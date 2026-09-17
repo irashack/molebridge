@@ -1,0 +1,101 @@
+#!/usr/bin/env sh
+# Idempotent namespace routing for the Switchyard exit.
+#
+# Runs once per `wireguard` container start via LinuxServer's
+# /custom-cont-init.d, before wg-quick brings the tunnel up. These rules exist
+# for the whole life of the namespace and are never removed by tunnel down.
+# That is what keeps forwarded traffic fail-closed (routed to an `unreachable`
+# entry) instead of falling back to the host's own Internet route when the
+# tunnel is down, its route is deleted, or the wireguard container stops.
+# See docs/architecture.md, "Routing contract".
+#
+# Priorities 90/95/96 must stay ahead of NetBird's own 105/110 rules. Do not
+# add wg-quick's usual prefix-length-suppressing default-route rule here: it
+# breaks the return path to overlay clients.
+set -eu
+
+OVERLAY_CIDR="${OVERLAY_CIDR:-}"
+OVERLAY6_CIDR="${OVERLAY6_CIDR:-}"
+OVERLAY_IF="${OVERLAY_IF:-wt0}"
+EXIT_IF="${EXIT_IF:-mullvad}"
+EXIT_TABLE="${EXIT_TABLE:-51821}"
+
+fail() {
+    echo "10-exit-routing: $1" >&2
+    exit 1
+}
+
+is_uint() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+[ -n "$OVERLAY_CIDR" ] || fail "OVERLAY_CIDR is not set; refusing to start without a known overlay range"
+case "$OVERLAY_CIDR" in
+    */*) : ;;
+    *) fail "OVERLAY_CIDR '$OVERLAY_CIDR' is not in CIDR form (A.B.C.D/N)" ;;
+esac
+
+addr="${OVERLAY_CIDR%/*}"
+prefix="${OVERLAY_CIDR#*/}"
+
+octet_count=$(printf '%s' "$addr" | awk -F. '{print NF}')
+[ "$octet_count" -eq 4 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' address does not have 4 octets"
+
+old_ifs=$IFS
+IFS=.
+# shellcheck disable=SC2086
+set -- $addr
+IFS=$old_ifs
+for octet in "$1" "$2" "$3" "$4"; do
+    is_uint "$octet" || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has a non-numeric octet '$octet'"
+    [ "$octet" -le 255 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has an out-of-range octet '$octet'"
+done
+is_uint "$prefix" || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has a non-numeric prefix '$prefix'"
+[ "$prefix" -le 32 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has an out-of-range prefix '$prefix'"
+
+if [ -n "$OVERLAY6_CIDR" ]; then
+    case "$OVERLAY6_CIDR" in
+        *:*/*) : ;;
+        *) fail "OVERLAY6_CIDR '$OVERLAY6_CIDR' is not an IPv6 CIDR" ;;
+    esac
+fi
+is_uint "$EXIT_TABLE" || fail "EXIT_TABLE '$EXIT_TABLE' is not a number"
+
+echo "10-exit-routing: installing rules for overlay $OVERLAY_CIDR ${OVERLAY6_CIDR:-(no IPv6 overlay)}"
+
+# `ip rule add` is not idempotent: delete any matching rule first so a restart
+# does not stack duplicates. "No such rule" on the first start is expected.
+
+# 1. Replies to overlay clients go back over the overlay, not the tunnel.
+while ip rule del to "$OVERLAY_CIDR" lookup main priority 90 2>/dev/null; do :; done
+ip rule add to "$OVERLAY_CIDR" lookup main priority 90
+
+# 2. Everything forwarded in from the overlay uses the exit table. Matching by
+#    interface name works before the overlay interface exists.
+while ip rule del iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95 2>/dev/null; do :; done
+ip rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
+
+# 3. The applier's probes, bound to the tunnel interface, use the tunnel.
+while ip rule del oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96 2>/dev/null; do :; done
+ip rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
+
+# 4. Fail-closed default: with no tunnel route in the exit table, forwarded
+#    traffic is unreachable instead of using the namespace's normal route.
+ip route replace unreachable default metric 4096 table "$EXIT_TABLE"
+
+# The same contract for IPv6. The unreachable default is installed even
+# without an IPv6 overlay, so forwarded IPv6 can never leak either.
+if [ -n "$OVERLAY6_CIDR" ]; then
+    while ip -6 rule del to "$OVERLAY6_CIDR" lookup main priority 90 2>/dev/null; do :; done
+    ip -6 rule add to "$OVERLAY6_CIDR" lookup main priority 90
+fi
+while ip -6 rule del iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95 2>/dev/null; do :; done
+ip -6 rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
+while ip -6 rule del oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96 2>/dev/null; do :; done
+ip -6 rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
+ip -6 route replace unreachable default metric 4096 table "$EXIT_TABLE"
+
+echo "10-exit-routing: rules installed (priority 90/95/96, table $EXIT_TABLE unreachable defaults)"

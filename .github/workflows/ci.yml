@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Whitespace
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+      - name: Shell scripts
+        run: |
+          sh -n routing/10-exit-routing applier/apply.sh
+          shellcheck -S warning routing/10-exit-routing applier/apply.sh
+      - name: Compose file
+        run: cp .env.example .env && docker compose config --quiet
+      - name: Python tests
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet pytest==9.1.1
+          .venv/bin/python -m pytest -q panel tools

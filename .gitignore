@@ -1,0 +1,11 @@
+.DS_Store
+.env
+secrets/
+state/
+tunnel/wg_confs/*
+!tunnel/wg_confs/.gitkeep
+*.conf
+__pycache__/
+.pytest_cache/
+.venv/
+.claude/settings.local.json

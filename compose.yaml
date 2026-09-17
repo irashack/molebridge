@@ -1,0 +1,178 @@
+# Switchyard: a Mullvad WireGuard exit node for a NetBird overlay, with a web
+# panel for choosing the Mullvad server.
+#
+# Run from the repository root after following docs/setup.md:
+#   docker compose up -d
+#
+# Namespace ownership: `wireguard` creates the network namespace and the
+# Mullvad tunnel. `netbird` and `applier` join it (`network_mode:
+# service:wireguard`) and share its interfaces and routing. If `wireguard`
+# restarts, those two are left in its dead namespace; their healthchecks fail
+# and they need a restart to rejoin (see docs/operations.md). `control-panel`
+# runs on its own network with no capabilities and talks to the applier only
+# through files under ./state.
+#
+# Images are pinned to exact multi-arch releases. Secrets live only in the
+# mode-0600 files under ./tunnel and ./secrets; never print them or paste
+# `docker compose config` output anywhere.
+name: switchyard
+
+services:
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:1.0.20260223-r0-ls122@sha256:dca67384e3e9a5bcc288461fa983e6fcb0e248e5a2d8e5b3e5d3f753bfac3e35
+    container_name: switchyard-wireguard
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    sysctls:
+      # The namespace forwards overlay traffic into the tunnel.
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv6.conf.default.disable_ipv6: "0"
+    environment:
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      TZ: "${TZ:-Etc/UTC}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      EXIT_IF: mullvad
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+    volumes:
+      # wg_confs/mullvad.conf holds the Mullvad private key (mode 0600).
+      - ./tunnel/wg_confs:/config/wg_confs:ro
+      # LinuxServer runs these before bringing the tunnel up. The directory and
+      # script must be owned by root on the host (docs/setup.md).
+      - ./routing:/custom-cont-init.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "ip link show mullvad >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  netbird:
+    image: docker.io/netbirdio/netbird:0.78.2@sha256:0d6653f21f0417b6014e4c621c75e898e06698e1cce973398d1c3c45a30f6bd6
+    container_name: switchyard-netbird
+    restart: unless-stopped
+    network_mode: service:wireguard
+    cap_add: [NET_ADMIN]
+    environment:
+      NB_HOSTNAME: "${NB_HOSTNAME:-switchyard-exit}"
+      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
+      NB_LOG_LEVEL: info
+      # This peer only forwards traffic; it serves and uses no overlay DNS.
+      NB_DISABLE_DNS: "true"
+    env_file:
+      # NB_SETUP_KEY, needed only until the peer first enrolls.
+      - path: ./secrets/netbird.env
+        required: false
+    volumes:
+      # Durable peer identity; deleting it re-enrolls as a new peer.
+      - netbird-data:/var/lib/netbird
+    depends_on:
+      wireguard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "netbird status 2>/dev/null | grep -q 'Management: Connected'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  applier:
+    # Same image as `wireguard`, which ships wg and ip. It never sees the
+    # tunnel config or private key.
+    image: lscr.io/linuxserver/wireguard:1.0.20260223-r0-ls122@sha256:dca67384e3e9a5bcc288461fa983e6fcb0e248e5a2d8e5b3e5d3f753bfac3e35
+    container_name: switchyard-applier
+    restart: unless-stopped
+    network_mode: service:wireguard
+    cap_add: [NET_ADMIN]
+    entrypoint: ["/bin/sh", "/opt/switchyard/apply.sh"]
+    environment:
+      EXIT_IF: mullvad
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-switchyard}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      - ./applier/apply.sh:/opt/switchyard/apply.sh:ro
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+    depends_on:
+      wireguard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ip link show mullvad >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+
+  control-panel:
+    image: docker.io/library/python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+    container_name: switchyard-control-panel
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    working_dir: /app
+    command: ["python", "/app/app.py"]
+    environment:
+      STATE_DIR: /state
+      PYTHONDONTWRITEBYTECODE: "1"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Mullvad exit}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Exit}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this exit}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+    ports:
+      # Loopback only. Publish it to people through an authenticating proxy.
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      - ./panel:/app:ro
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+networks:
+  panel:
+
+volumes:
+  netbird-data:
