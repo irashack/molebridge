@@ -59,6 +59,10 @@ With the exit selected on a device in `exit-users`:
   shows a Mullvad address. Without IPv6 overlay, check that IPv6 either fails or
   is unused; if a native IPv6 address shows, that traffic is bypassing the
   exit. Mobile carriers that are IPv6-only with NAT64 are the likeliest case.
+- **Direct path.** On the host, `docker compose exec netbird netbird status -d`
+  lists the client with `Connection type: P2P`. `Relayed` adds the relay
+  server's round trip to every packet; on a phone, first check that Force relay
+  connection is off in the NetBird app.
 - **Switch.** Choose a server in another city in the panel. The panel reports
   the new city within about a minute, and the client's egress follows without
   reselecting the exit.

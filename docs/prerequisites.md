@@ -28,6 +28,11 @@ Gather these before [setup](setup.md).
   in the dashboard's network settings and as `network_range` in the
   management API's account settings. Switchyard needs it so replies to your
   devices return over the overlay rather than into the tunnel.
+- **Direct connections on phones.** NetBird's mobile apps default to *Force
+  relay connection* to save battery, which sends all exit traffic through a
+  NetBird relay server. On one deployment that took a 32 ms path to 124 ms and
+  cut throughput by more than half. Turn it off in the app's Settings →
+  Advanced on devices that use the exit.
 - **Optional IPv6 overlay.** If IPv6 overlay is enabled for the account, note its
   range too. Without it, clients' IPv6 is not carried by NetBird; check what your
   devices do with native IPv6 while the exit is selected (see
