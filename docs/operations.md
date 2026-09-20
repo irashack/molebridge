@@ -163,6 +163,16 @@ as the Compose project name. Docker scopes named volumes to that name, so
 changing it on an existing installation would create a fresh NetBird identity
 volume and leave the old deployment behind.
 
+The GitHub repository is now `irashack/molebridge`. Update an existing HTTPS
+checkout's remote with:
+
+```sh
+git remote set-url origin https://github.com/irashack/molebridge.git
+```
+
+For SSH, use `git@github.com:irashack/molebridge.git`. This changes where Git
+fetches and pushes; it does not change the Compose project or identity volume.
+
 Before starting the updated Compose file, add this to your existing `.env`:
 
 ```sh

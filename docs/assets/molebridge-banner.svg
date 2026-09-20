@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="title description">
+  <title id="title">Molebridge</title>
+  <desc id="description">Stay on NetBird. Exit through Mullvad. A bridge connects two network nodes in the panel's blue and green palette.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#24273a"/>
+      <stop offset="1" stop-color="#181b2b"/>
+    </linearGradient>
+    <linearGradient id="bridge">
+      <stop stop-color="#8aadf4"/>
+      <stop offset="1" stop-color="#a6da95"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#8aadf4" stroke-opacity=".055"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="280" rx="20" fill="url(#background)"/>
+  <rect width="1200" height="280" rx="20" fill="url(#grid)"/>
+  <path d="M56 224H1144" stroke="#363a4f"/>
+  <g font-family="Arial,Helvetica,sans-serif">
+    <text x="56" y="69" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">A LITTLE BRIDGE FOR YOUR HOMELAB</text>
+    <text x="52" y="142" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
+    <text x="56" y="185" fill="#b8c0e0" font-size="24">Stay on NetBird. Exit through Mullvad.</text>
+    <text x="56" y="252" fill="#a5adcb" font-size="13" letter-spacing="1.4">NETBIRD + MULLVAD</text>
+    <text x="1144" y="252" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">SELF-HOSTED · DOCKER COMPOSE</text>
+  </g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M807 166H1126" stroke="#363a4f" stroke-width="2"/>
+    <path d="M832 166C852 166 856 164 868 134C903 46 1030 46 1065 134C1077 164 1081 166 1101 166" stroke="url(#bridge)" stroke-width="5"/>
+    <path d="M887 103V166M926 80V166M967 73V166M1008 80V166M1047 103V166" stroke="#8aadf4" stroke-opacity=".22" stroke-width="2"/>
+    <path d="M850 186H1083" stroke="#363a4f" stroke-dasharray="3 8"/>
+    <circle cx="827" cy="166" r="12" fill="#24273a" stroke="#8aadf4" stroke-width="4"/>
+    <circle cx="1106" cy="166" r="12" fill="#24273a" stroke="#a6da95" stroke-width="4"/>
+    <circle cx="967" cy="73" r="5" fill="#a6da95" stroke="#24273a" stroke-width="3"/>
+  </g>
+</svg>
