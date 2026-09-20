@@ -42,7 +42,11 @@ Its filesystem is read-only except for its own state and bounded scratch space.
 Initialization installs temporary IPv4 and IPv6 `iif wt0 unreachable` rules at
 priority 80. They block forwarding while the permanent rules are rebuilt. The
 temporary rules are removed only after all installation commands succeed.
-A readiness marker gates the WireGuard healthcheck and dependent startup.
+A readiness marker gates the WireGuard healthcheck and Compose startup.
+NetBird's entrypoint also waits for the exact priority-97 terminal rule in both
+address families in its own namespace before launching the official entrypoint.
+This gate runs even when daemon or host restarts bypass Compose ordering.
+`NB_INTERFACE_NAME` uses the same `OVERLAY_IF` as routing and the applier.
 
 | Priority | Rule | Purpose |
 |---|---|---|
@@ -60,8 +64,11 @@ The tunnel uses `Table = off`. Its `PostUp` adds a default route through
 `mullvad` to the exit table; `PreDown` removes it. The fallback and terminal
 guard are not removed on tunnel down. The exit's own unbound traffic continues
 through the ordinary route so NetBird and Mullvad control traffic can connect.
-The applier verifies rule priorities/selectors, both fallback routes and that
-the exit table contains no route through another interface. An unknown rule
+The applier verifies that the overlay interface exists, rule priorities/selectors,
+both fallback routes and that the exit table contains no route through another
+interface. It requires a tunnel default for each family with a global address
+on the tunnel interface; an IPv4-only tunnel still requires IPv6 fail-closed
+guards. An unknown rule
 ahead of the guard, an extra selector, or a temporary guard left behind prevents
 a healthy result.
 
@@ -93,10 +100,14 @@ working tunnel merely because the API is unavailable.
    and aborts if removal fails, then applies the approved key/endpoint using
    fixed subprocess argument lists and timeouts.
 4. It probes Mullvad through the tunnel for up to roughly 60 seconds. Success
-   requires a fresh non-future handshake, a typed Mullvad egress response and
-   intact routing protection. The current server is derived from live peer
+   requires a fresh non-future handshake, separate typed Mullvad egress responses
+   from `curl -4` and (for an IPv6 tunnel) `curl -6`, and intact routing protection.
+   The current server is derived from live peer
    state, including the initial server from the downloaded configuration.
-5. A rejected request or failed switch is acknowledged as failed and is not
+5. An unavailable fresh catalogue, overlay interface or tunnel routing leaves
+   the request pending without changing peers. The applier reports the missing
+   prerequisite and retries the same request when prerequisites recover.
+   A malformed or unlisted request or an attempted switch that fails is acknowledged as failed and is not
    retried every five seconds. Selecting the same server again creates a new
    request and retries. No other server is selected automatically. After normal
    tunnel recreation, a previously successful desired selection is reapplied.
@@ -118,7 +129,8 @@ explicitly historical.
 
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
 verified connected result; otherwise 503. Docker's applier healthcheck checks
-freshness and current routing protection after a completed inspection; startup
+freshness, a live WireGuard exit interface with exactly one peer, and current
+routing protection after a completed inspection; startup
 and an in-progress switch do not count as completed checks. It does not restart unhealthy
 containers. The host-side doctor additionally checks the shared namespace and
 recent verified egress.

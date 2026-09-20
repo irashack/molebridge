@@ -70,6 +70,11 @@ def test_compose_trust_boundary():
     assert all('tunnel' not in v and '/config' not in v for v in applier['volumes'])
     assert applier['network_mode'] == 'service:wireguard'
     assert applier['read_only']
+    netbird = compose['services']['netbird']
+    assert netbird['environment']['NB_INTERFACE_NAME'] == applier['environment']['OVERLAY_IF']
+    assert netbird['entrypoint'] == ['/bin/sh', '/usr/local/bin/molebridge-wait-for-guards',
+                                     '/usr/local/bin/netbird-entrypoint.sh']
+    assert './routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro' in netbird['volumes']
 
 
 def shell():
@@ -143,3 +148,59 @@ def test_bad_config_makes_no_routing_changes(tmp_path, setting, value):
                             env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode != 0
     assert '10-exit-routing:' in result.stderr
+
+
+def gate_run(tmp_path, rule4, rule6, *, interface='mesh0', advance=False):
+    if not shell():
+        pytest.skip('POSIX shell unavailable')
+    for family, value in ((4, rule4), (6, rule6)):
+        (tmp_path / f'rules-{family}').write_text(value)
+    binaries = {
+        'ip': '#!/bin/sh\ncat "$GATE_DIR/rules${1}"\n',
+        'sleep': '''#!/bin/sh
+if [ "$ADVANCE" != 1 ]; then exit 42; fi
+if [ ! -f "$GATE_DIR/first-wait" ]; then
+    touch "$GATE_DIR/first-wait"
+    printf '%s\\n' '97: from all iif mesh0 [detached] unreachable' > "$GATE_DIR/rules-4"
+else
+    touch "$GATE_DIR/second-wait"
+    printf '%s\\n' '97: from all iif mesh0 [detached] unreachable' > "$GATE_DIR/rules-6"
+fi
+''',
+    }
+    for name, source in binaries.items():
+        binary = tmp_path / name
+        binary.write_text(source, newline='\n')
+        binary.chmod(0o755)
+    env = dict(os.environ, GATE_DIR=posix_path(tmp_path), NB_INTERFACE_NAME=interface,
+               ADVANCE=str(int(advance)), SCRIPT=posix_path(ROOT / 'routing' / 'wait-for-guards'))
+    return subprocess.run([shell(), '-c',
+                           'PATH="$GATE_DIR:$PATH"; export PATH; sh "$SCRIPT" sh -c \'touch "$GATE_DIR/started"\''],
+                          env=env, capture_output=True, text=True, timeout=5)
+
+
+@pytest.mark.parametrize('rule', [
+    '', '97: from all iif wt0 unreachable', '97: from 192.0.2.2 iif mesh0 unreachable',
+    '97: from all iif mesh0 lookup 51821', '197: from all iif mesh0 unreachable',
+    '97: from all iif mesh0 unreachable suppress_prefixlength 0',
+])
+@pytest.mark.parametrize('family', [4, 6])
+def test_netbird_gate_refuses_missing_wrong_or_narrowed_guards(tmp_path, rule, family):
+    valid = '97: from all iif mesh0 unreachable'
+    result = gate_run(tmp_path, rule if family == 4 else valid, rule if family == 6 else valid)
+    assert result.returncode != 0
+    assert not (tmp_path / 'started').exists()
+
+
+def test_netbird_gate_waits_for_both_families_before_starting(tmp_path):
+    result = gate_run(tmp_path, '', '', advance=True)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / 'first-wait').exists() and (tmp_path / 'second-wait').exists()
+    assert (tmp_path / 'started').exists()
+
+
+@pytest.mark.parametrize('detached', ['', '[detached] '])
+def test_netbird_gate_accepts_exact_guards_before_overlay_exists(tmp_path, detached):
+    rule = f'97: from all iif mesh0 {detached}unreachable'
+    assert gate_run(tmp_path, rule, rule).returncode == 0
+    assert (tmp_path / 'started').exists()

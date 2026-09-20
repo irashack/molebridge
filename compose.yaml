@@ -63,11 +63,14 @@ services:
 
   netbird:
     image: docker.io/netbirdio/netbird:0.78.2@sha256:0d6653f21f0417b6014e4c621c75e898e06698e1cce973398d1c3c45a30f6bd6
+    # This gate also runs on daemon/host restarts, which ignore depends_on.
+    entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-wait-for-guards", "/usr/local/bin/netbird-entrypoint.sh"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
     restart: unless-stopped
     network_mode: service:wireguard
     cap_add: [NET_ADMIN]
     environment:
+      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
       NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
       NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
       NB_LOG_LEVEL: info
@@ -78,6 +81,7 @@ services:
       - path: ./secrets/netbird.env
         required: false
     volumes:
+      - ./routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro
       # Durable peer identity; deleting it re-enrolls as a new peer.
       - netbird-data:/var/lib/netbird
     depends_on:

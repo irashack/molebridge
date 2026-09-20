@@ -60,11 +60,16 @@ class Kernel:
         self.rules = {4: rules(4), 6: rules(6)}
         self.routes = {4: routes(), 6: routes()}
         self.keys = [KEY]
+        self.overlay_present = True
+        self.tunnel_present = True
+        self.families = [4, 6]
         self.now = 0
         self.egress_ok = True
         self.fail_set = False
         self.age = 1
         self.probe = {'ip': '203.0.113.10', 'city': 'Example City', 'country': 'Example', 'mullvad_exit_ip': True}
+        self.probe6 = {**self.probe, 'ip': '2001:db8:3::10'}
+        self.failed_egress = set()
 
     def sleep(self, seconds):
         self.now += seconds
@@ -72,9 +77,20 @@ class Kernel:
     def run(self, args, **kwargs):
         self.calls.append(args)
         if args[0] == 'ip':
+            if args[1:4] == ['link', 'show', 'dev']:
+                if not self.overlay_present:
+                    raise RuntimeError('missing overlay interface')
+                return ''
+            if args[1:4] == ['-j', 'address', 'show']:
+                if not self.tunnel_present:
+                    return '[]'
+                return json.dumps([{'addr_info': [
+                    {'family': 'inet' if f == 4 else 'inet6', 'scope': 'global'} for f in self.families]}])
             family = int(args[2][1:])
             return json.dumps(self.rules[family] if args[3] == 'rule' else self.routes[family])
         if args[:2] == ['wg', 'show']:
+            if not self.tunnel_present:
+                raise RuntimeError('missing tunnel interface')
             if args[-1] == 'peers':
                 return '\n'.join(self.keys)
             return '\n'.join(f'{key}\t{int(time.time()) - self.age}' for key in self.keys)
@@ -87,10 +103,12 @@ class Kernel:
                 self.keys = [args[4]]
             return ''
         if args[0] == 'curl':
-            if not self.egress_ok:
+            family = 4 if '-4' in args else 6
+            assert f'-{family}' in args
+            if not self.egress_ok or family in self.failed_egress:
                 raise RuntimeError('injected probe failure')
             assert '--interface' in args and args[args.index('--interface') + 1] == 'mullvad'
-            return json.dumps(self.probe)
+            return json.dumps(self.probe if family == 4 else self.probe6)
         raise AssertionError('unexpected command')
 
     @property
@@ -173,6 +191,77 @@ def test_stale_catalogue_refuses_switch(runtime):
     assert not kernel.mutations
 
 
+def test_saved_selection_retries_after_catalogue_recovers(runtime):
+    app, kernel = runtime
+    app.catalog.snapshot['fetched_at'] = timestamp(86401)
+    app.next_catalog = 0
+    responses = iter(['unavailable', json.dumps(payload())])
+    app.fetch_catalog = lambda: next(responses)
+    write_json_atomic(app.desired_path, request())
+    assert app.tick()['status'] == 'failed'
+    assert app.pending and not app.rejection and app.last_request is None
+    assert not kernel.mutations
+    kernel.now = 60
+    result = app.tick()
+    assert result['status'] == 'ok' and result['request_id'] == '0' * 32
+    assert len(kernel.mutations) == 1
+    assert not app.pending
+
+
+@pytest.mark.parametrize('prerequisite', ['overlay', 'tunnel', 'route'])
+def test_saved_selection_retries_after_routing_recovers(runtime, prerequisite):
+    app, kernel = runtime
+    kernel.overlay_present = prerequisite != 'overlay'
+    kernel.tunnel_present = prerequisite != 'tunnel'
+    if prerequisite == 'route':
+        kernel.routes[6] = routes()[1:]
+    write_json_atomic(app.desired_path, request())
+    assert app.tick()['status'] == 'failed'
+    assert app.pending and not kernel.mutations
+    kernel.overlay_present = kernel.tunnel_present = True
+    kernel.routes[6] = routes()
+    assert app.tick()['status'] == 'ok'
+    assert len(kernel.mutations) == 1
+
+
+def test_unlisted_request_requires_explicit_retry_even_after_catalogue_change(runtime):
+    app, kernel = runtime
+    unlisted = 'xx-xxx-wg-999'
+    write_json_atomic(app.desired_path, request(server=unlisted))
+    assert app.tick()['status'] == 'failed'
+    assert app.rejection and not app.pending
+    assert app.catalog.refresh(lambda: json.dumps(payload(hostname=unlisted)))
+    kernel.now += 60
+    assert app.tick()['status'] == 'failed'
+    assert not kernel.mutations
+    write_json_atomic(app.desired_path, request(server=unlisted, request_id='1' * 32))
+    assert app.tick()['status'] == 'ok'
+
+
+def test_removing_pending_request_cancels_retry(runtime):
+    app, kernel = runtime
+    kernel.overlay_present = False
+    write_json_atomic(app.desired_path, request())
+    app.tick()
+    app.desired_path.unlink()
+    kernel.overlay_present = True
+    app.tick()
+    assert not app.pending and not kernel.mutations
+
+
+def test_tunnel_disappearing_before_peer_update_leaves_request_pending(runtime):
+    app, kernel = runtime
+    peers = app.peers
+    def missing_interface():
+        raise RuntimeError('interface disappeared')
+    app.peers = missing_interface
+    write_json_atomic(app.desired_path, request())
+    assert app.tick()['status'] == 'failed'
+    assert app.pending and not kernel.mutations
+    app.peers = peers
+    assert app.tick()['status'] == 'ok'
+
+
 def test_switch_and_observed_initial_peer(runtime):
     app, kernel = runtime
     assert app.inspect()['server'] == HOST
@@ -198,6 +287,60 @@ def test_missing_fallback_prevents_switch_success(runtime):
     result = app.switch(request())
     assert result['status'] == 'failed' and not result['unreachable_fallback']
     assert not kernel.mutations
+
+
+@pytest.mark.parametrize('family', [4, 6])
+def test_single_family_route_loss_is_unhealthy_and_refuses_switch(runtime, family):
+    app, kernel = runtime
+    kernel.routes[family] = routes()[1:]
+    result = app.inspect()
+    assert result['status'] == 'failed' and not result['routing_ok']
+    assert result['unreachable_fallback'] is True
+    assert status_view(None, result)[0] == 'failed'
+    assert app.switch(request())['status'] == 'failed'
+    assert not kernel.mutations
+
+
+@pytest.mark.parametrize('family', [4, 6])
+@pytest.mark.parametrize('failure', ['unreachable', 'not-mullvad', 'wrong-address-family'])
+def test_each_egress_family_must_pass(runtime, family, failure):
+    app, kernel = runtime
+    if failure == 'unreachable':
+        kernel.failed_egress.add(family)
+    else:
+        probe = kernel.probe if family == 4 else kernel.probe6
+        if failure == 'not-mullvad':
+            probe['mullvad_exit_ip'] = False
+        else:
+            probe['ip'] = '2001:db8::1' if family == 4 else '203.0.113.1'
+    assert app.inspect()['status'] == 'failed'
+
+
+def test_ipv4_only_tunnel_keeps_ipv6_guard_without_requiring_ipv6_egress(runtime):
+    app, kernel = runtime
+    kernel.families = [4]
+    kernel.routes[6] = routes()[1:]
+    kernel.failed_egress.add(6)
+    result = app.switch(request())
+    assert result['status'] == 'ok'
+    assert result['egress_ips'] == {'4': '203.0.113.10'}
+    assert not any(c[0] == 'curl' and '-6' in c for c in kernel.calls)
+    kernel.rules[6] = [r for r in rules(6) if r['priority'] != 97]
+    assert app.inspect()['status'] == 'failed'
+
+
+def test_healthy_dual_stack_result_records_both_probes(runtime):
+    app, _ = runtime
+    result = app.inspect()
+    assert result['status'] == 'ok'
+    assert result['egress_ips'] == {'4': '203.0.113.10', '6': '2001:db8:3::10'}
+
+
+@pytest.mark.parametrize('selector', ['iif_detached', 'oif_detached'])
+def test_detached_routing_selectors_are_unhealthy(selector):
+    table = rules(4)
+    table[2 if selector == 'iif_detached' else 3][selector] = True
+    assert family_status(table, routes(), CONFIG, 4) == (False, True)
 
 
 @pytest.mark.parametrize('extra', [{'fwmark': '0x1'}, {'src': '192.0.2.5'}, {'not': True}, {'suppress_prefixlen': 0}])
@@ -257,6 +400,27 @@ def test_peer_update_failure_not_hidden(runtime):
     assert 'update failed' in result['message']
 
 
+def test_routing_failure_after_peer_update_requires_explicit_retry(runtime):
+    app, kernel = runtime
+    run = kernel.run
+    def lose_route(args, **kwargs):
+        result = run(args, **kwargs)
+        if args[:2] == ['wg', 'set']:
+            kernel.routes[6] = routes()[1:]
+        return result
+    app.run = lose_route
+    write_json_atomic(app.desired_path, request())
+    assert app.tick()['status'] == 'failed'
+    assert app.rejection and not app.pending
+    app.run = run
+    kernel.routes[6] = routes()
+    kernel.now += 60
+    assert app.tick()['status'] == 'failed'
+    assert len(kernel.mutations) == 1
+    write_json_atomic(app.desired_path, request(request_id='1' * 32))
+    assert app.tick()['status'] == 'ok'
+
+
 @pytest.mark.parametrize('value', ['true', 1, None, {}])
 def test_egress_boolean_must_be_boolean(runtime, value):
     app, kernel = runtime
@@ -278,6 +442,26 @@ def test_container_health_waits_for_a_completed_check(runtime, monkeypatch, stat
     monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
     monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
     assert applier_module.main() == expected
+
+
+@pytest.mark.parametrize('broken', ['missing-tunnel', 'not-wireguard', 'no-peers', 'missing-overlay'])
+def test_container_health_rejects_orphaned_namespace(runtime, monkeypatch, broken):
+    app, kernel = runtime
+    app.publish('failed', 'Tunnel inspection failed.')
+    if broken == 'missing-tunnel':
+        kernel.tunnel_present = False
+    elif broken == 'not-wireguard':
+        def missing_wireguard():
+            raise RuntimeError('not a WireGuard interface')
+        app.peers = missing_wireguard
+    elif broken == 'no-peers':
+        kernel.keys = []
+    else:
+        kernel.overlay_present = False
+    monkeypatch.setattr(applier_module, 'Applier', lambda *a, **kw: app)
+    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
+    monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
+    assert applier_module.main() == 1
 
 
 def test_catalogue_fetch_is_bounded_and_does_not_follow_redirect(runtime):

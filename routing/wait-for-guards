@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# Runtime restarts do not honor Compose depends_on. Check this namespace
+# before handing off to the pinned image's original NetBird entrypoint.
+set -eu
+set -f
+overlay_if=${NB_INTERFACE_NAME:-wt0}
+case "$overlay_if" in
+    ''|[!a-zA-Z0-9_]*|*[!a-zA-Z0-9_.-]*) echo 'NetBird gate: invalid interface name' >&2; exit 1 ;;
+esac
+[ "${#overlay_if}" -le 15 ] && [ "$#" -gt 0 ] || exit 1
+
+guard_present() {
+    # iproute2 marks a selector detached until NetBird creates the interface.
+    # Require the whole terminal rule, not a substring or a narrowed selector.
+    rules=$(ip "$1" rule show 2>/dev/null) || return 1
+    printf '%s\n' "$rules" | awk -v iface="$overlay_if" '
+        $1 == "97:" && $2 == "from" && $3 == "all" && $4 == "iif" && $5 == iface {
+            if ((NF == 6 && $6 == "unreachable") ||
+                (NF == 7 && $6 == "[detached]" && $7 == "unreachable")) found = 1
+        }
+        END { exit !found }
+    '
+}
+
+trap 'exit 0' INT TERM
+echo 'NetBird gate: waiting for IPv4 and IPv6 routing guards'
+until guard_present -4 && guard_present -6; do sleep 1; done
+exec "$@"

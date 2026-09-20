@@ -9,9 +9,11 @@ root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 work=$(mktemp -d)
 created=''
+gate_pid=''
 cleanup() {
+    if [ -n "$gate_pid" ]; then kill "$gate_pid" 2>/dev/null || true; wait "$gate_pid" 2>/dev/null || true; fi
     for ns in $created; do ip netns del "$ns" 2>/dev/null || true; done
-    rm -f "$work/ready" "$work/rules.json" "$work/routes.json"
+    rm -f "$work/ready" "$work/rules.json" "$work/routes.json" "$work/gate-started"
     rmdir "$work"
 }
 trap cleanup EXIT HUP INT TERM
@@ -19,6 +21,7 @@ client=mb-client-$$
 exitns=mb-exit-$$
 outside=mb-outside-$$
 tunnel=mb-tunnel-$$
+overlay_if=${TEST_OVERLAY_IF:-wt0}
 for ns in "$client" "$exitns" "$outside" "$tunnel"; do
     ip netns add "$ns"
     created="$created $ns"
@@ -26,7 +29,7 @@ for ns in "$client" "$exitns" "$outside" "$tunnel"; do
     ip netns exec "$ns" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
     ip netns exec "$ns" sysctl -qw net.ipv6.conf.default.accept_dad=0
 done
-ip -n "$exitns" link add wt0 type veth peer name client0 netns "$client"
+ip -n "$exitns" link add "$overlay_if" type veth peer name client0 netns "$client"
 ip -n "$exitns" link add eth0 type veth peer name outside0 netns "$outside"
 ip -n "$exitns" link add mullvad type veth peer name tunnel0 netns "$tunnel"
 
@@ -35,7 +38,7 @@ configure() {
     ip -n "$1" -6 addr add "$4" dev "$2" nodad
     ip -n "$1" link set "$2" up
 }
-configure "$exitns" wt0 192.0.2.1/24 2001:db8:1::1/64
+configure "$exitns" "$overlay_if" 192.0.2.1/24 2001:db8:1::1/64
 configure "$client" client0 192.0.2.2/24 2001:db8:1::2/64
 configure "$exitns" eth0 198.51.100.1/24 2001:db8:2::1/64
 configure "$outside" outside0 198.51.100.2/24 2001:db8:2::2/64
@@ -62,7 +65,7 @@ ip -n "$tunnel" -6 addr add 2001:db8:2::100/128 dev tunnel0 nodad
 
 install_rules() {
     ip netns exec "$exitns" env OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 \
-        OVERLAY_IF=wt0 EXIT_IF=mullvad EXIT_TABLE=51821 ROUTING_READY_FILE="$work/ready" \
+        OVERLAY_IF="$overlay_if" EXIT_IF=mullvad EXIT_TABLE=51821 ROUTING_READY_FILE="$work/ready" \
         sh "$root/routing/10-exit-routing"
 }
 restore_routes() {
@@ -106,23 +109,62 @@ connected() {
         fi
     done
 }
-install_rules
-restore_routes
-connected
 # Check the exact iproute2 JSON emitted by a real kernel, not just fixtures.
-for family in 4 6; do
-    ip -n "$exitns" -j "-$family" rule show > "$work/rules.json"
-    ip -n "$exitns" -j "-$family" route show table 51821 > "$work/routes.json"
-    python3 - "$work/rules.json" "$work/routes.json" "$family" <<'PY'
+validate_family() {
+    ip -n "$exitns" -j "-$1" rule show > "$work/rules.json"
+    ip -n "$exitns" -j "-$1" route show table 51821 > "$work/routes.json"
+    python3 - "$work/rules.json" "$work/routes.json" "$1" "$2" "$overlay_if" <<'PY'
 import json, sys
 from molebridge.routing import RoutingConfig, family_status
 with open(sys.argv[1]) as f:
     rules = json.load(f)
 with open(sys.argv[2]) as f:
     routes = json.load(f)
-result = family_status(rules, routes, RoutingConfig('192.0.2.0/24', '2001:db8:1::/64'), int(sys.argv[3]))
-assert result == (True, True), f'IPv{sys.argv[3]} validation={result}; rules={rules!r}; routes={routes!r}'
+config = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64', overlay_if=sys.argv[5])
+result = family_status(rules, routes, config, int(sys.argv[3]))
+assert result == (sys.argv[4] == 'healthy', True), f'IPv{sys.argv[3]} validation={result}; rules={rules!r}; routes={routes!r}'
 PY
+}
+
+# Start NetBird's gate before initialization, just as a runtime restart can.
+ip netns exec "$exitns" env NB_INTERFACE_NAME="$overlay_if" \
+    sh "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$work/gate-started" &
+gate_pid=$!
+sleep 2
+test ! -f "$work/gate-started"
+ip -n "$exitns" -4 rule add iif "$overlay_if" unreachable priority 97
+sleep 2
+test ! -f "$work/gate-started"
+install_rules
+# Bound the wait so a gate regression fails CI rather than hanging it.
+attempt=0
+while [ "$attempt" -lt 5 ] && [ ! -f "$work/gate-started" ]; do
+    sleep 1
+    attempt=$((attempt + 1))
+done
+test -f "$work/gate-started"
+wait "$gate_pid"
+gate_pid=''
+echo 'PASS overlay startup waits for both routing guards'
+restore_routes
+connected
+for family in 4 6; do validate_family "$family" healthy; done
+
+for family in 4 6; do
+    surviving=4
+    [ "$family" = 4 ] && surviving=6
+    ip -n "$exitns" "-$family" route del default dev mullvad table 51821
+    if probe "$client" "-$family"; then
+        echo "FAIL client escaped after IPv$family route deletion" >&2
+        exit 1
+    fi
+    probe "$client" "-$surviving"
+    probe "$exitns" "-$family"
+    validate_family "$family" failed
+    validate_family "$surviving" healthy
+    echo "PASS IPv$family route loss detected (other family and host path still reachable)"
+    restore_routes
+    connected
 done
 for family in -4 -6; do ip -n "$exitns" "$family" route del default dev mullvad table 51821; done
 blocked 'tunnel route deleted'

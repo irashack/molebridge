@@ -142,10 +142,10 @@ python3 -m venv .venv
 .venv/bin/pip install pytest==9.1.1 PyYAML==6.0.3
 .venv/bin/python -m pytest -q panel tools
 
-for script in routing/10-exit-routing applier/apply.sh tools/check-routing.sh; do
+for script in routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh; do
   sh -n "$script"
 done
-shellcheck -S warning routing/10-exit-routing applier/apply.sh tools/check-routing.sh
+shellcheck -S warning routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh
 docker compose --env-file .env.example config --quiet
 ```
 

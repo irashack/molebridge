@@ -25,8 +25,9 @@ docker compose exec applier sh
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
    IPv4-only config still has the IPv6 unreachable fallback.
 3. **The tunnel egresses through Mullvad.**
-   `curl -s --interface mullvad https://am.i.mullvad.net/json` reports
-   `"mullvad_exit_ip": true`.
+   `curl -4 -fsS --interface mullvad https://am.i.mullvad.net/json` reports
+   `"mullvad_exit_ip": true`. Repeat with `-6` when the tunnel has an IPv6 address.
+   Both probes must succeed; one family cannot stand in for the other.
 4. **The exit's own traffic does not.** `curl -s https://am.i.mullvad.net/json`
    without `--interface` reports your host's normal IP. That is the path the
    Mullvad handshake and NetBird's own control connections take; it must stay
@@ -66,6 +67,9 @@ interface returns. If a request was rejected or failed, select again to retry.
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked. The isolated `tools/check-routing.sh` drill also
 deletes all exit-table routes together to exercise the terminal guard.
+For each single-family route deletion, confirm the other family still works
+while the next applier check reports `failed`, `/readyz` returns 503, and any
+monitoring push reports failure. A safe black hole must not appear healthy.
 
 ## Status and recovery
 
@@ -76,6 +80,16 @@ Disconnect an open browser from the panel and confirm its next failed poll
 clears connected status. Test a failed switch followed by selecting the same
 server again. Finally, verify the recovery helper, container recreation and
 host reboot preserve the NetBird peer identity and shared namespace.
+After a WireGuard restart outside Compose, confirm an applier stranded without
+the WireGuard interface becomes Docker-unhealthy even if its failure result is
+fresh. On a disposable deployment, start NetBird before the routing initializer:
+its entrypoint must wait until both priority-97 guards exist in its namespace.
+Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interface.
+
+Start with a saved desired selection, an expired catalogue and an unavailable
+relay API. Confirm no peer change occurs and the result says the request will
+retry. Restore the API and confirm the same request is applied automatically.
+Malformed/unlisted requests and failed peer updates still require a new selection.
 
 ## From a client
 

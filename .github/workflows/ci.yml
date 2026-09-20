@@ -26,8 +26,8 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Shell scripts
         run: |
-          for script in routing/10-exit-routing applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
-          shellcheck -S warning routing/10-exit-routing applier/apply.sh tools/check-routing.sh
+          for script in routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
+          shellcheck -S warning routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh
       - name: Compose file
         run: cp .env.example .env && docker compose config --quiet
       - name: Python tests

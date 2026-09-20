@@ -19,6 +19,9 @@ the exit drop at the switch.
 
 If a switch fails, the panel shows the failure and the request is not retried
 continuously. Select the same server again to retry, or select another one.
+If the request is waiting for a fresh catalogue, the overlay interface or tunnel
+routing before any peer change, its diagnostic says it will retry automatically.
+The saved selection stays pending through these startup failures.
 The applier never chooses another server on its own. A failed probe means the
 path was not verified; an approved working tunnel can still carry traffic while
 the check endpoint is unavailable. Routing prevents fallback through the host.
@@ -102,8 +105,11 @@ would fail whenever the tunnel is down. Molebridge does not provide it.
 
 The applier rewrites `state/applier/result.json` about every minute. Healthy
 requires a recent handshake, confirmed Mullvad egress, a fresh catalogue matching
-the observed peer, and intact routing rules and fallback routes for both address
-families. Missing, malformed and future-dated status is not trusted.
+the observed peer, an existing overlay interface, and intact routing rules and
+fallback routes for both address families. Each family configured on the tunnel
+must also have its tunnel default and pass its own egress probe. An IPv4-only
+tunnel does not require IPv6 egress. Missing, malformed and future-dated status
+is not trusted.
 
 `/healthz` checks the panel process. `/readyz` returns 200 only for fresh
 verified connectivity, otherwise 503. The host-side doctor checks configuration,
@@ -128,6 +134,12 @@ all runtime crashes. Use the supported host-side recovery command:
 ```sh
 python3 tools/molebridge.py recover
 ```
+
+NetBird waits for both terminal routing guards before launching on every start,
+including daemon and host restarts. The applier's Docker healthcheck fails if
+its WireGuard interface or peer is missing, even when old rules and a freshly
+written failure result remain in an orphaned namespace. This makes the fault
+visible to a supervisor; recovery still needs to rejoin both namespace dependents.
 
 It validates the existing deployment and identity volume, builds both derived
 images before interrupting traffic, stops namespace dependents, recreates all

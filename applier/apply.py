@@ -56,6 +56,7 @@ class Applier:
         self.next_catalog = 0
         self.next_health = 0
         self.rejection = None
+        self.pending = None
 
     def fetch_catalog(self):
         response = self.run(['curl', '--noproxy', '*', '--proto', '=https', '-fsS',
@@ -69,13 +70,30 @@ class Applier:
             raise ValueError('unexpected catalogue HTTP status; redirects refused')
         return body
 
+    def tunnel_families(self):
+        """Infer configured families from interface addresses, never its routes."""
+        links = decode_json(self.run(['ip', '-j', 'address', 'show', 'dev', self.config.exit_if]))
+        if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
+            raise ValueError('missing tunnel interface')
+        addresses = links[0].get('addr_info')
+        if not isinstance(addresses, list) or any(not isinstance(a, dict) for a in addresses):
+            raise ValueError('invalid tunnel addresses')
+        families = {4 if a['family'] == 'inet' else 6 for a in addresses
+                    if a.get('scope') == 'global' and a.get('family') in ('inet', 'inet6')}
+        if 4 not in families:
+            raise ValueError('missing IPv4 tunnel address')
+        return sorted(families)
+
     def routing_status(self):
         checks = []
         try:
+            self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
+            families = self.tunnel_families()
             for family in (4, 6):
                 rules = decode_json(self.run(['ip', '-j', f'-{family}', 'rule', 'show']))
                 routes = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', self.config.table]))
-                checks.append(family_status(rules, routes, self.config, family))
+                checks.append(family_status(rules, routes, self.config, family,
+                                            require_tunnel=family in families))
             return all(c[0] for c in checks), all(c[1] for c in checks)
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
@@ -102,8 +120,8 @@ class Applier:
                 return age if timestamp > 0 and age >= 0 else None
         return None
 
-    def egress(self):
-        raw = self.run(['curl', '--interface', self.config.exit_if, '--noproxy', '*',
+    def egress_family(self, family):
+        raw = self.run(['curl', f'-{family}', '--interface', self.config.exit_if, '--noproxy', '*',
                         '--proto', '=https', '--max-filesize', '16384', '-fsS', '--max-time', '10',
                         'https://am.i.mullvad.net/json'], timeout=12, limit=16384)
         data = decode_json(raw)
@@ -111,19 +129,27 @@ class Applier:
             raise ValueError('invalid egress response')
         if not isinstance(data.get('ip'), str):
             raise ValueError('invalid egress address')
-        ip = str(ipaddress.ip_address(data.get('ip', '')))
+        ip = ipaddress.ip_address(data.get('ip', ''))
+        if ip.version != family:
+            raise ValueError('wrong egress address family')
         labels = [data.get('city'), data.get('country')]
         if any(not isinstance(v, str) or len(v) > 256 or any(ord(c) < 32 for c in v) for v in labels):
             raise ValueError('invalid egress location')
-        return {'egress_ip': ip, 'egress_city': labels[0], 'egress_country': labels[1],
+        return {'egress_ip': str(ip), 'egress_city': labels[0], 'egress_country': labels[1],
                 'mullvad_exit_ip': data['mullvad_exit_ip']}
+
+    def egress(self):
+        probes = {family: self.egress_family(family) for family in self.tunnel_families()}
+        return {**probes[4], 'mullvad_exit_ip': all(p['mullvad_exit_ip'] for p in probes.values()),
+                'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
 
     def publish(self, status, message, *, server=None, **fields):
         result = {'server': server, 'status': status, 'message': message, 'checked_at': now_iso(),
                   'request_id': request_token(self.request) if self.request else None,
                   'requested_server': self.request['server'] if self.request else None,
                   'routing_ok': False, 'unreachable_fallback': False, 'mullvad_exit_ip': False,
-                  'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None}
+                  'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
+                  'egress_ips': {}}
         result.update(fields)
         write_json_atomic(self.result_path, result, public=True)
         return result
@@ -134,6 +160,8 @@ class Applier:
         server = None
 
         def emit(status, message):
+            if self.pending:
+                status, message = 'failed', self.pending
             if applying and routing_ok and status == 'failed' and not self.rejection:
                 status, message = 'applying', 'Waiting for tunnel verification.'
             return self.publish(status, message, server=server, **fields)
@@ -165,19 +193,27 @@ class Applier:
         request = desired_request(request)
         self.request = request
         self.rejection = None
+        self.pending = None
         if request is None:
             self.rejection = 'Invalid desired-state file; no change applied.'
             return self.inspect()
-        if not self.catalog.usable() or request['server'] not in self.catalog.relays:
+        if not self.catalog.usable():
+            self.pending = 'Waiting for a fresh trusted relay catalogue; request will retry automatically.'
+            return self.inspect()
+        if request['server'] not in self.catalog.relays:
             self.rejection = 'Requested server is not in a fresh trusted relay catalogue; no change applied.'
             return self.inspect()
         routing_ok, fallback = self.routing_status()
         if not routing_ok:
-            self.rejection = 'Routing protection is incomplete; no switch applied. Run the recovery helper.'
+            self.pending = 'Waiting for tunnel and overlay routing; request will retry automatically. Run recovery if this persists.'
             return self.inspect()
         relay = self.catalog.relays[request['server']]
         try:
             keys = self.peers()
+        except (RuntimeError, ValueError, UnicodeError):
+            self.pending = 'Waiting for the WireGuard interface; request will retry automatically.'
+            return self.inspect()
+        try:
             self.publish('applying', 'Applying the requested server.', server=self.server_for(keys),
                          routing_ok=True, unreachable_fallback=fallback)
             # A failed removal aborts before any new peer is added.
@@ -193,7 +229,8 @@ class Applier:
                 if result['status'] == 'ok' and result['server'] == request['server']:
                     return result
                 if not result['routing_ok']:
-                    return result
+                    self.rejection = 'Routing changed during the switch; choose a server again after recovery.'
+                    return self.inspect()
                 self.sleep(3)
             self.rejection = 'Switch verification timed out; choose a server again to retry.'
             return self.inspect()
@@ -230,10 +267,12 @@ class Applier:
             if self.last_request != 'invalid':
                 self.next_health = 0
             self.last_request, self.request = 'invalid', None
+            self.pending = None
             self.rejection = 'Invalid desired-state file; no change applied.'
-        elif request and request_token(request) != self.last_request:
-            self.last_request = request_token(request)
+        elif request and (request_token(request) != self.last_request or self.pending):
             result = self.switch(request)
+            if not self.pending:
+                self.last_request = request_token(request)
             self.next_health = self.clock() + REFRESH_SEC
             self.push_gatus(result)
             return result
@@ -249,6 +288,7 @@ class Applier:
                 pass
         elif request is None and not self.desired_path.exists():
             self.request, self.last_request, self.rejection = None, None, None
+            self.pending = None
         if self.clock() >= self.next_health:
             result = self.inspect()
             self.next_health = self.clock() + REFRESH_SEC
@@ -268,7 +308,8 @@ def main():
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
-            return 0 if completed and recent(result.get('checked_at')) and applier.routing_status()[0] else 1
+            return 0 if (completed and recent(result.get('checked_at'))
+                         and len(applier.peers()) == 1 and applier.routing_status()[0]) else 1
         if args.doctor:
             result = read_json(applier.result_path, 16384)
             result = result if isinstance(result, dict) else {}

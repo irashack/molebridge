@@ -9,7 +9,7 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation; see [rename upgrade notes](operations.md#upgrading-from-switchyard). |
 | `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
-| `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. |
+| `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. Compose passes it as `NB_INTERFACE_NAME` and uses it for the startup gate, routing and health checks. |
 | `EXIT_TABLE` | `51821` | Dedicated table (256..2147483647). Must match the tunnel config; rerun `tools/prepare-tunnel-config.py` with `EXIT_TABLE` exported if you change it. The helper does not source `.env`. |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
@@ -45,7 +45,7 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | `applier/relays.json` | applier | panel (read-only) | `fetched_at` and validated `relays`: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in` |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields, `mullvad_exit_ip`, `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
+| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `mullvad_exit_ip`, `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 applier snapshots are mode 0644 so the non-root panel can read them; requests

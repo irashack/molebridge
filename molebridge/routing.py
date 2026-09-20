@@ -36,7 +36,7 @@ class RoutingConfig:
         return cls(str(overlay), overlay6, *interfaces, table)
 
 
-def family_status(rules, routes, config, family):
+def family_status(rules, routes, config, family, *, require_tunnel=True):
     """Check exact selectors, rule ordering, terminal guard and safe table routes."""
     if not isinstance(rules, list) or not isinstance(routes, list):
         return False, False
@@ -93,8 +93,11 @@ def family_status(rules, routes, config, family):
             rules_ok = False
         if any(normalized.get(k) != v for k, v in spec.items()):
             rules_ok = False
+        if normalized.get('iif_detached') or normalized.get('oif_detached'):
+            rules_ok = False
     rules_ok = rules_ok and found == set(expected)
     fallback = False
+    tunnel_default = False
     routes_ok = True
     for route in routes:
         if not isinstance(route, dict):
@@ -103,7 +106,8 @@ def family_status(rules, routes, config, family):
         if kind == 'unreachable' and route.get('dst') == 'default' and route.get('metric') == 4096:
             fallback = True
         elif kind == 'unicast' and route.get('dev') == config.exit_if and not any(k in route for k in ('gateway', 'nexthops', 'via')):
-            pass
+            if route.get('dst') == 'default' and 'linkdown' not in route.get('flags', []):
+                tunnel_default = True
         else:
             routes_ok = False
-    return rules_ok and routes_ok and fallback, fallback
+    return rules_ok and routes_ok and fallback and (tunnel_default or not require_tunnel), fallback
