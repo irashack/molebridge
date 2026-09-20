@@ -39,8 +39,9 @@ def payload(**changes):
 
 
 def rules(family):
+    destination, prefix = (CONFIG.overlay if family == 4 else CONFIG.overlay6).split('/')
     return [{'priority': 0, 'src': 'all', 'table': 'local'},
-            {'priority': 90, 'src': 'all', 'iif': 'mullvad', 'dst': CONFIG.overlay if family == 4 else CONFIG.overlay6, 'table': 'main'},
+            {'priority': 90, 'src': 'all', 'iif': 'mullvad', 'dst': destination, 'dstlen': int(prefix), 'table': 'main'},
             {'priority': 95, 'src': 'all', 'iif': 'wt0', 'table': 51821},
             {'priority': 96, 'src': 'all', 'oif': 'mullvad', 'table': 51821},
             {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'},
@@ -208,6 +209,28 @@ def test_narrowed_or_inverted_rule_is_not_healthy(extra):
 def test_earlier_rule_and_unsafe_table_route_rejected():
     assert not family_status([{'priority': 50, 'table': 'main'}, *rules(4)], routes(), CONFIG, 4)[0]
     assert not family_status(rules(4), [*routes(), {'dst': '192.0.2.0/24', 'dev': 'eth0'}], CONFIG, 4)[0]
+
+
+@pytest.mark.parametrize('family', [4, 6])
+def test_iproute2_separate_destination_prefix_and_cidr(family):
+    table = rules(family)
+    assert family_status(table, routes(), CONFIG, family) == (True, True)
+    table[1]['dst'] += '/' + str(table[1].pop('dstlen'))
+    assert family_status(table, routes(), CONFIG, family) == (True, True)
+
+
+@pytest.mark.parametrize('prefix', [0, 23, 25, None, '24', True, [], 129])
+def test_wrong_or_malformed_rule_prefix_rejected(prefix):
+    table = rules(4)
+    table[1]['dstlen'] = prefix
+    assert not family_status(table, routes(), CONFIG, 4)[0]
+
+
+def test_host_rule_prefix_omits_dstlen():
+    table = rules(4)
+    del table[1]['dstlen']
+    config = RoutingConfig('192.0.2.0/32')
+    assert family_status(table, routes(), config, 4) == (True, True)
 
 
 def test_switch_timeout_does_not_repeat_or_failover(runtime):

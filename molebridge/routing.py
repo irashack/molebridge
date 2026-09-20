@@ -66,6 +66,25 @@ def family_status(rules, routes, config, family):
                 rules_ok = False
                 continue
             normalized['table'] = {254: 'main', 255: 'local'}.get(normalized['table'], str(normalized['table']))
+        # iproute2 represents rule prefixes as separate dst/dstlen fields.
+        # A host prefix omits dstlen; accept CIDR strings as well.
+        if 'dst' in normalized and normalized['dst'] != 'all':
+            try:
+                destination = normalized['dst']
+                if not isinstance(destination, str):
+                    raise ValueError('invalid rule destination')
+                if 'dstlen' in normalized:
+                    length = normalized.pop('dstlen')
+                    if type(length) is not int or '/' in destination:
+                        raise ValueError('invalid rule prefix')
+                    destination = f'{destination}/{length}'
+                network = ipaddress.ip_network(destination, strict=True)
+                if network.version != family:
+                    raise ValueError('wrong rule address family')
+                normalized['dst'] = str(network)
+            except ValueError:
+                rules_ok = False
+                continue
         # Reject extra selectors, inversion, suppressors and goto actions.
         metadata = {'priority', 'protocol', 'src', 'dst', 'iif_detached', 'oif_detached'}
         if set(normalized) - (set(spec) | metadata):
