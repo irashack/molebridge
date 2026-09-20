@@ -1,2 +1,8 @@
 # Upstream license text, kept verbatim.
 panel/static/JetBrainsMono-OFL.txt -whitespace
+
+# Linux container entrypoints must survive a checkout on Windows.
+*.sh text eol=lf
+routing/* text eol=lf
+*.py text eol=lf
+applier/Dockerfile text eol=lf

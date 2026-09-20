@@ -1,112 +1,150 @@
 # Architecture
 
-## Goal
+## Goal and boundary
 
-Keep a device on its NetBird overlay while its Internet traffic leaves through
-Mullvad, chosen per session by selecting an exit node. If the Mullvad side is
-unavailable, that traffic must fail rather than leave through the host's own
-connection.
+Keep a device on NetBird while Internet traffic received by this exit leaves
+through Mullvad. If the tunnel is unavailable, forwarded traffic must fail.
+This is a property of the exit namespace, not a device-wide kill switch:
+deselecting the exit, disconnecting NetBird, client-local routes, DNS and client
+IPv6 behavior require separate verification.
 
-## Components
+## Components and trust
 
 One Compose project, four containers:
 
-| Container | Image | Network | Role |
-|---|---|---|---|
-| `wireguard` | LinuxServer WireGuard | Owns the namespace | Brings up the Mullvad tunnel with `wg-quick`; runs `routing/10-exit-routing` first |
-| `netbird` | Official NetBird client | `wireguard`'s namespace | The exit peer (kernel WireGuard, `wt0`) |
-| `applier` | LinuxServer WireGuard, entrypoint `applier/apply.sh` | `wireguard`'s namespace | Changes the tunnel's peer to the requested server; health checks |
-| `control-panel` | Official Python slim | Its own bridge, loopback publish | Web UI and relay list; no capabilities, non-root, read-only filesystem |
+| Container | Runtime | Role |
+|---|---|---|
+| `wireguard` | Local build from pinned LinuxServer WireGuard | Owns the namespace, installs routing, brings up the tunnel |
+| `netbird` | Pinned official NetBird client | Joins the namespace as the overlay exit peer |
+| `applier` | Local build from the pinned Python slim base, Debian wg/ip/curl tools | Joins the namespace, owns the relay catalogue, validates requests and controls the peer |
+| `control-panel` | Pinned official Python slim | Separate bridge, loopback publish, non-root, no capabilities or subprocesses |
 
-No custom images are built.
+Build both derived images with `docker compose build wireguard applier`. The
+routing script is copied root-owned into the WireGuard image, so the checkout
+needs no root-owned directories. Each base is
+pinned by multi-architecture digest. Debian tools come from signed package
+repositories and may change on an uncached rebuild; rebuild deliberately and
+rerun verification. The Docker build context excludes configuration, state and
+secrets.
+
+The panel can write only its request directory. It reads `state/applier/`
+through a read-only mount. It cannot change the relay catalogue, result or
+applier code. An old `state/panel/relays.json` has no authority and is ignored.
+
+The applier never mounts the tunnel config, invokes a shell, or reads a
+WireGuard private key. Nevertheless it has `NET_ADMIN` in the tunnel namespace:
+a compromised applier can retrieve the live key and alter routing. It belongs
+to the trusted computing base, along with Docker, the host and NetBird.
+Its filesystem is read-only except for its own state and bounded scratch space.
 
 ## Routing contract
 
-Installed once per `wireguard` start, before the tunnel comes up, and never
-removed when the tunnel goes down:
+Initialization installs temporary IPv4 and IPv6 `iif wt0 unreachable` rules at
+priority 80. They block forwarding while the permanent rules are rebuilt. The
+temporary rules are removed only after all installation commands succeed.
+A readiness marker gates the WireGuard healthcheck and dependent startup.
 
-| Priority | Rule | Why |
+| Priority | Rule | Purpose |
 |---|---|---|
-| 90 | `to <overlay range> lookup main` | Replies to clients return over `wt0`, not into the tunnel. |
-| 95 | `iif wt0 lookup 51821` | Everything forwarded from the overlay uses the exit table. Matching by name works before `wt0` exists. |
-| 96 | `oif mullvad lookup 51821` | The applier's probes bound to the tunnel use it. |
-| — | `unreachable default metric 4096 table 51821` | With no tunnel route, forwarded traffic is dropped. |
+| 90 | `iif mullvad to <overlay range> lookup main` | Tunnel replies return over the overlay. Client-originated traffic cannot use this exception. |
+| 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
+| 96 | `oif mullvad lookup 51821` | Interface-bound health probes use the same table. |
+| 97 | `iif wt0 unreachable` | Terminal guard if lookup 95 or all exit-table routes disappear. |
+| — | `unreachable default metric 4096 table 51821` | Fallback when the tunnel route is absent. |
 
-The tunnel config sets `Table = off`, so WireGuard installs no routes of its own.
-Its `PostUp` adds `default dev mullvad` to table 51821 and `PreDown` removes it.
-The same rules exist for IPv6.
+IPv6 uses the same contract. Rule 90 is omitted for IPv6 when no IPv6 overlay
+range is configured. Table numbers 0–255 are reserved and refused. Interface
+names and overlay ranges are validated.
 
-Consequences:
+The tunnel uses `Table = off`. Its `PostUp` adds a default route through
+`mullvad` to the exit table; `PreDown` removes it. The fallback and terminal
+guard are not removed on tunnel down. The exit's own unbound traffic continues
+through the ordinary route so NetBird and Mullvad control traffic can connect.
+The applier verifies rule priorities/selectors, both fallback routes and that
+the exit table contains no route through another interface. An unknown rule
+ahead of the guard, an extra selector, or a temporary guard left behind prevents
+a healthy result.
 
-- **Tunnel down, route deleted, or container stopped:** forwarded traffic hits
-  `unreachable`, or the namespace disappears. It never falls through to the
-  namespace's normal default route.
-- **The exit's own traffic stays off the tunnel.** The Mullvad handshake and
-  NetBird's control, signal and relay connections have no `wt0` input interface
-  and no tunnel binding, so they use the normal route. This does not rely on
-  NetBird's firewall marks.
-- **No LAN reach.** Forwarded traffic's only route is the tunnel, so the
-  host's LAN and other containers are not reachable from clients.
-- Priorities 90–96 sit ahead of NetBird's own rules (105/110).
+A privileged actor can remove or bypass these protections. Health polling
+detects drift; it is not an instantaneous defense against a compromised host.
 
-### Why not Gluetun or wg-quick's defaults
+## Relay catalogue
 
-`wg-quick`'s full-tunnel mode and Gluetun both add a default-route rule with
-`suppress_prefixlength`, plus firewall rules, that capture the overlay's return
-traffic. People running a mesh exit behind them report broken return paths and
-MTU stalls. Owning the rules keeps the return path explicit. The tunnel MTU is
-pinned at 1420.
+The applier fetches the fixed HTTPS Mullvad relay API at startup and every six
+hours. Redirects and proxy environment overrides are refused. Input is size
+limited, decoded as JSON with duplicate keys rejected, and checked for active
+WireGuard entries, hostname shape, canonical 32-byte base64 keys, IPv4 endpoints
+and bounded location strings.
 
-## Switching
+It atomically writes `state/applier/relays.json`. Failed or empty refreshes
+keep the last good catalogue and publish a sanitized error in
+`relay-error.json`; retries happen every minute. A catalogue older than 24
+hours cannot authorize a new switch or a healthy result. It does not remove a
+working tunnel merely because the API is unavailable.
 
-A Mullvad WireGuard key and tunnel address work on every Mullvad server, so a
-switch replaces only the peer's public key and endpoint.
+## Requests and switching
 
-1. The panel validates the requested name against its allowlist and writes
-   `desired.json`. It never runs `wg`, `ip` or subprocesses.
-2. The applier polls `desired.json` every 5 seconds. It re-validates the name
-   against `relays.json` (exact match, 32-byte base64 key, dotted-quad IPv4). If
-   the peer differs, it writes `status: applying`, removes the old peer, adds the
-   new one with `AllowedIPs 0.0.0.0/0, ::/0` and a 25-second keepalive, and
-   records the new server.
-3. It probes `https://am.i.mullvad.net/json` through the tunnel until the
-   handshake is fresh (under 180 seconds) and the egress is a Mullvad exit IP, or
-   60 seconds pass. It writes `ok` or `failed`. On failure it stops. It does not
-   try another server.
-4. Every 60 seconds it also rewrites the result: `ok` requires a fresh
-   handshake, Mullvad egress, and the unreachable fallback present.
+1. The panel checks membership in the read-only catalogue and atomically writes
+   `desired.json` with `server`, `requested_at` and a random `request_id`.
+2. Every five seconds the applier reads a bounded, regular, non-symlink file.
+   It validates the entire schema and resolves the name only through its own
+   fresh catalogue. The old two-field request schema remains readable.
+3. Before changing a peer it verifies routing protection. It removes old peers
+   and aborts if removal fails, then applies the approved key/endpoint using
+   fixed subprocess argument lists and timeouts.
+4. It probes Mullvad through the tunnel for up to roughly 60 seconds. Success
+   requires a fresh non-future handshake, a typed Mullvad egress response and
+   intact routing protection. The current server is derived from live peer
+   state, including the initial server from the downloaded configuration.
+5. A rejected request or failed switch is acknowledged as failed and is not
+   retried every five seconds. Selecting the same server again creates a new
+   request and retries. No other server is selected automatically. After normal
+   tunnel recreation, a previously successful desired selection is reapplied.
 
-The applier never mounts the tunnel config and never brings the interface up,
-so it never sees the private key.
+A failed health probe does not necessarily mean traffic is blocked: a working
+approved tunnel can carry traffic while the verification endpoint is unavailable.
+A failed switch remains visibly failed until a new request or process restart.
+Routing protects against a missing tunnel; probe failure does not install an
+alternate route.
 
-## Panel
+## Honest status
 
-- **Access:** no authentication. It relies on being published only through
-  something that authenticates, and binds to loopback.
-- **Posts:** `POST /select` requires a CSRF token (HMAC of a per-page cookie
-  nonce with a per-process secret) and an `Origin` matching
-  `PANEL_PUBLIC_HOSTS` or the request host. It sends `Referrer-Policy:
-  same-origin` because `no-referrer` makes browsers send `Origin: null`.
-- **Content Security Policy:** same-origin scripts, styles, fonts, images,
-  connections and manifest only; `frame-ancestors` from `PANEL_FRAME_ANCESTORS`,
-  otherwise `'none'` plus `X-Frame-Options: DENY`. No inline scripts.
-- **Relay data is untrusted:** entries are validated when fetched and escaped
-  when rendered. Static files are served from a fixed allowlist.
-- **Latency:** a TCP connect to each server's port 443 from the panel container,
-  two attempts with a 1.5-second timeout, 24 at a time, results cached 15 minutes
-  per server. A refused connection still counts as a round trip. TCP needs no
-  capabilities, unlike ICMP, and matched `ping` within a few milliseconds in
-  testing. Probes run only for pages that are open.
-- **Progressive enhancement:** without JavaScript the page still lists servers
-  and switches through a plain form post.
+Every roughly 60 seconds the applier writes a new `result.json`. The panel and
+API use the same status interpretation. A missing, malformed, future-dated or
+more-than-150-second-old check is unknown, even if the file says `ok`. Requests
+must be acknowledged by ID before their outcome is displayed. Failed browser
+polls immediately clear the connected indication. Last-check diagnostics are
+explicitly historical.
 
-## Limitations
+`/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
+verified connected result; otherwise 503. Docker's applier healthcheck checks
+freshness and current routing protection. It does not restart unhealthy
+containers. The host-side doctor additionally checks the shared namespace and
+recent verified egress.
 
-- One server for all clients of the exit; a switch drops open connections.
-- No automatic failover to another server, by design.
-- Docker does not restart containers left in a dead namespace; see
-  [operations](operations.md#restarts).
-- IPv4 Mullvad endpoints only (the tunnel still carries IPv6).
-- DNS is not routed through Mullvad; see [operations](operations.md#dns).
-- NetBird only. Other overlays would need a different `OVERLAY_IF` and have not
-  been tried.
+## Panel and access
+
+There is no application login. Loopback publishing plus authenticated access is
+required; see [access](access.md). POSTs require a cookie-bound CSRF token and an
+origin check. Security headers restrict scripts/styles/resources to same origin,
+and dashboard framing is opt-in. HTTP body size and socket time are bounded.
+Remote text is escaped in HTML and assigned as text in JavaScript.
+Panel logs use fixed route names and omit client addresses, origins, query
+strings, bodies and unknown paths.
+
+Latency probes remain unprivileged TCP connects to port 443, cached for 15
+minutes, with bounded concurrency. They run only for open pages and measure the
+host-to-relay path, not end-to-end client latency.
+
+## Recovery and verification
+
+`python3 tools/molebridge.py recover` builds first, checks for the existing
+identity volume, stops namespace dependents, then recreates all four containers
+in dependency order and waits for health. It never deletes a volume or silently
+enrolls a new peer. This is an explicit host operation, not a Docker socket
+mounted in the panel. `depends_on.restart` also handles explicit Compose
+dependency updates, but runtime crashes still require recovery.
+
+[Verification](verification.md) covers the live deployment; isolated namespace
+CI tests cover the Linux routing contract. Linux Docker and NetBird Cloud end
+to end still need the [homelab test pass](homelab-testing.md).

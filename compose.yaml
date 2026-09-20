@@ -1,4 +1,4 @@
-# Switchyard: a Mullvad WireGuard exit node for a NetBird overlay, with a web
+# Molebridge: a Mullvad WireGuard exit node for a NetBird overlay, with a web
 # panel for choosing the Mullvad server.
 #
 # Run from the repository root after following docs/setup.md:
@@ -7,20 +7,24 @@
 # Namespace ownership: `wireguard` creates the network namespace and the
 # Mullvad tunnel. `netbird` and `applier` join it (`network_mode:
 # service:wireguard`) and share its interfaces and routing. If `wireguard`
-# restarts, those two are left in its dead namespace; their healthchecks fail
-# and they need a restart to rejoin (see docs/operations.md). `control-panel`
+# is recreated, those two can remain in its old namespace. Use the host-side
+# recovery helper to recreate them together (see docs/operations.md). `control-panel`
 # runs on its own network with no capabilities and talks to the applier only
 # through files under ./state.
 #
 # Images are pinned to exact multi-arch releases. Secrets live only in the
 # mode-0600 files under ./tunnel and ./secrets; never print them or paste
 # `docker compose config` output anywhere.
-name: switchyard
+# Existing installs: retain COMPOSE_PROJECT_NAME in .env to preserve the
+# NetBird identity volume (docs/operations.md#upgrading-from-switchyard).
+name: molebridge
 
 services:
   wireguard:
-    image: lscr.io/linuxserver/wireguard:1.0.20260223-r0-ls122@sha256:dca67384e3e9a5bcc288461fa983e6fcb0e248e5a2d8e5b3e5d3f753bfac3e35
-    container_name: switchyard-wireguard
+    build:
+      context: .
+      dockerfile: routing/Dockerfile
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-wireguard"
     restart: unless-stopped
     cap_add: [NET_ADMIN]
     sysctls:
@@ -41,11 +45,8 @@ services:
     volumes:
       # wg_confs/mullvad.conf holds the Mullvad private key (mode 0600).
       - ./tunnel/wg_confs:/config/wg_confs:ro
-      # LinuxServer runs these before bringing the tunnel up. The directory and
-      # script must be owned by root on the host (docs/setup.md).
-      - ./routing:/custom-cont-init.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "ip link show mullvad >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "test -f /run/molebridge-routing-ready && ip link show mullvad >/dev/null 2>&1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -62,12 +63,12 @@ services:
 
   netbird:
     image: docker.io/netbirdio/netbird:0.78.2@sha256:0d6653f21f0417b6014e4c621c75e898e06698e1cce973398d1c3c45a30f6bd6
-    container_name: switchyard-netbird
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
     restart: unless-stopped
     network_mode: service:wireguard
     cap_add: [NET_ADMIN]
     environment:
-      NB_HOSTNAME: "${NB_HOSTNAME:-switchyard-exit}"
+      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
       NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
       NB_LOG_LEVEL: info
       # This peer only forwards traffic; it serves and uses no overlay DNS.
@@ -82,6 +83,7 @@ services:
     depends_on:
       wireguard:
         condition: service_healthy
+        restart: true
     healthcheck:
       test: ["CMD-SHELL", "netbird status 2>/dev/null | grep -q 'Management: Connected'"]
       interval: 30s
@@ -95,34 +97,46 @@ services:
           memory: 256m
 
   applier:
-    # Same image as `wireguard`, which ships wg and ip. It never sees the
-    # tunnel config or private key.
-    image: lscr.io/linuxserver/wireguard:1.0.20260223-r0-ls122@sha256:dca67384e3e9a5bcc288461fa983e6fcb0e248e5a2d8e5b3e5d3f753bfac3e35
-    container_name: switchyard-applier
+    # Built from a pinned Python base with wg/ip/curl. This trusted component
+    # owns the relay catalogue. NET_ADMIN can read the live interface key;
+    # the tunnel configuration file is deliberately not mounted.
+    build:
+      context: .
+      dockerfile: applier/Dockerfile
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-applier"
     restart: unless-stopped
     network_mode: service:wireguard
-    cap_add: [NET_ADMIN]
-    entrypoint: ["/bin/sh", "/opt/switchyard/apply.sh"]
+    cap_drop: [ALL]
+    # NET_RAW supports interface binding on older kernels; DAC_OVERRIDE reads
+    # mode-0600 requests and writes host-user-owned state directories.
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
     environment:
       EXIT_IF: mullvad
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
       GATUS_URL: "${GATUS_URL:-}"
-      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-switchyard}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
     env_file:
       # Optional GATUS_TOKEN for health pushes.
       - path: ./secrets/applier.env
         required: false
     volumes:
-      - ./applier/apply.sh:/opt/switchyard/apply.sh:ro
       - ./state/panel:/state/panel:ro
       - ./state/applier:/state/applier
     depends_on:
       wireguard:
         condition: service_healthy
+        restart: true
     healthcheck:
-      test: ["CMD-SHELL", "ip link show mullvad >/dev/null 2>&1"]
+      test: ["CMD", "python", "-m", "applier.apply", "--healthcheck"]
       interval: 30s
-      timeout: 5s
+      timeout: 25s
       retries: 3
       start_period: 30s
     logging: *logging
@@ -133,21 +147,21 @@ services:
 
   control-panel:
     image: docker.io/library/python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
-    container_name: switchyard-control-panel
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-control-panel"
     restart: unless-stopped
     user: "${PUID:-1000}:${PGID:-1000}"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     working_dir: /app
-    command: ["python", "/app/app.py"]
+    command: ["python", "/app/panel/app.py"]
     environment:
       STATE_DIR: /state
       PYTHONDONTWRITEBYTECODE: "1"
       PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
       PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
-      PANEL_TITLE: "${PANEL_TITLE:-Mullvad exit}"
-      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Exit}"
+      PANEL_TITLE: "${PANEL_TITLE:-Molebridge}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Molebridge}"
       PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this exit}"
       PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
       PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
@@ -155,7 +169,8 @@ services:
       # Loopback only. Publish it to people through an authenticating proxy.
       - "127.0.0.1:${PANEL_PORT:-8095}:8080"
     volumes:
-      - ./panel:/app:ro
+      - ./panel:/app/panel:ro
+      - ./molebridge:/app/molebridge:ro
       - ./state/panel:/state/panel
       - ./state/applier:/state/applier:ro
     networks: [panel]

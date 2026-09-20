@@ -1,4 +1,4 @@
-// Progressive enhancement for the Mullvad exit panel. Without it the page
+// Progressive enhancement for the Molebridge panel. Without it the page
 // still switches servers through the plain form POST.
 (() => {
   'use strict';
@@ -117,7 +117,7 @@
         paintMs(msEl, ms);
 
         li.append(flag, place, msEl);
-        if (!isCurrent) {
+        if (!isCurrent || page.dataset.state !== 'ok') {
           const btn = document.createElement('button');
           btn.type = 'submit';
           btn.name = 'server';
@@ -242,7 +242,7 @@
   form.addEventListener('click', (e) => {
     const btn = e.target.closest('button[name="server"]');
     if (!btn) return;
-    if (btn.value === desired) {
+    if (btn.value === desired && page.dataset.state === 'ok') {
       e.preventDefault();
       return;
     }
@@ -264,37 +264,75 @@
   // -- status polling ---------------------------------------------------------
 
   const pill = page.querySelector('[data-state-pill]');
+  let polling = false;
+  function paintStatus(state, label, message = '') {
+    if (pill) {
+      pill.className = `pill pill-${state}`;
+      pill.textContent = label;
+      pill.setAttribute('aria-live', 'polite');
+    }
+    const notes = page.querySelector('[data-notes]');
+    if (notes) {
+      notes.replaceChildren();
+      if (message) {
+        const note = document.createElement('p');
+        note.className = 'note note-negative';
+        note.textContent = message;
+        notes.append(note);
+      }
+    }
+    page.dataset.state = state;
+  }
+
   async function pollStatus() {
+    if (polling) return 30000;
+    polling = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     let data;
     try {
-      const res = await fetch('/api/status', { cache: 'no-store' });
+      const res = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
+      if (!res.ok) throw new Error('status unavailable');
       data = await res.json();
+      if (!data.view || !['ok', 'failed', 'applying', 'unknown'].includes(data.view.state)) {
+        throw new Error('invalid status');
+      }
     } catch {
+      paintStatus('unknown', 'status unavailable', 'Cannot reach the panel. Connection status is unknown.');
+      const ip = page.querySelector('[data-current-ip]');
+      if (ip) ip.textContent = '—';
       return 30000;
+    } finally {
+      clearTimeout(timeout);
+      polling = false;
     }
     const want = data.desired?.server || '';
+    const request = data.desired?.request_id || '';
     const result = data.result || {};
-    const settled = want && result.server === want && result.status !== 'applying';
-    // Once a switch lands (or another tab changed the server), redraw from the server.
-    if (page.dataset.state === 'applying' ? settled : want !== desired) {
+    const state = data.view.state;
+    if (want !== desired || request !== page.dataset.request ||
+        (state !== 'applying' && (result.server || '') !== page.dataset.actual)) {
       location.reload();
       return 0;
     }
     for (const el of page.querySelectorAll('[data-f]')) {
       const key = el.dataset.f;
       if (key === 'egress') el.textContent = `${result.egress_city ?? '(unknown)'}, ${result.egress_country ?? '(unknown)'}`;
-      else if (key === 'handshake_age_s') el.textContent = `${result.handshake_age_s ?? '(unknown)'}s ago`;
+      else if (key === 'handshake_age_s') el.textContent = `${result.handshake_age_s ?? '(unknown)'}s at last check`;
       else el.textContent = result[key] ?? '';
     }
     const ip = page.querySelector('[data-current-ip]');
-    if (ip && result.egress_ip) ip.textContent = result.egress_ip;
-    if (pill && page.dataset.state !== 'applying') {
-      const state = result.status === 'ok' ? 'ok' : result.status === 'failed' ? 'failed' : 'unknown';
-      pill.className = `pill pill-${state}`;
-      pill.textContent = state === 'ok' ? 'connected' : state;
+    if (ip) ip.textContent = state === 'ok' ? (result.egress_ip || '—') : '—';
+    const message = state === 'unknown' ? 'Status is stale or unavailable. Details are from the last check.' :
+      state === 'failed' ? (result.message || 'Tunnel verification failed.') : '';
+    const previousState = page.dataset.state;
+    paintStatus(state, data.view.label, message);
+    if (previousState === 'applying' && state === 'ok') {
+      location.reload();
+      return 0;
     }
-    desired = want;
-    return page.dataset.state === 'applying' ? 2000 : 30000;
+    renderFastest();
+    return state === 'applying' ? 2000 : 30000;
   }
 
   async function pollLoop() {

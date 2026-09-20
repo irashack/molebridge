@@ -1,11 +1,13 @@
 import http.client
 import http.server
+import io
 import json
 import re
 import shutil
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import sys
 
@@ -13,166 +15,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 import app  # noqa: E402
 
 
-SAMPLE_LOCATIONS = {
-    'se-sto': {'country': 'Sweden', 'city': 'Stockholm'},
-    'us-nyc': {'country': 'USA', 'city': 'New York'},
-}
-
-VALID_PUBKEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='  # 32 zero bytes, base64
-
-
-def make_relay(**overrides):
-    relay = {
-        'hostname': 'se-sto-wg-001',
-        'location': 'se-sto',
-        'active': True,
-        'public_key': VALID_PUBKEY,
-        'ipv4_addr_in': '198.51.100.10',
-        'owned': True,
-        'provider': 'example',
-    }
-    relay.update(overrides)
-    return relay
-
-
-class RelayParsingTests(unittest.TestCase):
-    def test_filters_inactive_and_joins_locations(self):
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [
-                make_relay(),
-                make_relay(hostname='us-nyc-wg-002', location='us-nyc', active=False),
-            ]},
-        }
-        result = app.parse_relay_response(data)
-        self.assertEqual(list(result.keys()), ['se-sto-wg-001'])
-        entry = result['se-sto-wg-001']
-        self.assertEqual(entry['country'], 'Sweden')
-        self.assertEqual(entry['city'], 'Stockholm')
-        self.assertEqual(entry['location_code'], 'se-sto')
-        self.assertEqual(entry['ipv4_addr_in'], '198.51.100.10')
-
-    def test_rejects_malformed_hostname(self):
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay(hostname='not-a-relay-name')]},
-        }
-        self.assertEqual(app.parse_relay_response(data), {})
-
-    def test_rejects_bad_public_key(self):
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay(public_key='not-base64-!!!')]},
-        }
-        self.assertEqual(app.parse_relay_response(data), {})
-
-    def test_rejects_short_public_key(self):
-        short_key = app.base64.b64encode(b'short').decode()
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay(public_key=short_key)]},
-        }
-        self.assertEqual(app.parse_relay_response(data), {})
-
-    def test_rejects_bad_ipv4(self):
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay(ipv4_addr_in='not-an-ip')]},
-        }
-        self.assertEqual(app.parse_relay_response(data), {})
-
-    def test_rejects_unknown_location(self):
-        data = {
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay(location='xx-yyy')]},
-        }
-        self.assertEqual(app.parse_relay_response(data), {})
-
-    def test_raises_on_missing_schema_sections(self):
-        with self.assertRaises(ValueError):
-            app.parse_relay_response({'locations': {}})
-        with self.assertRaises(ValueError):
-            app.parse_relay_response({'wireguard': {'relays': []}})
-        with self.assertRaises(ValueError):
-            app.parse_relay_response('not a dict')
-
-
-class RefreshBehaviorTests(unittest.TestCase):
-    def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self._orig_relays_path = app.RELAYS_PATH
-        app.RELAYS_PATH = self.tmpdir / 'relays.json'
-        app._clear_fetch_error()
-
-    def tearDown(self):
-        app.RELAYS_PATH = self._orig_relays_path
-        app._clear_fetch_error()
-        shutil.rmtree(self.tmpdir, ignore_errors=True)
-
-    def test_failed_fetch_keeps_last_good_file(self):
-        good = {'fetched_at': '2026-01-01T00:00:00Z', 'relays': {'se-sto-wg-001': {'hostname': 'se-sto-wg-001'}}}
-        app.write_json_atomic(app.RELAYS_PATH, good)
-
-        def boom(*_a, **_kw):
-            raise urllib_error_stub()
-
-        orig_fetch = app.fetch_relays_raw
-        app.fetch_relays_raw = boom
-        try:
-            changed = app.refresh_relays_once()
-        finally:
-            app.fetch_relays_raw = orig_fetch
-
-        self.assertFalse(changed)
-        self.assertEqual(app.read_json(app.RELAYS_PATH), good)
-        err, at = app.get_fetch_error()
-        self.assertIsNotNone(err)
-        self.assertIsNotNone(at)
-
-    def test_empty_result_keeps_last_good_file(self):
-        good = {'fetched_at': '2026-01-01T00:00:00Z', 'relays': {'se-sto-wg-001': {'hostname': 'se-sto-wg-001'}}}
-        app.write_json_atomic(app.RELAYS_PATH, good)
-
-        empty_payload = json.dumps({'locations': SAMPLE_LOCATIONS, 'wireguard': {'relays': []}}).encode()
-        orig_fetch = app.fetch_relays_raw
-        app.fetch_relays_raw = lambda: empty_payload
-        try:
-            changed = app.refresh_relays_once()
-        finally:
-            app.fetch_relays_raw = orig_fetch
-
-        self.assertFalse(changed)
-        self.assertEqual(app.read_json(app.RELAYS_PATH), good)
-        err, _at = app.get_fetch_error()
-        self.assertIsNotNone(err)
-
-    def test_successful_fetch_writes_new_file(self):
-        payload = json.dumps({
-            'locations': SAMPLE_LOCATIONS,
-            'wireguard': {'relays': [make_relay()]},
-        }).encode()
-        orig_fetch = app.fetch_relays_raw
-        app.fetch_relays_raw = lambda: payload
-        try:
-            changed = app.refresh_relays_once()
-        finally:
-            app.fetch_relays_raw = orig_fetch
-
-        self.assertTrue(changed)
-        data = app.read_json(app.RELAYS_PATH)
-        self.assertIn('se-sto-wg-001', data['relays'])
-        err, _at = app.get_fetch_error()
-        self.assertIsNone(err)
-
-
-def urllib_error_stub():
-    return app.urllib.error.URLError('simulated network failure')
+VALID_PUBKEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 
 
 class RenderEscapingTests(unittest.TestCase):
     def test_page_escapes_malicious_city_name(self):
         relays_data = {
-            'fetched_at': '2026-01-01T00:00:00Z',
+            'fetched_at': app.now_iso(),
             'relays': {
                 'se-sto-wg-001': {
                     'hostname': 'se-sto-wg-001',
@@ -197,6 +46,7 @@ class CsrfAndOriginUnitTests(unittest.TestCase):
         self.assertFalse(app.verify_csrf(nonce, 'wrong-token'))
         self.assertFalse(app.verify_csrf(None, token))
         self.assertFalse(app.verify_csrf(nonce, None))
+        self.assertFalse(app.verify_csrf(nonce, 'é' * 64))
 
     def test_origin_host_matching(self):
         self.assertTrue(app.origin_matches_host(None, 'exit.example.test'))
@@ -205,6 +55,9 @@ class CsrfAndOriginUnitTests(unittest.TestCase):
         self.assertFalse(app.origin_matches_host(
             'https://evil.example.com', 'exit.example.test'))
         self.assertFalse(app.origin_matches_host('https://evil.example.com', None))
+        self.assertFalse(app.origin_matches_host('http://exit.example.test:8096', 'exit.example.test:8095'))
+        self.assertTrue(app.origin_matches_host('http://[::1]:8095', '[::1]:8095'))
+        self.assertFalse(app.origin_matches_host('http://[', 'exit.example.test'))
 
 
 class ServerIntegrationTests(unittest.TestCase):
@@ -217,12 +70,12 @@ class ServerIntegrationTests(unittest.TestCase):
         (self.tmpdir / 'applier').mkdir()
 
         self._orig_paths = (app.RELAYS_PATH, app.DESIRED_PATH, app.APPLIER_RESULT_PATH)
-        app.RELAYS_PATH = self.tmpdir / 'panel' / 'relays.json'
+        app.RELAYS_PATH = self.tmpdir / 'applier' / 'relays.json'
         app.DESIRED_PATH = self.tmpdir / 'panel' / 'desired.json'
         app.APPLIER_RESULT_PATH = self.tmpdir / 'applier' / 'result.json'
 
         app.write_json_atomic(app.RELAYS_PATH, {
-            'fetched_at': '2026-01-01T00:00:00Z',
+            'fetched_at': app.now_iso(),
             'relays': {'se-sto-wg-001': {
                 'hostname': 'se-sto-wg-001', 'country': 'Sweden', 'city': 'Stockholm',
                 'location_code': 'se-sto', 'public_key': VALID_PUBKEY,
@@ -304,6 +157,30 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertEqual(resp.status, 400)
         conn.close()
         self.assertIsNone(app.read_json(app.DESIRED_PATH))
+
+    def test_malformed_origin_is_rejected_without_logging_input(self):
+        for origin in ('http://[', 'https://private.example.test'):
+            with self.subTest(origin=origin), patch('sys.stderr', new_callable=io.StringIO) as log:
+                conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+                conn.request('POST', '/select', body=b'', headers={'Origin': origin})
+                response = conn.getresponse()
+                response.read()
+                conn.close()
+                self.assertEqual(response.status, 403)
+                self.assertNotIn(origin, log.getvalue())
+                self.assertNotIn('127.0.0.1', log.getvalue())
+
+    def test_unknown_path_is_not_logged(self):
+        with patch('sys.stderr', new_callable=io.StringIO) as log:
+            conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+            conn.request('GET', '/private.example.test?token=example')
+            response = conn.getresponse()
+            response.read()
+            conn.close()
+            self.assertEqual(response.status, 404)
+            self.assertNotIn('private.example.test', log.getvalue())
+            self.assertNotIn('token=', log.getvalue())
+            self.assertIn('(unknown route)', log.getvalue())
 
     def test_post_oversized_body_is_rejected(self):
         _status, nonce, token = self._get_index()
@@ -422,24 +299,12 @@ class LatencyTests(unittest.TestCase):
         many = ','.join(f'x{i}-wg-001' for i in range(200))
         self.assertEqual(len(app.latency_targets({'hosts': [many]}, self.RELAYS)), app.MAX_PROBE_HOSTS)
 
-    def test_real_probe_counts_refused_connection_as_round_trip(self):
-        with socket_listener_closed() as port:
-            self.assertIsNotNone(self._orig_probe('127.0.0.1', port=port, timeout=1, attempts=1))
-
-
-class socket_listener_closed:
-    """A loopback port with nothing listening, so connects are refused."""
-
-    def __enter__(self):
-        import socket
-        s = socket.socket()
-        s.bind(('127.0.0.1', 0))
-        self.port = s.getsockname()[1]
-        s.close()
-        return self.port
-
-    def __exit__(self, *exc):
-        return False
+    def test_probe_counts_refused_connection_as_round_trip(self):
+        from unittest.mock import patch
+        with patch('app.socket.create_connection', side_effect=ConnectionRefusedError):
+            self.assertIsNotNone(self._orig_probe('198.51.100.10', attempts=1))
+        with patch('app.socket.create_connection', side_effect=TimeoutError):
+            self.assertIsNone(self._orig_probe('198.51.100.10', attempts=1))
 
 
 class FramingAndRenderTests(unittest.TestCase):
@@ -505,6 +370,36 @@ class EmbedAndApiIntegrationTests(ServerIntegrationTests):
         resp, body = self._get('/api/status')
         self.assertEqual(resp.status, 200)
         self.assertEqual(json.loads(body)['desired']['server'], 'se-sto-wg-001')
+
+    def test_stale_success_is_unknown_in_api_html_and_readiness(self):
+        app.write_json_atomic(app.APPLIER_RESULT_PATH, {
+            'server': 'se-sto-wg-001', 'status': 'ok', 'checked_at': '2000-01-01T00:00:00Z',
+            'routing_ok': True, 'mullvad_exit_ip': True,
+        })
+        _, body = self._get('/api/status')
+        self.assertEqual(json.loads(body)['view']['state'], 'unknown')
+        _, page = self._get('/')
+        self.assertIn(b'status stale', page)
+        ready, _ = self._get('/readyz')
+        self.assertEqual(ready.status, 503)
+        live, _ = self._get('/healthz')
+        self.assertEqual(live.status, 200)
+
+    def test_fresh_success_ready_without_desired_file(self):
+        app.write_json_atomic(app.APPLIER_RESULT_PATH, {
+            'server': 'se-sto-wg-001', 'status': 'ok', 'checked_at': app.now_iso(),
+            'routing_ok': True, 'mullvad_exit_ip': True,
+        })
+        ready, _ = self._get('/readyz')
+        self.assertEqual(ready.status, 200)
+        _, page = self._get('/')
+        self.assertIn(b'se-sto-wg-001', page)
+        self.assertNotIn(b'Awaiting verified server', page)
+
+    def test_panel_ignores_old_writable_catalogue(self):
+        # Production RELAYS_PATH is under the read-only applier mount.
+        self.assertEqual(app.STATE_DIR / 'applier' / 'relays.json',
+                         self._orig_paths[0])
 
     def test_static_files_are_allowlisted(self):
         resp, _ = self._get('/static/panel.js')

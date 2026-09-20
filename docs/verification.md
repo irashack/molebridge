@@ -2,8 +2,11 @@
 
 Run these on your own host before letting real traffic through the exit, and
 again after changing routing, the tunnel config, compose networking or the
-applier. They are the checks run on the author's deployment. None of them print
-secrets.
+applier. The original drills were used on the author's deployment; the expanded
+checks for this revision still need the [homelab pass](homelab-testing.md).
+Keep an independent host access path. Do not share raw addresses or peer
+information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
+`wg show ... private-key` for a report: they disclose the live key.
 
 ## Inside the namespace
 
@@ -13,12 +16,14 @@ secrets.
 docker compose exec applier sh
 ```
 
-1. **Rules are installed.** `ip rule` shows priority 90 (overlay range → `main`),
-   95 (`iif wt0` → table 51821) and 96 (`oif mullvad` → table 51821). With
-   `OVERLAY6_CIDR` set, `ip -6 rule` shows the same.
+1. **Rules are installed.** `ip rule` shows priority 90 (`iif mullvad`, overlay
+   destination → `main`), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
+   51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard should
+   remain. IPv6 has 95/96/97 in all cases and 90 when `OVERLAY6_CIDR` is set.
 2. **The exit table fails closed.** `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
-   holds for `ip -6 route show table 51821`.
+   holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
+   IPv4-only config still has the IPv6 unreachable fallback.
 3. **The tunnel egresses through Mullvad.**
    `curl -s --interface mullvad https://am.i.mullvad.net/json` reports
    `"mullvad_exit_ip": true`.
@@ -26,27 +31,51 @@ docker compose exec applier sh
    without `--interface` reports your host's normal IP. That is the path the
    Mullvad handshake and NetBird's own control connections take; it must stay
    off the tunnel.
-5. **Unlisted servers are refused.** Outside the container, write a server name
-   that is not in `state/panel/relays.json` into `state/panel/desired.json`
-   (for example `{"server": "xx-xxx-wg-999"}`). `docker compose logs applier`
-   shows `not in the relay allowlist; ignoring`, and `wg show mullvad` still
-   lists the old peer. Restore the file afterwards by picking a server in the
-   panel.
+5. **Trust boundary.** The panel can read `state/applier/relays.json` but cannot
+   write the applier mount. The old panel-owned catalogue is ignored. A malformed
+   desired file and a valid request for an unlisted name must report failure
+   without changing the peer. A valid request has `server`, `requested_at`
+   (current UTC `YYYY-MM-DDTHH:MM:SSZ`) and an optional 32-character lowercase
+   hexadecimal `request_id`. Use a fictitious unlisted name such as
+   `xx-xxx-wg-999`, then restore the desired state by selecting a valid server
+   in the panel. `wg show mullvad peers` exposes only the public peer key.
+6. **Doctor.** On the host, `python3 tools/molebridge.py doctor` should pass.
+   It checks actual namespace agreement as well as routing and status freshness.
 
 ## Fail-closed drills
 
 For each drill, keep a client with the exit selected loading
 <https://am.i.mullvad.net> or pinging a public IP. During the drill the client
-must lose Internet access. It must **never** show your host's own IP.
+must lose the tested exit path. It must **never** show your host's own IP. Test
+IPv4 and IPv6 explicitly; a generic browser check may exercise only one family.
+Also record any client fallback to its own connection: server routing cannot
+enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
 
 | Drill | Break | Restore |
 |---|---|---|
 | Tunnel down | `docker compose exec wireguard wg-quick down /config/wg_confs/mullvad.conf` | `docker compose exec wireguard wg-quick up /config/wg_confs/mullvad.conf` |
-| Route deleted | `docker compose exec wireguard ip route del default dev mullvad table 51821` | `docker compose exec wireguard ip route replace default dev mullvad table 51821` |
-| Container stopped | `docker compose stop wireguard` | `docker compose up -d`, then `docker compose restart netbird applier` |
+| IPv4 route deleted | `docker compose exec wireguard ip route del default dev mullvad table 51821` | `docker compose exec wireguard ip route replace default dev mullvad table 51821` |
+| IPv6 route deleted (when configured) | `docker compose exec wireguard ip -6 route del default dev mullvad table 51821` | `docker compose exec wireguard ip -6 route replace default dev mullvad table 51821` |
+| IPv4 lookup rule deleted | `docker compose exec wireguard ip rule del priority 95` | `python3 tools/molebridge.py recover` |
+| IPv6 lookup rule deleted | `docker compose exec wireguard ip -6 rule del priority 95` | `python3 tools/molebridge.py recover` |
+| Container stopped | `docker compose stop wireguard` | `python3 tools/molebridge.py recover` |
 
 After each restore, the client regains Mullvad egress. After the tunnel-down
-drill, the applier re-applies the panel's chosen server within a few seconds.
+drill, the applier re-applies a previously successful chosen server after the
+interface returns. If a request was rejected or failed, select again to retry.
+Confirm the exit host's own unbound traffic stays on its ordinary path while
+the client path is blocked. The isolated `tools/check-routing.sh` drill also
+deletes all exit-table routes together to exercise the terminal guard.
+
+## Status and recovery
+
+Stop the applier while leaving the tunnel running. Within 150 seconds plus one
+browser poll, the panel must show stale/unknown and `/readyz` must return 503;
+`/healthz` remains 200. Restart the applier and confirm fresh status returns.
+Disconnect an open browser from the panel and confirm its next failed poll
+clears connected status. Test a failed switch followed by selecting the same
+server again. Finally, verify the recovery helper, container recreation and
+host reboot preserve the NetBird peer identity and shared namespace.
 
 ## From a client
 
@@ -66,6 +95,6 @@ With the exit selected on a device in `exit-users`:
 - **Switch.** Choose a server in another city in the panel. The panel reports
   the new city within about a minute, and the client's egress follows without
   reselecting the exit.
-- **DNS.** Switchyard does not change DNS; see
+- **DNS.** Molebridge does not change DNS; see
   [operations](operations.md#dns). Check that mullvad.net/check's DNS leak
   result is acceptable to you.

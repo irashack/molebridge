@@ -9,16 +9,16 @@ spec = importlib.util.spec_from_file_location('prepare', Path(__file__).parent /
 prepare = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(prepare)
 
-# Fictitious values: all-zero and all-one 32-byte keys, documentation addresses.
+# Fictitious values: all-zero keys and documentation addresses.
 PRIVATE = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
-PUBLIC = 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE='
+PUBLIC = PRIVATE
 
 DOWNLOADED = f"""
 [Interface]
 # Device: Example Device
 PrivateKey = {PRIVATE}
-Address = 10.64.0.2/32,fc00:bbbb:bbbb:bb01::1:2/128
-DNS = 10.64.0.1
+Address = 192.0.2.2/32,2001:db8:4::2/128
+DNS = 192.0.2.1
 
 [Peer]
 PublicKey = {PUBLIC}
@@ -38,7 +38,7 @@ class PrepareTunnelConfigTests(unittest.TestCase):
         self.assertIn('AllowedIPs = 0.0.0.0/0, ::/0', out)
 
     def test_ipv4_only_config_omits_ipv6_routes(self):
-        out = prepare.build_tunnel_conf(DOWNLOADED.replace(',fc00:bbbb:bbbb:bb01::1:2/128', ''))
+        out = prepare.build_tunnel_conf(DOWNLOADED.replace(',2001:db8:4::2/128', ''))
         self.assertNotIn('ip -6', out)
         self.assertIn('AllowedIPs = 0.0.0.0/0\n', out)
 
@@ -48,6 +48,23 @@ class PrepareTunnelConfigTests(unittest.TestCase):
         with self.assertRaises(prepare.ConfigError):
             prepare.build_tunnel_conf(DOWNLOADED.replace('198.51.100.10:51820', 'se-sto-wg-001:51820'))
 
+    def test_rejects_reserved_table_and_invalid_port(self):
+        for table in ('0', '254', '255', '000256', '4294967296', '51821; echo bad'):
+            with self.subTest(table=table), self.assertRaises(prepare.ConfigError):
+                prepare.build_tunnel_conf(DOWNLOADED, table=table)
+        for port in ('0', '65536', '-1'):
+            with self.subTest(port=port), self.assertRaises(prepare.ConfigError):
+                prepare.build_tunnel_conf(DOWNLOADED.replace(':51820', ':' + port))
+
+    @unittest.skipIf(hasattr(os, 'fchmod'), 'non-POSIX behavior')
+    def test_unsupported_host_refuses_before_creating_key_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'nested' / 'mullvad.conf'
+            with self.assertRaises(prepare.ConfigError):
+                prepare.write_private(dest, DOWNLOADED)
+            self.assertFalse(dest.parent.exists())
+
+    @unittest.skipUnless(hasattr(os, 'fchmod'), 'POSIX file permissions required')
     def test_writes_mode_0600_without_printing_keys(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / 'download.conf'

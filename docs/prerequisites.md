@@ -7,7 +7,7 @@ Gather these before [setup](setup.md).
 - **An active Mullvad account.** When its time runs out, the tunnel stops
   handshaking and the exit fails closed; the panel reports that the account
   may have expired.
-- **One free device slot.** Switchyard uses a single WireGuard key for every
+- **One free device slot.** Molebridge uses a single WireGuard key for every
   server, so it takes one slot no matter how often you switch.
 - **A WireGuard configuration file** generated for that device:
   1. Sign in at mullvad.net and open the WireGuard configuration generator
@@ -24,9 +24,9 @@ Gather these before [setup](setup.md).
 - **A NetBird account**, NetBird Cloud or self-hosted, with clients that
   support exit nodes (the iOS, Android, macOS, Windows and Linux clients do).
   The author's deployment runs NetBird 0.78.
-- **The account's peer network range**, for example `100.92.0.0/16`. It appears
+- **The account's peer network range**. It appears
   in the dashboard's network settings and as `network_range` in the
-  management API's account settings. Switchyard needs it so replies to your
+  management API's account settings. Molebridge needs it so replies to your
   devices return over the overlay rather than into the tunnel.
 - **Direct connections on phones.** NetBird's mobile apps default to *Force
   relay connection* to save battery, which sends all exit traffic through a
@@ -39,9 +39,9 @@ Gather these before [setup](setup.md).
   [verification](verification.md#from-a-client)).
 - **Two groups:**
   - `exit-users`: only the devices allowed to use this exit;
-  - `exit-nodes`: the Switchyard peer.
+  - `exit-nodes`: the Molebridge peer.
 
-  Never put the Switchyard peer in `exit-users`, and never distribute the exit
+  Never put the Molebridge peer in `exit-users`, and never distribute the exit
   route to `All`. The exit forwards everything a distributed client sends it,
   and NetBird access policies do not filter forwarded destinations.
 - **An access policy** from `exit-users` to `exit-nodes`. ICMP alone is enough;
@@ -49,8 +49,9 @@ Gather these before [setup](setup.md).
 - **A setup key** for the peer's first enrollment: one-off, auto-assigning
   `exit-nodes`, short expiry.
 - Later, during setup, you create an **exit node route**: network `0.0.0.0/0`,
-  routing peer the Switchyard peer, masquerade on, auto-apply off, distribution
-  group `exit-users`. With IPv6 overlay, add a matching `::/0` route. See
+  routing peer the Molebridge peer, masquerade on, auto-apply off, distribution
+  group `exit-users`. With supported IPv6 overlay, NetBird generates the matching
+  `::/0` exit route; confirm it is present for the tested account/client version. See
   NetBird's [exit node guide](https://docs.netbird.io/use-cases/remote-access/exit-nodes).
 
 ## Host
@@ -62,6 +63,11 @@ Gather these before [setup](setup.md).
   - macOS with OrbStack: tested on Apple silicon;
   - Docker Desktop: untested.
 - **amd64 or arm64.** The pinned images are multi-arch.
+- **Python 3.10+ on the host** for configuration, doctor and recovery helpers.
+  Native Windows configuration writing is unsupported; create the mode-0600
+  tunnel config on the Docker host. The panel/applier Python runtimes are bundled.
+- **Build access:** the first setup builds two small derived images from the
+  pinned bases. The applier installs wg/ip/curl from signed Debian repositories.
 - **Outbound network access:** UDP 51820 to Mullvad servers, HTTPS to
   `api.mullvad.net` (relay list) and `am.i.mullvad.net` (egress checks), TCP 443
   to Mullvad servers (latency probes), and whatever NetBird needs to reach your

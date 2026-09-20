@@ -1,0 +1,9 @@
+**
+!molebridge/
+!molebridge/*.py
+!applier/
+!applier/*.py
+!applier/Dockerfile
+!routing/
+!routing/10-exit-routing
+!routing/Dockerfile

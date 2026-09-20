@@ -3,7 +3,7 @@
 ## Switching servers
 
 Open the panel. **Current exit** shows the chosen server, its egress IP, and a
-status: connected, switching or failed. **Fastest from …** lists the
+status: connected, switching, failed or unknown/stale. **Fastest from …** lists the
 lowest-latency cities with a Switch button. **Locations** groups every Mullvad
 WireGuard server by country and city, with a filter (press `/`).
 
@@ -11,15 +11,22 @@ A switch takes two clicks: the first arms the button, the second (within four
 seconds) confirms. Without JavaScript a single click submits. The applier then
 swaps the tunnel's peer and waits for a fresh handshake and a Mullvad-confirmed
 egress, normally a few seconds. The panel follows along and refreshes when it
-finishes.
+finishes. The initial peer is identified from the running interface without an
+initial panel selection.
 
 Every device using the exit shares the one server, and open connections through
 the exit drop at the switch.
 
-If a switch fails (no handshake or no Mullvad egress within 60 seconds), the
-panel shows **failed** with the reason, and the exit stays fail-closed: clients
-have no Internet through it until another server is chosen. The applier never
-picks a different server on its own.
+If a switch fails, the panel shows the failure and the request is not retried
+continuously. Select the same server again to retry, or select another one.
+The applier never chooses another server on its own. A failed probe means the
+path was not verified; an approved working tunnel can still carry traffic while
+the check endpoint is unavailable. Routing prevents fallback through the host.
+
+Missing or more-than-150-second-old applier checks show unknown/stale. The page
+polls every 30 seconds when settled and every two seconds while switching;
+failed browser polls clear the connected indication. Diagnostics describe the
+last check, not a live handshake age.
 
 ## Latency
 
@@ -37,9 +44,11 @@ measured.
 
 ## Relay list
 
-The panel fetches Mullvad's published relay list on start and every six hours,
-keeping only active WireGuard servers with a valid key and IPv4 address. If a
-fetch fails, it keeps the last good list and shows the error.
+The applier fetches Mullvad's published relay list at startup and every six
+hours. It keeps the last good catalogue if a fetch fails, retries after a
+minute and publishes a sanitized error for the panel. A catalogue older than
+24 hours cannot authorize switching or a healthy result. The panel's mount is
+read-only; it can only submit a desired server name.
 
 ## Embedding in a dashboard
 
@@ -54,7 +63,7 @@ For Glance or Dynacat:
 
 ```yaml
 - type: iframe
-  title: Mullvad Exit
+  title: Molebridge
   title-url: https://exit.example.net
   source: https://exit.example.net/embed
   height: 460
@@ -78,7 +87,7 @@ has been tested with a passkey sign-in through a NetBird reverse proxy.
 
 ## DNS
 
-Switchyard leaves DNS alone. Clients keep resolving names with whatever
+Molebridge leaves DNS alone. Clients keep resolving names with whatever
 resolver they already use, while traffic leaves through Mullvad. A DNS leak
 test may therefore show your usual resolver. On the author's iPhone with local
 DNS, mullvad.net/check reported no DNS or WebRTC leak, but that depends on the
@@ -87,49 +96,96 @@ client and network.
 Sending DNS through Mullvad instead would need a resolver inside the exit's
 namespace forwarding to Mullvad's resolver over the tunnel, plus a NetBird
 nameserver group. That would apply even when the exit is not selected, and DNS
-would fail whenever the tunnel is down. Switchyard does not provide it.
+would fail whenever the tunnel is down. Molebridge does not provide it.
 
 ## Health
 
-The applier rewrites `state/applier/result.json` about every minute. Status is
-`ok` only when the handshake is under three minutes old, the egress is
-confirmed Mullvad, and the unreachable fallback is present. Otherwise it is
-`failed` with a reason; if both egress and handshake fail, the reason says the
-Mullvad account may have expired.
+The applier rewrites `state/applier/result.json` about every minute. Healthy
+requires a recent handshake, confirmed Mullvad egress, a fresh catalogue matching
+the observed peer, and intact routing rules and fallback routes for both address
+families. Missing, malformed and future-dated status is not trusted.
 
-To feed monitoring, set `GATUS_URL` and `GATUS_ENDPOINT` in `.env` and put
-`GATUS_TOKEN=` followed by the token in `secrets/applier.env` (mode 0600). The
-applier pushes each result to that Gatus external endpoint.
-
-## Restarts
-
-`wireguard` owns the network namespace. When it restarts, `netbird` and
-`applier` are left in the old, dead namespace: their healthchecks fail but Docker
-does not restart unhealthy containers on its own. Restart them:
+`/healthz` checks the panel process. `/readyz` returns 200 only for fresh
+verified connectivity, otherwise 503. The host-side doctor checks configuration,
+permissions, the existing identity volume, namespace agreement and applier state:
 
 ```sh
-docker compose restart netbird applier
+python3 tools/molebridge.py doctor
 ```
 
-or run a watchdog that restarts unhealthy containers. The author's deployment
-uses one; recovery took about nine minutes with the exit fail-closed the whole
-time.
+For optional Gatus monitoring, configure `GATUS_URL` and `GATUS_ENDPOINT`,
+and store `GATUS_TOKEN` in `secrets/applier.env` (mode 0600). Prefer HTTPS;
+use HTTP only over a trusted local transport. Configure missing pushes as
+failures in the monitoring service: a stopped applier cannot send a failure.
+
+## Restarts and recovery
+
+A WireGuard container recreation can leave NetBird and the applier in an old
+namespace. Docker does not restart unhealthy containers by itself. Explicit
+Compose dependency updates request dependent restarts, but they do not cover
+all runtime crashes. Use the supported host-side recovery command:
+
+```sh
+python3 tools/molebridge.py recover
+```
+
+It validates the existing deployment and identity volume, builds both derived
+images before interrupting traffic, stops namespace dependents, recreates all
+four containers together, waits for health and runs doctor. It never deletes a
+volume or intentionally re-enrolls a peer. A failed build leaves the running
+exit alone. A failure after recreation can leave the exit unavailable; fix the
+reported issue and rerun recovery. Keep an independent host access path.
+
+Recovery is explicit. There is no bundled Docker-socket watchdog. The new
+procedure still needs live homelab validation, including reboot and container
+recreation; see [the test handoff](homelab-testing.md).
 
 ## Upgrades
 
-Images are pinned by version and digest in `compose.yaml`. After updating a
-pin:
+If your installation predates the Molebridge name, follow the rename notes
+below first. Keep `.env` and the named NetBird identity volume. After pulling
+reviewed source/image pin changes:
 
 ```sh
-docker compose pull
-docker compose up -d
-docker compose restart netbird applier
+docker compose pull netbird control-panel
+python3 tools/molebridge.py recover
 ```
 
-Recreating `wireguard` interrupts the exit for about 30 seconds. The applier
-re-applies the chosen server afterwards. Rerun the
-[namespace checks](verification.md#inside-the-namespace) after changing the
-WireGuard or NetBird image.
+The helper rebuilds the routing and applier images from their pinned bases.
+An uncached applier build can update Debian tool packages; use `docker compose
+build --no-cache applier` when intentionally refreshing them, then recover.
+Rerun [verification](verification.md) after routing, image or applier changes.
+
+### Upgrading from Switchyard
+
+Molebridge was previously called Switchyard. New installations use `molebridge`
+as the Compose project name. Docker scopes named volumes to that name, so
+changing it on an existing installation would create a fresh NetBird identity
+volume and leave the old deployment behind.
+
+Before starting the updated Compose file, add this to your existing `.env`:
+
+```sh
+COMPOSE_PROJECT_NAME=switchyard
+```
+
+Use your existing project name instead if you previously overrode it with
+`docker compose -p` or `COMPOSE_PROJECT_NAME`. Keep the same project name for
+every Compose command. Container names follow it too.
+
+Keep your existing `NB_HOSTNAME` and `GATUS_ENDPOINT` values. If you relied on
+their previous defaults, set them explicitly to `switchyard-exit` and
+`switchyard` respectively. Keep the existing `state/`, `tunnel/`, `secrets/`
+and named volume; do not replace `.env` with the new example or run
+`docker compose down -v` during the upgrade.
+
+Then use the normal upgrade commands above. Existing `PANEL_TITLE` and
+`PANEL_SHORT_TITLE` overrides still apply; remove them or set them to
+`Molebridge` to use the new branding. The directory containing your checkout
+can keep its old name.
+
+This migration procedure has not been verified on a live Docker host. Run the
+[verification checks](verification.md) after upgrading.
 
 ## Rotating the Mullvad key
 
@@ -137,8 +193,7 @@ Generate a new configuration for a new device on mullvad.net, run
 `tools/prepare-tunnel-config.py` on it, then:
 
 ```sh
-docker compose up -d --force-recreate wireguard
-docker compose restart netbird applier
+python3 tools/molebridge.py recover
 ```
 
 Once the exit works, remove the old device on mullvad.net.

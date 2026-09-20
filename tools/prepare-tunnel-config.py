@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a WireGuard config downloaded from Mullvad into Switchyard's tunnel config.
+"""Turn a WireGuard config downloaded from Mullvad into Molebridge's tunnel config.
 
 Usage: tools/prepare-tunnel-config.py DOWNLOADED.conf [OUTPUT]
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -67,8 +68,8 @@ def build_tunnel_conf(text: str, table: str = EXIT_TABLE) -> str:
     addresses = [a.strip() for a in iface.get('Address', '').split(',') if a.strip()]
     try:
         parsed = [ipaddress.ip_interface(a) for a in addresses]
-    except ValueError as exc:
-        raise ConfigError(f'Interface Address is not valid: {exc}') from None
+    except ValueError:
+        raise ConfigError('Interface Address is not valid') from None
     if not any(a.version == 4 for a in parsed):
         raise ConfigError('Interface Address has no IPv4 tunnel address')
 
@@ -78,10 +79,10 @@ def build_tunnel_conf(text: str, table: str = EXIT_TABLE) -> str:
         ipaddress.IPv4Address(host)
     except ValueError:
         raise ConfigError('Peer Endpoint must be an IPv4 address and port') from None
-    if not port.isdigit():
-        raise ConfigError('Peer Endpoint has no port')
-    if not table.isdigit():
-        raise ConfigError('EXIT_TABLE must be a number')
+    if not re.fullmatch(r'[0-9]{1,5}', port) or not 1 <= int(port) <= 65535:
+        raise ConfigError('Peer Endpoint port must be 1..65535')
+    if not re.fullmatch(r'[1-9][0-9]{0,9}', table) or not 256 <= int(table) <= 2147483647:
+        raise ConfigError('EXIT_TABLE must be an unreserved table number (256..2147483647)')
 
     has_v6 = any(a.version == 6 for a in parsed)
     post_up = f'ip route replace default dev %i table {table}'
@@ -110,11 +111,13 @@ def build_tunnel_conf(text: str, table: str = EXIT_TABLE) -> str:
 
 
 def write_private(path: Path, content: str) -> None:
+    if not hasattr(os, 'fchmod'):
+        raise ConfigError('Create the tunnel config on a POSIX host that supports mode 0600')
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix='.tmp-', dir=str(path.parent))
     try:
-        os.fchmod(fd, 0o600)
         with os.fdopen(fd, 'w') as f:
+            os.fchmod(f.fileno(), 0o600)
             f.write(content)
         os.replace(tmp, path)
     except BaseException:
@@ -133,10 +136,10 @@ def main(argv: list) -> int:
     output = Path(argv[2]) if len(argv) == 3 else DEFAULT_OUTPUT
     try:
         content = build_tunnel_conf(source.read_text())
+        write_private(output, content)
     except (OSError, ConfigError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1
-    write_private(output, content)
     print(f'wrote {output} (mode 0600); delete {source} now')
     return 0
 

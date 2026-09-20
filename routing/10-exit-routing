@@ -1,101 +1,82 @@
 #!/usr/bin/env sh
-# Idempotent namespace routing for the Switchyard exit.
-#
-# Runs once per `wireguard` container start via LinuxServer's
-# /custom-cont-init.d, before wg-quick brings the tunnel up. These rules exist
-# for the whole life of the namespace and are never removed by tunnel down.
-# That is what keeps forwarded traffic fail-closed (routed to an `unreachable`
-# entry) instead of falling back to the host's own Internet route when the
-# tunnel is down, its route is deleted, or the wireguard container stops.
-# See docs/architecture.md, "Routing contract".
-#
-# Priorities 90/95/96 must stay ahead of NetBird's own 105/110 rules. Do not
-# add wg-quick's usual prefix-length-suppressing default-route rule here: it
-# breaks the return path to overlay clients.
+# Install Molebridge's namespace routing before the overlay can start.
+# Priority 80 blocks forwarded traffic while rules are being rebuilt.
+# Priority 97 is a permanent terminal guard if lookup 95 or its routes vanish.
 set -eu
+set -f
 
 OVERLAY_CIDR="${OVERLAY_CIDR:-}"
 OVERLAY6_CIDR="${OVERLAY6_CIDR:-}"
 OVERLAY_IF="${OVERLAY_IF:-wt0}"
 EXIT_IF="${EXIT_IF:-mullvad}"
 EXIT_TABLE="${EXIT_TABLE:-51821}"
+READY_FILE="${ROUTING_READY_FILE:-/run/molebridge-routing-ready}"
+rm -f "$READY_FILE"
 
-fail() {
-    echo "10-exit-routing: $1" >&2
-    exit 1
-}
-
+fail() { echo "10-exit-routing: $1" >&2; exit 1; }
 is_uint() {
-    case "$1" in
-        ''|*[!0-9]*) return 1 ;;
-        *) return 0 ;;
-    esac
+    case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac
 }
+valid_if() {
+    case "$1" in ''|[!a-zA-Z0-9_]*|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
+    [ "${#1}" -le 15 ]
+}
+valid_if "$OVERLAY_IF" && valid_if "$EXIT_IF" || fail "invalid interface name"
+[ "$OVERLAY_IF" != "$EXIT_IF" ] || fail "overlay and exit interfaces must differ"
+is_uint "$EXIT_TABLE" || fail "EXIT_TABLE must be numeric"
+case "$EXIT_TABLE" in 0*) fail "EXIT_TABLE must be canonical decimal" ;; esac
+[ "${#EXIT_TABLE}" -le 10 ] && [ "$EXIT_TABLE" -ge 256 ] && [ "$EXIT_TABLE" -le 2147483647 ] || fail "EXIT_TABLE must be 256..2147483647"
 
-[ -n "$OVERLAY_CIDR" ] || fail "OVERLAY_CIDR is not set; refusing to start without a known overlay range"
-case "$OVERLAY_CIDR" in
-    */*) : ;;
-    *) fail "OVERLAY_CIDR '$OVERLAY_CIDR' is not in CIDR form (A.B.C.D/N)" ;;
-esac
-
-addr="${OVERLAY_CIDR%/*}"
-prefix="${OVERLAY_CIDR#*/}"
-
-octet_count=$(printf '%s' "$addr" | awk -F. '{print NF}')
-[ "$octet_count" -eq 4 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' address does not have 4 octets"
-
-old_ifs=$IFS
-IFS=.
+case "$OVERLAY_CIDR" in */*) : ;; *) fail "OVERLAY_CIDR must be an IPv4 CIDR" ;; esac
+addr=${OVERLAY_CIDR%/*}
+prefix=${OVERLAY_CIDR#*/}
+is_uint "$prefix" || fail "invalid IPv4 prefix"
+case "$prefix" in 0*) fail "IPv4 default routes and leading zeroes are forbidden" ;; esac
+[ "${#prefix}" -le 2 ] && [ "$prefix" -le 32 ] || fail "invalid IPv4 prefix"
+old_ifs=$IFS; IFS=.
+# Deliberate splitting; globbing is disabled above.
 # shellcheck disable=SC2086
 set -- $addr
 IFS=$old_ifs
-for octet in "$1" "$2" "$3" "$4"; do
-    is_uint "$octet" || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has a non-numeric octet '$octet'"
-    [ "$octet" -le 255 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has an out-of-range octet '$octet'"
+[ "$#" -eq 4 ] || fail "IPv4 address needs four octets"
+address_num=0
+for octet in "$@"; do
+    is_uint "$octet" || fail "invalid IPv4 octet"
+    case "$octet" in 0) : ;; 0*) fail "IPv4 leading zeroes are forbidden" ;; esac
+    [ "${#octet}" -le 3 ] && [ "$octet" -le 255 ] || fail "invalid IPv4 octet"
+    address_num=$((address_num * 256 + octet))
 done
-is_uint "$prefix" || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has a non-numeric prefix '$prefix'"
-[ "$prefix" -le 32 ] || fail "OVERLAY_CIDR '$OVERLAY_CIDR' has an out-of-range prefix '$prefix'"
-
+host_bits=$((32 - prefix))
+[ $((address_num % (1 << host_bits))) -eq 0 ] || fail "OVERLAY_CIDR must use the network address"
 if [ -n "$OVERLAY6_CIDR" ]; then
-    case "$OVERLAY6_CIDR" in
-        *:*/*) : ;;
-        *) fail "OVERLAY6_CIDR '$OVERLAY6_CIDR' is not an IPv6 CIDR" ;;
-    esac
+    case "$OVERLAY6_CIDR" in *:*/*) : ;; *) fail "OVERLAY6_CIDR must be an IPv6 CIDR" ;; esac
+    prefix6=${OVERLAY6_CIDR#*/}
+    is_uint "$prefix6" || fail "invalid IPv6 prefix"
+    [ "${#prefix6}" -le 3 ] && [ "$prefix6" -ge 1 ] && [ "$prefix6" -le 128 ] || fail "invalid IPv6 prefix"
 fi
-is_uint "$EXIT_TABLE" || fail "EXIT_TABLE '$EXIT_TABLE' is not a number"
 
-echo "10-exit-routing: installing rules for overlay $OVERLAY_CIDR ${OVERLAY6_CIDR:-(no IPv6 overlay)}"
-
-# `ip rule add` is not idempotent: delete any matching rule first so a restart
-# does not stack duplicates. "No such rule" on the first start is expected.
-
-# 1. Replies to overlay clients go back over the overlay, not the tunnel.
-while ip rule del to "$OVERLAY_CIDR" lookup main priority 90 2>/dev/null; do :; done
-ip rule add to "$OVERLAY_CIDR" lookup main priority 90
-
-# 2. Everything forwarded in from the overlay uses the exit table. Matching by
-#    interface name works before the overlay interface exists.
-while ip rule del iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95 2>/dev/null; do :; done
-ip rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
-
-# 3. The applier's probes, bound to the tunnel interface, use the tunnel.
-while ip rule del oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96 2>/dev/null; do :; done
-ip rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
-
-# 4. Fail-closed default: with no tunnel route in the exit table, forwarded
-#    traffic is unreachable instead of using the namespace's normal route.
-ip route replace unreachable default metric 4096 table "$EXIT_TABLE"
-
-# The same contract for IPv6. The unreachable default is installed even
-# without an IPv6 overlay, so forwarded IPv6 can never leak either.
-if [ -n "$OVERLAY6_CIDR" ]; then
-    while ip -6 rule del to "$OVERLAY6_CIDR" lookup main priority 90 2>/dev/null; do :; done
-    ip -6 rule add to "$OVERLAY6_CIDR" lookup main priority 90
-fi
-while ip -6 rule del iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95 2>/dev/null; do :; done
-ip -6 rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
-while ip -6 rule del oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96 2>/dev/null; do :; done
-ip -6 rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
-ip -6 route replace unreachable default metric 4096 table "$EXIT_TABLE"
-
-echo "10-exit-routing: rules installed (priority 90/95/96, table $EXIT_TABLE unreachable defaults)"
+# These priorities are owned by Molebridge in this dedicated namespace.
+# Never remove the temporary guard if any later command fails.
+for family in -4 -6; do
+    ip "$family" rule add iif "$OVERLAY_IF" unreachable priority 80
+    ip "$family" route replace unreachable default metric 4096 table "$EXIT_TABLE"
+done
+for family in -4 -6; do
+    for priority in 90 95 96 97; do
+        while ip "$family" rule del priority "$priority" 2>/dev/null; do :; done
+    done
+    cidr=$OVERLAY_CIDR
+    [ "$family" = -4 ] || cidr=$OVERLAY6_CIDR
+    if [ -n "$cidr" ]; then
+        # Only tunnel replies may use the main table for overlay destinations.
+        ip "$family" rule add iif "$EXIT_IF" to "$cidr" lookup main priority 90
+    fi
+    ip "$family" rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
+    ip "$family" rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
+    ip "$family" rule add iif "$OVERLAY_IF" unreachable priority 97
+done
+for family in -4 -6; do
+    while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
+done
+touch "$READY_FILE"
+echo "10-exit-routing: rules installed (90/95/96/97, protected table)"

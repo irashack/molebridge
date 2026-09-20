@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Switchyard control panel.
+"""Molebridge control panel.
 
 Web UI for choosing which Mullvad WireGuard server the exit uses. It has no
 login of its own: publish it only behind something that authenticates people,
 such as an identity-aware reverse proxy or an overlay access policy. It:
 
-- refreshes a validated allowlist of active Mullvad WireGuard relays from
-  Mullvad's published API on start and every REFRESH_INTERVAL_S seconds,
-  keeping the last good file on any failure or empty result;
+- reads the applier-owned relay catalogue through a read-only mount;
 - shows the current desired server, the applier's last result, and relay
   list freshness/errors;
 - accepts a POSTed desired server, CSRF-protected, which is
@@ -21,30 +19,29 @@ Python standard library only. Never calls wg/ip/subprocess.
 """
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import html
 import http.client
 import http.cookies
 import http.server
-import ipaddress
 import json
 import os
 import re
 import secrets
 import sys
 import socket
-import tempfile
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from molebridge.state import (CATALOG_MAX_AGE, HOSTNAME_RE, now_iso, read_json,
+                              recent, status_view, write_json_atomic)
+from molebridge.relays import snapshot_relays
 
 # --------------------------------------------------------------------------
 # Configuration and file contract
@@ -52,14 +49,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 STATE_DIR = Path(os.environ.get('STATE_DIR', '/state'))
 PANEL_DIR = STATE_DIR / 'panel'
-RELAYS_PATH = PANEL_DIR / 'relays.json'
+RELAYS_PATH = STATE_DIR / 'applier' / 'relays.json'
+RELAY_ERROR_PATH = STATE_DIR / 'applier' / 'relay-error.json'
 DESIRED_PATH = PANEL_DIR / 'desired.json'
 APPLIER_RESULT_PATH = STATE_DIR / 'applier' / 'result.json'
-
-MULLVAD_RELAYS_URL = 'https://api.mullvad.net/app/v1/relays'
-FETCH_TIMEOUT_S = 20
-MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MB cap
-REFRESH_INTERVAL_S = 6 * 60 * 60  # 6 hours
 
 MAX_BODY_BYTES = 4096
 CSRF_COOKIE_NAME = 'csrf_nonce'
@@ -85,8 +78,8 @@ STATIC_FILES = {
 }
 
 # Presentation settings; none of these affect switching.
-PANEL_TITLE = os.environ.get('PANEL_TITLE', 'Mullvad exit')
-PANEL_SHORT_TITLE = os.environ.get('PANEL_SHORT_TITLE', 'Exit')
+PANEL_TITLE = os.environ.get('PANEL_TITLE', 'Molebridge')
+PANEL_SHORT_TITLE = os.environ.get('PANEL_SHORT_TITLE', 'Molebridge')
 PANEL_HOST_LABEL = os.environ.get('PANEL_HOST_LABEL', 'this exit')
 PANEL_HOME_URL = os.environ.get('PANEL_HOME_URL', '')
 PANEL_HOME_LABEL = os.environ.get('PANEL_HOME_LABEL', 'Home')
@@ -108,11 +101,6 @@ WEB_MANIFEST = {
 
 LISTEN_HOST = '0.0.0.0'
 LISTEN_PORT = 8080
-
-# Tolerant hostname check: real Mullvad WireGuard hostnames look like
-# "se-sto-wg-001" (^[a-z]{2}-[a-z]{3}-wg-[0-9]{3}$), but we accept the wider
-# shape while still requiring the "-wg-<3 digits>" marker.
-HOSTNAME_RE = re.compile(r'^[a-z0-9-]{1,40}-wg-[0-9]{3}$')
 
 SECURITY_HEADERS = {
     # no-referrer makes browsers send `Origin: null` on form POSTs, which the
@@ -149,183 +137,24 @@ def security_headers() -> Dict[str, str]:
 # --------------------------------------------------------------------------
 
 _CSRF_SECRET = secrets.token_bytes(32)
-_state_lock = threading.Lock()
-_last_fetch_error: Optional[str] = None
-_last_fetch_error_at: Optional[str] = None
 # hostname -> (round-trip ms or None when unreachable, time.monotonic() measured)
 _latency_cache: Dict[str, Tuple[Optional[float], float]] = {}
 _probe_lock = threading.Lock()
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-# --------------------------------------------------------------------------
-# Atomic file helpers
-# --------------------------------------------------------------------------
-
-def write_json_atomic(path: Path, obj: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix='.tmp-', dir=str(path.parent))
-    try:
-        with os.fdopen(fd, 'w') as f:
-            json.dump(obj, f)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_name, path)
-    except Exception:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
-
-
-def read_json(path: Path) -> Optional[Any]:
-    try:
-        with open(path, 'r') as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
-
-
 def load_allowlist() -> set:
-    data = read_json(RELAYS_PATH)
-    if not isinstance(data, dict) or not isinstance(data.get('relays'), dict):
+    snapshot = read_json(RELAYS_PATH)
+    if not isinstance(snapshot, dict) or not recent(snapshot.get('fetched_at'), CATALOG_MAX_AGE):
         return set()
-    return set(data['relays'].keys())
+    return set(snapshot_relays(snapshot))
 
 
-# --------------------------------------------------------------------------
-# Relay list fetch, validation and refresh
-# --------------------------------------------------------------------------
-
-def _is_valid_wg_pubkey(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except Exception:
-        return False
-    return len(decoded) == 32
-
-
-def _is_valid_ipv4(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        ipaddress.IPv4Address(value)
-        return True
-    except ValueError:
-        return False
-
-
-def validate_relay(relay: Dict[str, Any], locations: Dict[str, Any]) -> Optional[Dict[str, str]]:
-    """Return the validated allowlist entry for one relay, or None to drop it."""
-    if relay.get('active') is not True:
-        return None
-    hostname = relay.get('hostname')
-    if not isinstance(hostname, str) or not HOSTNAME_RE.match(hostname):
-        return None
-    if not _is_valid_wg_pubkey(relay.get('public_key')):
-        return None
-    ipv4 = relay.get('ipv4_addr_in')
-    if not _is_valid_ipv4(ipv4):
-        return None
-    loc_code = relay.get('location')
-    if not isinstance(loc_code, str) or loc_code not in locations:
-        return None
-    loc = locations[loc_code]
-    if not isinstance(loc, dict):
-        return None
-    country = loc.get('country')
-    city = loc.get('city')
-    if not isinstance(country, str) or not isinstance(city, str):
-        return None
-    return {
-        'hostname': hostname,
-        'country': country,
-        'city': city,
-        'location_code': loc_code,
-        'public_key': relay['public_key'],
-        'ipv4_addr_in': ipv4,
-    }
-
-
-def parse_relay_response(data: Any) -> Dict[str, Dict[str, str]]:
-    """Return {hostname: entry} for every valid active relay. Raises ValueError
-    on a response that does not match the expected top-level schema."""
-    if not isinstance(data, dict):
-        raise ValueError('top-level response is not a JSON object')
-    locations = data.get('locations')
-    wireguard = data.get('wireguard')
-    if not isinstance(locations, dict):
-        raise ValueError("missing or invalid 'locations' map")
-    if not isinstance(wireguard, dict) or not isinstance(wireguard.get('relays'), list):
-        raise ValueError("missing or invalid 'wireguard.relays' list")
-
-    result: Dict[str, Dict[str, str]] = {}
-    for relay in wireguard['relays']:
-        if not isinstance(relay, dict):
-            continue
-        entry = validate_relay(relay, locations)
-        if entry:
-            result[entry['hostname']] = entry
-    return result
-
-
-def fetch_relays_raw(url: str = MULLVAD_RELAYS_URL, timeout: int = FETCH_TIMEOUT_S) -> bytes:
-    req = urllib.request.Request(url, headers={'User-Agent': 'switchyard-panel/0.1'})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec: fixed https URL
-        raw = resp.read(MAX_RESPONSE_BYTES + 1)
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise ValueError(f'relay response exceeded {MAX_RESPONSE_BYTES} byte cap')
-    return raw
-
-
-def _record_fetch_error(message: str) -> None:
-    global _last_fetch_error, _last_fetch_error_at
-    with _state_lock:
-        _last_fetch_error = message
-        _last_fetch_error_at = now_iso()
-
-
-def _clear_fetch_error() -> None:
-    global _last_fetch_error, _last_fetch_error_at
-    with _state_lock:
-        _last_fetch_error = None
-        _last_fetch_error_at = None
-
-
-def get_fetch_error() -> Tuple[Optional[str], Optional[str]]:
-    with _state_lock:
-        return _last_fetch_error, _last_fetch_error_at
-
-
-def refresh_relays_once() -> bool:
-    """Fetch, validate and persist the relay allowlist. On any failure or an
-    empty result, the last good relays.json is left untouched and the error
-    is recorded for display. Returns True on a successful write."""
-    try:
-        raw = fetch_relays_raw()
-        data = json.loads(raw)
-        relays = parse_relay_response(data)
-        if not relays:
-            raise ValueError('parsed relay list is empty')
-    except Exception as exc:  # noqa: BLE001 - any failure keeps the last good file
-        _record_fetch_error(f'{type(exc).__name__}: {exc}')
-        return False
-
-    write_json_atomic(RELAYS_PATH, {'fetched_at': now_iso(), 'relays': relays})
-    _clear_fetch_error()
-    return True
-
-
-def relay_refresh_loop(stop_event: threading.Event) -> None:
-    refresh_relays_once()
-    while not stop_event.wait(REFRESH_INTERVAL_S):
-        refresh_relays_once()
+def get_fetch_error():
+    data = read_json(RELAY_ERROR_PATH, 4096)
+    snapshot = read_json(RELAYS_PATH)
+    if not isinstance(snapshot, dict) or not recent(snapshot.get('fetched_at'), CATALOG_MAX_AGE):
+        return 'No fresh trusted relay catalogue; selections are unavailable.', None
+    return (data.get('message'), data.get('checked_at')) if isinstance(data, dict) else (None, None)
 
 
 # --------------------------------------------------------------------------
@@ -390,10 +219,7 @@ def latency_targets(query: Dict[str, List[str]], relays: Dict[str, Dict[str, Any
 
 
 def load_relays() -> Dict[str, Dict[str, Any]]:
-    data = read_json(RELAYS_PATH)
-    if isinstance(data, dict) and isinstance(data.get('relays'), dict):
-        return data['relays']
-    return {}
+    return snapshot_relays(read_json(RELAYS_PATH))
 
 
 # --------------------------------------------------------------------------
@@ -409,7 +235,7 @@ def csrf_token(nonce: str) -> str:
 
 
 def verify_csrf(nonce: Optional[str], token: Optional[str]) -> bool:
-    if not nonce or not token:
+    if not isinstance(nonce, str) or not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
         return False
     expected = csrf_token(nonce)
     return hmac.compare_digest(expected, token)
@@ -437,18 +263,25 @@ def origin_matches_host(
     primary control."""
     if not origin_header:
         return True
-    origin_netloc = urllib.parse.urlsplit(origin_header).netloc
-    if not origin_netloc:
+    try:
+        origin = urllib.parse.urlsplit(origin_header)
+        if origin.scheme not in ('http', 'https') or not origin.hostname or origin.username or origin.password:
+            return False
+        if origin.path or origin.query or origin.fragment:
+            return False
+        default_port = 443 if origin.scheme == 'https' else 80
+        expected = (origin.hostname.lower(), origin.port or default_port)
+        candidates = [h.strip() for h in os.environ.get('PANEL_PUBLIC_HOSTS', '').split(',') if h.strip()]
+        candidates.extend(h.split(',', 1)[0].strip() for h in (host_header, forwarded_host) if h)
+        for host in candidates:
+            parsed = urllib.parse.urlsplit('//' + host)
+            if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+                continue
+            if (str(parsed.hostname).lower(), parsed.port or default_port) == expected:
+                return True
+    except ValueError:
         return False
-    origin_host = origin_netloc.rsplit(':', 1)[0].lower()
-    # Some proxies forward neither the public Host nor X-Forwarded-Host, so the
-    # published name can be configured explicitly.
-    candidates = [h.strip().lower() for h in os.environ.get('PANEL_PUBLIC_HOSTS', '').split(',') if h.strip()]
-    for header in (host_header, forwarded_host):
-        if header:
-            first = header.split(',', 1)[0].strip()
-            candidates.append(first.rsplit(':', 1)[0].lower())
-    return origin_host in candidates
+    return False
 
 
 def parse_select_form(body: bytes) -> Dict[str, str]:
@@ -458,9 +291,9 @@ def parse_select_form(body: bytes) -> Dict[str, str]:
 
 
 def process_select(*, server: Optional[str], allowlist: set, desired_path: Path) -> Tuple[int, str]:
-    if not server or server not in allowlist:
+    if not isinstance(server, str) or not HOSTNAME_RE.fullmatch(server) or server not in allowlist:
         return 400, 'unknown or unlisted server'
-    write_json_atomic(desired_path, {'server': server, 'requested_at': now_iso()})
+    write_json_atomic(desired_path, {'server': server, 'requested_at': now_iso(), 'request_id': secrets.token_hex(16)})
     return 303, 'ok'
 
 
@@ -502,20 +335,13 @@ def _field(container: Optional[Dict[str, Any]], key: str, default: str = '(unkno
     return html.escape(str(value)) if value is not None else default
 
 
-def status_view(desired: Optional[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
-    """(css state, label) for the current-exit pill. A desired server the
-    applier hasn't reached yet reads as switching."""
-    desired_server = (desired or {}).get('server')
-    status = (result or {}).get('status')
-    if desired_server and (result or {}).get('server') != desired_server:
-        return 'applying', 'switching'
-    if status == 'ok':
-        return 'ok', 'connected'
-    if status == 'applying':
-        return 'applying', 'switching'
-    if status == 'failed':
-        return 'failed', 'failed'
-    return 'unknown', 'unknown'
+def status_payload():
+    desired = read_json(DESIRED_PATH, 4096)
+    result = read_json(APPLIER_RESULT_PATH, 16384)
+    desired = desired if isinstance(desired, dict) else None
+    result = result if isinstance(result, dict) else None
+    state, label = status_view(desired, result)
+    return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label}}
 
 
 def render_index_html(
@@ -529,6 +355,8 @@ def render_index_html(
     embed: bool = False,
 ) -> str:
     esc = html.escape
+    desired = desired if isinstance(desired, dict) else {}
+    result = result if isinstance(result, dict) else {}
 
     relays: Dict[str, Dict[str, Any]] = {}
     fetched_at = 'never'
@@ -540,16 +368,17 @@ def render_index_html(
 
     desired_server = str((desired or {}).get('server') or '')
     result_server = str((result or {}).get('server') or '')
-    current_info = relays.get(desired_server) or relays.get(result_server) or {}
     state, state_label = status_view(desired, result)
+    display_server = desired_server if state == 'applying' else result_server
+    current_info = relays.get(display_server) or {}
 
     if current_info:
         current_place = f"{esc(str(current_info.get('city', '')))}, {esc(str(current_info.get('country', '')))}"
         current_flag = flag_emoji(current_info.get('location_code'))
-    elif desired_server:
-        current_place, current_flag = esc(desired_server), ''
+    elif display_server:
+        current_place, current_flag = esc(display_server), ''
     else:
-        current_place, current_flag = 'No server selected', ''
+        current_place, current_flag = 'Awaiting verified server', ''
 
     switching_note = ''
     if state == 'applying' and result_server and result_server != desired_server:
@@ -558,6 +387,9 @@ def render_index_html(
     failure_note = ''
     if state == 'failed' and message:
         failure_note = f'<p class="note note-negative">{esc(str(message))}</p>'
+
+    if state == 'unknown':
+        failure_note = '<p class="note note-negative">Status is unavailable or stale. Details are from the last check.</p>'
 
     grouped: Dict[str, Dict[str, List[str]]] = {}
     codes: Dict[str, str] = {}
@@ -643,7 +475,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-desired="{esc(desired_server)}" data-state="{state}">
+<main class="page" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 <section class="widget">
   <div class="widget-header"><h2>Current exit</h2>{open_link}</div>
@@ -652,7 +484,7 @@ def render_index_html(
       <span class="flag flag-lg" data-current-flag>{current_flag}</span>
       <div class="current-main">
         <div class="current-place" data-current-place>{current_place}</div>
-        <div class="subdue small"><span data-current-host>{esc(desired_server or '—')}</span> · <span data-current-ip>{'—' if state == 'applying' else _field(result, 'egress_ip', '—')}</span></div>
+        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> · <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></div>
       </div>
       <div class="current-side">
         <span class="pill pill-{state}" data-state-pill>{state_label}</span>
@@ -667,8 +499,9 @@ def render_index_html(
         <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
         <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
         <dt>Mullvad IP</dt><dd data-f="mullvad_exit_ip">{_field(result, 'mullvad_exit_ip')}</dd>
-        <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s ago</dd>
-        <dt>Fail-closed</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
+        <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
+        <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
+        <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
         <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
         <dt>Requested</dt><dd>{_field(desired, 'requested_at', '')}</dd>
         <dt>Relay list</dt><dd>{len(relays)} relays, fetched {fetched_at}</dd>
@@ -707,8 +540,12 @@ def render_index_html(
 # --------------------------------------------------------------------------
 
 class PanelHandler(http.server.BaseHTTPRequestHandler):
-    server_version = 'switchyard-panel/0.1'
+    server_version = 'molebridge-panel/0.1'
     protocol_version = 'HTTP/1.1'
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
 
     # -- helpers -----------------------------------------------------------
 
@@ -744,6 +581,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == '/healthz':
             self._send_plain(200, 'ok')
+        elif parsed.path == '/readyz':
+            ready = status_payload()['view']['state'] == 'ok'
+            self._send_plain(200 if ready else 503, 'ready' if ready else 'not ready')
         elif parsed.path == '/':
             self._handle_index(embed=False)
         elif parsed.path == '/embed':
@@ -752,7 +592,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             self._send_body(200, 'application/manifest+json', json.dumps(WEB_MANIFEST).encode('utf-8'),
                             {'Cache-Control': 'public, max-age=86400'})
         elif parsed.path == '/api/status':
-            self._send_json({'desired': read_json(DESIRED_PATH), 'result': read_json(APPLIER_RESULT_PATH)})
+            self._send_json(status_payload())
         elif parsed.path == '/api/latency':
             query = urllib.parse.parse_qs(parsed.query)
             relays = load_relays()
@@ -785,13 +625,19 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             self._send_plain(413, 'request body too large')
             return
 
-        body = self.rfile.read(length)
+        try:
+            body = self.rfile.read(length)
+        except (TimeoutError, ConnectionError):
+            self._send_plain(408, 'request timeout')
+            return
+        if len(body) != length:
+            self._send_plain(400, 'incomplete body')
+            return
 
         if not origin_matches_host(
             self.headers.get('Origin'), self.headers.get('Host'), self.headers.get('X-Forwarded-Host')
         ):
-            origin = urllib.parse.urlsplit(self.headers.get('Origin') or '').netloc or '(none)'
-            sys.stderr.write(f'rejected POST origin={origin[:80]}\n')
+            sys.stderr.write('rejected POST: origin does not match host\n')
             self._send_plain(403, 'origin does not match host')
             return
 
@@ -813,7 +659,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         self._send_plain(status, message)
 
     def _handle_index(self, *, embed: bool) -> None:
-        nonce = new_csrf_nonce()
+        nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
+        if not nonce or not re.fullmatch(r'[A-Za-z0-9_-]{32}', nonce):
+            nonce = new_csrf_nonce()
         token = csrf_token(nonce)
         fetch_error, fetch_error_at = get_fetch_error()
         body = render_index_html(
@@ -837,20 +685,21 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             return
         self._send_body(200, content_type, body, {'Cache-Control': 'public, max-age=86400'})
 
-    # -- logging: no query strings or bodies ----------------------------
+    # -- logging: fixed routes only, no addresses or user-controlled text --
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         path = self.path.split('?', 1)[0]
+        known = {'/', '/embed', '/healthz', '/readyz', '/api/status', '/api/latency',
+                 '/select', '/manifest.webmanifest'}
+        known.update('/static/' + name for name in STATIC_FILES)
+        route = path if path in known else '(unknown route)'
+        method = self.command if self.command in ('GET', 'POST', 'HEAD') else '(other method)'
         sys.stderr.write(
-            f'{self.log_date_time_string()} {self.address_string()} {self.command} {path}\n'
+            f'{self.log_date_time_string()} {method} {route}\n'
         )
 
 
 def main() -> None:
-    stop_event = threading.Event()
-    refresher = threading.Thread(target=relay_refresh_loop, args=(stop_event,), daemon=True)
-    refresher.start()
-
     server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), PanelHandler)
     try:
         server.serve_forever()
@@ -858,7 +707,6 @@ def main() -> None:
         pass
     finally:
         # serve_forever has returned; shutdown() here would deadlock.
-        stop_event.set()
         server.server_close()
 
 

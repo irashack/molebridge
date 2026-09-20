@@ -1,4 +1,4 @@
-# Working on Switchyard
+# Working on Molebridge
 
 Read `README.md` and `docs/architecture.md` first. Keep the GitHub repository
 private and unlicensed until the owner explicitly asks to publish it.

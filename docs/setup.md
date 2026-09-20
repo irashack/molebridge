@@ -16,13 +16,9 @@ overlay), `PUID`/`PGID` (from `id -u` and `id -g`), `NB_HOSTNAME`, and
 `NB_MANAGEMENT_URL` if you self-host NetBird. Every setting is described in
 [configuration](configuration.md).
 
-On Linux, LinuxServer's image only runs container init scripts owned by root:
-
-```sh
-sudo chown -R root:root routing
-```
-
-(Not needed on OrbStack.)
+The routing init script is bundled root-owned in its image. Your checkout can
+remain owned by your normal user. Make sure `state/panel` is owned and writable
+by the `PUID`/`PGID` selected above; create it as that user.
 
 ## 2. Create the tunnel config
 
@@ -50,13 +46,17 @@ It contains one line: `NB_SETUP_KEY=` followed by the key.
 ## 4. Start the exit (no route yet)
 
 ```sh
+docker compose build wireguard applier
 docker compose up -d wireguard netbird applier
 docker compose ps
 docker compose logs wireguard | grep 10-exit-routing
 ```
 
-All three should become healthy, and the log should end with `rules installed`.
+All three should become healthy, and the routing log should show `rules installed`.
 If the routing script refuses to start, it names the setting it rejected.
+The WireGuard healthcheck requires a completed routing initialization before
+NetBird can start. Applier health checks freshness and routing, not client DNS
+or end-to-end connectivity.
 
 In NetBird, confirm the peer `NB_HOSTNAME` appears and is in `exit-nodes`. Then
 delete `secrets/netbird.env` (the peer's identity now lives in the
@@ -77,19 +77,21 @@ report a Mullvad exit IP in the starting server's city. Then run the
 
 ## 7. Start the panel
 
-Set `PANEL_PUBLIC_HOSTS` to the hostname your authenticating proxy serves the
-panel on, then:
+Choose an [authenticated access method](access.md). For a proxy, set
+`PANEL_PUBLIC_HOSTS` to its public hostname. For the SSH-forwarding example it
+can be empty. Then:
 
 ```sh
 docker compose up -d control-panel
 ```
 
-Point the proxy at `http://127.0.0.1:${PANEL_PORT}`. The panel fetches Mullvad's
-relay list on start; the first load may take a few seconds.
+If using a host-side proxy, point it at `http://127.0.0.1:${PANEL_PORT}`. The
+applier fetches the catalogue and identifies the downloaded config's running
+peer; the first load may take a few seconds. The panel reads that state and
+does not maintain its own catalogue. No initial selection is needed.
 
-Until you choose a server in the panel it shows **No server selected**, while the
-tunnel keeps using the server from your download. Pick a server once so the
-panel and applier agree on the current choice.
+Run `python3 tools/molebridge.py doctor` once the stack is running, then
+complete the real client checks; a passing doctor alone is not a leak test.
 
 Next: [operations](operations.md) covers switching, dashboard embedding,
 installing on a phone, and failure handling.
