@@ -24,6 +24,7 @@ for ns in "$client" "$exitns" "$outside" "$tunnel"; do
     created="$created $ns"
     ip -n "$ns" link set lo up
     ip netns exec "$ns" sysctl -qw net.ipv4.conf.all.rp_filter=0 net.ipv4.conf.default.rp_filter=0
+    ip netns exec "$ns" sysctl -qw net.ipv6.conf.default.accept_dad=0
 done
 ip -n "$exitns" link add wt0 type veth peer name client0 netns "$client"
 ip -n "$exitns" link add eth0 type veth peer name outside0 netns "$outside"
@@ -40,6 +41,9 @@ configure "$exitns" eth0 198.51.100.1/24 2001:db8:2::1/64
 configure "$outside" outside0 198.51.100.2/24 2001:db8:2::2/64
 configure "$exitns" mullvad 203.0.113.1/24 2001:db8:3::1/64
 configure "$tunnel" tunnel0 203.0.113.2/24 2001:db8:3::2/64
+# The fake tunnel is Ethernet; real WireGuard needs no neighbor discovery.
+# Use a fixed, locally administered MAC for the synthetic destination below.
+ip -n "$tunnel" link set tunnel0 address 02:00:00:00:03:02
 ip netns exec "$exitns" sysctl -qw net.ipv4.ip_forward=1 net.ipv6.conf.all.forwarding=1
 ip -n "$client" route add default via 192.0.2.1
 ip -n "$client" -6 route add default via 2001:db8:1::1
@@ -66,6 +70,9 @@ restore_routes() {
         ip -n "$exitns" "$family" route replace unreachable default metric 4096 table 51821
         ip -n "$exitns" "$family" route replace default dev mullvad table 51821
     done
+    # Model a point-to-point tunnel without off-subnet ARP/NDP dependencies.
+    ip -n "$exitns" -4 neigh replace 198.51.100.100 lladdr 02:00:00:00:03:02 nud permanent dev mullvad
+    ip -n "$exitns" -6 neigh replace 2001:db8:2::100 lladdr 02:00:00:00:03:02 nud permanent dev mullvad
 }
 probe() {
     address=198.51.100.100
