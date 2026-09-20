@@ -120,7 +120,8 @@ with open(sys.argv[1]) as f:
     rules = json.load(f)
 with open(sys.argv[2]) as f:
     routes = json.load(f)
-assert family_status(rules, routes, RoutingConfig('192.0.2.0/24', '2001:db8:1::/64'), int(sys.argv[3])) == (True, True)
+result = family_status(rules, routes, RoutingConfig('192.0.2.0/24', '2001:db8:1::/64'), int(sys.argv[3]))
+assert result == (True, True), f'IPv{sys.argv[3]} validation={result}; rules={rules!r}; routes={routes!r}'
 PY
 done
 for family in -4 -6; do ip -n "$exitns" "$family" route del default dev mullvad table 51821; done
