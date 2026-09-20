@@ -118,7 +118,8 @@ explicitly historical.
 
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
 verified connected result; otherwise 503. Docker's applier healthcheck checks
-freshness and current routing protection. It does not restart unhealthy
+freshness and current routing protection after a completed inspection; startup
+and an in-progress switch do not count as completed checks. It does not restart unhealthy
 containers. The host-side doctor additionally checks the shared namespace and
 recent verified egress.
 

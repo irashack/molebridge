@@ -139,6 +139,9 @@ connected
 ip -n "$exitns" link set mullvad down
 blocked 'tunnel interface down'
 ip -n "$exitns" link set mullvad up
+# Linux removes this manually assigned IPv6 address on link-down. Real
+# recovery runs wg-quick, which restores the configured interface addresses.
+ip -n "$exitns" -6 addr replace 2001:db8:3::1/64 dev mullvad nodad
 restore_routes
 connected
 install_rules

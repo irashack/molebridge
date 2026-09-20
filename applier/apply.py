@@ -267,7 +267,8 @@ def main():
         applier = Applier(directory, RoutingConfig.from_env(os.environ))
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
-            return 0 if isinstance(result, dict) and recent(result.get('checked_at')) and applier.routing_status()[0] else 1
+            completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
+            return 0 if completed and recent(result.get('checked_at')) and applier.routing_status()[0] else 1
         if args.doctor:
             result = read_json(applier.result_path, 16384)
             result = result if isinstance(result, dict) else {}

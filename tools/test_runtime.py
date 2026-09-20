@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from applier.apply import Applier, command
+from applier import apply as applier_module
 from molebridge import relays
 from molebridge.routing import RoutingConfig, family_status
 from molebridge.state import (decode_json, desired_request, now_iso, read_json,
@@ -267,6 +268,16 @@ def test_clock_in_future_is_not_fresh_handshake(runtime):
     app, kernel = runtime
     kernel.age = -60
     assert app.inspect()['status'] == 'failed'
+
+
+@pytest.mark.parametrize('status,expected', [('unknown', 1), ('applying', 1), ('ok', 0), ('failed', 0)])
+def test_container_health_waits_for_a_completed_check(runtime, monkeypatch, status, expected):
+    app, _ = runtime
+    app.publish(status, 'Example status.')
+    monkeypatch.setattr(applier_module, 'Applier', lambda *a, **kw: app)
+    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
+    monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
+    assert applier_module.main() == expected
 
 
 def test_catalogue_fetch_is_bounded_and_does_not_follow_redirect(runtime):
