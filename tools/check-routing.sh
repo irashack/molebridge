@@ -84,7 +84,20 @@ blocked() {
     echo "PASS $1 (IPv4 and IPv6 blocked; normal host path still reachable)"
 }
 connected() {
-    for family in -4 -6; do probe "$client" "$family"; done
+    for family in -4 -6; do
+        if ! probe "$client" "$family"; then
+            echo "FAIL expected tunnel forwarding ($family)" >&2
+            # These namespaces contain only the documentation addresses above.
+            # Include enough context to distinguish fixture and routing errors.
+            for ns in "$client" "$exitns" "$tunnel"; do
+                ip -n "$ns" "$family" addr show
+                ip -n "$ns" "$family" rule show
+                ip -n "$ns" "$family" route show table all
+                ip -n "$ns" "$family" neigh show
+            done
+            exit 1
+        fi
+    done
 }
 install_rules
 restore_routes
