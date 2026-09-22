@@ -20,6 +20,42 @@ container-runtime restart, a client held on the exit during a drill, and LAN
 unreachability from a client. Rerun this pass after those fixes before relying
 on a new revision.
 
+## Outcome of the 2026-09-22 rootless Podman pass
+
+Revision `984a703`, deployed the same day to Debian 13 / rootless Podman 5.4.2
+/ podman-compose 1.6.0 on amd64, NetBird client 0.79 against a self-hosted
+0.79 management server, through a deployment-specific Compose file carrying
+the same services and settings as `compose.yaml`. Checked live, inside the
+namespace and from one iPhone client:
+
+- Rules 90/94/95/96/97 present for both families with the `ipproto` qualifier
+  on 94 and ahead of NetBird's own rules; `default dev mullvad` plus the
+  unreachable fallback in the exit table for both families.
+- ICMP from the tunnel address resolves to the tunnel interface for both
+  families, while UDP from the same address takes the host path (the point of
+  narrowing rule 94).
+- Applier `--doctor`: recent check, routing protection, fresh catalogue and
+  verified Mullvad egress all PASS; per-family egress probes succeed.
+- Real client: mullvad.net/check clean, exit follows a server switch,
+  direct (P2P) path once the peer carried the interface blacklist, a
+  published UDP port and an external address mapping (see
+  [operations](operations.md#exits-on-a-private-container-network)); without
+  them every client was relayed.
+- Recreation: a forced recreation of all four containers preserved the peer
+  identity and rejoined the shared namespace; the boot unit is installed and
+  active.
+- CI green at `984a703`.
+
+Found and fixed during the move: Docker-only Compose settings, the missing
+`NET_RAW` capability, the panel user under uid remapping, the missing kernel
+module autoload, and the interface blacklist as a requirement rather than a
+tip (`afa8594` through `984a703`).
+
+Not run on this host: a reboot, a client held on the exit during a
+fail-closed drill, LAN unreachability from a client, and a live oversized UDP
+flow. The bundled `compose.yaml` validates with `podman-compose config` there
+but was not itself started unchanged.
+
 ## Prepare
 
 1. Schedule an interruption for exit users. Keep an independent SSH/console

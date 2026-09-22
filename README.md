@@ -111,10 +111,10 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 
 | Where | Verification so far |
 | :--- | :--- |
-| **Original deployment** | Daily use since 2026-09-16 on macOS / OrbStack / Apple silicon, with self-hosted NetBird 0.78 and iPhone and macOS clients. A live pass on 2026-09-20 ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills; its findings, including the path-MTU return path for UDP, are fixed in this revision. |
-| **Automated checks** | Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
-| **Current hardening pass** | Not yet re-run on a live deployment after the fixes; host reboot, a client held on the exit during a drill, and LAN unreachability from a client remain unverified. Use the [homelab test guide](docs/homelab-testing.md). |
-| **Rootless Podman** | Moved to a Debian 13 / rootless Podman 5.4 / amd64 host on 2026-09-22. The routing contract, fail-closed behavior and a direct client path were checked there; the compose and ICE requirements in this revision come from that move. A host reboot has not been exercised. |
+| **Original deployment** | macOS / OrbStack / Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients, daily use from 2026-09-16 to 2026-09-22. A live pass on 2026-09-20 ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `ae95c33`; its six findings, including the path-MTU return path for UDP, are fixed in `ae95c33` through `984a703`. |
+| **Automated checks** | On every push: Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. Green at `984a703`. [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
+| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64 since 2026-09-22, NetBird client 0.79 against a self-hosted 0.79 server, one iPhone client on a direct (P2P) path. Re-checked live at `984a703`: rules and fail-closed table for both families, per-family egress probes, the applier doctor, and container recreation preserving the peer identity. Runs through a deployment-specific Compose file equivalent to `compose.yaml`; see [operations](docs/operations.md#rootless-podman). |
+| **Still unverified on any host** | A host reboot, a client held on the exit during a fail-closed drill, LAN unreachability from a client, and a live oversized UDP flow (only the isolated drill proves the return path). Record: [homelab test guide](docs/homelab-testing.md). |
 | **Other deployments** | Linux Docker hosts and NetBird Cloud have not yet been verified end to end. |
 
 There are no releases or project license yet. The repository remains private

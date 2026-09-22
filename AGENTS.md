@@ -6,7 +6,8 @@ private and unlicensed until the owner explicitly asks to publish it.
 ## Write for someone else's machine
 
 - Design for a person installing on an ordinary supported host: Docker with
-  Compose, a NetBird account, a Mullvad account. Never require the author's
+  Compose or rootless Podman with podman-compose, a NetBird account, a Mullvad
+  account. Never require the author's
   infrastructure, hostnames, directory layout, identity provider, secret store,
   monitoring or deployment tooling.
 - Site-specific deployment records and policies belong with that deployment,

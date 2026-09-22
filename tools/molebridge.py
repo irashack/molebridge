@@ -117,14 +117,37 @@ class Host:
         if not namespaces[0] or len(set(namespaces)) != 1:
             raise CheckError('Containers do not share the current network namespace; run recover.')
 
+    def ice_blacklist_check(self, config):
+        """The exit interface must be in the peer's stored ICE interface blacklist.
+
+        No `netbird` command prints that setting, so read the one field from the
+        peer profile inside the container. The profile also holds the peer's
+        private key: only the blacklist array leaves the container, and none of
+        it is printed here."""
+        exit_if = config['services']['wireguard']['environment'].get('EXIT_IF', 'mullvad')
+        script = ("awk '/\"IFaceBlackList\"/ {p=1} p {print} p && /\\]|null/ {exit}' "
+                  '/var/lib/netbird/default.json')
+        try:
+            output = self.compose('exec', '-T', 'netbird', 'sh', '-c', script)
+        except CheckError:
+            raise CheckError('Unable to read the NetBird peer configuration; is the netbird container running?') from None
+        if '"IFaceBlackList"' not in output:
+            raise CheckError('NetBird peer configuration has no interface blacklist field; check the profile file name for this NetBird version.')
+        entries = re.findall(r'"([^"]*)"', output)[1:]
+        if exit_if not in entries:
+            raise CheckError(f'The exit interface {exit_if} is not in the NetBird ICE interface blacklist; '
+                             f'run docker compose exec netbird netbird down, then docker compose exec netbird '
+                             f'netbird up --extra-iface-blacklist {exit_if} (docs/setup.md).')
+
     def doctor(self):
         config = self.config()
         self.check_files(config)
         self.check_volume(config)
         self.namespace_checks()
+        self.ice_blacklist_check(config)
         # This command deliberately prints only fixed check labels, no addresses.
         self.compose('exec', '-T', 'applier', 'python', '-m', 'applier.apply', '--doctor', timeout=30)
-        print('PASS configuration, permissions, identity volume, namespace, routing and recent Mullvad check')
+        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, routing and recent Mullvad check')
         print('Client DNS, IPv6 and failure drills still require docs/verification.md.')
 
     def recover(self):

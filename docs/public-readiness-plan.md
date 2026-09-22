@@ -1,6 +1,13 @@
 # Molebridge public-readiness plan
 
-Status: draft for Fable review. Prepared 2026-09-22 against `984a703`.
+Status: reviewed 2026-09-22 against `984a703`. Items 1 to 3 are implemented
+in the revision that carries this line; item 4 waits for the owner's licence,
+reporting-route and visibility decisions. Review notes: no `netbird` command
+prints the stored blacklist, so the doctor reads the one profile field;
+`NB_EXTRA_IFACE_BLACKLIST` binds the flag at first enrollment for free; the
+helper stays Docker-only because `podman-compose config` has no JSON output;
+CI was green at `984a703`; history diff content held no private names, and
+the workstation author e-mail on ten commits was normalised.
 
 ## Outcome
 

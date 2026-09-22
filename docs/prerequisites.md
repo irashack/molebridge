@@ -82,10 +82,9 @@ Gather these before [setup](setup.md).
   Native Windows configuration writing is unsupported; create the mode-0600
   tunnel config on the container host. The panel/applier Python runtimes are
   bundled. `tools/molebridge.py doctor` and `recover` drive `docker compose`
-  directly and have no Podman equivalent; on Podman, recreate the project with
-  your own Compose command and use
-  `<engine> exec <project>-applier python -m applier.apply --doctor` for the
-  applier's own checks.
+  directly and have no Podman equivalent; on Podman, follow
+  [operations](operations.md#rootless-podman) for setup, upgrade, recovery,
+  the applier's own `--doctor` and the boot unit.
 - **Build access:** the first setup builds two small derived images from the
   pinned bases. The applier installs wg/ip/curl from signed Debian repositories.
 - **Outbound network access:** UDP 51820 to Mullvad servers, HTTPS to

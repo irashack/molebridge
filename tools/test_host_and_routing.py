@@ -107,7 +107,7 @@ PreDown = ip route del default dev %i table 51821; ip -6 route del default dev %
 def compose_config(**changes):
     config = {
         'services': {
-            'wireguard': {'environment': {'OVERLAY_CIDR': '192.0.2.0/24', 'EXIT_TABLE': '51821'},
+            'wireguard': {'environment': {'OVERLAY_CIDR': '192.0.2.0/24', 'EXIT_TABLE': '51821', 'EXIT_IF': 'mullvad'},
                           'sysctls': {'net.ipv4.ip_forward': '1', 'net.ipv4.icmp_errors_use_inbound_ifaddr': '1'}},
             'control-panel': {'cap_drop': ['ALL'], 'volumes': [
                 {'target': '/state/applier', 'read_only': True}, {'target': '/state/panel'}]},
@@ -127,6 +127,74 @@ def test_doctor_requires_the_return_path_sysctl(tmp_path):
         host = host_tools.Host(tmp_path, run=lambda *a, **kw: json.dumps(compose_config(sysctls=sysctls)))
         with pytest.raises(host_tools.CheckError, match='icmp_errors_use_inbound_ifaddr'):
             host.config()
+
+
+BLACKLIST_OUTPUT = """  "IFaceBlackList": [
+    "docker0",
+    "veth",
+    "lo",
+    "mullvad"
+  ],
+"""
+
+
+def test_doctor_reads_only_the_ice_blacklist_field(tmp_path):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return BLACKLIST_OUTPUT
+    host = host_tools.Host(tmp_path, run=run)
+    host.ice_blacklist_check(compose_config())
+    assert calls[0][:5] == ['docker', 'compose', 'exec', '-T', 'netbird']
+    script = calls[0][-1]
+    assert 'IFaceBlackList' in script and 'default.json' in script
+    assert 'cat ' not in script and 'PrivateKey' not in script
+
+
+@pytest.mark.parametrize('output,message', [
+    (BLACKLIST_OUTPUT.replace('"lo",\n    "mullvad"', '"lo"'), 'not in the NetBird ICE interface blacklist'),
+    ('  "IFaceBlackList": [],\n', 'not in the NetBird ICE interface blacklist'),
+    ('  "IFaceBlackList": null,\n', 'not in the NetBird ICE interface blacklist'),
+    ('', 'no interface blacklist'),
+    ('  "WgPort": 51820,\n', 'no interface blacklist'),
+])
+def test_doctor_fails_clearly_without_the_exit_interface_blacklisted(tmp_path, output, message):
+    host = host_tools.Host(tmp_path, run=lambda *a, **kw: output)
+    with pytest.raises(host_tools.CheckError, match=message) as excinfo:
+        host.ice_blacklist_check(compose_config())
+    # Diagnostics name the fix, never the other blacklist entries or the file.
+    assert 'docker0' not in str(excinfo.value) and 'veth' not in str(excinfo.value)
+    assert '--extra-iface-blacklist mullvad' in str(excinfo.value) or 'blacklist field' in str(excinfo.value)
+
+
+def test_doctor_fails_when_the_peer_configuration_is_unavailable(tmp_path):
+    def fail(*args, **kwargs):
+        raise host_tools.CheckError('exec failed')
+    host = host_tools.Host(tmp_path, run=fail)
+    with pytest.raises(host_tools.CheckError, match='Unable to read'):
+        host.ice_blacklist_check(compose_config())
+
+
+def test_doctor_checks_the_blacklist_before_trusting_applier_state(monkeypatch, tmp_path):
+    order = []
+    host = host_tools.Host(tmp_path, run=lambda args, **kw: order.append(args) or '')
+    monkeypatch.setattr(host, 'config', lambda: compose_config())
+    monkeypatch.setattr(host, 'check_files', lambda _: None)
+    monkeypatch.setattr(host, 'check_volume', lambda _: None)
+    monkeypatch.setattr(host, 'namespace_checks', lambda: order.append(['namespace']))
+    monkeypatch.setattr(host, 'ice_blacklist_check', lambda _: order.append(['blacklist']))
+    host.doctor()
+    assert order[0] == ['namespace'] and order[1] == ['blacklist']
+    assert order[2][-2:] == ['applier.apply', '--doctor']
+
+
+def test_compose_blacklists_the_exit_interface_at_first_enrollment():
+    yaml = pytest.importorskip('yaml')
+    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
+    netbird = compose['services']['netbird']['environment']
+    wireguard = compose['services']['wireguard']['environment']
+    assert netbird['NB_EXTRA_IFACE_BLACKLIST'] == wireguard['EXIT_IF'] == 'mullvad'
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='mode 0600 files')

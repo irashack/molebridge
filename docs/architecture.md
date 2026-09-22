@@ -94,9 +94,12 @@ a healthy result.
 Sharing the namespace has one consequence for NetBird itself: by default it
 gathers ICE candidates on every interface it finds there, including the exit
 tunnel. A candidate on that interface can never complete a STUN exchange, and
-NetBird can advertise the tunnel address to peers as a candidate. The exit interface therefore belongs in the peer's ICE blacklist,
-which is a required `netbird up` flag rather than an environment variable
-because the peer's stored configuration wins after enrollment. See
+NetBird can advertise the tunnel address to peers as a candidate. The exit
+interface therefore belongs in the peer's ICE blacklist. `compose.yaml` sets
+it for the first enrollment through `NB_EXTRA_IFACE_BLACKLIST`; after that the
+peer's stored configuration wins, so an already enrolled peer needs the
+`netbird up --extra-iface-blacklist` flag, and the host doctor reads the
+stored field because no `netbird` command prints it. See
 [setup](setup.md#5-keep-ice-off-the-tunnel-interface).
 
 A privileged actor can remove or bypass these protections. Health polling

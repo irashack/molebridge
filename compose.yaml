@@ -87,6 +87,12 @@ services:
       NB_LOG_LEVEL: info
       # This peer only forwards traffic; it serves and uses no overlay DNS.
       NB_DISABLE_DNS: "true"
+      # Keeps ICE off the exit tunnel interface from the peer's first
+      # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
+      # first `netbird up`. An already enrolled peer keeps its stored
+      # blacklist, so an upgrade sets it with the flag instead
+      # (docs/setup.md#5-keep-ice-off-the-tunnel-interface).
+      NB_EXTRA_IFACE_BLACKLIST: mullvad
     env_file:
       # NB_SETUP_KEY, needed only until the peer first enrolls.
       - path: ./secrets/netbird.env

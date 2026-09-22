@@ -133,7 +133,8 @@ With the exit selected on a device in `exit-users`:
   ([setup](setup.md#5-keep-ice-off-the-tunnel-interface)) and look for
   `ICE retries exhausted` in `docker compose logs netbird`. A peer that has hit
   that state retries only hourly, so re-apply the flag and bring the peer back
-  up rather than waiting.
+  up rather than waiting. `python3 tools/molebridge.py doctor` checks the
+  stored blacklist; no `netbird` command prints it.
 - **Switch.** Choose a server in another city in the panel. The panel reports
   the new city within about a minute, and the client's egress follows without
   reselecting the exit.

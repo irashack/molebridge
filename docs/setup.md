@@ -57,7 +57,8 @@ All three should become healthy, and the routing log should show `rules installe
 If the routing script refuses to start, it names the setting it rejected.
 The WireGuard healthcheck requires a completed routing initialization before
 NetBird can start. Applier health checks freshness and routing, not client DNS
-or end-to-end connectivity.
+or end-to-end connectivity. The peer enrolls with the Mullvad interface
+already excluded from ICE (step 5 explains why that matters).
 
 In NetBird, confirm the peer `NB_HOSTNAME` appears and is in `exit-nodes`. Then
 delete `secrets/netbird.env` (the peer's identity now lives in the
@@ -67,17 +68,21 @@ delete `secrets/netbird.env` (the peer's identity now lives in the
 
 Required, not a tuning step. The exit peer shares its network namespace with
 the Mullvad tunnel, so by default NetBird gathers ICE candidates on the tunnel
-interface too. Exclude it:
+interface too. `compose.yaml` excludes it from the first enrollment:
+`NB_EXTRA_IFACE_BLACKLIST=mullvad` binds NetBird's `--extra-iface-blacklist`
+flag on the first `netbird up`, so a peer enrolled with this file has the
+exclusion before it exchanges a candidate with anyone.
+
+The environment variable works only at enrollment. NetBird stores the
+blacklist in the peer's own configuration, and that stored value wins over
+`NB_*` environment variables once the peer has enrolled. A peer enrolled with
+an older `compose.yaml`, or re-enrolled without the variable, gets the
+exclusion from the flag instead:
 
 ```sh
 docker compose exec netbird netbird down
 docker compose exec netbird netbird up --extra-iface-blacklist mullvad
 ```
-
-It has to be this flag. NetBird stores the blacklist in the peer's own
-configuration, and that stored value wins over `NB_*` environment variables
-once the peer has enrolled, so setting an environment variable in
-`compose.yaml` changes nothing on an existing peer.
 
 Two things go wrong without it, and the second is the serious one:
 
@@ -95,8 +100,12 @@ Two things go wrong without it, and the second is the serious one:
 
 The setting lives in the `netbird-data` volume (`IFaceBlackList` in the stored
 client configuration; `default.json` on NetBird 0.78), so it survives restarts
-and recreation. It does **not** survive re-enrollment: re-apply it any time
-the peer identity is recreated.
+and recreation. It does **not** survive a re-enrollment made with a Compose
+file that lacks the variable: re-apply the flag any time the peer identity is
+recreated that way. No `netbird` command prints the stored blacklist
+(`netbird debug config` omits it); `python3 tools/molebridge.py doctor` reads
+that one field from the profile and fails, naming the commands above, when
+the exit interface is missing.
 
 ## 6. Verify before trusting it
 

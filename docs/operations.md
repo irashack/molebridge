@@ -103,14 +103,18 @@ would fail whenever the tunnel is down. Molebridge does not provide it.
 
 ## Direct connections
 
-The exit peer must keep ICE off the Mullvad tunnel interface. This is set once
-during [setup](setup.md#5-keep-ice-off-the-tunnel-interface) with
-`netbird up --extra-iface-blacklist mullvad` and stored in the peer's own
-configuration inside the `netbird-data` volume, where it survives restarts,
-recreation and the recovery helper. It does not survive re-enrollment, and
-`NB_*` environment variables cannot set it on an enrolled peer, so re-apply the
-flag whenever the peer identity is recreated. Without it, clients are relayed
+The exit peer must keep ICE off the Mullvad tunnel interface. `compose.yaml`
+sets it at the first enrollment through `NB_EXTRA_IFACE_BLACKLIST`; for a peer
+enrolled before that variable existed, the flag
+`netbird up --extra-iface-blacklist mullvad` sets it
+([setup](setup.md#5-keep-ice-off-the-tunnel-interface)). Either way it is
+stored in the peer's own configuration inside the `netbird-data` volume, where
+it survives restarts, recreation and the recovery helper, and where `NB_*`
+environment variables can no longer change it. Without it, clients are relayed
 and the exit's tunnel address can be offered to peers as an ICE candidate.
+No `netbird` command prints the stored value; `python3 tools/molebridge.py
+doctor` checks it, and the [Podman section](#rootless-podman) shows how to read
+the field by hand.
 
 To see what a peer is doing, raise the client log level, read the discovered
 local candidates and the remote ones, then put the level back:
@@ -237,6 +241,12 @@ panel now answers 421 for any `Host` it is not published under; if your proxy
 rewrites the upstream `Host` (for example to `host.docker.internal:8095`), add
 that name to `PANEL_PUBLIC_HOSTS` before recreating the panel.
 
+Since the enrollment-time blacklist, `doctor` also fails when the exit
+interface is missing from the peer's ICE interface blacklist. A peer enrolled
+before this revision needs the flag once
+([setup](setup.md#5-keep-ice-off-the-tunnel-interface)); the new
+`NB_EXTRA_IFACE_BLACKLIST` variable cannot change an enrolled peer.
+
 Two more since the container-engine portability changes. The panel's user is
 now `PANEL_USER` rather than `PUID`/`PGID`; it defaults to `1000:1000`, so set
 it explicitly if your `PUID`/`PGID` are anything else, or the panel cannot
@@ -285,6 +295,107 @@ can keep its old name.
 
 This migration procedure has not been verified on a live Docker host. Run the
 [verification checks](verification.md) after upgrading.
+
+## Rootless Podman
+
+Tested on Debian 13 with rootless Podman 5.4 and podman-compose 1.6 on amd64,
+through a deployment-specific Compose file carrying the same services, mounts
+and settings as `compose.yaml`; the bundled file itself validates with
+`podman-compose config` there but has not been started unchanged on that
+host. `tools/molebridge.py` drives `docker compose` and reads its JSON output,
+which `podman-compose config` does not offer, so on Podman the commands below
+replace `doctor` and `recover`. Substitute your project name for `molebridge`
+if you changed `COMPOSE_PROJECT_NAME`.
+
+**Before the first start**, load the `wireguard` module and set
+`PANEL_USER=0:0` as described in [prerequisites](prerequisites.md#host).
+
+**Setup** follows [setup](setup.md) with `podman-compose` in place of
+`docker compose`:
+
+```sh
+podman-compose build wireguard applier
+podman-compose up -d wireguard netbird applier
+podman-compose ps
+podman logs molebridge-wireguard 2>&1 | grep 10-exit-routing
+```
+
+**Upgrade or recover.** Rebuild first, so a failed build leaves the running
+exit alone, then recreate all four containers together; recreating `wireguard`
+alone strands `netbird` and `applier` in its old namespace:
+
+```sh
+podman-compose pull netbird control-panel
+podman-compose build wireguard applier
+podman-compose up -d --force-recreate wireguard netbird applier control-panel
+```
+
+podman-compose has no `--wait`; poll health instead, then confirm the three
+namespace users agree and the applier's own checks pass:
+
+```sh
+for c in wireguard netbird applier control-panel; do
+  podman inspect --format '{{.State.Health.Status}}' molebridge-$c
+done
+for c in wireguard netbird applier; do
+  podman exec molebridge-$c readlink /proc/self/ns/net
+done
+podman exec molebridge-applier python -m applier.apply --doctor
+```
+
+The three `readlink` values must be identical. `--doctor` prints four fixed
+PASS/FAIL lines covering routing, egress, the catalogue and freshness. It does
+not check the ICE blacklist, so read that one field from the peer profile
+yourself; the file also holds the peer's private key, so never print more of
+it:
+
+```sh
+awk '/"IFaceBlackList"/ {p=1} p {print} p && /\]|null/ {exit}' \
+  "$(podman volume inspect molebridge_netbird-data --format '{{.Mountpoint}}')/default.json"
+```
+
+Never use `down -v`: the named volume is the peer's identity.
+
+**Boot.** `restart: unless-stopped` restarts a container whose process dies,
+but rootless containers start at boot only through a systemd user session.
+The tested arrangement is a lingering user unit that brings the project up:
+
+```sh
+loginctl enable-linger "$USER"
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/molebridge.service <<'UNIT'
+[Unit]
+Description=Molebridge rootless Podman project
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/molebridge
+ExecStart=/usr/bin/podman-compose up -d
+ExecStop=/usr/bin/podman-compose stop
+TimeoutStartSec=900
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target
+UNIT
+systemctl --user daemon-reload
+systemctl --user enable --now molebridge.service
+```
+
+Set `WorkingDirectory` to your checkout. This unit is installed and active on
+the tested host, but no reboot has been exercised with the exit present, so
+unattended boot on Podman is **experimental**: after a reboot, run the health
+and namespace checks above before trusting the exit. Podman does not act on a
+failing healthcheck, so a stranded `netbird` or `applier` stays stranded until
+you recreate all four containers as in the upgrade step.
+
+**Direct connections.** A rootless project sits on a private bridge behind
+the engine's NAT, so expect relayed clients until you follow
+[Exits on a private container network](#exits-on-a-private-container-network),
+confirming the symptom in `netbird status -d` first.
 
 ## Rotating the Mullvad key
 
