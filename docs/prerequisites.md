@@ -69,7 +69,8 @@ Gather these before [setup](setup.md).
 - **Build access:** the first setup builds two small derived images from the
   pinned bases. The applier installs wg/ip/curl from signed Debian repositories.
 - **Outbound network access:** UDP 51820 to Mullvad servers, HTTPS to
-  `api.mullvad.net` (relay list) and `am.i.mullvad.net` (egress checks), TCP 443
+  `api.mullvad.net` (relay list) and `ipv4.am.i.mullvad.net` /
+  `ipv6.am.i.mullvad.net` (egress checks, through the tunnel), TCP 443
   to Mullvad servers (latency probes), and whatever NetBird needs to reach your
   management server and peers.
 - **Upload bandwidth.** Every client's traffic crosses this host twice: in from

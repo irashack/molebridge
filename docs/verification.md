@@ -27,9 +27,11 @@ docker compose exec applier sh
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
    IPv4-only config still has the IPv6 unreachable fallback.
 3. **The tunnel egresses through Mullvad.**
-   `curl -4 -fsS --interface mullvad https://am.i.mullvad.net/json` reports
-   `"mullvad_exit_ip": true`. Repeat with `-6` when the tunnel has an IPv6 address.
-   Both probes must succeed; one family cannot stand in for the other.
+   `curl -4 -fsS --interface mullvad https://ipv4.am.i.mullvad.net/json` reports
+   `"mullvad_exit_ip": true`. When the tunnel has an IPv6 address, so does
+   `curl -6 -fsS --interface mullvad https://ipv6.am.i.mullvad.net/json`
+   (`am.i.mullvad.net` itself has no AAAA record, so `-6` against it fails to
+   resolve). Both probes must succeed; one family cannot stand in for the other.
 4. **The exit's own traffic does not.** `curl -s https://am.i.mullvad.net/json`
    without `--interface` reports your host's normal IP. That is the path the
    Mullvad handshake and NetBird's own control connections take; it must stay

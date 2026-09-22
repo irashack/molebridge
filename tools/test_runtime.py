@@ -123,6 +123,8 @@ class Kernel:
             if not self.egress_ok or family in self.failed_egress:
                 raise RuntimeError('injected probe failure')
             assert '--interface' in args and args[args.index('--interface') + 1] == 'mullvad'
+            # The generic name has no AAAA record; each family has its own.
+            assert args[-1] == f'https://ipv{family}.am.i.mullvad.net/json'
             return json.dumps(self.probe if family == 4 else self.probe6)
         raise AssertionError('unexpected command')
 

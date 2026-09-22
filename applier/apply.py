@@ -133,9 +133,10 @@ class Applier:
         return None
 
     def egress_family(self, family):
+        # am.i.mullvad.net has no AAAA record; Mullvad publishes per-family names.
         raw = self.run(['curl', f'-{family}', '--interface', self.config.exit_if, '--noproxy', '*',
                         '--proto', '=https', '--max-filesize', '16384', '-fsS', '--max-time', '10',
-                        'https://am.i.mullvad.net/json'], timeout=12, limit=16384)
+                        f'https://ipv{family}.am.i.mullvad.net/json'], timeout=12, limit=16384)
         data = decode_json(raw)
         if not isinstance(data, dict) or type(data.get('mullvad_exit_ip')) is not bool:
             raise ValueError('invalid egress response')

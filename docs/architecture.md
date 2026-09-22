@@ -117,7 +117,9 @@ working tunnel merely because the API is unavailable.
    fixed subprocess argument lists and timeouts.
 4. It probes Mullvad through the tunnel for up to roughly 60 seconds. Success
    requires a fresh non-future handshake, separate typed Mullvad egress responses
-   from `curl -4` and (for an IPv6 tunnel) `curl -6`, and intact routing protection.
+   from `curl -4` against `ipv4.am.i.mullvad.net` and (for an IPv6 tunnel)
+   `curl -6` against `ipv6.am.i.mullvad.net` (`am.i.mullvad.net` itself has no
+   AAAA record), and intact routing protection.
    The current server is derived from live peer
    state, including the initial server from the downloaded configuration.
 5. An unavailable fresh catalogue, overlay interface or tunnel routing leaves
