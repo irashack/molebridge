@@ -5,6 +5,21 @@ ownership, Compose mounts and status semantics. Unit tests and isolated Linux
 namespace drills do not establish that the whole NetBird/Mullvad deployment
 works. Run this pass on the existing homelab before trusting the update.
 
+## Outcome of the 2026-09-20 pass
+
+The pass ran on the original deployment (macOS/OrbStack, self-hosted NetBird)
+with simulated client routing plus one real phone. Steady-state fail-closed
+behaviour held in every drill for both families. It found six defects, all
+fixed since: a single-family tunnel-route loss reported healthy; the applier
+stayed Docker-healthy in an orphaned namespace; `OVERLAY_IF` was not passed to
+NetBird; a transient start-up failure consumed the saved selection; NetBird
+preceded the routing guards only by timing; and the exit's ICMP errors for
+oversized tunnel replies left over the host's route, so UDP (QUIC) through the
+exit stalled. Still unverified on a live deployment: host reboot and
+container-runtime restart, a client held on the exit during a drill, and LAN
+unreachability from a client. Rerun this pass after those fixes before relying
+on a new revision.
+
 ## Prepare
 
 1. Schedule an interruption for exit users. Keep an independent SSH/console

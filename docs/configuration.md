@@ -16,7 +16,7 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `PUID`, `PGID` | `1000` | Host user and group that own `state/`. The panel runs as this user. |
 | `TZ` | `Etc/UTC` | Container time zone. |
 | `PANEL_PORT` | `8095` | Loopback port for the panel. |
-| `PANEL_PUBLIC_HOSTS` | empty | Comma-separated hostnames the panel is published on. Form posts are accepted only from these origins (or the request's own `Host`). |
+| `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Requests for any other name get 421; loopback names are always accepted. Form posts are accepted only from these origins. |
 | `PANEL_FRAME_ANCESTORS` | empty | Space-separated `https://` origins allowed to embed the panel. Empty forbids framing. |
 | `PANEL_TITLE` | `Molebridge` | Page and app name. |
 | `PANEL_SHORT_TITLE` | `Molebridge` | Home-screen icon label. |
@@ -32,7 +32,7 @@ contents anywhere.
 
 | File | Contents | Needed |
 |---|---|---|
-| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses, starting server | Always |
+| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | Always |
 | `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
 | `secrets/applier.env` | `GATUS_TOKEN` | Only with `GATUS_URL` |
 
@@ -46,6 +46,11 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `mullvad_exit_ip`, `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
+
+Routing initialization reads only the `Address` line of the tunnel config, for
+the return-path rule; `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr`
+on the `wireguard` service for the same reason, and the applier and doctor
+require both. See [architecture](architecture.md#routing-contract).
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 applier snapshots are mode 0644 so the non-root panel can read them; requests

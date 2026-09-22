@@ -48,16 +48,41 @@ class CsrfAndOriginUnitTests(unittest.TestCase):
         self.assertFalse(app.verify_csrf(nonce, None))
         self.assertFalse(app.verify_csrf(nonce, 'é' * 64))
 
-    def test_origin_host_matching(self):
-        self.assertTrue(app.origin_matches_host(None, 'exit.example.test'))
-        self.assertTrue(app.origin_matches_host(
-            'https://exit.example.test', 'exit.example.test'))
-        self.assertFalse(app.origin_matches_host(
-            'https://evil.example.com', 'exit.example.test'))
-        self.assertFalse(app.origin_matches_host('https://evil.example.com', None))
-        self.assertFalse(app.origin_matches_host('http://exit.example.test:8096', 'exit.example.test:8095'))
-        self.assertTrue(app.origin_matches_host('http://[::1]:8095', '[::1]:8095'))
-        self.assertFalse(app.origin_matches_host('http://[', 'exit.example.test'))
+    def test_origin_allowlist(self):
+        with patch.dict('os.environ', {'PANEL_PUBLIC_HOSTS': 'exit.example.test, other.example.test:8443'}):
+            self.assertTrue(app.origin_allowed(None))
+            self.assertTrue(app.origin_allowed('https://exit.example.test'))
+            self.assertTrue(app.origin_allowed('https://exit.example.test:443'))
+            self.assertFalse(app.origin_allowed('https://exit.example.test:8443'))
+            self.assertTrue(app.origin_allowed('https://other.example.test:8443'))
+            self.assertFalse(app.origin_allowed('https://other.example.test'))
+            self.assertFalse(app.origin_allowed('https://evil.example.com'))
+            self.assertFalse(app.origin_allowed('https://exit.example.test/path'))
+            self.assertFalse(app.origin_allowed('ftp://exit.example.test'))
+            self.assertFalse(app.origin_allowed('http://['))
+            self.assertFalse(app.origin_allowed('null'))
+        # Loopback is always acceptable, on any port: SSH forwards vary.
+        self.assertTrue(app.origin_allowed('http://[::1]:8095'))
+        self.assertTrue(app.origin_allowed('http://127.0.0.1:9000'))
+        self.assertTrue(app.origin_allowed('http://localhost:8095'))
+        self.assertFalse(app.origin_allowed('https://exit.example.test'))
+
+    def test_host_allowlist(self):
+        with patch.dict('os.environ', {'PANEL_PUBLIC_HOSTS': 'exit.example.test,host.docker.internal:8095'}):
+            self.assertTrue(app.host_allowed('exit.example.test'))
+            self.assertTrue(app.host_allowed('exit.example.test:443'))
+            self.assertTrue(app.host_allowed('EXIT.example.test'))
+            self.assertFalse(app.host_allowed('exit.example.test:8095'))
+            self.assertTrue(app.host_allowed('host.docker.internal:8095'))
+            self.assertFalse(app.host_allowed('host.docker.internal'))
+            self.assertFalse(app.host_allowed('evil.example.com:8095'))
+            self.assertFalse(app.host_allowed('exit.example.test@evil.example.com'))
+            self.assertFalse(app.host_allowed(None))
+            self.assertFalse(app.host_allowed(''))
+        self.assertTrue(app.host_allowed('127.0.0.1:8095'))
+        self.assertTrue(app.host_allowed('[::1]:8095'))
+        self.assertTrue(app.host_allowed('localhost'))
+        self.assertFalse(app.host_allowed('exit.example.test'))
 
 
 class ServerIntegrationTests(unittest.TestCase):
@@ -170,6 +195,45 @@ class ServerIntegrationTests(unittest.TestCase):
                 self.assertNotIn(origin, log.getvalue())
                 self.assertNotIn('127.0.0.1', log.getvalue())
 
+    def _request(self, method, path, headers, body=None):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp, data
+
+    def test_unpublished_host_is_misdirected_and_not_logged(self):
+        # DNS rebinding: the browser reaches loopback under an attacker's name.
+        for path in ('/', '/embed', '/api/status', '/readyz', '/static/panel.js'):
+            with self.subTest(path=path), patch('sys.stderr', new_callable=io.StringIO) as log:
+                resp, data = self._request('GET', path, {'Host': f'rebind.example.com:{self.port}'})
+                self.assertEqual(resp.status, 421)
+                self.assertNotIn(b'csrf_token', data)
+                self.assertNotIn('rebind.example.com', log.getvalue())
+        resp, _ = self._request('GET', '/healthz', {'Host': f'rebind.example.com:{self.port}'})
+        self.assertEqual(resp.status, 200)
+        _status, nonce, token = self._get_index()
+        body = f'server=se-sto-wg-001&csrf_token={token}'.encode()
+        resp, _ = self._request('POST', '/select', {
+            'Host': f'rebind.example.com:{self.port}',
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': str(len(body)),
+            'Cookie': f'csrf_nonce={nonce}',
+            'Origin': f'http://rebind.example.com:{self.port}',
+            'X-Forwarded-Host': '127.0.0.1',
+        }, body)
+        self.assertEqual(resp.status, 421)
+        self.assertIsNone(app.read_json(app.DESIRED_PATH))
+
+    def test_published_hosts_include_a_proxy_upstream_name(self):
+        with patch.dict('os.environ', {'PANEL_PUBLIC_HOSTS': 'exit.example.test,host.docker.internal:8095'}):
+            for host, expected in (('host.docker.internal:8095', 200), ('host.docker.internal:8096', 421),
+                                   ('exit.example.test', 200), ('127.0.0.1:%d' % self.port, 200)):
+                with self.subTest(host=host):
+                    resp, _ = self._request('GET', '/api/status', {'Host': host})
+                    self.assertEqual(resp.status, expected)
+
     def test_unknown_path_is_not_logged(self):
         with patch('sys.stderr', new_callable=io.StringIO) as log:
             conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
@@ -222,28 +286,16 @@ if __name__ == '__main__':
     unittest.main()
 
 
-def test_origin_accepts_forwarded_host_behind_proxy():
-    import importlib.util
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location("panel_app_fwd", Path(__file__).parent / "app.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    origin = "https://exit.example.test"
-    assert mod.origin_matches_host(origin, "host.docker.internal:8095", "exit.example.test")
-    assert not mod.origin_matches_host("https://evil.example", "host.docker.internal:8095", "exit.example.test")
-
-
-def test_origin_accepts_configured_public_host_behind_proxy(monkeypatch):
-    import importlib.util
-    from pathlib import Path
-    spec = importlib.util.spec_from_file_location("panel_app_public", Path(__file__).parent / "app.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+def test_forwarded_host_header_is_not_trusted(monkeypatch):
+    # A rebinding page can set X-Forwarded-Host on a same-origin fetch, so the
+    # panel never derives its allowlist from request headers.
     monkeypatch.setenv("PANEL_PUBLIC_HOSTS", "exit.example.test")
-    assert mod.origin_matches_host("https://exit.example.test", "127.0.0.1:8095", None)
-    assert not mod.origin_matches_host("https://evil.example", "127.0.0.1:8095", None)
+    assert app.origin_allowed("https://exit.example.test")
+    assert not app.origin_allowed("https://evil.example")
+    assert not app.host_allowed("evil.example:8095")
     monkeypatch.delenv("PANEL_PUBLIC_HOSTS")
-    assert not mod.origin_matches_host("https://exit.example.test", "127.0.0.1:8095", None)
+    assert not app.origin_allowed("https://exit.example.test")
+    assert not app.host_allowed("exit.example.test")
 
 
 def test_referrer_policy_keeps_origin_for_same_site_posts():

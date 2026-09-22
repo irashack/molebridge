@@ -17,9 +17,11 @@ docker compose exec applier sh
 ```
 
 1. **Rules are installed.** `ip rule` shows priority 90 (`iif mullvad`, overlay
-   destination → `main`), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
-   51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard should
-   remain. IPv6 has 95/96/97 in all cases and 90 when `OVERLAY6_CIDR` is set.
+   destination → `main`), 94 (`from` the tunnel's IPv4 address → table 51821),
+   95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table 51821), and 97
+   (`iif wt0 unreachable`). No temporary priority-80 guard should remain. IPv6
+   has 95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is set, and 94 when the
+   tunnel has an IPv6 address.
 2. **The exit table fails closed.** `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
@@ -40,7 +42,16 @@ docker compose exec applier sh
    hexadecimal `request_id`. Use a fictitious unlisted name such as
    `xx-xxx-wg-999`, then restore the desired state by selecting a valid server
    in the panel. `wg show mullvad peers` exposes only the public peer key.
-6. **Doctor.** On the host, `python3 tools/molebridge.py doctor` should pass.
+6. **The exit's ICMP errors return through the tunnel.**
+   `cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr` prints `1`, and
+   `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` shows
+   `dev mullvad`; with an IPv6 tunnel address,
+   `ip -6 route get 2001:db8::1 from <tunnel IPv6 address> ipproto ipv6-icmp`
+   does too. Under client traffic, `Icmp6OutPktTooBigs` in `/proc/net/snmp6`
+   grows over time while `Ip6OutNoRoutes` stops growing. Without this, replies
+   larger than the overlay MTU are dropped with no error to the origin, and
+   UDP flows such as QUIC through the exit stall.
+7. **Doctor.** On the host, `python3 tools/molebridge.py doctor` should pass.
    It checks actual namespace agreement as well as routing and status freshness.
 
 ## Fail-closed drills
@@ -66,7 +77,10 @@ drill, the applier re-applies a previously successful chosen server after the
 interface returns. If a request was rejected or failed, select again to retry.
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked. The isolated `tools/check-routing.sh` drill also
-deletes all exit-table routes together to exercise the terminal guard.
+deletes all exit-table routes together to exercise the terminal guard, and
+proves that an oversized tunnel reply produces an ICMP error back over the
+tunnel, that a missing return-path rule is detected, and that with the tunnel
+route gone the error is dropped rather than sent over the host's route.
 For each single-family route deletion, confirm the other family still works
 while the next applier check reports `failed`, `/readyz` returns 503, and any
 monitoring push reports failure. A safe black hole must not appear healthy.
@@ -102,6 +116,10 @@ With the exit selected on a device in `exit-users`:
   shows a Mullvad address. Without IPv6 overlay, check that IPv6 either fails or
   is unused; if a native IPv6 address shows, that traffic is bypassing the
   exit. Mobile carriers that are IPv6-only with NAT64 are the likeliest case.
+- **Large UDP.** With the exit selected, a video call or an HTTP/3 (QUIC)
+  download does not stall after the first seconds. Browsers fall back to TCP
+  when QUIC breaks, so a stall that "fixes itself" is the symptom of a missing
+  return path, not of a slow tunnel.
 - **Direct path.** On the host, `docker compose exec netbird netbird status -d`
   lists the client with `Connection type: P2P`. `Relayed` adds the relay
   server's round trip to every packet; on a phone, first check that Force relay

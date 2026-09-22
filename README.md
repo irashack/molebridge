@@ -110,9 +110,9 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 
 | Where | Verification so far |
 | :--- | :--- |
-| **Original deployment** | Daily use since 2026-09-16 on macOS / OrbStack / Apple silicon, with self-hosted NetBird 0.78 and iPhone and macOS clients. |
+| **Original deployment** | Daily use since 2026-09-16 on macOS / OrbStack / Apple silicon, with self-hosted NetBird 0.78 and iPhone and macOS clients. A live pass on 2026-09-20 ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills; its findings, including the path-MTU return path for UDP, are fixed in this revision. |
 | **Automated checks** | Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
-| **Current hardening pass** | Full NetBird/Mullvad deployment and client checks are still pending. Use the [homelab test guide](docs/homelab-testing.md). |
+| **Current hardening pass** | Not yet re-run on a live deployment after the fixes; host reboot, a client held on the exit during a drill, and LAN unreachability from a client remain unverified. Use the [homelab test guide](docs/homelab-testing.md). |
 | **Other deployments** | Linux Docker hosts and NetBird Cloud have not yet been verified end to end. |
 
 There are no releases or project license yet. The repository remains private

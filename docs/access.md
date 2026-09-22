@@ -17,7 +17,7 @@ already working. It requires no domain, certificate or reverse proxy.
    ```
 
 3. Leave that command running and open `http://127.0.0.1:8095` on the laptop.
-   The panel accepts its own request host; `PANEL_PUBLIC_HOSTS` can be empty for
+   Loopback names are always accepted; `PANEL_PUBLIC_HOSTS` can be empty for
    this access method.
 4. Close the SSH connection when finished. The Docker host's panel port remains
    available only through loopback. Do not change the publish to `0.0.0.0` to
@@ -35,7 +35,10 @@ policy is another option if it restricts access to exactly the people who may
 switch. The host/container topology must allow the proxy to reach the loopback
 publish; a proxy's own container loopback is not the Docker host's loopback.
 
-Set `PANEL_PUBLIC_HOSTS` to the public hostname and optional port, and configure
-`PANEL_FRAME_ANCESTORS` only for an authenticated dashboard. Keep the proxy's
+Set `PANEL_PUBLIC_HOSTS` to the public hostname and optional port. The panel
+answers 421 to any request whose `Host` is neither loopback nor listed there,
+so a proxy that rewrites the upstream `Host` (a containerized proxy reaching
+`host.docker.internal:8095`, for example) needs that name listed as well.
+Configure `PANEL_FRAME_ANCESTORS` only for an authenticated dashboard. Keep the proxy's
 session cookie valid for iframe and home-screen use; see [operations](operations.md).
 Do not expose an unauthenticated panel through a public tunnel or port forward.

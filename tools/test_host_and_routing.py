@@ -75,6 +75,66 @@ def test_compose_trust_boundary():
     assert netbird['entrypoint'] == ['/bin/sh', '/usr/local/bin/molebridge-wait-for-guards',
                                      '/usr/local/bin/netbird-entrypoint.sh']
     assert './routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro' in netbird['volumes']
+    wireguard = compose['services']['wireguard']
+    assert wireguard['sysctls']['net.ipv4.icmp_errors_use_inbound_ifaddr'] == '1'
+
+
+TUNNEL_CONF = """[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Address = 203.0.113.1/32, 2001:db8:3::1/128
+MTU = 1420
+Table = off
+PostUp = ip route replace default dev %i table 51821; ip -6 route replace default dev %i table 51821
+PreDown = ip route del default dev %i table 51821; ip -6 route del default dev %i table 51821
+"""
+
+
+def compose_config(**changes):
+    config = {
+        'services': {
+            'wireguard': {'environment': {'OVERLAY_CIDR': '192.0.2.0/24', 'EXIT_TABLE': '51821'},
+                          'sysctls': {'net.ipv4.ip_forward': '1', 'net.ipv4.icmp_errors_use_inbound_ifaddr': '1'}},
+            'control-panel': {'cap_drop': ['ALL'], 'volumes': [
+                {'target': '/state/applier', 'read_only': True}, {'target': '/state/panel'}]},
+            'applier': {'volumes': [{'target': '/state/applier'}]},
+        },
+        'volumes': {'netbird-data': {'name': 'example_netbird-data'}},
+    }
+    config['services']['wireguard'].update(changes)
+    return config
+
+
+def test_doctor_requires_the_return_path_sysctl(tmp_path):
+    (tmp_path / '.env').write_text('')
+    host = host_tools.Host(tmp_path, run=lambda *a, **kw: json.dumps(compose_config()))
+    assert host.config()['services']['wireguard']['sysctls']
+    for sysctls in ({}, {'net.ipv4.icmp_errors_use_inbound_ifaddr': '0'}):
+        host = host_tools.Host(tmp_path, run=lambda *a, **kw: json.dumps(compose_config(sysctls=sysctls)))
+        with pytest.raises(host_tools.CheckError, match='icmp_errors_use_inbound_ifaddr'):
+            host.config()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='mode 0600 files')
+@pytest.mark.parametrize('text,message', [
+    (TUNNEL_CONF, None),
+    (TUNNEL_CONF.replace('; ip -6 route replace default dev %i table 51821', ''), 'every address family'),
+    (TUNNEL_CONF.replace('; ip -6 route del default dev %i table 51821', ''), 'every address family'),
+    (TUNNEL_CONF.replace(', 2001:db8:3::1/128', ''), None),
+    (TUNNEL_CONF.replace('203.0.113.1/32', '203.0.113.1/32, 203.0.113.2/32'), 'exactly one IPv4'),
+    (TUNNEL_CONF.replace('Address = 203.0.113.1/32, 2001:db8:3::1/128', 'Address = 2001:db8:3::1/128'), 'exactly one IPv4'),
+    (TUNNEL_CONF.replace('203.0.113.1/32', 'not-an-address'), 'invalid Address'),
+])
+def test_doctor_checks_both_route_hooks_and_one_address_per_family(tmp_path, text, message):
+    path = tmp_path / 'tunnel' / 'wg_confs' / 'mullvad.conf'
+    path.parent.mkdir(parents=True)
+    path.write_text(text)
+    path.chmod(0o600)
+    host = host_tools.Host(tmp_path, run=lambda *a, **kw: '')
+    if message is None:
+        host.check_files(compose_config())
+    else:
+        with pytest.raises(host_tools.CheckError, match=message):
+            host.check_files(compose_config())
 
 
 def shell():
@@ -104,8 +164,11 @@ exit 0
     binary.chmod(0o755)
     log = tmp_path / 'commands'
     ready = tmp_path / 'ready'
+    conf = tmp_path / 'mullvad.conf'
+    conf.write_text(env_changes.pop('conf_text', TUNNEL_CONF))
+    tunnel_conf = env_changes.pop('TUNNEL_CONF', posix_path(conf))
     env = dict(os.environ, OVERLAY_CIDR='192.0.2.0/24', OVERLAY6_CIDR='2001:db8:1::/64',
-               OVERLAY_IF='wt0', EXIT_IF='mullvad', EXIT_TABLE='51821',
+               OVERLAY_IF='wt0', EXIT_IF='mullvad', EXIT_TABLE='51821', TUNNEL_CONF=tunnel_conf,
                FAKE_BIN=posix_path(tmp_path), SCRIPT=posix_path(ROOT / 'routing' / '10-exit-routing'),
                LOGFILE=posix_path(log), ROUTING_READY_FILE=posix_path(ready), INJECT_FAULT=fault,
                **env_changes)
@@ -118,14 +181,47 @@ def test_routing_initialization_blocks_before_replacing_rules(tmp_path):
     result, calls, ready = routing_run(tmp_path)
     assert result.returncode == 0, result.stderr
     assert ready.exists()
-    for family in ('-4', '-6'):
+    for family, address in (('-4', '203.0.113.1'), ('-6', '2001:db8:3::1')):
         guard = calls.index(f'{family} rule add iif wt0 unreachable priority 80')
         fallback = calls.index(f'{family} route replace unreachable default metric 4096 table 51821')
         deleting = calls.index(f'{family} rule del priority 90')
+        stale = calls.index(f'{family} rule del priority 94')
+        return_path = calls.index(f'{family} rule add from {address} lookup 51821 priority 94')
         final = calls.index(f'{family} rule add iif wt0 unreachable priority 97')
         unblock = calls.index(f'{family} rule del iif wt0 unreachable priority 80')
-        assert guard < fallback < deleting < final < unblock
+        assert guard < fallback < deleting < stale < return_path < final < unblock
     assert '-4 rule add iif mullvad to 192.0.2.0/24 lookup main priority 90' in calls
+    assert 'AAAAAAAA' not in result.stdout + result.stderr
+
+
+def test_ipv4_only_tunnel_gets_no_ipv6_return_path_rule(tmp_path):
+    result, calls, ready = routing_run(tmp_path, conf_text=TUNNEL_CONF.replace(', 2001:db8:3::1/128', ''))
+    assert result.returncode == 0, result.stderr
+    assert ready.exists()
+    assert '-4 rule add from 203.0.113.1 lookup 51821 priority 94' in calls
+    assert not any('-6 rule add from' in call for call in calls)
+
+
+@pytest.mark.parametrize('conf_text', [
+    TUNNEL_CONF.replace('Address = 203.0.113.1/32, 2001:db8:3::1/128', 'Address = 2001:db8:3::1/128'),
+    TUNNEL_CONF.replace('203.0.113.1/32', '203.0.113.1/32, 203.0.113.2/32'),
+    TUNNEL_CONF.replace('2001:db8:3::1/128', '2001:db8:3::1/128, 2001:db8:3::2/128'),
+    TUNNEL_CONF.replace('203.0.113.1/32', '203.0.113.256/32'),
+    TUNNEL_CONF.replace('2001:db8:3::1/128', '2001:db8:3::g/128'),
+    TUNNEL_CONF.replace('Address = 203.0.113.1/32, 2001:db8:3::1/128\n', ''),
+])
+def test_unsupported_tunnel_addresses_stop_routing_init(tmp_path, conf_text):
+    result, calls, ready = routing_run(tmp_path, conf_text=conf_text)
+    assert result.returncode != 0
+    assert '10-exit-routing:' in result.stderr and 'AAAAAAAA' not in result.stdout + result.stderr
+    assert not ready.exists() and not any('rule add' in call for call in calls)
+
+
+def test_missing_tunnel_config_stops_routing_init(tmp_path):
+    result, calls, ready = routing_run(tmp_path, TUNNEL_CONF=posix_path(tmp_path / 'absent.conf'))
+    assert result.returncode != 0
+    assert 'tunnel configuration is missing' in result.stderr
+    assert not ready.exists() and not calls
 
 
 def test_failed_routing_init_leaves_guard_and_never_marks_ready(tmp_path):
@@ -141,7 +237,9 @@ def test_bad_config_makes_no_routing_changes(tmp_path, setting, value):
     # Pass overridden variables through a copied environment to avoid kwargs duplication.
     if not shell():
         pytest.skip('POSIX shell unavailable')
-    env = dict(os.environ, OVERLAY_CIDR='192.0.2.0/24', EXIT_TABLE='51821',
+    conf = tmp_path / 'mullvad.conf'
+    conf.write_text(TUNNEL_CONF)
+    env = dict(os.environ, OVERLAY_CIDR='192.0.2.0/24', EXIT_TABLE='51821', TUNNEL_CONF=posix_path(conf),
                ROUTING_READY_FILE=posix_path(tmp_path / 'ready'))
     env[setting] = value
     result = subprocess.run([shell(), posix_path(ROOT / 'routing' / '10-exit-routing')],

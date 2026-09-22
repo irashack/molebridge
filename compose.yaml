@@ -31,6 +31,10 @@ services:
       # The namespace forwards overlay traffic into the tunnel.
       net.ipv4.ip_forward: "1"
       net.ipv6.conf.all.forwarding: "1"
+      # ICMP errors for tunnel traffic (fragmentation needed) are sourced from
+      # the tunnel address so the priority-94 rule returns them through the
+      # tunnel. Without it, path MTU discovery through the exit silently fails.
+      net.ipv4.icmp_errors_use_inbound_ifaddr: "1"
       net.ipv6.conf.all.disable_ipv6: "0"
       net.ipv6.conf.default.disable_ipv6: "0"
     environment:

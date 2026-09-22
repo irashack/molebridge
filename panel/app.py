@@ -253,14 +253,62 @@ def get_cookie(cookie_header: Optional[str], name: str) -> Optional[str]:
     return morsel.value if morsel else None
 
 
-def origin_matches_host(
-    origin_header: Optional[str], host_header: Optional[str], forwarded_host: Optional[str] = None
-) -> bool:
-    """True unless an Origin header is present and disagrees with Host.
+LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1'}
 
-    Behind a reverse proxy the upstream Host may be the loopback target, so
-    the proxy's X-Forwarded-Host is accepted too. The CSRF token remains the
-    primary control."""
+
+def _split_host(value: str) -> Optional[Tuple[str, Optional[int]]]:
+    """(hostname, port or None) from a Host-style value; None when malformed."""
+    try:
+        parsed = urllib.parse.urlsplit('//' + value.strip())
+        if not parsed.hostname or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
+            return None
+        return parsed.hostname.lower(), parsed.port
+    except ValueError:
+        return None
+
+
+def allowed_hosts() -> List[Tuple[str, Optional[int]]]:
+    """Names the panel may be asked for: PANEL_PUBLIC_HOSTS plus loopback.
+
+    A proxy that rewrites the upstream Host (for example to
+    host.docker.internal:8095) needs that name listed too."""
+    hosts = []
+    for entry in os.environ.get('PANEL_PUBLIC_HOSTS', '').split(','):
+        if entry.strip():
+            parsed = _split_host(entry)
+            if parsed:
+                hosts.append(parsed)
+    return hosts
+
+
+def _host_allowed(hostname: str, port: Optional[int], default_port: Optional[int] = None) -> bool:
+    if hostname in LOOPBACK_HOSTS:
+        return True  # any port: SSH forwards and local proxies vary
+    for allowed_name, allowed_port in allowed_hosts():
+        if hostname != allowed_name:
+            continue
+        if allowed_port is None:
+            if port is None or port == default_port or port in (80, 443):
+                return True
+        elif port == allowed_port:
+            return True
+    return False
+
+
+def host_allowed(host_header: Optional[str]) -> bool:
+    """Reject requests for names the panel is not published under. This keeps
+    a DNS-rebinding page from reading status or a token-bearing page."""
+    if not host_header:
+        return False
+    parsed = _split_host(host_header.split(',', 1)[0])
+    return bool(parsed) and _host_allowed(parsed[0], parsed[1])
+
+
+def origin_allowed(origin_header: Optional[str]) -> bool:
+    """True unless an Origin header is present and names a host the panel is
+    not published under. Browsers always send Origin on form and fetch POSTs;
+    the request's own Host header is deliberately not trusted here, because a
+    rebinding page controls it. The CSRF token remains the primary control."""
     if not origin_header:
         return True
     try:
@@ -270,18 +318,9 @@ def origin_matches_host(
         if origin.path or origin.query or origin.fragment:
             return False
         default_port = 443 if origin.scheme == 'https' else 80
-        expected = (origin.hostname.lower(), origin.port or default_port)
-        candidates = [h.strip() for h in os.environ.get('PANEL_PUBLIC_HOSTS', '').split(',') if h.strip()]
-        candidates.extend(h.split(',', 1)[0].strip() for h in (host_header, forwarded_host) if h)
-        for host in candidates:
-            parsed = urllib.parse.urlsplit('//' + host)
-            if parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
-                continue
-            if (str(parsed.hostname).lower(), parsed.port or default_port) == expected:
-                return True
+        return _host_allowed(origin.hostname.lower(), origin.port or default_port, default_port)
     except ValueError:
         return False
-    return False
 
 
 def parse_select_form(body: bytes) -> Dict[str, str]:
@@ -577,10 +616,19 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
 
     # -- routes --------------------------------------------------------
 
+    def _misdirected(self) -> bool:
+        if host_allowed(self.headers.get('Host')):
+            return False
+        sys.stderr.write('rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback\n')
+        self._send_plain(421, 'unknown host; publish the panel under PANEL_PUBLIC_HOSTS')
+        return True
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler naming
         parsed = urllib.parse.urlsplit(self.path)
         if parsed.path == '/healthz':
             self._send_plain(200, 'ok')
+        elif self._misdirected():
+            return
         elif parsed.path == '/readyz':
             ready = status_payload()['view']['state'] == 'ok'
             self._send_plain(200 if ready else 503, 'ready' if ready else 'not ready')
@@ -608,6 +656,8 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         if parsed.path != '/select':
             self._send_plain(404, 'not found')
             return
+        if self._misdirected():
+            return
 
         length_header = self.headers.get('Content-Length')
         if length_header is None:
@@ -634,11 +684,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             self._send_plain(400, 'incomplete body')
             return
 
-        if not origin_matches_host(
-            self.headers.get('Origin'), self.headers.get('Host'), self.headers.get('X-Forwarded-Host')
-        ):
-            sys.stderr.write('rejected POST: origin does not match host\n')
-            self._send_plain(403, 'origin does not match host')
+        if not origin_allowed(self.headers.get('Origin')):
+            sys.stderr.write('rejected POST: origin is not a published panel host\n')
+            self._send_plain(403, 'origin is not a published panel host')
             return
 
         fields = parse_select_form(body)

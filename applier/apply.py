@@ -17,7 +17,7 @@ import urllib.parse
 from pathlib import Path
 
 from molebridge.relays import MULLVAD_RELAYS_URL, REFRESH_INTERVAL_S, RelayCatalog, valid_key
-from molebridge.routing import RoutingConfig, family_status
+from molebridge.routing import RETURN_PATH_SYSCTL, RoutingConfig, family_status, return_path_enabled
 from molebridge.state import (MAX_CATALOG_BYTES, decode_json, desired_request, now_iso, read_json,
                               recent, request_token, write_json_atomic)
 
@@ -70,31 +70,43 @@ class Applier:
             raise ValueError('unexpected catalogue HTTP status; redirects refused')
         return body
 
-    def tunnel_families(self):
-        """Infer configured families from interface addresses, never its routes."""
+    def tunnel_addresses(self):
+        """Global tunnel addresses by family, read from the interface, never its routes.
+
+        Exactly one address per family is supported: the return-path rule and
+        the kernel's ICMP source selection both assume a single address."""
         links = decode_json(self.run(['ip', '-j', 'address', 'show', 'dev', self.config.exit_if]))
         if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
             raise ValueError('missing tunnel interface')
         addresses = links[0].get('addr_info')
         if not isinstance(addresses, list) or any(not isinstance(a, dict) for a in addresses):
             raise ValueError('invalid tunnel addresses')
-        families = {4 if a['family'] == 'inet' else 6 for a in addresses
-                    if a.get('scope') == 'global' and a.get('family') in ('inet', 'inet6')}
-        if 4 not in families:
+        found = {}
+        for entry in addresses:
+            if entry.get('scope') != 'global' or entry.get('family') not in ('inet', 'inet6'):
+                continue
+            if not isinstance(entry.get('local'), str):
+                raise ValueError('invalid tunnel address')
+            address = ipaddress.ip_address(entry['local'])
+            if address.version in found:
+                raise ValueError('multiple tunnel addresses for one family')
+            found[address.version] = str(address)
+        if 4 not in found:
             raise ValueError('missing IPv4 tunnel address')
-        return sorted(families)
+        return found
 
     def routing_status(self):
         checks = []
         try:
             self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
-            families = self.tunnel_families()
+            addresses = self.tunnel_addresses()
+            return_path = return_path_enabled(self.run(['cat', RETURN_PATH_SYSCTL]))
             for family in (4, 6):
                 rules = decode_json(self.run(['ip', '-j', f'-{family}', 'rule', 'show']))
                 routes = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', self.config.table]))
                 checks.append(family_status(rules, routes, self.config, family,
-                                            require_tunnel=family in families))
-            return all(c[0] for c in checks), all(c[1] for c in checks)
+                                            tunnel_address=addresses.get(family)))
+            return return_path and all(c[0] for c in checks), all(c[1] for c in checks)
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
 
@@ -139,7 +151,7 @@ class Applier:
                 'mullvad_exit_ip': data['mullvad_exit_ip']}
 
     def egress(self):
-        probes = {family: self.egress_family(family) for family in self.tunnel_families()}
+        probes = {family: self.egress_family(family) for family in sorted(self.tunnel_addresses())}
         return {**probes[4], 'mullvad_exit_ip': all(p['mullvad_exit_ip'] for p in probes.values()),
                 'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
 
@@ -269,14 +281,21 @@ class Applier:
             self.last_request, self.request = 'invalid', None
             self.pending = None
             self.rejection = 'Invalid desired-state file; no change applied.'
-        elif request and (request_token(request) != self.last_request or self.pending):
+        elif request and request_token(request) != self.last_request:
             result = self.switch(request)
-            if not self.pending:
-                self.last_request = request_token(request)
+            self.last_request = request_token(request)
             self.next_health = self.clock() + REFRESH_SEC
             self.push_gatus(result)
             return result
-        elif request and not self.rejection:
+        elif request and self.pending and self.catalog.usable():
+            # A pending request retries once its prerequisites can be met. A
+            # stale catalogue is checked here without probing; routing and the
+            # tunnel are re-checked by the switch itself.
+            result = self.switch(request)
+            self.next_health = self.clock() + REFRESH_SEC
+            self.push_gatus(result)
+            return result
+        elif request and not self.rejection and not self.pending:
             # A recreated tunnel may start with the downloaded peer again.
             try:
                 if self.server_for(self.peers()) != request['server']:

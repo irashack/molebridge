@@ -107,9 +107,10 @@ The applier rewrites `state/applier/result.json` about every minute. Healthy
 requires a recent handshake, confirmed Mullvad egress, a fresh catalogue matching
 the observed peer, an existing overlay interface, and intact routing rules and
 fallback routes for both address families. Each family configured on the tunnel
-must also have its tunnel default and pass its own egress probe. An IPv4-only
-tunnel does not require IPv6 egress. Missing, malformed and future-dated status
-is not trusted.
+must also have its tunnel default, its return-path rule for the live tunnel
+address, and pass its own egress probe; the ICMP source sysctl must be set. An
+IPv4-only tunnel does not require IPv6 egress. Missing, malformed and
+future-dated status is not trusted.
 
 `/healthz` checks the panel process. `/readyz` returns 200 only for fresh
 verified connectivity, otherwise 503. The host-side doctor checks configuration,
@@ -167,6 +168,14 @@ The helper rebuilds the routing and applier images from their pinned bases.
 An uncached applier build can update Debian tool packages; use `docker compose
 build --no-cache applier` when intentionally refreshing them, then recover.
 Rerun [verification](verification.md) after routing, image or applier changes.
+
+Two changes need attention when upgrading from a revision before the
+return-path rule. The `wireguard` service now needs
+`net.ipv4.icmp_errors_use_inbound_ifaddr: "1"` in its `sysctls`; the bundled
+`compose.yaml` has it, and doctor reports a Compose file that lacks it. The
+panel now answers 421 for any `Host` it is not published under; if your proxy
+rewrites the upstream `Host` (for example to `host.docker.internal:8095`), add
+that name to `PANEL_PUBLIC_HOSTS` before recreating the panel.
 
 ### Upgrading from Switchyard
 

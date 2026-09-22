@@ -21,6 +21,7 @@ from molebridge.state import (decode_json, desired_request, now_iso, read_json,
 KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 HOST = 'se-sto-wg-001'
 CONFIG = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64')
+TUNNEL = {4: '203.0.113.1', 6: '2001:db8:3::1'}
 ENTRY = {'hostname': HOST, 'public_key': KEY, 'ipv4_addr_in': '198.51.100.10',
          'city': 'Example City', 'country': 'Example', 'location_code': 'se-sto'}
 
@@ -43,6 +44,7 @@ def rules(family):
     destination, prefix = (CONFIG.overlay if family == 4 else CONFIG.overlay6).split('/')
     return [{'priority': 0, 'src': 'all', 'table': 'local'},
             {'priority': 90, 'src': 'all', 'iif': 'mullvad', 'dst': destination, 'dstlen': int(prefix), 'table': 'main'},
+            {'priority': 94, 'src': TUNNEL[family], 'table': 51821},
             {'priority': 95, 'src': 'all', 'iif': 'wt0', 'table': 51821},
             {'priority': 96, 'src': 'all', 'oif': 'mullvad', 'table': 51821},
             {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'},
@@ -54,6 +56,14 @@ def routes():
             {'type': 'unreachable', 'dst': 'default', 'metric': 4096}]
 
 
+def by_priority(table, priority):
+    return next(rule for rule in table if rule['priority'] == priority)
+
+
+def status(table, table_routes, family, tunnel=True):
+    return family_status(table, table_routes, CONFIG, family, tunnel_address=TUNNEL[family] if tunnel else None)
+
+
 class Kernel:
     def __init__(self):
         self.calls = []
@@ -63,6 +73,7 @@ class Kernel:
         self.overlay_present = True
         self.tunnel_present = True
         self.families = [4, 6]
+        self.return_path = '1\n'
         self.now = 0
         self.egress_ok = True
         self.fail_set = False
@@ -85,7 +96,8 @@ class Kernel:
                 if not self.tunnel_present:
                     return '[]'
                 return json.dumps([{'addr_info': [
-                    {'family': 'inet' if f == 4 else 'inet6', 'scope': 'global'} for f in self.families]}])
+                    {'family': 'inet' if f == 4 else 'inet6', 'scope': 'global', 'local': TUNNEL[f]}
+                    for f in self.families]}])
             family = int(args[2][1:])
             return json.dumps(self.rules[family] if args[3] == 'rule' else self.routes[family])
         if args[:2] == ['wg', 'show']:
@@ -102,6 +114,9 @@ class Kernel:
             else:
                 self.keys = [args[4]]
             return ''
+        if args[0] == 'cat':
+            assert args[1].endswith('icmp_errors_use_inbound_ifaddr')
+            return self.return_path
         if args[0] == 'curl':
             family = 4 if '-4' in args else 6
             assert f'-{family}' in args
@@ -199,8 +214,11 @@ def test_saved_selection_retries_after_catalogue_recovers(runtime):
     app.fetch_catalog = lambda: next(responses)
     write_json_atomic(app.desired_path, request())
     assert app.tick()['status'] == 'failed'
-    assert app.pending and not app.rejection and app.last_request is None
+    assert app.pending and not app.rejection
     assert not kernel.mutations
+    # While the catalogue stays stale nothing is probed or pushed again.
+    probes = len([c for c in kernel.calls if c[0] == 'curl'])
+    assert app.tick() is None and len([c for c in kernel.calls if c[0] == 'curl']) == probes
     kernel.now = 60
     result = app.tick()
     assert result['status'] == 'ok' and result['request_id'] == '0' * 32
@@ -273,7 +291,7 @@ def test_switch_and_observed_initial_peer(runtime):
 
 
 @pytest.mark.parametrize('family', [4, 6])
-@pytest.mark.parametrize('priority', [90, 95, 96, 97])
+@pytest.mark.parametrize('priority', [90, 94, 95, 96, 97])
 def test_missing_rule_prevents_success_and_switch(runtime, family, priority):
     app, kernel = runtime
     kernel.rules[family] = [r for r in kernel.rules[family] if r['priority'] != priority]
@@ -321,6 +339,9 @@ def test_ipv4_only_tunnel_keeps_ipv6_guard_without_requiring_ipv6_egress(runtime
     kernel.families = [4]
     kernel.routes[6] = routes()[1:]
     kernel.failed_egress.add(6)
+    # A return-path rule for an address the tunnel does not have is unexpected.
+    assert app.inspect()['status'] == 'failed'
+    kernel.rules[6] = [r for r in rules(6) if r['priority'] != 94]
     result = app.switch(request())
     assert result['status'] == 'ok'
     assert result['egress_ips'] == {'4': '203.0.113.10'}
@@ -339,42 +360,99 @@ def test_healthy_dual_stack_result_records_both_probes(runtime):
 @pytest.mark.parametrize('selector', ['iif_detached', 'oif_detached'])
 def test_detached_routing_selectors_are_unhealthy(selector):
     table = rules(4)
-    table[2 if selector == 'iif_detached' else 3][selector] = True
-    assert family_status(table, routes(), CONFIG, 4) == (False, True)
+    by_priority(table, 95 if selector == 'iif_detached' else 96)[selector] = True
+    assert status(table, routes(), 4) == (False, True)
 
 
 @pytest.mark.parametrize('extra', [{'fwmark': '0x1'}, {'src': '192.0.2.5'}, {'not': True}, {'suppress_prefixlen': 0}])
 def test_narrowed_or_inverted_rule_is_not_healthy(extra):
     table = rules(4)
-    table[2].update(extra)
-    assert not family_status(table, routes(), CONFIG, 4)[0]
+    by_priority(table, 95).update(extra)
+    assert not status(table, routes(), 4)[0]
 
 
 def test_earlier_rule_and_unsafe_table_route_rejected():
-    assert not family_status([{'priority': 50, 'table': 'main'}, *rules(4)], routes(), CONFIG, 4)[0]
-    assert not family_status(rules(4), [*routes(), {'dst': '192.0.2.0/24', 'dev': 'eth0'}], CONFIG, 4)[0]
+    assert not status([{'priority': 50, 'table': 'main'}, *rules(4)], routes(), 4)[0]
+    assert not status(rules(4), [*routes(), {'dst': '192.0.2.0/24', 'dev': 'eth0'}], 4)[0]
 
 
 @pytest.mark.parametrize('family', [4, 6])
 def test_iproute2_separate_destination_prefix_and_cidr(family):
     table = rules(family)
-    assert family_status(table, routes(), CONFIG, family) == (True, True)
+    assert status(table, routes(), family) == (True, True)
     table[1]['dst'] += '/' + str(table[1].pop('dstlen'))
-    assert family_status(table, routes(), CONFIG, family) == (True, True)
+    assert status(table, routes(), family) == (True, True)
 
 
 @pytest.mark.parametrize('prefix', [0, 23, 25, None, '24', True, [], 129])
 def test_wrong_or_malformed_rule_prefix_rejected(prefix):
     table = rules(4)
     table[1]['dstlen'] = prefix
-    assert not family_status(table, routes(), CONFIG, 4)[0]
+    assert not status(table, routes(), 4)[0]
 
 
 def test_host_rule_prefix_omits_dstlen():
     table = rules(4)
     del table[1]['dstlen']
     config = RoutingConfig('192.0.2.0/32')
-    assert family_status(table, routes(), config, 4) == (True, True)
+    assert family_status(table, routes(), config, 4, tunnel_address=TUNNEL[4]) == (True, True)
+
+
+@pytest.mark.parametrize('family', [4, 6])
+@pytest.mark.parametrize('change', ['other-address', 'prefix', 'iif', 'oif', 'main', 'missing'])
+def test_return_path_rule_must_match_the_tunnel_address_exactly(family, change):
+    table = rules(family)
+    rule = by_priority(table, 94)
+    if change == 'other-address':
+        rule['src'] = '203.0.113.9' if family == 4 else '2001:db8:3::9'
+    elif change == 'prefix':
+        rule['srclen'] = 24 if family == 4 else 64
+    elif change in ('iif', 'oif'):
+        rule[change] = 'mullvad'
+    elif change == 'main':
+        rule['table'] = 'main'
+    else:
+        table.remove(rule)
+    assert status(table, routes(), family) == (False, True)
+    assert status(rules(family), routes(), family) == (True, True)
+
+
+@pytest.mark.parametrize('family', [4, 6])
+def test_return_path_rule_explicit_host_length_is_accepted(family):
+    table = rules(family)
+    by_priority(table, 94)['srclen'] = 32 if family == 4 else 128
+    assert status(table, routes(), family) == (True, True)
+
+
+def test_tunnel_without_a_family_expects_no_return_path_rule():
+    assert status(rules(6), routes()[1:], 6, tunnel=False) == (False, True)
+    table = [r for r in rules(6) if r['priority'] != 94]
+    assert status(table, routes()[1:], 6, tunnel=False) == (True, True)
+
+
+@pytest.mark.parametrize('value', ['0\n', '', 'x'])
+def test_return_path_sysctl_is_required_for_health_and_switching(runtime, value):
+    app, kernel = runtime
+    kernel.return_path = value
+    result = app.inspect()
+    assert result['status'] == 'failed' and not result['routing_ok']
+    assert app.switch(request())['status'] == 'failed'
+    assert not kernel.mutations
+
+
+@pytest.mark.parametrize('addresses', [[], [('inet', '203.0.113.1'), ('inet', '203.0.113.2')],
+                                       [('inet', '203.0.113.1'), ('inet6', 'bad')], [('inet6', '2001:db8:3::1')]])
+def test_unsupported_tunnel_addresses_are_unhealthy(runtime, addresses):
+    app, kernel = runtime
+    run = kernel.run
+    def with_addresses(args, **kwargs):
+        if args[1:4] == ['-j', 'address', 'show']:
+            return json.dumps([{'addr_info': [{'family': f, 'scope': 'global', 'local': a} for f, a in addresses]}])
+        return run(args, **kwargs)
+    app.run = with_addresses
+    assert app.inspect()['status'] == 'failed'
+    assert app.switch(request())['status'] == 'failed'
+    assert not kernel.mutations
 
 
 def test_switch_timeout_does_not_repeat_or_failover(runtime):

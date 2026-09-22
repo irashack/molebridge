@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -18,6 +19,23 @@ from molebridge.routing import RoutingConfig
 
 class CheckError(Exception):
     pass
+
+
+def tunnel_families(text):
+    """Address families of the tunnel config, requiring one address per family.
+
+    The routing init script and the applier both assume a single tunnel
+    address per family for the return-path rule."""
+    addresses = []
+    for line in re.findall(r'^\s*Address\s*=\s*(.+)$', text, re.M):
+        addresses.extend(a.strip() for a in line.split(',') if a.strip())
+    try:
+        versions = [ipaddress.ip_interface(a).version for a in addresses]
+    except ValueError:
+        raise CheckError('Tunnel configuration has an invalid Address.') from None
+    if versions.count(4) != 1 or versions.count(6) > 1:
+        raise CheckError('Tunnel configuration needs exactly one IPv4 Address and at most one IPv6 Address.')
+    return set(versions)
 
 
 def execute(args, *, cwd, timeout=30):
@@ -45,6 +63,9 @@ class Host:
         try:
             data = json.loads(self.compose('config', '--format', 'json'))
             RoutingConfig.from_env(data['services']['wireguard']['environment'])
+            sysctls = data['services']['wireguard'].get('sysctls') or {}
+            if str(sysctls.get('net.ipv4.icmp_errors_use_inbound_ifaddr')) != '1':
+                raise CheckError('The wireguard service must set net.ipv4.icmp_errors_use_inbound_ifaddr=1 (compose.yaml).')
             panel = data['services']['control-panel']
             mounts = {v['target']: v for v in panel['volumes']}
             if not mounts['/state/applier'].get('read_only'):
@@ -71,11 +92,13 @@ class Host:
             expected = config['services']['wireguard']['environment']['EXIT_TABLE']
             if not re.search(r'^Table\s*=\s*off\s*$', text, re.M):
                 raise CheckError('Tunnel configuration must use Table = off.')
+            families = tunnel_families(text)
             for key, action in (('PostUp', 'replace'), ('PreDown', 'del')):
                 match = re.search(r'^' + key + r'\s*=\s*(.+)$', text, re.M)
-                route = rf'ip route {action} default dev %i table {re.escape(str(expected))}(?:\s*;|\s*$)'
-                if not match or not re.search(route, match[1]):
-                    raise CheckError('Tunnel configuration and EXIT_TABLE do not match; regenerate the config.')
+                for flag in ('', '-6 ') if 6 in families else ('',):
+                    route = rf'ip {flag}route {action} default dev %i table {re.escape(str(expected))}(?:\s*;|\s*$)'
+                    if not match or not re.search(route, match[1]):
+                        raise CheckError('Tunnel configuration and EXIT_TABLE do not match for every address family; regenerate the config.')
         for relative in ('secrets/netbird.env', 'secrets/applier.env'):
             path = self.root / relative
             if path.exists() and (path.is_symlink() or (os.name == 'posix' and stat.S_IMODE(path.stat().st_mode) != 0o600)):
