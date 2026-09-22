@@ -122,6 +122,45 @@ docker compose exec netbird netbird debug log level info
 
 Treat candidate addresses as private; they identify your network.
 
+### Exits on a private container network
+
+A second, independent reason clients end up relayed. If the engine puts the
+exit's namespace on a private container bridge, as every rootless setup and
+Docker's default bridge do, the peer's only host candidate is that bridge
+address, which nothing outside the host can reach. The namespace is also
+behind the engine's NAT, so the peer gathers no server-reflexive candidate of
+its own. Every client then falls back to the relay silently: the exit works,
+it is just slower, so nothing reports a fault.
+
+Two settings fix it, alongside publishing the port:
+
+```yaml
+  wireguard:
+    ports:
+      - "51825:51825/udp"
+```
+
+```sh
+docker compose exec netbird netbird down
+docker compose exec netbird netbird up \
+  --extra-iface-blacklist mullvad \
+  --wireguard-port 51825 \
+  --external-ip-map 198.51.100.10/eth0
+```
+
+- The published port and `--wireguard-port` must be the same number. Pick one
+  that is free on the host; a NetBird client running on the host itself
+  already holds 51820.
+- `--external-ip-map <address>/<interface>` is what the peer advertises in
+  place of the unreachable container address. For clients on the same LAN that
+  is the host's LAN address; for clients arriving over the Internet it is the
+  router's public address, with that UDP port forwarded to the host.
+- Publishing a UDP port is new exposure. Do it deliberately, and prefer the
+  LAN address unless remote clients actually need the direct path.
+- The remote candidate may then resolve as `prflx`. Rootless port forwarding
+  rewrites the source address, and ICE's peer-reflexive mechanism covers that;
+  it is expected, not a fault.
+
 ## Health
 
 The applier rewrites `state/applier/result.json` about every minute. Healthy

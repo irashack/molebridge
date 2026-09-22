@@ -56,16 +56,36 @@ Gather these before [setup](setup.md).
 
 ## Host
 
-- **An always-on machine** with Docker Engine and Compose v2.24 or newer, able
-  to run containers with `NET_ADMIN` and create WireGuard interfaces:
-  - Linux with kernel 5.6 or newer (WireGuard built in): expected to work, not
-    yet tested;
+- **An always-on machine** with a Compose runtime able to run containers with
+  `NET_ADMIN` and create WireGuard interfaces. Docker Engine with Compose v2.24
+  or newer, or rootless Podman with podman-compose:
   - macOS with OrbStack: tested on Apple silicon;
+  - Debian 13 with rootless Podman 5.4 and podman-compose 1.6: tested on amd64;
+  - other Linux with Docker Engine and kernel 5.6 or newer (WireGuard built
+    in): expected to work, not yet tested;
   - Docker Desktop: untested.
+- **On rootless Podman, two host-side facts.** Container uids are remapped, so
+  container root is your own user and `PANEL_USER` must be `0:0` (see
+  [configuration](configuration.md)). And a rootless container cannot autoload
+  a kernel module, so the host must have `wireguard` loaded before the project
+  starts, and keep it loaded across reboots:
+
+  ```sh
+  sudo modprobe wireguard
+  echo wireguard | sudo tee /etc/modules-load.d/wireguard.conf
+  ```
+
+  Without it `wg-quick` fails inside the container with no useful message,
+  even though the same host loads the module on demand for a rootful process.
 - **amd64 or arm64.** The pinned images are multi-arch.
 - **Python 3.10+ on the host** for configuration, doctor and recovery helpers.
   Native Windows configuration writing is unsupported; create the mode-0600
-  tunnel config on the Docker host. The panel/applier Python runtimes are bundled.
+  tunnel config on the container host. The panel/applier Python runtimes are
+  bundled. `tools/molebridge.py doctor` and `recover` drive `docker compose`
+  directly and have no Podman equivalent; on Podman, recreate the project with
+  your own Compose command and use
+  `<engine> exec <project>-applier python -m applier.apply --doctor` for the
+  applier's own checks.
 - **Build access:** the first setup builds two small derived images from the
   pinned bases. The applier installs wg/ip/curl from signed Debian repositories.
 - **Outbound network access:** UDP 51820 to Mullvad servers, HTTPS to

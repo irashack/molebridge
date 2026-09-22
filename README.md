@@ -76,8 +76,9 @@ routing and privilege boundaries.
 
 ## Bring your own homelab
 
-You need a Docker host with Compose, a NetBird account, a Mullvad account with
-one free device slot, and an authenticated way to reach the panel.
+You need a container host with Compose (Docker Engine, or rootless Podman with
+podman-compose), a NetBird account, a Mullvad account with one free device
+slot, and an authenticated way to reach the panel.
 
 1. **[Check the prerequisites](docs/prerequisites.md)** — accounts, host support,
    and NetBird groups and routes.
@@ -113,6 +114,7 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 | **Original deployment** | Daily use since 2026-09-16 on macOS / OrbStack / Apple silicon, with self-hosted NetBird 0.78 and iPhone and macOS clients. A live pass on 2026-09-20 ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills; its findings, including the path-MTU return path for UDP, are fixed in this revision. |
 | **Automated checks** | Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
 | **Current hardening pass** | Not yet re-run on a live deployment after the fixes; host reboot, a client held on the exit during a drill, and LAN unreachability from a client remain unverified. Use the [homelab test guide](docs/homelab-testing.md). |
+| **Rootless Podman** | Moved to a Debian 13 / rootless Podman 5.4 / amd64 host on 2026-09-22. The routing contract, fail-closed behavior and a direct client path were checked there; the compose and ICE requirements in this revision come from that move. A host reboot has not been exercised. |
 | **Other deployments** | Linux Docker hosts and NetBird Cloud have not yet been verified end to end. |
 
 There are no releases or project license yet. The repository remains private
