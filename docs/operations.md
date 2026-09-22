@@ -101,6 +101,27 @@ namespace forwarding to Mullvad's resolver over the tunnel, plus a NetBird
 nameserver group. That would apply even when the exit is not selected, and DNS
 would fail whenever the tunnel is down. Molebridge does not provide it.
 
+## Direct connections
+
+The exit peer must keep ICE off the Mullvad tunnel interface. This is set once
+during [setup](setup.md#5-keep-ice-off-the-tunnel-interface) with
+`netbird up --extra-iface-blacklist mullvad` and stored in the peer's own
+configuration inside the `netbird-data` volume, where it survives restarts,
+recreation and the recovery helper. It does not survive re-enrollment, and
+`NB_*` environment variables cannot set it on an enrolled peer, so re-apply the
+flag whenever the peer identity is recreated. Without it, clients are relayed
+and the exit's tunnel address can be offered to peers as an ICE candidate.
+
+To see what a peer is doing, raise the client log level, read the discovered
+local candidates and the remote ones, then put the level back:
+
+```sh
+docker compose exec netbird netbird debug log level debug
+docker compose exec netbird netbird debug log level info
+```
+
+Treat candidate addresses as private; they identify your network.
+
 ## Health
 
 The applier rewrites `state/applier/result.json` about every minute. Healthy

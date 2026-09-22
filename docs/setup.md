@@ -63,12 +63,45 @@ In NetBird, confirm the peer `NB_HOSTNAME` appears and is in `exit-nodes`. Then
 delete `secrets/netbird.env` (the peer's identity now lives in the
 `netbird-data` volume) and revoke the setup key if it was reusable.
 
-## 5. Verify before trusting it
+## 5. Keep ICE off the tunnel interface
+
+Required, not a tuning step. The exit peer shares its network namespace with
+the Mullvad tunnel, so by default NetBird gathers ICE candidates on the tunnel
+interface too. Exclude it:
+
+```sh
+docker compose exec netbird netbird down
+docker compose exec netbird netbird up --extra-iface-blacklist mullvad
+```
+
+It has to be this flag. NetBird stores the blacklist in the peer's own
+configuration, and that stored value wins over `NB_*` environment variables
+once the peer has enrolled, so setting an environment variable in
+`compose.yaml` changes nothing on an existing peer.
+
+Two things go wrong without it, and the second is the serious one:
+
+- **P2P stops being attempted.** The priority-94 rule sends traffic sourced
+  from the tunnel address into the tunnel, so STUN from that interface never
+  completes. NetBird logs `wait for gathering timed out`, then `ICE retries
+  exhausted (3/3), switching to hourly retry`, and makes no further direct
+  attempt for an hour. Every client is relayed in the meantime.
+- **The tunnel address can leak into signalling.** With the interface in play,
+  NetBird can offer the exit's Mullvad tunnel address to peers as an ICE
+  candidate. Keeping that address inside the tunnel is the point of the
+  product.
+
+The setting lives in the `netbird-data` volume (`IFaceBlackList` in the stored
+client configuration; `default.json` on NetBird 0.78), so it survives restarts
+and recreation. It does **not** survive re-enrollment: re-apply it any time
+the peer identity is recreated.
+
+## 6. Verify before trusting it
 
 Run the namespace checks in [verification](verification.md#inside-the-namespace)
 now, before any client can route through the exit.
 
-## 6. Create the route and try a client
+## 7. Create the route and try a client
 
 Create the exit node route and access policy from
 [prerequisites](prerequisites.md#netbird). On a device in `exit-users`, select
@@ -76,7 +109,7 @@ the exit in the NetBird client and open <https://am.i.mullvad.net>. It should
 report a Mullvad exit IP in the starting server's city. Then run the
 [client checks](verification.md#from-a-client).
 
-## 7. Start the panel
+## 8. Start the panel
 
 Choose an [authenticated access method](access.md). For a proxy, set
 `PANEL_PUBLIC_HOSTS` to its public hostname. For the SSH-forwarding example it

@@ -88,6 +88,15 @@ fail-closed guards and must have no IPv6 return-path rule. An unknown rule
 ahead of the guard, an extra selector, or a temporary guard left behind prevents
 a healthy result.
 
+Sharing the namespace has one consequence for NetBird itself: by default it
+gathers ICE candidates on every interface it finds there, including the exit
+tunnel. Rule 94 then sends that STUN traffic into the tunnel, where it never
+completes, and NetBird can advertise the tunnel address to peers as a
+candidate. The exit interface therefore belongs in the peer's ICE blacklist,
+which is a required `netbird up` flag rather than an environment variable
+because the peer's stored configuration wins after enrollment. See
+[setup](setup.md#5-keep-ice-off-the-tunnel-interface).
+
 A privileged actor can remove or bypass these protections. Health polling
 detects drift; it is not an instantaneous defense against a compromised host.
 

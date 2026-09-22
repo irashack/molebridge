@@ -125,7 +125,12 @@ With the exit selected on a device in `exit-users`:
 - **Direct path.** On the host, `docker compose exec netbird netbird status -d`
   lists the client with `Connection type: P2P`. `Relayed` adds the relay
   server's round trip to every packet; on a phone, first check that Force relay
-  connection is off in the NetBird app.
+  connection is off in the NetBird app. If every client is relayed, confirm the
+  exit interface is in the peer's ICE blacklist
+  ([setup](setup.md#5-keep-ice-off-the-tunnel-interface)) and look for
+  `ICE retries exhausted` in `docker compose logs netbird`. A peer that has hit
+  that state retries only hourly, so re-apply the flag and bring the peer back
+  up rather than waiting.
 - **Switch.** Choose a server in another city in the panel. The panel reports
   the new city within about a minute, and the client's egress follows without
   reselecting the exit.
