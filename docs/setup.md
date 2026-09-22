@@ -81,11 +81,13 @@ once the peer has enrolled, so setting an environment variable in
 
 Two things go wrong without it, and the second is the serious one:
 
-- **P2P stops being attempted.** The priority-94 rule sends traffic sourced
-  from the tunnel address into the tunnel, so STUN from that interface never
-  completes. NetBird logs `wait for gathering timed out`, then `ICE retries
-  exhausted (3/3), switching to hourly retry`, and makes no further direct
-  attempt for an hour. Every client is relayed in the meantime.
+- **P2P stops being attempted.** A candidate gathered on the tunnel interface
+  can never complete a STUN exchange: traffic sourced from the tunnel address
+  either goes into the tunnel, which is not a path to the signalling server,
+  or leaves the host with a source address nothing will answer. NetBird logs
+  `wait for gathering timed out`, then `ICE retries exhausted (3/3), switching
+  to hourly retry`, and makes no further direct attempt for an hour. Every
+  client is relayed in the meantime.
 - **The tunnel address can leak into signalling.** With the interface in play,
   NetBird can offer the exit's Mullvad tunnel address to peers as an ICE
   candidate. Keeping that address inside the tunnel is the point of the

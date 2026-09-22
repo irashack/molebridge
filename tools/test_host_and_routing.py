@@ -196,12 +196,14 @@ def test_routing_initialization_blocks_before_replacing_rules(tmp_path):
     result, calls, ready = routing_run(tmp_path)
     assert result.returncode == 0, result.stderr
     assert ready.exists()
-    for family, address in (('-4', '203.0.113.1'), ('-6', '2001:db8:3::1')):
+    for family, address, protocol in (('-4', '203.0.113.1', 'icmp'),
+                                      ('-6', '2001:db8:3::1', 'ipv6-icmp')):
         guard = calls.index(f'{family} rule add iif wt0 unreachable priority 80')
         fallback = calls.index(f'{family} route replace unreachable default metric 4096 table 51821')
         deleting = calls.index(f'{family} rule del priority 90')
         stale = calls.index(f'{family} rule del priority 94')
-        return_path = calls.index(f'{family} rule add from {address} lookup 51821 priority 94')
+        return_path = calls.index(
+            f'{family} rule add from {address} ipproto {protocol} lookup 51821 priority 94')
         final = calls.index(f'{family} rule add iif wt0 unreachable priority 97')
         unblock = calls.index(f'{family} rule del iif wt0 unreachable priority 80')
         assert guard < fallback < deleting < stale < return_path < final < unblock
@@ -213,7 +215,7 @@ def test_ipv4_only_tunnel_gets_no_ipv6_return_path_rule(tmp_path):
     result, calls, ready = routing_run(tmp_path, conf_text=TUNNEL_CONF.replace(', 2001:db8:3::1/128', ''))
     assert result.returncode == 0, result.stderr
     assert ready.exists()
-    assert '-4 rule add from 203.0.113.1 lookup 51821 priority 94' in calls
+    assert '-4 rule add from 203.0.113.1 ipproto icmp lookup 51821 priority 94' in calls
     assert not any('-6 rule add from' in call for call in calls)
 
 

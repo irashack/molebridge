@@ -10,6 +10,13 @@ from dataclasses import dataclass
 # address, and the priority-94 rule routes that address through the exit table.
 RETURN_PATH_SYSCTL = '/proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr'
 
+# The return-path rule carries a protocol qualifier so it cannot capture other
+# traffic sourced from the tunnel address. iproute2 renders the selector by
+# name where the host has a protocol database and by number where it does not;
+# both forms mean the same rule.
+ICMP_PROTOCOL = {4: 'icmp', 6: 'ipv6-icmp'}
+PROTOCOL_ALIASES = {'1': 'icmp', '58': 'ipv6-icmp'}
+
 
 @dataclass(frozen=True)
 class RoutingConfig:
@@ -64,7 +71,7 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
     `tunnel_address` is the family's global address on the exit interface, or
     None when the tunnel does not carry this family. With an address, the
     family must also have its tunnel default route and the priority-94
-    return-path rule for exactly that address."""
+    return-path rule, for exactly that address and ICMP alone."""
     if not isinstance(rules, list) or not isinstance(routes, list):
         return False, False
     overlay = config.overlay if family == 4 else config.overlay6
@@ -81,7 +88,8 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
             return False, False
         if address.version != family or address.prefixlen != address.max_prefixlen:
             return False, False
-        expected[94] = {'src': str(address), 'table': config.table}
+        expected[94] = {'src': str(address), 'ipproto': ICMP_PROTOCOL[family],
+                        'table': config.table}
     found = set()
     rules_ok = True
     for rule in rules:
@@ -101,6 +109,12 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
                 rules_ok = False
                 continue
             normalized['table'] = {254: 'main', 255: 'local'}.get(normalized['table'], str(normalized['table']))
+        if 'ipproto' in normalized:
+            if type(normalized['ipproto']) not in (int, str):
+                rules_ok = False
+                continue
+            protocol = str(normalized['ipproto'])
+            normalized['ipproto'] = PROTOCOL_ALIASES.get(protocol, protocol)
         try:
             for key in ('src', 'dst'):
                 if key in normalized and normalized[key] != 'all':

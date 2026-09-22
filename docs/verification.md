@@ -17,11 +17,14 @@ docker compose exec applier sh
 ```
 
 1. **Rules are installed.** `ip rule` shows priority 90 (`iif mullvad`, overlay
-   destination → `main`), 94 (`from` the tunnel's IPv4 address → table 51821),
-   95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table 51821), and 97
-   (`iif wt0 unreachable`). No temporary priority-80 guard should remain. IPv6
-   has 95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is set, and 94 when the
-   tunnel has an IPv6 address.
+   destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
+   → table 51821), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
+   51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard
+   should remain. IPv6 has 95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is
+   set, and 94 with `ipproto ipv6-icmp` when the tunnel has an IPv6 address.
+   Rule 94 must carry the protocol qualifier: without it every protocol
+   sourced from the tunnel address is forced into the tunnel, and the applier
+   reports `routing_ok` false.
 2. **The exit table fails closed.** `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an

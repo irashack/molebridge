@@ -44,7 +44,8 @@ def rules(family):
     destination, prefix = (CONFIG.overlay if family == 4 else CONFIG.overlay6).split('/')
     return [{'priority': 0, 'src': 'all', 'table': 'local'},
             {'priority': 90, 'src': 'all', 'iif': 'mullvad', 'dst': destination, 'dstlen': int(prefix), 'table': 'main'},
-            {'priority': 94, 'src': TUNNEL[family], 'table': 51821},
+            {'priority': 94, 'src': TUNNEL[family], 'table': 51821,
+             'ipproto': 'icmp' if family == 4 else 'ipv6-icmp'},
             {'priority': 95, 'src': 'all', 'iif': 'wt0', 'table': 51821},
             {'priority': 96, 'src': 'all', 'oif': 'mullvad', 'table': 51821},
             {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'},
@@ -401,8 +402,9 @@ def test_host_rule_prefix_omits_dstlen():
 
 
 @pytest.mark.parametrize('family', [4, 6])
-@pytest.mark.parametrize('change', ['other-address', 'prefix', 'iif', 'oif', 'main', 'missing'])
-def test_return_path_rule_must_match_the_tunnel_address_exactly(family, change):
+@pytest.mark.parametrize('change', ['other-address', 'prefix', 'iif', 'oif', 'main', 'missing',
+                                    'any-protocol', 'other-protocol', 'unknown-protocol'])
+def test_return_path_rule_must_match_the_tunnel_address_and_icmp_only(family, change):
     table = rules(family)
     rule = by_priority(table, 94)
     if change == 'other-address':
@@ -413,10 +415,32 @@ def test_return_path_rule_must_match_the_tunnel_address_exactly(family, change):
         rule[change] = 'mullvad'
     elif change == 'main':
         rule['table'] = 'main'
+    elif change == 'any-protocol':
+        # The pre-qualifier rule: every protocol from the tunnel address.
+        del rule['ipproto']
+    elif change == 'other-protocol':
+        rule['ipproto'] = 'ipv6-icmp' if family == 4 else 'icmp'
+    elif change == 'unknown-protocol':
+        rule['ipproto'] = ['icmp']
     else:
         table.remove(rule)
     assert status(table, routes(), family) == (False, True)
     assert status(rules(family), routes(), family) == (True, True)
+
+
+@pytest.mark.parametrize('family', [4, 6])
+def test_numeric_protocol_selector_means_the_same_rule(family):
+    # iproute2 prints the number instead of the name without a protocol database.
+    table = rules(family)
+    by_priority(table, 94)['ipproto'] = '1' if family == 4 else '58'
+    assert status(table, routes(), family) == (True, True)
+
+
+@pytest.mark.parametrize('priority', [90, 95, 96, 97])
+def test_no_other_rule_may_carry_a_protocol_selector(priority):
+    table = rules(4)
+    by_priority(table, priority)['ipproto'] = 'icmp'
+    assert status(table, routes(), 4) == (False, True)
 
 
 @pytest.mark.parametrize('family', [4, 6])
