@@ -79,6 +79,21 @@ def test_compose_trust_boundary():
     assert wireguard['sysctls']['net.ipv4.icmp_errors_use_inbound_ifaddr'] == '1'
 
 
+def test_compose_avoids_engine_specific_runtime_settings():
+    """Settings Docker accepts silently but a rootless Podman host rejects, or
+    honors differently, once the same file runs there."""
+    yaml = pytest.importorskip('yaml')
+    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
+    for name, service in compose['services'].items():
+        logging = service['logging']
+        assert logging['driver'] == 'json-file', name
+        assert set(logging['options']) == {'max-size'}, name
+    # Docker grants NET_RAW implicitly; NetBird needs it to bring the overlay up.
+    assert compose['services']['netbird']['cap_add'] == ['NET_ADMIN', 'NET_RAW']
+    # The panel's user must be separable from PUID/PGID for remapped engines.
+    assert compose['services']['control-panel']['user'] == '${PANEL_USER:-1000:1000}'
+
+
 TUNNEL_CONF = """[Interface]
 PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 Address = 203.0.113.1/32, 2001:db8:3::1/128

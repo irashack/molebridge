@@ -12,9 +12,10 @@ chmod 700 secrets tunnel/wg_confs
 ```
 
 Edit `.env`. At minimum set `OVERLAY_CIDR` (and `OVERLAY6_CIDR` if you use IPv6
-overlay), `PUID`/`PGID` (from `id -u` and `id -g`), `NB_HOSTNAME`, and
-`NB_MANAGEMENT_URL` if you self-host NetBird. Every setting is described in
-[configuration](configuration.md).
+overlay), `PUID`/`PGID` (from `id -u` and `id -g`), `PANEL_USER`, `NB_HOSTNAME`,
+and `NB_MANAGEMENT_URL` if you self-host NetBird. Every setting is described in
+[configuration](configuration.md). On Docker, `PANEL_USER` is your
+`PUID:PGID`; on rootless Podman it is `0:0`.
 
 The routing init script is bundled root-owned in its image. Your checkout can
 remain owned by your normal user. Make sure `state/panel` is owned and writable

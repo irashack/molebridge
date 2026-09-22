@@ -177,6 +177,14 @@ panel now answers 421 for any `Host` it is not published under; if your proxy
 rewrites the upstream `Host` (for example to `host.docker.internal:8095`), add
 that name to `PANEL_PUBLIC_HOSTS` before recreating the panel.
 
+Two more since the container-engine portability changes. The panel's user is
+now `PANEL_USER` rather than `PUID`/`PGID`; it defaults to `1000:1000`, so set
+it explicitly if your `PUID`/`PGID` are anything else, or the panel cannot
+write `state/panel`. Container logs now use the `json-file` driver with a
+10 MB cap instead of `local` with three 10 MB files, because `local` and
+`max-file` are Docker-only; existing `local` log files are discarded when the
+container is recreated.
+
 ### Upgrading from Switchyard
 
 Molebridge was previously called Switchyard. New installations use `molebridge`

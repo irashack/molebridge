@@ -13,7 +13,8 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `EXIT_TABLE` | `51821` | Dedicated table (256..2147483647). Must match the tunnel config; rerun `tools/prepare-tunnel-config.py` with `EXIT_TABLE` exported if you change it. The helper does not source `.env`. |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
-| `PUID`, `PGID` | `1000` | Host user and group that own `state/`. The panel runs as this user. |
+| `PUID`, `PGID` | `1000` | Host user and group that own `state/`. |
+| `PANEL_USER` | `1000:1000` | The panel's `user:` inside its container, as `uid:gid`. On an engine that maps container uids to host uids directly, set it to your `PUID:PGID`. On a rootless engine that remaps them, container root is already your host user and an unmapped uid cannot read the 0700 state tree: use `0:0`. The panel still holds no capabilities. |
 | `TZ` | `Etc/UTC` | Container time zone. |
 | `PANEL_PORT` | `8095` | Loopback port for the panel. |
 | `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Requests for any other name get 421; loopback names are always accepted. Form posts are accepted only from these origins. |
