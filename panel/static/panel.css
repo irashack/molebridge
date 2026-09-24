@@ -170,6 +170,7 @@ h1 {
 
 .subdue { color: var(--color-text-subdue); }
 .small { font-size: var(--font-size-h6); }
+.nowrap { white-space: nowrap; }
 
 /* current exit */
 .current-row { display: flex; align-items: center; gap: 1.4rem; }
@@ -222,7 +223,7 @@ h1 {
   text-transform: uppercase;
   display: inline-block;
 }
-.diagnostics summary::after { content: ' ◀'; display: inline-block; transition: rotate .3s; }
+.diagnostics summary::after { content: '◀'; margin-left: 0.5em; display: inline-block; transition: rotate .3s; }
 .diagnostics[open] summary::after { rotate: -90deg; }
 .diagnostics summary:hover { color: var(--color-text-base); }
 

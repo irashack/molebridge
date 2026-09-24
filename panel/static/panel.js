@@ -157,7 +157,8 @@
     if (latency.has(host)) paintMs(msEl, ms);
 
     li.append(flag, place, msEl);
-    if (!current || page.dataset.state !== 'ok') {
+    // Connected, or already being switched to: nothing to request.
+    if (!current || !['ok', 'applying'].includes(page.dataset.state)) {
       const btn = document.createElement('button');
       btn.type = 'submit';
       btn.name = 'server';
@@ -439,7 +440,8 @@
   document.addEventListener('click', (e) => {
     const btn = e.target.closest('button[name="server"]');
     if (!btn || btn.form !== form) return;
-    if (btn.value === desired && page.dataset.state === 'ok') {
+    // Re-requesting the server being switched to would restart that switch.
+    if (btn.value === desired && ['ok', 'applying'].includes(page.dataset.state)) {
       e.preventDefault();
       return;
     }

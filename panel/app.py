@@ -529,7 +529,9 @@ def render_index_html(
     filter_buttons = ''.join(
         f'<button type="button" class="filter-chip" data-attr-filter="{key}" aria-pressed="false">{label}</button>'
         for key, label in ATTRIBUTE_FILTERS.items()
-        if any(isinstance(info.get(key), bool) for info in relays.values())
+        # Only where it would narrow the list: some relays have it, some do not.
+        if any(info.get(key) is True for info in relays.values())
+        and any(info.get(key) is not True for info in relays.values())
     )
     filters_toggle = filters_row = ''
     if filter_buttons:
@@ -572,6 +574,7 @@ def render_index_html(
 <title>{esc(PANEL_TITLE)}</title>
 <!-- An authenticating proxy needs its session cookie, which manifest fetches omit by default. -->
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="icon" href="/static/icon-192.png?v={v['icon-192.png']}" type="image/png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={v['apple-touch-icon.png']}">
 <link rel="stylesheet" href="/static/panel.css?v={v['panel.css']}">
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
@@ -586,7 +589,7 @@ def render_index_html(
       <span class="flag flag-lg" data-current-flag>{current_flag}</span>
       <div class="current-main">
         <div class="current-place" data-current-place>{current_place}</div>
-        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> · <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></div>
+        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></span></div>
       </div>
       <button type="button" class="link-button pin" data-pin aria-pressed="false" aria-label="Pin this server" title="Pin this server" hidden>☆</button>
       <div class="current-side">

@@ -448,10 +448,32 @@ class SwitcherRenderTests(unittest.TestCase):
         self.assertIn('data-owned="1" data-stboot="0"', page)
         self.assertEqual(page.count('data-owned='), 1)
         self.assertIn('data-attr-filter="owned"', page)
-        self.assertIn('data-attr-filter="stboot"', page)
+        # No relay is RAM-only here, so that filter would hide everything.
+        self.assertNotIn('data-attr-filter="stboot"', page)
         self.assertIn('data-filters-toggle', page)
         self.assertNotIn('<b>Example Hosting</b>', page)
         self.assertIn('&lt;b&gt;Example Hosting&lt;/b&gt; · Mullvad-owned', page)
+
+    def test_filters_offered_only_when_they_narrow_the_list(self):
+        every = _catalogue(_relay(stboot=True), _relay('se-sto-wg-002', stboot=True))
+        page = app.render_index_html(None, None, every, None, None, 'tok')
+        self.assertIn('data-stboot="1"', page)
+        self.assertNotIn('data-attr-filter', page)
+        self.assertNotIn('data-filters-toggle', page)
+
+        mixed = _catalogue(_relay(stboot=True), _relay('se-sto-wg-002', stboot=False))
+        page = app.render_index_html(None, None, mixed, None, None, 'tok')
+        self.assertIn('data-attr-filter="stboot"', page)
+        self.assertNotIn('data-attr-filter="owned"', page)
+
+        partly_known = _catalogue(_relay(owned=True), _relay('se-sto-wg-002'))
+        page = app.render_index_html(None, None, partly_known, None, None, 'tok')
+        self.assertIn('data-attr-filter="owned"', page)
+
+    def test_favicon_and_unbroken_address(self):
+        page = app.render_index_html(None, None, None, None, None, 'tok')
+        self.assertRegex(page, r'<link rel="icon" href="/static/icon-192\.png\?v=\w+" type="image/png">')
+        self.assertIn('<span class="nowrap">· <span data-current-ip>', page)
 
     def test_theme_setting(self):
         for value, expected in (('light', 'light'), ('dark', 'dark'), ('auto', 'auto'), ('neon', 'auto'), ('', 'auto')):
