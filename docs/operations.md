@@ -238,11 +238,11 @@ ICE interface blacklist; fix whatever it reports before relying on the upgrade.
 ## Rootless Podman
 
 Tested on Debian 13 with rootless Podman 5.4 and podman-compose 1.6 on amd64,
-through a deployment-specific Compose file carrying the same services, mounts
-and settings as `compose.yaml`; the bundled file itself validates with
-`podman-compose config` there but has not been started unchanged on that
-host. `tools/molebridge.py` drives `docker compose` and reads its JSON output,
-which `podman-compose config` does not offer, so on Podman the commands below
+both as a long-running deployment and as a clean install of the unchanged
+`compose.yaml` ([testing](testing.md#clean-install-from-the-published-files));
+that clean install followed the setup and upgrade commands below.
+`tools/molebridge.py` drives `docker compose` and reads its JSON output, which
+`podman-compose config` does not offer, so on Podman the commands below
 replace `doctor` and `recover`. Substitute your project name for `molebridge`
 if you changed `COMPOSE_PROJECT_NAME`.
 

@@ -44,16 +44,94 @@ through a Compose file carrying the same services and settings as
 Found and fixed while adding Podman support: Docker-only Compose settings, the
 missing `NET_RAW` capability, the panel user under uid remapping, the missing
 kernel module autoload, and the interface blacklist as a requirement rather
-than a tip (`afa8594` through `984a703`). The bundled `compose.yaml` validates
-with `podman-compose config` but was not itself started unchanged.
+than a tip (`afa8594` through `984a703`).
+
+## Live client and reboot pass at `5a6e0b5`
+
+2026-09-24, the same Debian 13 / rootless Podman 5.4.2 / podman-compose 1.6.0
+host, NetBird 0.79.0 client and self-hosted server. The client was a separate
+NetBird 0.79.0 Linux peer (a container on another machine) with the exit
+selected, probing IPv4 and IPv6 egress against `am.i.mullvad.net` about every
+two seconds, 781 probes in all. Each family's probe used a pinned address, so a
+failed family could not take the other's name resolution down with it.
+
+**Fail-closed with the client on the exit.** All six drills from
+[verification](verification.md#fail-closed-drills):
+
+| Drill | Client during the drill | Status | After restore |
+| :--- | :--- | :--- | :--- |
+| Tunnel down | both families failed | — | Mullvad egress on both |
+| IPv4 route deleted | IPv4 failed, IPv6 on Mullvad | `/readyz` 503 within 60 s, applier `failed` | Mullvad egress on both |
+| IPv6 route deleted | IPv6 failed, IPv4 on Mullvad | `/readyz` 503 within 25 s | Mullvad egress on both |
+| IPv4 lookup rule deleted | IPv4 failed, IPv6 on Mullvad | `/readyz` 503 within 45 s | recovered by recreating all four |
+| IPv6 lookup rule deleted | IPv6 failed, IPv4 on Mullvad | `/readyz` 503 within 40 s | recovered by recreating all four |
+| `wireguard` stopped | both families failed | — | recovered by recreating all four |
+
+No probe returned a non-Mullvad address during any drill, and the exit host's
+own traffic kept its ordinary path throughout.
+
+**Reboot.** The host was rebooted with the client still selected. The
+lingering boot unit brought the project up without intervention: all four
+containers healthy 76 seconds after boot, one shared namespace, doctor 4×
+PASS, the same peer identity, and `mullvad` still in the ICE blacklist. The
+client failed closed for the whole outage (the NetBird client kept the exit
+selected while the peer was offline) and regained Mullvad egress on its own.
+A tunnel-down drill after the reboot failed closed.
+
+**LAN isolation.** Through the exit, the client could not reach the exit
+host's router (ICMP, TCP 80), the host itself (TCP 22), or the gateway of the
+exit's container network. The host reached the same router and port directly,
+so the targets were live.
+
+**Oversized replies.** IPv6 replies larger than the overlay MTU made the exit
+send ICMPv6 Packet Too Big (MTU 1280) out of the tunnel interface, sourced from
+the tunnel address; a capture on the host-side interface saw no ICMP error
+leave there. The public servers used ignore Packet Too Big for echo replies,
+so that flow did not recover end to end. HTTP/3 (QUIC) requests through the
+exit completed on both families to three large sites, but none of them sent
+a datagram above 1280 bytes, so no live UDP flow exceeded the overlay MTU.
+
+**Client fallback.** Deselecting the exit on the client sent its IPv4 traffic
+out of the client's own connection at once. That is the documented boundary
+in the README: server routing is not a device-wide kill switch.
+
+## Clean install from the published files
+
+2026-09-24, a fresh clone of `5a6e0b5` from GitHub on the same host, with the
+bundled `compose.yaml` unchanged and only `.env` edited (project name, overlay
+ranges, `PUID`/`PGID`, `PANEL_USER=0:0`, panel port, `NB_HOSTNAME`,
+`NB_MANAGEMENT_URL`). A new peer enrolled with a fresh setup key; the tunnel
+config came from an existing device while that device's other exit was
+stopped. Following [setup](setup.md) with the
+[rootless Podman commands](operations.md#rootless-podman):
+
+- Build and start: all containers healthy, routing log `rules installed`, the
+  three namespace users identical. podman-compose puts the project in its
+  default pod; that works, no `x-podman` setting is needed.
+- `NB_EXTRA_IFACE_BLACKLIST` put `mullvad` in the ICE blacklist at the first
+  enrollment.
+- [Namespace checks](verification.md#inside-the-namespace) 1 to 4 and 6 pass;
+  doctor 4× PASS. The panel serves `/` and `/readyz`.
+- The documented upgrade sequence (pull, build, recreate all four) left all
+  four healthy in one namespace with the same peer identity, doctor passing.
+
+This instance carried no client route and had no boot unit; the client and
+reboot results above come from the long-running deployment.
+
+**Known issue.** The panel does not exit on `SIGTERM`, so every stop or
+recreation waits for the engine's 10-second timeout and then kills it. Nothing
+is lost (the panel keeps no state of its own), but recreation takes longer.
 
 ## Not yet tested
 
-On any host: a reboot and container-runtime restart, a client held on the exit
-during a fail-closed drill, LAN unreachability from a client, and a live
-oversized UDP flow (only the isolated drill proves the return path). Linux
-hosts running Docker Engine, Docker Desktop and NetBird Cloud have not been
-tested end to end.
+- A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
+  fragmentation-needed error on a live flow. The isolated CI drill covers both
+  return paths; the live pass above shows the IPv6 error leaving through the
+  tunnel.
+- Fail-closed drills with a phone client. The drills above used a Linux
+  client; a phone's NetBird client may fall back to its own connection
+  differently while the exit peer is offline.
+- Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
 
 ## Validating a new revision
 

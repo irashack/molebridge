@@ -52,10 +52,13 @@ docker compose exec applier sh
    `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` shows
    `dev mullvad`; with an IPv6 tunnel address,
    `ip -6 route get 2001:db8::1 from <tunnel IPv6 address> ipproto ipv6-icmp`
-   does too. Under client traffic, `Icmp6OutPktTooBigs` in `/proc/net/snmp6`
-   grows over time while `Ip6OutNoRoutes` stops growing. Without this, replies
-   larger than the overlay MTU are dropped with no error to the origin, and
-   UDP flows such as QUIC through the exit stall.
+   does too. Under client traffic that carries replies larger than the overlay
+   MTU, `Icmp6OutPktTooBigs` in `/proc/net/snmp6` grows, and a capture on the
+   tunnel interface (`icmp6 and ip6[40] == 2`) shows the errors leaving there
+   and not on the host-side interface. Do not rely on `Ip6OutNoRoutes`: on a
+   container network without IPv6 it also counts the exit's own IPv6
+   attempts. Without this return path, oversized replies are dropped with no
+   error to the origin, and UDP flows such as QUIC through the exit stall.
 7. **Doctor.** On the host, `python3 tools/molebridge.py doctor` should pass.
    It checks actual namespace agreement as well as routing and status freshness.
 
