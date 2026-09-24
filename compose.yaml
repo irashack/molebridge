@@ -69,7 +69,7 @@ services:
           memory: 256m
 
   netbird:
-    image: docker.io/netbirdio/netbird:0.78.2@sha256:0d6653f21f0417b6014e4c621c75e898e06698e1cce973398d1c3c45a30f6bd6
+    image: docker.io/netbirdio/netbird:0.79.0@sha256:9d8480d87b7f7c10d67b820eecf332ecca5c2756792d4bdfa532182b4fc3005f
     # This gate also runs on daemon/host restarts, which ignore depends_on.
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-wait-for-guards", "/usr/local/bin/netbird-entrypoint.sh"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
@@ -167,7 +167,7 @@ services:
           memory: 128m
 
   control-panel:
-    image: docker.io/library/python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+    image: docker.io/library/python:3.14.7-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-control-panel"
     restart: unless-stopped
     # The user that owns ./state/panel, as the container sees it. Keep it equal
