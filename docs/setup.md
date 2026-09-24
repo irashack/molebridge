@@ -24,8 +24,8 @@ by the `PUID`/`PGID` selected above; create it as that user.
 ## 2. Create the tunnel config
 
 ```sh
-tools/prepare-tunnel-config.py ~/Downloads/<mullvad-download>.conf
-rm ~/Downloads/<mullvad-download>.conf
+tools/prepare-tunnel-config.py ~/Downloads/<mullvad-download>.conf &&
+  rm ~/Downloads/<mullvad-download>.conf
 ```
 
 This writes `tunnel/wg_confs/mullvad.conf` (mode 0600). It keeps the key,

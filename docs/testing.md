@@ -5,12 +5,18 @@ whole NetBird/Mullvad deployment works. This page records what has been tested
 on real hosts, and the pass to run on your own host before trusting a new
 revision.
 
+Revisions are given by their published hashes. The passes before 2026-09-24
+ran on pre-publication hashes that a metadata-only history rewrite replaced;
+each has an identical tree on `main` (`ae95c33` is `1390860`, `984a703` is
+`336d904`, `afa8594` is `4739352`). CI results quoted for those revisions ran
+on the old hashes.
+
 ## macOS / OrbStack pass
 
 Apple silicon, self-hosted NetBird 0.78, simulated client routing plus one real
 phone. Steady-state fail-closed behaviour held in every drill for both
-families. The pass found six defects, all fixed in `ae95c33` through
-`984a703`: a single-family tunnel-route loss reported healthy; the applier
+families. The pass found six defects, all fixed in `1390860` through
+`336d904`: a single-family tunnel-route loss reported healthy; the applier
 stayed healthy in an orphaned namespace; `OVERLAY_IF` was not passed to
 NetBird; a transient start-up failure consumed the saved selection; NetBird
 preceded the routing guards only by timing; and the exit's ICMP errors for
@@ -19,7 +25,7 @@ exit stalled.
 
 ## Rootless Podman pass
 
-Revision `984a703` on Debian 13 / rootless Podman 5.4.2 / podman-compose 1.6.0
+Revision `336d904` on Debian 13 / rootless Podman 5.4.2 / podman-compose 1.6.0
 on amd64, NetBird client 0.79 against a self-hosted 0.79 management server,
 through a Compose file carrying the same services and settings as
 `compose.yaml`. Checked live, inside the namespace and from one iPhone client:
@@ -39,12 +45,12 @@ through a Compose file carrying the same services and settings as
   them every client was relayed.
 - Recreation: a forced recreation of all four containers preserved the peer
   identity and rejoined the shared namespace.
-- CI green at `984a703`.
+- CI green at `336d904` (run on its pre-publication hash).
 
 Found and fixed while adding Podman support: Docker-only Compose settings, the
 missing `NET_RAW` capability, the panel user under uid remapping, the missing
 kernel module autoload, and the interface blacklist as a requirement rather
-than a tip (`afa8594` through `984a703`).
+than a tip (`4739352` through `336d904`).
 
 ## Live client and reboot pass at `5a6e0b5`
 
@@ -120,7 +126,8 @@ reboot results above come from the long-running deployment.
 
 **Known issue.** The panel does not exit on `SIGTERM`, so every stop or
 recreation waits for the engine's 10-second timeout and then kills it. Nothing
-is lost (the panel keeps no state of its own), but recreation takes longer.
+is lost (completed server selections persist in the mounted request directory),
+but recreation takes longer.
 
 ## Not yet tested
 

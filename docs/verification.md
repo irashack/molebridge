@@ -86,9 +86,12 @@ interface returns. If a request was rejected or failed, select again to retry.
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked. The isolated `tools/check-routing.sh` drill also
 deletes all exit-table routes together to exercise the terminal guard, and
-proves that an oversized tunnel reply produces an ICMP error back over the
+checks that an oversized tunnel reply produces an ICMP error back over the
 tunnel, that a missing return-path rule is detected, and that with the tunnel
-route gone the error is dropped rather than sent over the host's route.
+route gone no error reaches the tunnel side. It does not watch the host-side
+interface, so it cannot tell a dropped error from one sent over the host's
+route; a capture on that interface during a live flow can (see step 6
+above).
 For each single-family route deletion, confirm the other family still works
 while the next applier check reports `failed`, `/readyz` returns 503, and any
 monitoring push reports failure. A safe black hole must not appear healthy.

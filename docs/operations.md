@@ -132,8 +132,10 @@ A second, independent reason clients end up relayed. If the engine puts the
 exit's namespace on a private container bridge, as every rootless setup and
 Docker's default bridge do, the peer's only host candidate is that bridge
 address, which nothing outside the host can reach. The namespace is also
-behind the engine's NAT, so the peer gathers no server-reflexive candidate of
-its own. Every client then falls back to the relay silently: the exit works,
+behind the engine's NAT, and whether STUN then yields a usable
+server-reflexive candidate depends on that NAT; on the tested rootless host
+the peer gathered none. When neither candidate works, every client falls back
+to the relay silently: the exit works,
 it is just slower, so nothing reports a fault.
 
 Two settings fix it, alongside publishing the port:
@@ -213,8 +215,10 @@ volume or intentionally re-enrolls a peer. A failed build leaves the running
 exit alone. A failure after recreation can leave the exit unavailable; fix the
 reported issue and rerun recovery. Keep an independent host access path.
 
-Recovery is explicit. There is no bundled Docker-socket watchdog. Recovery
-after a host reboot has not been tested yet; see [testing](testing.md).
+Recovery is explicit. There is no bundled Docker-socket watchdog. Unattended
+recovery after a host reboot is tested on rootless Podman with the boot unit
+below ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)); Docker
+hosts rely on `restart: unless-stopped` and have not been reboot-tested.
 
 ## Upgrades
 
@@ -231,9 +235,13 @@ An uncached applier build can update Debian tool packages; use `docker compose
 build --no-cache applier` when intentionally refreshing them, then recover.
 Rerun [verification](verification.md) after routing, image or applier changes.
 
-`doctor` checks the settings a working exit depends on, including the
-`wireguard` sysctls in your Compose file and the exit interface in the peer's
-ICE interface blacklist; fix whatever it reports before relying on the upgrade.
+`doctor` checks the Compose configuration and files, the identity volume,
+namespace agreement, `net.ipv4.icmp_errors_use_inbound_ifaddr=1` on the
+`wireguard` service, and the exit interface in the peer's ICE interface
+blacklist, plus the applier's routing, egress, catalogue and freshness checks.
+It does not prove that client traffic is forwarded or that the panel can write
+its request directory; the [verification](verification.md) client checks and a
+server switch in the panel cover those.
 
 ## Rootless Podman
 
@@ -324,9 +332,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now molebridge.service
 ```
 
-Set `WorkingDirectory` to your checkout. This unit is installed and active on
-the tested host, but no reboot has been exercised with the exit present, so
-unattended boot on Podman is **experimental**: after a reboot, run the health
+Set `WorkingDirectory` to your checkout. On the tested host a reboot with
+this arrangement brought the exit back healthy in 76 seconds with no
+intervention ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)).
+One reboot on one host is thin evidence, so after a reboot still run the health
 and namespace checks above before trusting the exit. Podman does not act on a
 failing healthcheck, so a stranded `netbird` or `applier` stays stranded until
 you recreate all four containers as in the upgrade step.
