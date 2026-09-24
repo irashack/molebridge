@@ -1,7 +1,7 @@
 # Security policy
 
-Molebridge is an experimental, single-maintainer project. There are no
-releases yet; security fixes land on `main`.
+Molebridge is an experimental, single-maintainer project. Security fixes land
+on `main` and go into the next release; only the latest release is supported.
 
 ## Reporting a vulnerability
 

@@ -110,8 +110,9 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 | **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64, NetBird 0.79, self-hosted. At `5a6e0b5`: all six fail-closed drills with a client held on the exit (no leak during any drill or the reboot), host reboot with unattended recovery, LAN isolation from the client, and the IPv6 path-MTU error leaving through the tunnel. A clean install of the unchanged `compose.yaml` started, passed doctor and survived the documented recovery. Record: [testing](docs/testing.md). |
 | **Still unverified** | A live UDP flow larger than the overlay MTU, fail-closed drills with a phone client, and Docker Engine or NetBird Cloud end to end. |
 
-Molebridge is experimental. There are no releases yet; run a pinned revision
-and verify it on your own host. Report vulnerabilities privately as described
+Molebridge is experimental. The first release is
+[v0.1.0](https://github.com/irashack/molebridge/releases/tag/v0.1.0); run a
+release or another pinned revision and verify it on your own host. Report vulnerabilities privately as described
 in [SECURITY.md](SECURITY.md).
 
 ## Find your way around
