@@ -54,7 +54,7 @@ def render(size: int) -> bytes:
                 ring(r, 150, 24),
                 max(abs(y) - 9, inside_globe),                    # equator
                 max(abs(abs(y) - 80) - 8, inside_globe),          # latitudes
-                max(ellipse_ring(x, y, 66, 150, 18), inside_globe),  # meridian
+                max(ellipse_ring(x, y, 66, 150, 18), inside_globe),  # longitudes
             )
             colour = mix(BACKGROUND, PRIMARY, cover(globe, px))
             dot_r = math.hypot(x - 128, y - 128)

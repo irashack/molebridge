@@ -18,7 +18,7 @@
   <rect width="1200" height="280" rx="20" fill="url(#grid)"/>
   <path d="M56 224H1144" stroke="#363a4f"/>
   <g font-family="Arial,Helvetica,sans-serif">
-    <text x="56" y="69" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">A LITTLE BRIDGE FOR YOUR HOMELAB</text>
+    <text x="56" y="69" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">A LITTLE BRIDGE FOR YOUR MESH</text>
     <text x="52" y="142" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
     <text x="56" y="185" fill="#b8c0e0" font-size="24">Stay on NetBird. Exit through Mullvad.</text>
     <text x="56" y="252" fill="#a5adcb" font-size="13" letter-spacing="1.4">NETBIRD + MULLVAD</text>

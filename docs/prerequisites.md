@@ -23,7 +23,7 @@ Gather these before [setup](setup.md).
 
 - **A NetBird account**, NetBird Cloud or self-hosted, with clients that
   support exit nodes (the iOS, Android, macOS, Windows and Linux clients do).
-  The author's deployment runs NetBird 0.78.
+  Tested with self-hosted NetBird 0.78 and 0.79.
 - **The account's peer network range**. It appears
   in the dashboard's network settings and as `network_range` in the
   management API's account settings. Molebridge needs it so replies to your

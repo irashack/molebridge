@@ -6,7 +6,7 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation; see [rename upgrade notes](operations.md#upgrading-from-switchyard). |
+| `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation: changing it creates a fresh identity volume and enrolls a new peer. |
 | `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
 | `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. Compose passes it as `NB_INTERFACE_NAME` and uses it for the startup gate, routing and health checks. |

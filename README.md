@@ -19,7 +19,7 @@
 ## Your mesh, with a Mullvad exit
 
 On a phone, turning on the Mullvad VPN usually means disconnecting NetBird.
-Molebridge moves the Mullvad tunnel to a machine in your homelab. Your devices
+Molebridge moves the Mullvad tunnel to an always-on machine you run. Your devices
 stay on NetBird and select that machine as their exit node.
 
 Pick a Mullvad server in the web panel, and every device using the exit follows.
@@ -41,7 +41,7 @@ flowchart LR
     device("Your devices<br/>NetBird connected")
     mullvad("Mullvad server<br/>Internet egress")
 
-    subgraph host["Your homelab · shared network namespace"]
+    subgraph host["Your exit host · shared network namespace"]
         peer("NetBird<br/>exit peer")
         route("Policy<br/>routing")
         tunnel("WireGuard<br/>tunnel")
@@ -74,7 +74,7 @@ its own Mullvad relay catalogue, updates the live peer, and publishes status for
 the panel to read. See the [full architecture](docs/architecture.md) for the
 routing and privilege boundaries.
 
-## Bring your own homelab
+## What you need
 
 You need a container host with Compose (Docker Engine, or rootless Podman with
 podman-compose), a NetBird account, a Mullvad account with one free device
@@ -86,12 +86,6 @@ slot, and an authenticated way to reach the panel.
    enroll the exit peer, and start the containers.
 3. **[Verify the exit](docs/verification.md)** — check real client traffic, both
    address families, DNS, and failure behavior before relying on it.
-
-> [!IMPORTANT]
-> **Upgrading from Switchyard?** Keep your existing Compose project name and
-> NetBird identity volume. Follow the [rename upgrade notes](docs/operations.md#upgrading-from-switchyard)
-> before starting the updated stack. The repository is now named `molebridge`;
-> your existing checkout directory can keep its old name.
 
 ## Know the boundary
 
@@ -107,14 +101,14 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 
 ## Project status
 
-**Early, homelab focused, and still being verified.**
+**Early, experimental, and still being verified.**
 
 | Where | Verification so far |
 | :--- | :--- |
-| **Original deployment** | macOS / OrbStack / Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients, daily use from 2026-09-16 to 2026-09-22. A live pass on 2026-09-20 ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `ae95c33`; its six findings, including the path-MTU return path for UDP, are fixed in `ae95c33` through `984a703`. |
+| **macOS / OrbStack** | Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients. A live pass ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `ae95c33`; its six findings, including the path-MTU return path for UDP, are fixed in `ae95c33` through `984a703`. |
 | **Automated checks** | On every push: Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. Green at `984a703`. [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
-| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64 since 2026-09-22, NetBird client 0.79 against a self-hosted 0.79 server, one iPhone client on a direct (P2P) path. Re-checked live at `984a703`: rules and fail-closed table for both families, per-family egress probes, the applier doctor, and container recreation preserving the peer identity. Runs through a deployment-specific Compose file equivalent to `compose.yaml`; see [operations](docs/operations.md#rootless-podman). |
-| **Still unverified on any host** | A host reboot, a client held on the exit during a fail-closed drill, LAN unreachability from a client, and a live oversized UDP flow (only the isolated drill proves the return path). Record: [homelab test guide](docs/homelab-testing.md). |
+| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64 since 2026-09-22, NetBird client 0.79 against a self-hosted 0.79 server, one iPhone client on a direct (P2P) path. Re-checked live at `984a703`: rules and fail-closed table for both families, per-family egress probes, the applier doctor, and container recreation preserving the peer identity. Tested through a Compose file carrying the same services and settings as `compose.yaml`; see [operations](docs/operations.md#rootless-podman). |
+| **Still unverified on any host** | A host reboot, a client held on the exit during a fail-closed drill, LAN unreachability from a client, and a live oversized UDP flow (only the isolated drill proves the return path). Record: [testing](docs/testing.md). |
 | **Other deployments** | Linux Docker hosts and NetBird Cloud have not yet been verified end to end. |
 
 Molebridge is experimental. There are no releases yet; run a pinned revision
@@ -131,7 +125,7 @@ in [SECURITY.md](SECURITY.md).
 | [Configuration](docs/configuration.md) | Look up a setting, secret-file location, or state-file format. |
 | [Architecture](docs/architecture.md) | Understand routing, catalogue ownership, and privilege separation. |
 | [Verification](docs/verification.md) | Test client privacy and deliberately break the tunnel. |
-| [Homelab test guide](docs/homelab-testing.md) | Deploy and validate the current reliability/security pass. |
+| [Testing](docs/testing.md) | See what has been tested, and validate a new revision on your host. |
 
 <details>
 <summary><strong>Working on Molebridge</strong></summary>

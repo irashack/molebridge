@@ -15,8 +15,8 @@
 # Images are pinned to exact multi-arch releases. Secrets live only in the
 # mode-0600 files under ./tunnel and ./secrets; never print them or paste
 # `docker compose config` output anywhere.
-# Existing installs: retain COMPOSE_PROJECT_NAME in .env to preserve the
-# NetBird identity volume (docs/operations.md#upgrading-from-switchyard).
+# Keep COMPOSE_PROJECT_NAME unchanged after the first start: it scopes the
+# NetBird identity volume.
 name: molebridge
 
 services:

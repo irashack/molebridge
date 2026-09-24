@@ -2,8 +2,8 @@
 
 Run these on your own host before letting real traffic through the exit, and
 again after changing routing, the tunnel config, compose networking or the
-applier. The original drills were used on the author's deployment; the expanded
-checks for this revision still need the [homelab pass](homelab-testing.md).
+applier. [Testing](testing.md) records which of these checks have run, and on
+which platforms.
 Keep an independent host access path. Do not share raw addresses or peer
 information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
 `wg show ... private-key` for a report: they disclose the live key.

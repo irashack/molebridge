@@ -1,32 +1,28 @@
-# Reliability/security pass: homelab handoff
+# Testing
 
-This revision changes routing initialization, applier runtime, catalogue
-ownership, Compose mounts and status semantics. Unit tests and isolated Linux
-namespace drills do not establish that the whole NetBird/Mullvad deployment
-works. Run this pass on the existing homelab before trusting the update.
+Unit tests and the isolated Linux namespace drills in CI do not establish that a
+whole NetBird/Mullvad deployment works. This page records what has been tested
+on real hosts, and the pass to run on your own host before trusting a new
+revision.
 
-## Outcome of the 2026-09-20 pass
+## macOS / OrbStack pass
 
-The pass ran on the original deployment (macOS/OrbStack, self-hosted NetBird)
-with simulated client routing plus one real phone. Steady-state fail-closed
-behaviour held in every drill for both families. It found six defects, all
-fixed since: a single-family tunnel-route loss reported healthy; the applier
-stayed Docker-healthy in an orphaned namespace; `OVERLAY_IF` was not passed to
+Apple silicon, self-hosted NetBird 0.78, simulated client routing plus one real
+phone. Steady-state fail-closed behaviour held in every drill for both
+families. The pass found six defects, all fixed in `ae95c33` through
+`984a703`: a single-family tunnel-route loss reported healthy; the applier
+stayed healthy in an orphaned namespace; `OVERLAY_IF` was not passed to
 NetBird; a transient start-up failure consumed the saved selection; NetBird
 preceded the routing guards only by timing; and the exit's ICMP errors for
 oversized tunnel replies left over the host's route, so UDP (QUIC) through the
-exit stalled. Still unverified on a live deployment: host reboot and
-container-runtime restart, a client held on the exit during a drill, and LAN
-unreachability from a client. Rerun this pass after those fixes before relying
-on a new revision.
+exit stalled.
 
-## Outcome of the 2026-09-22 rootless Podman pass
+## Rootless Podman pass
 
-Revision `984a703`, deployed the same day to Debian 13 / rootless Podman 5.4.2
-/ podman-compose 1.6.0 on amd64, NetBird client 0.79 against a self-hosted
-0.79 management server, through a deployment-specific Compose file carrying
-the same services and settings as `compose.yaml`. Checked live, inside the
-namespace and from one iPhone client:
+Revision `984a703` on Debian 13 / rootless Podman 5.4.2 / podman-compose 1.6.0
+on amd64, NetBird client 0.79 against a self-hosted 0.79 management server,
+through a Compose file carrying the same services and settings as
+`compose.yaml`. Checked live, inside the namespace and from one iPhone client:
 
 - Rules 90/94/95/96/97 present for both families with the `ipproto` qualifier
   on 94 and ahead of NetBird's own rules; `default dev mullvad` plus the
@@ -42,21 +38,26 @@ namespace and from one iPhone client:
   [operations](operations.md#exits-on-a-private-container-network)); without
   them every client was relayed.
 - Recreation: a forced recreation of all four containers preserved the peer
-  identity and rejoined the shared namespace; the boot unit is installed and
-  active.
+  identity and rejoined the shared namespace.
 - CI green at `984a703`.
 
-Found and fixed during the move: Docker-only Compose settings, the missing
-`NET_RAW` capability, the panel user under uid remapping, the missing kernel
-module autoload, and the interface blacklist as a requirement rather than a
-tip (`afa8594` through `984a703`).
+Found and fixed while adding Podman support: Docker-only Compose settings, the
+missing `NET_RAW` capability, the panel user under uid remapping, the missing
+kernel module autoload, and the interface blacklist as a requirement rather
+than a tip (`afa8594` through `984a703`). The bundled `compose.yaml` validates
+with `podman-compose config` but was not itself started unchanged.
 
-Not run on this host: a reboot, a client held on the exit during a
-fail-closed drill, LAN unreachability from a client, and a live oversized UDP
-flow. The bundled `compose.yaml` validates with `podman-compose config` there
-but was not itself started unchanged.
+## Not yet tested
 
-## Prepare
+On any host: a reboot and container-runtime restart, a client held on the exit
+during a fail-closed drill, LAN unreachability from a client, and a live
+oversized UDP flow (only the isolated drill proves the return path). Linux
+hosts running Docker Engine, Docker Desktop and NetBird Cloud have not been
+tested end to end.
+
+## Validating a new revision
+
+### Prepare
 
 1. Schedule an interruption for exit users. Keep an independent SSH/console
    connection to the host that does not depend on this exit.
@@ -64,15 +65,11 @@ but was not itself started unchanged.
    `.env`, state, tunnel configuration, secret files and the named NetBird
    identity volume using your normal protected backup process. Do not commit
    or paste these files into a task, issue or CI log.
-3. Follow [Upgrading from Switchyard](operations.md#upgrading-from-switchyard).
-   In particular, keep the existing `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and
-   monitoring endpoint. Preserve the named identity volume.
-4. Pull this revision. The routing script is now bundled root-owned in a
-   derived WireGuard image; the checkout no longer needs root-owned init files.
-   If the old root-owned `routing/` prevents Git updating it, restore that
-   directory's ownership to the checkout owner before pulling.
+3. Keep the existing `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and monitoring
+   endpoint, and preserve the named identity volume.
+4. Pull the new revision.
 
-## Build and deploy
+### Build and deploy
 
 From the repository root on the host:
 
@@ -89,10 +86,10 @@ waits for health. Its final doctor can fail if the account, relay API or egress
 probe is unavailable; inspect locally without sharing secret-bearing output.
 
 The applier should create `state/applier/relays.json` and `relay-error.json`.
-The old `state/panel/relays.json` is ignored. Existing `desired.json` requests
-remain readable; no key, peer or client route needs to be re-enrolled.
+Existing `desired.json` requests remain readable; no key, peer or client route
+needs to be re-enrolled.
 
-## Verify
+### Verify
 
 - Confirm all namespace and client checks in [verification](verification.md),
   including **both** address families, DNS, tunnel down, route deletion, lookup
@@ -112,7 +109,7 @@ remain readable; no key, peer or client route needs to be re-enrolled.
 - With optional Gatus configured, confirm successful, failed and stale/missing
   pushes are handled as expected by your monitoring policy.
 
-## Record results
+### Record results
 
 Record revision, OS/runtime versions, architecture, NetBird server/client
 versions, which checks ran, and pass/fail outcomes in a sanitized test report.

@@ -197,4 +197,4 @@ dependency updates, but runtime crashes still require recovery.
 
 [Verification](verification.md) covers the live deployment; isolated namespace
 CI tests cover the Linux routing contract. Linux Docker and NetBird Cloud end
-to end still need the [homelab test pass](homelab-testing.md).
+to end have not been tested yet; see [testing](testing.md).

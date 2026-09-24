@@ -92,7 +92,7 @@ has been tested with a passkey sign-in through a NetBird reverse proxy.
 
 Molebridge leaves DNS alone. Clients keep resolving names with whatever
 resolver they already use, while traffic leaves through Mullvad. A DNS leak
-test may therefore show your usual resolver. On the author's iPhone with local
+test may therefore show your usual resolver. On a tested iPhone with local
 DNS, mullvad.net/check reported no DNS or WebRTC leak, but that depends on the
 client and network.
 
@@ -213,15 +213,13 @@ volume or intentionally re-enrolls a peer. A failed build leaves the running
 exit alone. A failure after recreation can leave the exit unavailable; fix the
 reported issue and rerun recovery. Keep an independent host access path.
 
-Recovery is explicit. There is no bundled Docker-socket watchdog. The new
-procedure still needs live homelab validation, including reboot and container
-recreation; see [the test handoff](homelab-testing.md).
+Recovery is explicit. There is no bundled Docker-socket watchdog. Recovery
+after a host reboot has not been tested yet; see [testing](testing.md).
 
 ## Upgrades
 
-If your installation predates the Molebridge name, follow the rename notes
-below first. Keep `.env` and the named NetBird identity volume. After pulling
-reviewed source/image pin changes:
+Keep `.env` and the named NetBird identity volume. After pulling reviewed
+source/image pin changes:
 
 ```sh
 docker compose pull netbird control-panel
@@ -233,68 +231,9 @@ An uncached applier build can update Debian tool packages; use `docker compose
 build --no-cache applier` when intentionally refreshing them, then recover.
 Rerun [verification](verification.md) after routing, image or applier changes.
 
-Two changes need attention when upgrading from a revision before the
-return-path rule. The `wireguard` service now needs
-`net.ipv4.icmp_errors_use_inbound_ifaddr: "1"` in its `sysctls`; the bundled
-`compose.yaml` has it, and doctor reports a Compose file that lacks it. The
-panel now answers 421 for any `Host` it is not published under; if your proxy
-rewrites the upstream `Host` (for example to `host.docker.internal:8095`), add
-that name to `PANEL_PUBLIC_HOSTS` before recreating the panel.
-
-Since the enrollment-time blacklist, `doctor` also fails when the exit
-interface is missing from the peer's ICE interface blacklist. A peer enrolled
-before this revision needs the flag once
-([setup](setup.md#5-keep-ice-off-the-tunnel-interface)); the new
-`NB_EXTRA_IFACE_BLACKLIST` variable cannot change an enrolled peer.
-
-Two more since the container-engine portability changes. The panel's user is
-now `PANEL_USER` rather than `PUID`/`PGID`; it defaults to `1000:1000`, so set
-it explicitly if your `PUID`/`PGID` are anything else, or the panel cannot
-write `state/panel`. Container logs now use the `json-file` driver with a
-10 MB cap instead of `local` with three 10 MB files, because `local` and
-`max-file` are Docker-only; existing `local` log files are discarded when the
-container is recreated.
-
-### Upgrading from Switchyard
-
-Molebridge was previously called Switchyard. New installations use `molebridge`
-as the Compose project name. Docker scopes named volumes to that name, so
-changing it on an existing installation would create a fresh NetBird identity
-volume and leave the old deployment behind.
-
-The GitHub repository is now `irashack/molebridge`. Update an existing HTTPS
-checkout's remote with:
-
-```sh
-git remote set-url origin https://github.com/irashack/molebridge.git
-```
-
-For SSH, use `git@github.com:irashack/molebridge.git`. This changes where Git
-fetches and pushes; it does not change the Compose project or identity volume.
-
-Before starting the updated Compose file, add this to your existing `.env`:
-
-```sh
-COMPOSE_PROJECT_NAME=switchyard
-```
-
-Use your existing project name instead if you previously overrode it with
-`docker compose -p` or `COMPOSE_PROJECT_NAME`. Keep the same project name for
-every Compose command. Container names follow it too.
-
-Keep your existing `NB_HOSTNAME` and `GATUS_ENDPOINT` values. If you relied on
-their previous defaults, set them explicitly to `switchyard-exit` and
-`switchyard` respectively. Keep the existing `state/`, `tunnel/`, `secrets/`
-and named volume; do not replace `.env` with the new example or run
-`docker compose down -v` during the upgrade.
-
-Then use the normal upgrade commands above. Existing `PANEL_TITLE` and
-`PANEL_SHORT_TITLE` overrides still apply; remove them or set them to
-`Molebridge` to use the new branding. The directory containing your checkout
-can keep its old name.
-
-This migration procedure has not been verified on a live Docker host. Run the
-[verification checks](verification.md) after upgrading.
+`doctor` checks the settings a working exit depends on, including the
+`wireguard` sysctls in your Compose file and the exit interface in the peer's
+ICE interface blacklist; fix whatever it reports before relying on the upgrade.
 
 ## Rootless Podman
 
