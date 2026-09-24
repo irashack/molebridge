@@ -10,6 +10,8 @@ from molebridge.state import (CATALOG_MAX_AGE, HOSTNAME_RE,
 
 MULLVAD_RELAYS_URL = 'https://api.mullvad.net/app/v1/relays'
 REFRESH_INTERVAL_S = 6 * 60 * 60
+# Mullvad-owned hardware; stboot means the relay runs from RAM.
+OPTIONAL_FLAGS = ('owned', 'stboot')
 
 
 def valid_key(value):
@@ -43,7 +45,12 @@ def validate_entry(entry):
         return None
     if not all(valid_text(entry.get(k)) for k in ('city', 'country', 'location_code')):
         return None
-    return {k: entry[k] for k in ('hostname', 'public_key', 'ipv4_addr_in', 'city', 'country', 'location_code')}
+    result = {k: entry[k] for k in ('hostname', 'public_key', 'ipv4_addr_in', 'city', 'country', 'location_code')}
+    # Optional display attributes: kept only when well formed, never required.
+    result.update({k: entry[k] for k in OPTIONAL_FLAGS if type(entry.get(k)) is bool})
+    if valid_text(entry.get('provider')) and len(entry['provider']) <= 64:
+        result['provider'] = entry['provider']
+    return result
 
 
 def parse_relay_response(data):

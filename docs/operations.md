@@ -7,18 +7,37 @@ status: connected, switching, failed or unknown/stale. **Fastest from …** list
 lowest-latency cities with a Switch button. **Locations** groups every Mullvad
 WireGuard server by country and city, with a filter (press `/`).
 
-A switch takes two clicks: the first arms the button, the second (within four
-seconds) confirms. Without JavaScript a single click submits. The applier then
+A switch takes two clicks: the first arms the button and announces it to
+screen readers, the second (within eight seconds) confirms. Escape or moving
+focus away cancels. Without JavaScript a single click submits. The applier then
 swaps the tunnel's peer and waits for a fresh handshake and a Mullvad-confirmed
-egress, normally a few seconds. The panel follows along and refreshes when it
-finishes. The initial peer is identified from the running interface without an
-initial panel selection.
+egress, normally a few seconds. While it works, Current exit shows which server
+it is leaving and for which, and how long the switch has been running; the
+applier gives up after about a minute. The panel refreshes when it finishes.
+The initial peer is identified from the running interface without an initial
+panel selection.
+
+Some parts of the page stay hidden until you use them:
+
+- **Saved** appears once you pin a server with the star in Current exit, or
+  once this browser has connected through more than one server. Pinned servers
+  come first, then recent ones. They are kept in this browser's storage only,
+  not on the exit, so another device or browser has its own list.
+- **Fastest: …** appears at the top of an opened country once every server in
+  it has been measured. Within a city, servers are already sorted
+  fastest first.
+- **Filters**, next to the Locations heading, opens a row of toggles for
+  Mullvad-owned and RAM-only servers. It appears only when the relay list
+  carries those attributes. Active filters are remembered in this browser, and
+  the row reopens while any are on. Filters apply to Locations, not to
+  Fastest from ….
 
 Every device using the exit shares the one server, and open connections through
 the exit drop at the switch.
 
 If a switch fails, the panel shows the failure and the request is not retried
-continuously. Select the same server again to retry, or select another one.
+continuously. Press **Retry** beside the message (or select the same server
+again) to retry, or select another one.
 If the request is waiting for a fresh catalogue, the overlay interface or tunnel
 routing before any peer change, its diagnostic says it will retry automatically.
 The saved selection stays pending through these startup failures.
@@ -71,6 +90,9 @@ For Glance or Dynacat:
   source: https://exit.example.net/embed
   height: 460
 ```
+
+The panel follows the viewer's light or dark setting. Set `PANEL_THEME=dark`
+when an always-dark dashboard embeds it.
 
 If your proxy authenticates with a session cookie, the frame needs a live
 session for the panel's hostname. When it has lapsed the frame is blank; open

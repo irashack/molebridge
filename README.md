@@ -124,6 +124,7 @@ in [SECURITY.md](SECURITY.md).
 | [Operations](docs/operations.md) | Switch servers, embed the panel, upgrade, or recover the stack. |
 | [Configuration](docs/configuration.md) | Look up a setting, secret-file location, or state-file format. |
 | [Architecture](docs/architecture.md) | Understand routing, catalogue ownership, and privilege separation. |
+| [Other providers](docs/providers.md) | See why Molebridge is Mullvad-only today and what another provider would need. |
 | [Verification](docs/verification.md) | Test client privacy and deliberately break the tunnel. |
 | [Testing](docs/testing.md) | See what has been tested, and validate a new revision on your host. |
 

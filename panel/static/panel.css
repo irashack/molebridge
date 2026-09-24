@@ -29,6 +29,7 @@
   --color-text-base: hsl(var(--bghs), 69.6%);
   --color-text-base-muted: hsl(var(--bghs), 62.4%);
   --color-text-subdue: hsl(var(--bghs), 42%);
+  --color-widget-shadow: hsl(var(--bghs), 17.5%);
   --border-radius: 5px;
   --widget-gap: 23px;
   --pad-v: 15px;
@@ -38,6 +39,47 @@
   --font-size-base: 1.3rem;
   --font-size-h5: 1.2rem;
   --font-size-h6: 1.1rem;
+}
+
+/* Light: a Catppuccin Latte counterpart, darkened where Latte's accents fall
+   short of readable contrast on a light widget. Kept in step with the block
+   below: PANEL_THEME=light forces it, auto follows the system setting. */
+:root[data-theme="light"] {
+  --color-primary: hsl(220, 91%, 48%);
+  --color-positive: hsl(109, 58%, 30%);
+  --color-negative: hsl(347, 87%, 42%);
+  --color-upcoming: hsl(35, 90%, 32%);
+  --color-background: hsl(220, 23%, 94%);
+  --color-widget-background: hsl(220, 23%, 98%);
+  --color-widget-content-border: hsl(223, 16%, 83%);
+  --color-widget-background-highlight: hsl(220, 22%, 91%);
+  --color-separator: hsl(223, 16%, 88%);
+  --color-text-highlight: hsl(234, 16%, 22%);
+  --color-text-paragraph: hsl(234, 16%, 32%);
+  --color-text-base: hsl(233, 13%, 38%);
+  --color-text-base-muted: hsl(233, 10%, 42%);
+  --color-text-subdue: hsl(230, 9%, 44%);
+  --color-widget-shadow: hsl(220, 16%, 86%);
+}
+
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --color-primary: hsl(220, 91%, 48%);
+    --color-positive: hsl(109, 58%, 30%);
+    --color-negative: hsl(347, 87%, 42%);
+    --color-upcoming: hsl(35, 90%, 32%);
+    --color-background: hsl(220, 23%, 94%);
+    --color-widget-background: hsl(220, 23%, 98%);
+    --color-widget-content-border: hsl(223, 16%, 83%);
+    --color-widget-background-highlight: hsl(220, 22%, 91%);
+    --color-separator: hsl(223, 16%, 88%);
+    --color-text-highlight: hsl(234, 16%, 22%);
+    --color-text-paragraph: hsl(234, 16%, 32%);
+    --color-text-base: hsl(233, 13%, 38%);
+    --color-text-base-muted: hsl(233, 10%, 42%);
+    --color-text-subdue: hsl(230, 9%, 44%);
+    --color-widget-shadow: hsl(220, 16%, 86%);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -120,7 +162,7 @@ h1 {
   background: var(--color-widget-background);
   border-radius: var(--border-radius);
   border: 1px solid var(--color-widget-content-border);
-  box-shadow: 0 3px 0 0 hsl(var(--bghs), 17.5%);
+  box-shadow: 0 3px 0 0 var(--color-widget-shadow);
 }
 
 .embed .widget-header { padding: 0; margin-bottom: 0.6rem; }
@@ -309,6 +351,51 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 
 [hidden], .is-filtered { display: none !important; }
 
+/* pin */
+.pin { font-size: 1.8rem; line-height: 1; padding: 0.2rem; }
+.pin[aria-pressed="true"] { color: var(--color-upcoming); }
+.saved-mark { color: var(--color-text-subdue); width: 1.4rem; text-align: center; flex-shrink: 0; }
+
+/* fastest in an opened country */
+.country-fastest { padding: 0 0 0.4rem; border-bottom: 1px dashed var(--color-separator); }
+.country-fastest .fastest-place { color: var(--color-text-base-muted); }
+
+/* attribute filters, shown on request */
+.filter-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: -0.4rem 0 1.2rem; }
+.filter-chip {
+  cursor: pointer;
+  background: none;
+  border: 1px solid var(--color-widget-content-border);
+  border-radius: 999px;
+  padding: 0.1rem 1rem;
+  font-size: var(--font-size-h6);
+  color: var(--color-text-base);
+}
+.filter-chip:hover { border-color: var(--color-text-subdue); }
+.filter-chip[aria-pressed="true"] { border-color: var(--color-primary); color: var(--color-primary); }
+.link-button[aria-expanded="true"] { color: var(--color-primary); }
+
+.note .relay-switch { margin-left: 0.6rem; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+:is(.relay, .relay-switch, .link-button, .filter-chip, summary):focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
 @media (max-width: 600px) {
   .full .page { padding-left: max(10px, env(safe-area-inset-left)); padding-right: max(10px, env(safe-area-inset-right)); }
   .cities { padding-left: 0.4rem; }
@@ -330,4 +417,6 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   .fastest-item { padding: 0.7rem 0; }
   .diagnostics summary { padding: 0.6rem 0; }
   .link-button { padding: 0.6rem 0 0.6rem 1.2rem; }
+  .pin { padding: 0.6rem; }
+  .filter-chip { min-height: 34px; padding: 0.2rem 1.3rem; }
 }
