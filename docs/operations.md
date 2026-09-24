@@ -27,8 +27,9 @@ Some parts of the page stay hidden until you use them:
   it has been measured. Within a city, servers are already sorted
   fastest first.
 - **Filters**, next to the Locations heading, opens a row of toggles for
-  Mullvad-owned and RAM-only servers. It appears only when the relay list
-  carries those attributes. Active filters are remembered in this browser, and
+  Mullvad-owned and RAM-only servers. A toggle appears only when it would
+  narrow the list, so when every server is RAM-only there is no RAM-only
+  toggle. Active filters are remembered in this browser, and
   the row reopens while any are on. Filters apply to Locations, not to
   Fastest from ….
 
