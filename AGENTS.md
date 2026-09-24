@@ -1,7 +1,9 @@
 # Working on Molebridge
 
-Read `README.md` and `docs/architecture.md` first. Keep the GitHub repository
-private and unlicensed until the owner explicitly asks to publish it.
+Read `README.md` and `docs/architecture.md` first. Molebridge is MIT-licensed;
+the bundled font keeps its own licence. Create releases or tags
+only when the owner asks. Handle suspected vulnerabilities through the private
+route in `SECURITY.md`, never in a public issue or commit message.
 
 ## Write for someone else's machine
 

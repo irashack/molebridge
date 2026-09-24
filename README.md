@@ -117,8 +117,9 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 | **Still unverified on any host** | A host reboot, a client held on the exit during a fail-closed drill, LAN unreachability from a client, and a live oversized UDP flow (only the isolated drill proves the return path). Record: [homelab test guide](docs/homelab-testing.md). |
 | **Other deployments** | Linux Docker hosts and NetBird Cloud have not yet been verified end to end. |
 
-There are no releases or project license yet. The repository remains private
-during development.
+Molebridge is experimental. There are no releases yet; run a pinned revision
+and verify it on your own host. Report vulnerabilities privately as described
+in [SECURITY.md](SECURITY.md).
 
 ## Find your way around
 
@@ -162,4 +163,5 @@ replace them.
 
 Built around [WireGuard's network namespace model](https://www.wireguard.com/netns/).
 Molebridge is not affiliated with Mullvad VPN AB or NetBird. The bundled
-JetBrains Mono font uses the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt).
+JetBrains Mono font uses the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt);
+the rest of Molebridge is released under the [MIT License](LICENSE).
