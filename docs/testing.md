@@ -124,10 +124,11 @@ stopped. Following [setup](setup.md) with the
 This instance carried no client route and had no boot unit; the client and
 reboot results above come from the long-running deployment.
 
-**Known issue.** The panel does not exit on `SIGTERM`, so every stop or
-recreation waits for the engine's 10-second timeout and then kills it. Nothing
-is lost (completed server selections persist in the mounted request directory),
-but recreation takes longer.
+**Fixed after the pass.** The panel did not exit on `SIGTERM`: as the
+container's PID 1 without a handler it ignored the signal, so every stop waited
+for the engine's 10-second timeout and then killed it. The panel now handles
+`SIGTERM` and exits cleanly; this is a panel-only change, with routing, the
+applier and Compose unchanged from `5a6e0b5`.
 
 ## Not yet tested
 

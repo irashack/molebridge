@@ -4,6 +4,8 @@ import io
 import json
 import re
 import shutil
+import signal
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -473,3 +475,30 @@ class PwaTests(ServerIntegrationTests.__base__):
             self.assertIn(name, app.STATIC_FILES)
             self.assertTrue((app.STATIC_DIR / name).read_bytes().startswith(b'\x89PNG'))
         self.assertIn("manifest-src 'self'", app.security_headers()['Content-Security-Policy'])
+
+
+class SigtermTests(unittest.TestCase):
+    """The panel runs as a container's PID 1, which ignores SIGTERM without a
+    handler; main() must turn SIGTERM into a clean exit."""
+
+    def test_sigterm_exits_cleanly(self):
+        state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, state)
+        script = (
+            'import sys, http.server\n'
+            f'sys.path.insert(0, {str(Path(__file__).parent)!r})\n'
+            'import app\n'
+            "app.LISTEN_HOST, app.LISTEN_PORT = '127.0.0.1', 0\n"
+            'activate = http.server.ThreadingHTTPServer.server_activate\n'
+            'def ready(self):\n'
+            '    activate(self)\n'
+            "    print('ready', flush=True)\n"
+            'http.server.ThreadingHTTPServer.server_activate = ready\n'
+            'app.main()\n'
+        )
+        proc = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE,
+                                text=True, env={'STATE_DIR': state, 'PATH': '/usr/bin:/bin'})
+        self.addCleanup(proc.kill)
+        self.assertEqual(proc.stdout.readline().strip(), 'ready')
+        proc.send_signal(signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=5), 0)

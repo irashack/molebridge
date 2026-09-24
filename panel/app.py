@@ -29,6 +29,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import sys
 import socket
 import threading
@@ -747,7 +748,14 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         )
 
 
+def _stop_on_sigterm(signum: int, frame: Any) -> None:
+    raise KeyboardInterrupt
+
+
 def main() -> None:
+    # As a container's PID 1 the panel ignores SIGTERM unless it handles it,
+    # so every stop would wait out the engine's timeout and end in SIGKILL.
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)
     server = http.server.ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), PanelHandler)
     try:
         server.serve_forever()
