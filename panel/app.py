@@ -85,7 +85,16 @@ PANEL_HOST_LABEL = os.environ.get('PANEL_HOST_LABEL', 'this exit')
 PANEL_HOME_URL = os.environ.get('PANEL_HOME_URL', '')
 PANEL_HOME_LABEL = os.environ.get('PANEL_HOME_LABEL', 'Home')
 
+
+def theme_setting(value: str) -> str:
+    """auto follows the viewer's system setting; anything unrecognised is auto."""
+    return value if value in ('auto', 'dark', 'light') else 'auto'
+
+
+PANEL_THEME = theme_setting(os.environ.get('PANEL_THEME', 'auto'))
+
 THEME_COLOR = '#232638'
+THEME_COLOR_LIGHT = '#eff1f5'
 WEB_MANIFEST = {
     'name': PANEL_TITLE,
     'short_name': PANEL_SHORT_TITLE,
@@ -354,6 +363,10 @@ def _static_versions() -> Dict[str, str]:
 _STATIC_VERSIONS = _static_versions()
 
 
+# Catalogue attribute -> filter label. Shown only when some relay carries it.
+ATTRIBUTE_FILTERS = {'owned': 'Mullvad-owned', 'stboot': 'RAM-only'}
+
+
 def flag_emoji(location_code: Any) -> str:
     """Regional-indicator flag from a Mullvad location code like 'se-sto'."""
     code = str(location_code or '')[:2].upper()
@@ -366,6 +379,29 @@ def relay_label(hostname: str) -> str:
     """Short chip label: 'se-sto-wg-001' -> 'wg-001'."""
     marker = hostname.rfind('-wg-')
     return hostname[marker + 1:] if marker >= 0 else hostname
+
+
+def relay_attributes(info: Dict[str, Any]) -> str:
+    """data-owned/data-stboot for the filters, only when the catalogue knows."""
+    return ''.join(f' data-{key}="{"1" if info[key] else "0"}"'
+                   for key in ATTRIBUTE_FILTERS if isinstance(info.get(key), bool))
+
+
+def relay_title(hostname: str, info: Dict[str, Any]) -> str:
+    details = relay_details(info)
+    return f'{hostname} · {details}' if details else hostname
+
+
+def relay_details(info: Dict[str, Any]) -> str:
+    """Hosting summary such as 'Example Hosting · rented · RAM-only'."""
+    parts = []
+    if isinstance(info.get('provider'), str):
+        parts.append(str(info['provider']))
+    if isinstance(info.get('owned'), bool):
+        parts.append('Mullvad-owned' if info['owned'] else 'rented')
+    if info.get('stboot') is True:
+        parts.append('RAM-only')
+    return ' · '.join(parts)
 
 
 def _field(container: Optional[Dict[str, Any]], key: str, default: str = '(unknown)') -> str:
@@ -382,6 +418,13 @@ def status_payload():
     result = result if isinstance(result, dict) else None
     state, label = status_view(desired, result)
     return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label}}
+
+
+def theme_color_meta() -> str:
+    if PANEL_THEME == 'auto':
+        return (f'<meta name="theme-color" content="{THEME_COLOR}" media="(prefers-color-scheme: dark)">\n'
+                f'<meta name="theme-color" content="{THEME_COLOR_LIGHT}" media="(prefers-color-scheme: light)">')
+    return f'<meta name="theme-color" content="{THEME_COLOR_LIGHT if PANEL_THEME == "light" else THEME_COLOR}">'
 
 
 def render_index_html(
@@ -425,8 +468,13 @@ def render_index_html(
         switching_note = f'<p class="note">Leaving {esc(result_server)}. Open connections through the exit will drop.</p>'
     message = (result or {}).get('message')
     failure_note = ''
-    if state == 'failed' and message:
-        failure_note = f'<p class="note note-negative">{esc(str(message))}</p>'
+    retry = ''
+    if state == 'failed' and desired_server in relays:
+        # Outside the form element but submitted with it, so it works without JS.
+        retry = (f' <button type="submit" form="select-form" name="server" value="{esc(desired_server)}" '
+                 f'class="relay-switch" data-retry>Retry</button>')
+    if state == 'failed' and (message or retry):
+        failure_note = f'<p class="note note-negative">{esc(str(message or "Switch failed."))}{retry}</p>'
 
     if state == 'unknown':
         failure_note = '<p class="note note-negative">Status is unavailable or stale. Details are from the last check.</p>'
@@ -452,10 +500,12 @@ def render_index_html(
             for hostname in sorted(cities[city]):
                 hn = esc(hostname)
                 current = ' is-current' if hostname == desired_server else ''
+                info = relays[hostname]
                 chips.append(
                     f'<button type="submit" name="server" value="{hn}" class="relay{current}" '
                     f'data-host="{hn}" data-city="{esc(city)}" data-country="{esc(country)}" '
-                    f'data-flag="{flag_emoji(relays[hostname].get("location_code"))}" title="{hn}">'
+                    f'data-flag="{flag_emoji(info.get("location_code"))}"{relay_attributes(info)} '
+                    f'title="{esc(relay_title(hostname, info))}">'
                     f'<span class="relay-name">{esc(relay_label(hostname))}</span>'
                     '<span class="ms" data-ms></span></button>'
                 )
@@ -475,6 +525,18 @@ def render_index_html(
             f'<div class="cities">{"".join(city_html)}</div></details>'
         )
     locations_html = ''.join(country_html) if country_html else '<p class="subdue">No relays available.</p>'
+
+    filter_buttons = ''.join(
+        f'<button type="button" class="filter-chip" data-attr-filter="{key}" aria-pressed="false">{label}</button>'
+        for key, label in ATTRIBUTE_FILTERS.items()
+        if any(isinstance(info.get(key), bool) for info in relays.values())
+    )
+    filters_toggle = filters_row = ''
+    if filter_buttons:
+        filters_toggle = ('<button type="button" class="link-button small" data-filters-toggle '
+                          'aria-expanded="false" aria-controls="relay-filters" hidden>Filters</button>')
+        filters_row = f'<div class="filter-row" id="relay-filters" hidden>{filter_buttons}</div>'
+    current_details = relay_details(current_info) if current_info else ''
 
     error_html = ''
     if fetch_error:
@@ -497,12 +559,12 @@ def render_index_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{PANEL_THEME}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<meta name="theme-color" content="{THEME_COLOR}">
+<meta name="color-scheme" content="{'dark light' if PANEL_THEME == 'auto' else PANEL_THEME}">
+{theme_color_meta()}
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -515,7 +577,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 <section class="widget">
   <div class="widget-header"><h2>Current exit</h2>{open_link}</div>
@@ -526,8 +588,9 @@ def render_index_html(
         <div class="current-place" data-current-place>{current_place}</div>
         <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> · <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></div>
       </div>
+      <button type="button" class="link-button pin" data-pin aria-pressed="false" aria-label="Pin this server" title="Pin this server" hidden>☆</button>
       <div class="current-side">
-        <span class="pill pill-{state}" data-state-pill>{state_label}</span>
+        <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
         <span class="ms" data-current-ms></span>
       </div>
     </div>
@@ -542,6 +605,7 @@ def render_index_html(
         <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
         <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
         <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
+        <dt>Server</dt><dd>{esc(current_details) or '(unknown)'}</dd>
         <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
         <dt>Requested</dt><dd>{_field(desired, 'requested_at', '')}</dd>
         <dt>Relay list</dt><dd>{len(relays)} relays, fetched {fetched_at}</dd>
@@ -554,6 +618,13 @@ def render_index_html(
 <input type="hidden" name="csrf_token" value="{token}">
 <input type="hidden" name="return" value="{return_to}">
 
+<section class="widget" id="saved" hidden>
+  <div class="widget-header"><h2>Saved</h2></div>
+  <div class="widget-content">
+    <ol class="fastest-list" data-saved></ol>
+  </div>
+</section>
+
 <section class="widget" id="fastest" hidden>
   <div class="widget-header"><h2>Fastest from {esc(PANEL_HOST_LABEL)}</h2><button type="button" class="link-button small" data-retest>Retest</button></div>
   <div class="widget-content">
@@ -562,14 +633,16 @@ def render_index_html(
 </section>
 
 <section class="widget">
-  <div class="widget-header"><h2>Locations</h2><span class="subdue small">{len(grouped)} countries</span></div>
+  <div class="widget-header"><h2>Locations</h2>{filters_toggle}<span class="subdue small">{len(grouped)} countries</span></div>
   <div class="widget-content">
     <input type="search" class="search" placeholder="Filter country, city or relay…" aria-label="Filter locations" data-filter autocomplete="off">
+    {filters_row}
     {error_html}
     <div class="countries">{locations_html}</div>
   </div>
 </section>
 </form>
+<div class="sr-only" aria-live="polite" data-announce></div>
 </main>
 </body>
 </html>"""

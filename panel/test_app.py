@@ -388,6 +388,85 @@ class FramingAndRenderTests(unittest.TestCase):
         self.assertNotIn('<h1>', page)
 
 
+def _relay(hostname='se-sto-wg-001', **extra):
+    return {'hostname': hostname, 'country': 'Sweden', 'city': 'Stockholm', 'location_code': 'se-sto',
+            'public_key': VALID_PUBKEY, 'ipv4_addr_in': '198.51.100.10', **extra}
+
+
+def _catalogue(*entries):
+    return {'fetched_at': app.now_iso(), 'relays': {e['hostname']: e for e in entries}}
+
+
+class SwitcherRenderTests(unittest.TestCase):
+    def _failed(self, server='se-sto-wg-001'):
+        desired = {'server': server, 'requested_at': app.now_iso(), 'request_id': 'a' * 32}
+        result = {'status': 'failed', 'message': 'Switch verification timed out.', 'checked_at': app.now_iso(),
+                  'request_id': 'a' * 32, 'server': None}
+        return desired, result
+
+    def test_status_pill_is_live_from_first_render(self):
+        page = app.render_index_html(None, None, None, None, None, 'tok')
+        self.assertRegex(page, r'data-state-pill role="status" aria-live="polite"')
+        self.assertIn('data-announce', page)
+
+    def test_request_time_is_exposed_for_progress(self):
+        desired = {'server': 'se-sto-wg-001', 'requested_at': '2026-01-01T00:00:00Z', 'request_id': 'a' * 32}
+        page = app.render_index_html(desired, None, _catalogue(_relay()), None, None, 'tok')
+        self.assertIn('data-requested="2026-01-01T00:00:00Z"', page)
+
+    def test_retry_offered_for_failed_catalogued_server(self):
+        desired, result = self._failed()
+        page = app.render_index_html(desired, result, _catalogue(_relay()), None, None, 'tok')
+        self.assertIn('form="select-form" name="server" value="se-sto-wg-001"', page)
+        self.assertIn('data-retry>Retry</button>', page)
+
+    def test_no_retry_when_not_failed_or_not_catalogued(self):
+        desired, result = self._failed(server='no-where-wg-001')
+        page = app.render_index_html(desired, result, _catalogue(_relay()), None, None, 'tok')
+        self.assertNotIn('data-retry', page)
+        ok = {'status': 'ok', 'routing_ok': True, 'mullvad_exit_ip': True, 'checked_at': app.now_iso(),
+              'request_id': 'a' * 32, 'server': 'se-sto-wg-001'}
+        page = app.render_index_html(self._failed()[0], ok, _catalogue(_relay()), None, None, 'tok')
+        self.assertNotIn('data-retry', page)
+
+    def test_failure_message_is_escaped_beside_retry(self):
+        desired, result = self._failed()
+        result['message'] = '<img src=x onerror=alert(1)>'
+        page = app.render_index_html(desired, result, _catalogue(_relay()), None, None, 'tok')
+        self.assertNotIn('<img src=x', page)
+        self.assertIn('&lt;img src=x onerror=alert(1)&gt;', page)
+
+    def test_relay_attributes_only_when_known(self):
+        page = app.render_index_html(None, None, _catalogue(_relay()), None, None, 'tok')
+        self.assertNotIn('data-owned', page)
+        self.assertNotIn('data-attr-filter', page)
+        self.assertNotIn('data-filters-toggle', page)
+
+        relays = _catalogue(_relay(owned=True, stboot=False, provider='<b>Example Hosting</b>'),
+                            _relay('se-sto-wg-002', owned='yes'))
+        page = app.render_index_html(None, None, relays, None, None, 'tok')
+        self.assertIn('data-owned="1" data-stboot="0"', page)
+        self.assertEqual(page.count('data-owned='), 1)
+        self.assertIn('data-attr-filter="owned"', page)
+        self.assertIn('data-attr-filter="stboot"', page)
+        self.assertIn('data-filters-toggle', page)
+        self.assertNotIn('<b>Example Hosting</b>', page)
+        self.assertIn('&lt;b&gt;Example Hosting&lt;/b&gt; · Mullvad-owned', page)
+
+    def test_theme_setting(self):
+        for value, expected in (('light', 'light'), ('dark', 'dark'), ('auto', 'auto'), ('neon', 'auto'), ('', 'auto')):
+            self.assertEqual(app.theme_setting(value), expected)
+        for theme in ('light', 'dark'):
+            with patch.object(app, 'PANEL_THEME', theme):
+                page = app.render_index_html(None, None, None, None, None, 'tok')
+                self.assertIn(f'<html lang="en" data-theme="{theme}">', page)
+                self.assertIn(f'<meta name="color-scheme" content="{theme}">', page)
+        with patch.object(app, 'PANEL_THEME', 'auto'):
+            page = app.render_index_html(None, None, None, None, None, 'tok')
+        self.assertIn('<meta name="color-scheme" content="dark light">', page)
+        self.assertIn('media="(prefers-color-scheme: light)"', page)
+
+
 class EmbedAndApiIntegrationTests(ServerIntegrationTests):
     def _get(self, path):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)

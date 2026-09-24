@@ -111,7 +111,13 @@ The applier fetches the fixed HTTPS Mullvad relay API at startup and every six
 hours. Redirects and proxy environment overrides are refused. Input is size
 limited, decoded as JSON with duplicate keys rejected, and checked for active
 WireGuard entries, hostname shape, canonical 32-byte base64 keys, IPv4 endpoints
-and bounded location strings.
+and bounded location strings. The optional display attributes (Mullvad-owned,
+RAM-only, hosting provider) are kept only when they are strict booleans or
+bounded text; they never affect whether a relay may be selected.
+
+The relay catalogue, egress check and naming are Mullvad-specific. See
+[other providers](providers.md) for what supporting another provider would
+involve.
 
 It atomically writes `state/applier/relays.json`. Failed or empty refreshes
 keep the last good catalogue and publish a sanitized error in

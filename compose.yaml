@@ -191,6 +191,7 @@ services:
       PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this exit}"
       PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
       PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
     ports:
       # Loopback only. Publish it to people through an authenticating proxy.
       - "127.0.0.1:${PANEL_PORT:-8095}:8080"

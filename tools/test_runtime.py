@@ -170,6 +170,20 @@ def test_duplicate_relays_rejected():
         relays.parse_relay_response(data)
 
 
+def test_optional_relay_attributes_kept_when_valid():
+    result = relays.parse_relay_response(payload(owned=True, stboot=False, provider='Example Hosting'))
+    assert result[HOST] == {**ENTRY, 'owned': True, 'stboot': False, 'provider': 'Example Hosting'}
+    snapshot = {'fetched_at': now_iso(), 'relays': result}
+    assert relays.snapshot_relays(snapshot) == result
+
+
+@pytest.mark.parametrize('changes', [{'owned': 'yes'}, {'owned': 1}, {'stboot': None}, {'stboot': 0},
+                                     {'provider': 'Example\nHosting'}, {'provider': 'x' * 65},
+                                     {'provider': ''}, {'provider': ['Example']}])
+def test_malformed_optional_relay_attributes_dropped(changes):
+    assert relays.parse_relay_response(payload(**changes))[HOST] == ENTRY
+
+
 @pytest.mark.parametrize('response', [b'not json', b'{}', b'{"locations":{},"wireguard":{"relays":[]}}'])
 def test_failed_refresh_preserves_last_good_catalogue(runtime, response):
     app, _ = runtime

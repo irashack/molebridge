@@ -23,6 +23,7 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `PANEL_SHORT_TITLE` | `Molebridge` | Home-screen icon label. |
 | `PANEL_HOST_LABEL` | `this exit` | Used in "Fastest from …". |
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | empty, `Home` | Optional back link in the page header. |
+| `PANEL_THEME` | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
 
@@ -43,7 +44,7 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 
 | File | Writer | Reader | Contents |
 |---|---|---|---|
-| `applier/relays.json` | applier | panel (read-only) | `fetched_at` and validated `relays`: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in` |
+| `applier/relays.json` | applier | panel (read-only) | `fetched_at` and validated `relays`: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters) |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `mullvad_exit_ip`, `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
