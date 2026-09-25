@@ -29,8 +29,8 @@ exit will drop.
 | | What you get |
 | :--- | :--- |
 | **Stay connected** | Keep NetBird active while sending exit traffic through Mullvad. |
-| **Pick your exit** | Browse countries and cities, compare measured latency, and switch servers. |
-| **Make it fit** | Embed the panel in a dashboard or install it as a home-screen app. |
+| **Pick your exit** | Browse countries and cities, compare measured latency, pin favourites, filter by hosting, and switch servers. |
+| **Make it fit** | Embed the panel in a dashboard, install it as a home-screen app, and use it in light or dark mode. |
 | **Keep it small** | Four containers, a Python standard-library panel, and dependency-free front-end code. |
 | **See what is happening** | Freshness-aware status, verified egress, and host-side doctor and recovery commands. |
 
@@ -107,11 +107,11 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 | :--- | :--- |
 | **macOS / OrbStack** | Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients. A live pass ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `1390860`; its six findings, including the path-MTU return path for UDP, are fixed in `1390860` through `336d904`. |
 | **Automated checks** | On every push: Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. Latest results: [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
-| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64, NetBird 0.79, self-hosted. At `5a6e0b5`: all six fail-closed drills with a client held on the exit (no leak during any drill or the reboot), host reboot with unattended recovery, LAN isolation from the client, and the IPv6 path-MTU error leaving through the tunnel. A clean install of the unchanged `compose.yaml` started, passed doctor and survived the documented recovery. Record: [testing](docs/testing.md). |
+| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64, NetBird 0.79, self-hosted. At `5a6e0b5`: all six fail-closed drills with a client held on the exit (no leak during any drill or the reboot), host reboot with unattended recovery, LAN isolation from the client, and the IPv6 path-MTU error leaving through the tunnel. A clean install of the unchanged `compose.yaml` started, passed doctor and survived the documented recovery. The v0.2.0 panel changes passed a live pass at `56ac2cc` and `40c461c`: doctor before and after each deployment, the live relay attributes, and one verified switch. Record: [testing](docs/testing.md). |
 | **Still unverified** | A live UDP flow larger than the overlay MTU, fail-closed drills with a phone client, and Docker Engine or NetBird Cloud end to end. |
 
-Molebridge is experimental. The first release is
-[v0.1.0](https://github.com/irashack/molebridge/releases/tag/v0.1.0); run a
+Molebridge is experimental. The latest release is
+[v0.2.0](https://github.com/irashack/molebridge/releases/tag/v0.2.0); run a
 release or another pinned revision and verify it on your own host. Report vulnerabilities privately as described
 in [SECURITY.md](SECURITY.md).
 
