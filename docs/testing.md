@@ -9,7 +9,9 @@ Revisions are given by their published hashes. The passes before 2026-09-24
 ran on pre-publication hashes that a metadata-only history rewrite replaced;
 each has an identical tree on `main` (`ae95c33` is `1390860`, `984a703` is
 `336d904`, `afa8594` is `4739352`). CI results quoted for those revisions ran
-on the old hashes.
+on the old hashes. The panel switcher pass ran on branch hashes that the
+rebase merge replaced, again with identical trees (`07c7b41` is `56ac2cc`,
+`0d518e4` is `40c461c`).
 
 ## macOS / OrbStack pass
 
@@ -130,14 +132,14 @@ for the engine's 10-second timeout and then killed it. The panel now handles
 `SIGTERM` and exits cleanly; this is a panel-only change, with routing, the
 applier and Compose unchanged from `5a6e0b5`.
 
-## Panel switcher pass at `07c7b41` and `0d518e4`
+## Panel switcher pass at `56ac2cc` and `40c461c`
 
 2026-09-25, the same Debian 13 / rootless Podman host, with each revision
 deployed by pinning it in the owner's deployment tooling. That tooling
 recreates all four containers on every pin change. Routing, the tunnel
 configuration and Compose networking are unchanged from `b4cf640`.
 
-At `07c7b41`:
+At `56ac2cc`:
 
 - Doctor 4× PASS before and after the deployment. All four containers were
   healthy, and the applier shared the WireGuard namespace.
@@ -153,7 +155,7 @@ At `07c7b41`:
 - One switch to another server in the same city showed switch progress and
   reached connected about 2.4 s after the confirming click.
 
-**Fixed after the pass**, in `0d518e4`:
+**Fixed after the pass**, in `40c461c`:
 
 - a RAM-only filter that hid nothing, because every relay was RAM-only;
 - a Switch button offered for the server a switch was already moving to;
@@ -161,7 +163,7 @@ At `07c7b41`:
 - the Diagnostics arrow spacing;
 - browsers requesting a missing `/favicon.ico`.
 
-At `0d518e4`: doctor 4× PASS before and after, the exit returned on the same
+At `40c461c`: doctor 4× PASS before and after, the exit returned on the same
 server, and the catalogue refreshed. The page offered only the Mullvad-owned
 filter, declared its icon, and made no `/favicon.ico` request. It showed no
 console errors and kept the address together when the line wrapped, in both
