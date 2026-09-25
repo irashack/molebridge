@@ -130,6 +130,51 @@ for the engine's 10-second timeout and then killed it. The panel now handles
 `SIGTERM` and exits cleanly; this is a panel-only change, with routing, the
 applier and Compose unchanged from `5a6e0b5`.
 
+## Panel switcher pass at `07c7b41` and `0d518e4`
+
+2026-09-25, the same Debian 13 / rootless Podman host, with each revision
+deployed by pinning it in the owner's deployment tooling. That tooling
+recreates all four containers on every pin change. Routing, the tunnel
+configuration and Compose networking are unchanged from `b4cf640`.
+
+At `07c7b41`:
+
+- Doctor 4× PASS before and after the deployment. All four containers were
+  healthy, and the applier shared the WireGuard namespace.
+- The live relay catalogue carried `owned`, `stboot` and `provider` with the
+  expected types on every active relay: 536 relays, 113 Mullvad-owned, and
+  all reported RAM-only at the time. Inactive relays were excluded as before.
+- Panel in Chromium through an SSH forward:
+  - Saved stayed hidden until a server was pinned.
+  - The Mullvad-owned filter narrowed the list.
+  - An opened country showed its Fastest row.
+  - Escape cancelled an armed switch.
+  - Both themes rendered correctly at desktop width and at 390 px.
+- One switch to another server in the same city showed switch progress and
+  reached connected about 2.4 s after the confirming click.
+
+**Fixed after the pass**, in `0d518e4`:
+
+- a RAM-only filter that hid nothing, because every relay was RAM-only;
+- a Switch button offered for the server a switch was already moving to;
+- the current-exit line wrapping after its separator on a phone;
+- the Diagnostics arrow spacing;
+- browsers requesting a missing `/favicon.ico`.
+
+At `0d518e4`: doctor 4× PASS before and after, the exit returned on the same
+server, and the catalogue refreshed. The page offered only the Mullvad-owned
+filter, declared its icon, and made no `/favicon.ico` request. It showed no
+console errors and kept the address together when the line wrapped, in both
+themes.
+
+Not tested live:
+
+- the Switch-button fix, which needs a switch in progress;
+- Retry, since no switch failed;
+- fixed `PANEL_THEME=light` and `dark`, since only `auto` was used;
+- screen readers beyond the announcement text;
+- phone clients.
+
 ## Not yet tested
 
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
