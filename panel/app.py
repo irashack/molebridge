@@ -656,7 +656,7 @@ def render_index_html(
 # --------------------------------------------------------------------------
 
 class PanelHandler(http.server.BaseHTTPRequestHandler):
-    server_version = 'molebridge-panel/0.1'
+    server_version = 'molebridge-panel/0.2'
     protocol_version = 'HTTP/1.1'
 
     def setup(self):
