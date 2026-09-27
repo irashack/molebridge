@@ -332,14 +332,14 @@ if ! command -v nft >/dev/null 2>&1; then
     exit 0
 fi
 restore_routes
-python3 - "$work" <<'PY'
+python3 - "$work" "$overlay_if" <<'PY'
 import sys, tempfile
 from pathlib import Path
 from applier.pia import PiaApplier
 from molebridge.routing import RoutingConfig
 work = Path(sys.argv[1])
 captured = []
-config = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64')
+config = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64', overlay_if=sys.argv[2])
 applier = PiaApplier(Path(tempfile.mkdtemp()), config, port_forward=True, forward_target='192.0.2.2',
                      run=lambda args, **kw: captured.append(Path(args[2]).read_text()) or '')
 applier.install_guard()

@@ -341,7 +341,12 @@ class PiaApplier(Applier):
         retry = self.retry_registration()
         result = retry or result
         if self.port_forward:
-            self.maintain_forward()
+            if self.guard_installed and self.forward_reconciled:
+                self.maintain_forward()
+            else:
+                # Never forward a port before the ingress guard is in place,
+                # nor before the leftover cleanup that would delete new rules.
+                self.forward_error = 'Waiting for the ingress guard; port forwarding is not started.'
         return result
 
     def switch(self, request):

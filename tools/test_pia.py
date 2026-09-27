@@ -585,6 +585,31 @@ def test_failed_guard_or_cleanup_is_retried(runtime, monkeypatch):
     assert any(GUARD in text for text in kernel.nft) and REMOVE_FORWARD in kernel.nft
 
 
+def test_no_forwarding_until_guard_and_cleanup_succeed(forwarding):
+    applier, kernel = forwarding
+    real = kernel.run
+
+    def no_nft(args, **kwargs):
+        if args[0] == 'nft':
+            kernel.calls.append(args)
+            raise RuntimeError('command failed')
+        return real(args, **kwargs)
+    applier.run = no_nft
+    desire(applier)
+    applier.tick()
+    assert applier.forward is None and 'guard' in applier.forward_error
+    assert not any(c[-1].endswith(('/getSignature', '/bindPort')) for c in kernel.calls)
+    applier.run = real
+    kernel.now += 1
+    applier.tick()
+    assert applier.forward['bound'] and 'dnat' in kernel.nft[-1]
+    # The cleanup already ran, so the next tick keeps the new rules.
+    loads = len(kernel.nft)
+    kernel.now += 1
+    applier.tick()
+    assert len(kernel.nft) == loads
+
+
 def test_interrupted_switch_is_repaired_before_the_next_one(runtime):
     applier, kernel = runtime
     applier.switch(request())
