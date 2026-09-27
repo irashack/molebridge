@@ -211,6 +211,29 @@ Not tested live: port forwarding against PIA (the isolated drill covers the
 nftables DNAT and the ingress guard); a PIA server forgetting the key mid-run;
 a stale-catalogue period; phone clients.
 
+## Switchyard pass at `4eda8ff`
+
+2026-09-27, the same host, with one extra panel container serving the Mullvad
+and PIA exits above (`PANEL_EXITS=mullvad=mullvad:Mullvad,pia=pia:PIA`),
+published through an authenticating proxy and embedded in a dashboard. Both
+exits stayed on their own revision, `b2a0a02`.
+
+- `/api/exits` listed both exits connected, with their places. `/readyz`
+  answered 200. `/` redirected to `/?exit=<id>`, each exit rendered in its
+  provider's layout (Mullvad's tree, PIA's region list), and the embed carried
+  the configured `frame-ancestors`.
+- A selection posted through the proxy for each exit (its current location
+  again) was written to that exit's `desired.json`, acknowledged by its
+  applier, and verified connected within a minute. The other exit was
+  untouched.
+- Headless Chrome screenshots of the full page, a phone width and the embed,
+  in both styles and both themes, including the armed and failed states, using
+  `tools/preview-panel.py`. Stopping the panel under an open page turned every
+  exit tab to "status unavailable" on the next poll.
+
+Not tested live: a switch to a different location through Switchyard; phone
+home-screen installation of the multi-exit page.
+
 ## Not yet tested
 
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
