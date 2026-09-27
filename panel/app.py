@@ -963,8 +963,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
                 # Always name the exit in the address: the page reloads itself,
                 # and a reload must not follow another tab's choice.
                 ex = find_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME)) or EXITS[0]
+                page = '/embed' if parsed.path == '/embed' else '/'
                 self._send_body(303, 'text/plain; charset=utf-8', b'',
-                                {'Location': f'{parsed.path}?exit={ex.id}', 'Cache-Control': 'no-store'})
+                                {'Location': f'{page}?exit={ex.id}', 'Cache-Control': 'no-store'})
                 return
             self._handle_index(query, embed=parsed.path == '/embed')
         elif parsed.path == '/manifest.webmanifest':
