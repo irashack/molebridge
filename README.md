@@ -1,167 +1,170 @@
 <p align="center">
-  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge — Stay on NetBird. Exit through Mullvad." width="1000">
+  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge: stay on NetBird, exit through Mullvad or PIA" width="1000">
 </p>
 
 <p align="center">
-  <strong>A small, self-hosted Mullvad exit for your NetBird mesh.</strong><br>
-  One Compose project. One Mullvad device. A server picker you can use from your phone.
+  <strong>A self-hosted NetBird exit node that sends traffic through Mullvad or PIA.</strong>
 </p>
 
 <p align="center">
-  <a href="docs/setup.md"><strong>Get started</strong></a> ·
-  <a href="docs/access.md">Panel access</a> ·
+  <a href="docs/setup.md"><strong>Setup</strong></a> ·
+  <a href="docs/prerequisites.md">Requirements</a> ·
+  <a href="docs/switchyard.md">The panel</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
-  <a href="https://github.com/irashack/molebridge/actions/workflows/ci.yml">CI</a>
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
 
-## Your mesh, with a Mullvad exit
+Phones can usually run only one VPN at a time, so turning on Mullvad or PIA
+means turning off NetBird. Molebridge moves the commercial VPN tunnel onto a
+machine you keep running. That machine joins your NetBird network as an exit
+node. Your devices stay on NetBird, select the exit, and their Internet
+traffic leaves through the VPN provider.
 
-On a phone, turning on the Mullvad VPN usually means disconnecting NetBird.
-Molebridge moves the Mullvad tunnel to an always-on machine you run. Your devices
-stay on NetBird and select that machine as their exit node.
+You choose the server (Mullvad) or region (PIA) in a small web panel called
+Switchyard. Every device using the exit follows the switch without any client
+changes. Connections open through the exit drop when it switches.
 
-Pick a Mullvad server in the web panel, and every device using the exit follows.
-No client reconfiguration when you switch; existing connections through the
-exit will drop.
+<p align="center">
+  <img src="docs/assets/switchyard.png" alt="Switchyard, showing a Mullvad exit and a PIA exit as tabs" width="900">
+</p>
 
-| | What you get |
-| :--- | :--- |
-| **Stay connected** | Keep NetBird active while sending exit traffic through Mullvad. |
-| **Pick your exit** | Browse countries and cities, compare measured latency, pin favourites, filter by hosting, and switch servers. |
-| **Run several** | One Switchyard panel can serve a Mullvad exit and a PIA exit side by side, each in its provider's colours and layout. |
-| **Make it fit** | Embed the panel in a dashboard, install it as a home-screen app, and use it in light or dark mode. |
-| **Keep it small** | Four containers, a Python standard-library panel, and dependency-free front-end code. |
-| **See what is happening** | Freshness-aware status, verified egress, and host-side doctor and recovery commands. |
-
-## The traffic path
+## How it works
 
 ```mermaid
 flowchart LR
-    device("Your devices<br/>NetBird connected")
-    mullvad("Mullvad server<br/>Internet egress")
+    device("Your devices<br/>on NetBird")
+    provider("Mullvad or PIA<br/>server")
 
-    subgraph host["Your exit host · shared network namespace"]
+    subgraph host["Exit host · one shared network namespace"]
         peer("NetBird<br/>exit peer")
         route("Policy<br/>routing")
         tunnel("WireGuard<br/>tunnel")
-        blocked("Tunnel unavailable<br/>Unreachable")
+        blocked("Tunnel down:<br/>unreachable")
         peer --> route
         route --> tunnel
         route -.-> blocked
     end
 
     device --> peer
-    tunnel --> mullvad
+    tunnel --> provider
 
     classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
     classDef routing fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
     classDef stopped fill:#24273a,stroke:#ed8796,color:#f4dbd6,stroke-width:2px
-    class device,peer,mullvad endpoint
+    class device,peer,provider endpoint
     class route,tunnel routing
     class blocked stopped
     style host fill:#1e2030,stroke:#494d64,color:#cad3f5
     linkStyle default stroke:#8087a2,stroke-width:2px
 ```
 
-The exit's own NetBird and Mullvad control connections use its normal network
-path. Forwarded client traffic uses a dedicated tunnel table, with unreachable
-fallback routes and a terminal routing rule if the table or its lookup disappears.
+Three containers share one network namespace: the WireGuard tunnel, a NetBird
+peer, and an "applier" that controls the tunnel. The fourth, the panel, runs
+outside it. Traffic forwarded from your devices can only go into the tunnel.
+If the tunnel or its routes disappear, that traffic is dropped; it never falls
+back to the host's own connection. The exit's own NetBird and VPN control
+traffic uses the host's normal route.
 
-**The panel stays outside that namespace.** It has no capabilities and writes
-only a desired server request. The trusted applier validates the request against
-its own Mullvad relay catalogue, updates the live peer, and publishes status for
-the panel to read. See the [full architecture](docs/architecture.md) for the
-routing and privilege boundaries.
+The panel holds no privileges. It writes one file naming the server you
+picked. The applier checks that name against the provider's server list,
+which the applier downloads itself, then changes the tunnel and reports back.
+Details: [architecture](docs/architecture.md).
 
 ## What you need
 
-You need a container host with Compose (Docker Engine, or rootless Podman with
-podman-compose), a NetBird account, a Mullvad account with one free device
-slot, and an authenticated way to reach the panel.
+- **An always-on Linux host**, amd64 or arm64, with kernel WireGuard (Linux
+  5.6 or later). Rootless Podman with podman-compose is tested, and so is macOS
+  with OrbStack. Docker Engine with Compose 2.24 or later should work but
+  hasn't been tested end to end. Windows hosts are not supported.
+- **Resources:** on the tested host the four containers use about 100 MB of
+  RAM between them, and the images take about 500 MB of disk. Every byte your
+  devices send crosses the host twice, so the host's upload speed caps
+  throughput.
+- **A NetBird network**, either NetBird Cloud or self-hosted, with admin
+  access to create groups, a policy, a setup key and an exit-node route.
+- **A VPN account:**
+  - Mullvad, which uses one free device slot;
+  - or PIA, which needs your username and password on the host.
+- **A way to reach the panel with authentication.** The panel has no login of
+  its own; see [panel access](docs/access.md).
+- **Python 3.10 or later on the host**, for the setup and maintenance helpers.
 
-1. **[Check the prerequisites](docs/prerequisites.md)** — accounts, host support,
-   and NetBird groups and routes.
-2. **[Set up Molebridge](docs/setup.md)** — prepare the tunnel configuration,
-   enroll the exit peer, and start the containers.
-3. **[Verify the exit](docs/verification.md)** — check real client traffic, both
-   address families, DNS, and failure behavior before relying on it.
+The full list, with the NetBird groups, the outbound ports and the rootless
+Podman details, is in [requirements](docs/prerequisites.md).
 
-## Know the boundary
+## Limits
 
-| Boundary | What it means for your deployment |
+- **The panel has no login.** Anyone who can reach it can change the exit for
+  every device that uses it. Reach it through an SSH tunnel or an
+  authenticating proxy.
+- **This is not a kill switch on your devices.** The exit fails closed for
+  traffic it receives. If a device deselects the exit or NetBird disconnects,
+  that device uses its own connection.
+- **DNS is untouched.** Devices keep their own resolvers, so a DNS leak test
+  may show your usual resolver.
+- **Mullvad and PIA only.** Other providers aren't supported. Some could be
+  added if there's interest; [other providers](docs/other-providers.md) says
+  which, and what that support would realistically look like.
+- **One provider per exit.** To offer both Mullvad and PIA, run two exits on
+  the same host and serve both from one [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
+- **PIA is IPv4 only.** Its port forwarding is experimental and opens a port
+  to the Internet.
+- **No automatic failover.** Molebridge never moves the exit to a different
+  server or region by itself. (PIA re-registers within the same region when
+  its server stops answering.)
+- **NetBird only.** It relies on NetBird's exit-node routes and was never
+  built or tested for Tailscale or other overlays.
+
+## Status
+
+Molebridge is experimental, with one maintainer. Run a release or a pinned
+commit, and verify it on your own host before you rely on it. The latest
+release is [v0.2.0](https://github.com/irashack/molebridge/releases/tag/v0.2.0).
+PIA support and multi-exit panels are on `main` and not yet in a release; see
+the [changelog](CHANGELOG.md).
+
+| Setup | Tested |
 | :--- | :--- |
-| **Panel access** | The panel has **no login**. It binds to loopback by default. Use [authenticated access](docs/access.md); anyone who reaches it can change the shared exit. |
-| **Routing protection** | The guards protect traffic received by the exit. They are not a device-wide kill switch when NetBird disconnects or the exit is deselected. |
-| **Client privacy** | DNS stays under your client and NetBird account configuration. Verify DNS and IPv6 on every client; a healthy server probe cannot prove the whole client path. |
-| **Trusted components** | Docker, the host, NetBird, and the applier are privileged. The applier has no config-file mount, but its namespace privileges can retrieve the live WireGuard key. |
+| Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64, self-hosted NetBird 0.79: Mullvad | A client held on the exit through all six failure drills, a host reboot with unattended recovery, LAN isolation, and a clean install from the published files. |
+| The same host: PIA | First start, recreation, a client held on the exit through a tunnel-down drill, IPv6 and LAN isolation, and region switches. |
+| The same host: Switchyard | One panel serving the Mullvad and PIA exits, with a selection verified on each. |
+| macOS, OrbStack, Apple silicon, self-hosted NetBird 0.78: Mullvad | An earlier live pass; the six defects it found are fixed. |
+| CI on every push | Unit tests, shell lint, Compose validation, image builds, and IPv4/IPv6 routing failure drills in isolated namespaces. |
+| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, and PIA port forwarding against PIA itself. |
 
-Restrict the NetBird exit route to the devices that should use it. Distribution
-groups and access policy are covered in the [NetBird prerequisites](docs/prerequisites.md#netbird).
+The dated record of each pass is in [testing](docs/testing.md). Report
+vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
-## Project status
+## Documentation
 
-**Early, experimental, and still being verified.**
+**Install**
+- [Requirements](docs/prerequisites.md): accounts, host, NetBird groups and ports.
+- [Setup](docs/setup.md): from an empty checkout to a working exit.
+- [Verification](docs/verification.md): the checks and failure drills to run before you rely on it.
+- [Panel access](docs/access.md): SSH forwarding or an authenticating proxy.
 
-| Where | Verification so far |
-| :--- | :--- |
-| **macOS / OrbStack** | Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients. A live pass ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `1390860`; its six findings, including the path-MTU return path for UDP, are fixed in `1390860` through `336d904`. |
-| **Automated checks** | On every push: Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. Latest results: [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
-| **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64, NetBird 0.79, self-hosted. At `5a6e0b5`: all six fail-closed drills with a client held on the exit (no leak during any drill or the reboot), host reboot with unattended recovery, LAN isolation from the client, and the IPv6 path-MTU error leaving through the tunnel. A clean install of the unchanged `compose.yaml` started, passed doctor and survived the documented recovery. The v0.2.0 panel changes passed a live pass at `56ac2cc` and `40c461c`: doctor before and after each deployment, the live relay attributes, and one verified switch. Record: [testing](docs/testing.md). |
-| **PIA** | Experimental. On the rootless Podman host above at `0165147`: first start, recreation, a client held on the exit through a tunnel-down drill and recovery, IPv6 and LAN isolation, and live region switches ([testing](docs/testing.md#pia-pass-at-0165147)). Port forwarding is covered by the isolated drills only. See [providers](docs/providers.md). |
-| **Still unverified** | A live UDP flow larger than the overlay MTU, fail-closed drills with a phone client, and Docker Engine or NetBird Cloud end to end. |
+**Use**
+- [Switchyard](docs/switchyard.md): switching, embedding in a dashboard, phones, several exits.
+- [Operations](docs/operations.md): health, upgrades, recovery, backups, rootless Podman, removal.
+- [Troubleshooting](docs/troubleshooting.md): symptoms and fixes.
 
-Molebridge is experimental. The latest release is
-[v0.2.0](https://github.com/irashack/molebridge/releases/tag/v0.2.0); run a
-release or another pinned revision and verify it on your own host. Report vulnerabilities privately as described
-in [SECURITY.md](SECURITY.md).
+**Reference**
+- [Configuration](docs/configuration.md): every setting, file and endpoint.
+- [Providers](docs/providers.md): how PIA differs from Mullvad, port forwarding, adding a provider.
+- [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
+- [Architecture](docs/architecture.md): routing, trust boundaries and the switching sequence.
+- [Testing](docs/testing.md): what has been tested, where and at which revision.
 
-## Find your way around
-
-| Guide | Start here when you want to… |
-| :--- | :--- |
-| [Setup](docs/setup.md) | Install a fresh exit. |
-| [Authenticated access](docs/access.md) | Reach the panel through SSH, an overlay policy, or an authenticating proxy. |
-| [Operations](docs/operations.md) | Switch servers, embed the panel, upgrade, or recover the stack. |
-| [Configuration](docs/configuration.md) | Look up a setting, secret-file location, or state-file format. |
-| [Providers](docs/providers.md) | Use PIA instead of Mullvad, or add another provider. |
-| [Architecture](docs/architecture.md) | Understand routing, catalogue ownership, and privilege separation. |
-| [Switchyard](docs/switchyard.md) | Run one panel for several exits, such as a Mullvad exit and a PIA exit. |
-| [Provider candidates](docs/provider-candidates.md) | See which providers could come next and what each would take. |
-| [Verification](docs/verification.md) | Test client privacy and deliberately break the tunnel. |
-| [Testing](docs/testing.md) | See what has been tested, and validate a new revision on your host. |
-
-<details>
-<summary><strong>Working on Molebridge</strong></summary>
-
-The panel uses only the Python standard library, and its front end has no
-package dependencies. Start with [AGENTS.md](AGENTS.md) and the
-[architecture](docs/architecture.md).
-
-```sh
-python3 -m venv .venv
-.venv/bin/pip install pytest==9.1.1 PyYAML==6.0.3
-.venv/bin/python -m pytest -q panel tools
-
-for script in routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh; do
-  sh -n "$script"
-done
-shellcheck -S warning routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh
-docker compose --env-file .env.example config --quiet
-```
-
-On a disposable Linux host, `sudo sh tools/check-routing.sh` exercises forwarding
-and failure handling in isolated namespaces without accounts or real endpoints.
-These checks complement the real NetBird/Mullvad client drills; they do not
-replace them.
-
-</details>
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-Built around [WireGuard's network namespace model](https://www.wireguard.com/netns/).
-Molebridge is not affiliated with Mullvad VPN AB or NetBird. The bundled
-JetBrains Mono font uses the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt);
-the bundled PIA certificate authority comes with [PIA's MIT notice](applier/PIA-CA-LICENSE.txt);
-the rest of Molebridge is released under the [MIT License](LICENSE).
+Molebridge isn't affiliated with Mullvad VPN AB, Private Internet Access or
+NetBird. Their names are used only to say what Molebridge works with. The
+panel's provider styling uses colors only, with no logos or copied assets.
+Molebridge is released under the [MIT License](LICENSE). The bundled
+JetBrains Mono font is under the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt),
+and the bundled PIA certificate authority comes with
+[PIA's MIT notice](applier/PIA-CA-LICENSE.txt).

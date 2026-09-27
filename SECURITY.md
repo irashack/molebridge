@@ -21,14 +21,18 @@ Reports are handled on a best-effort basis, with no guaranteed response time.
 
 Anything that breaks the properties in [the architecture](docs/architecture.md):
 
-- forwarded client traffic leaving by any path other than the Mullvad tunnel
-  (a fail-open), for either address family;
+- forwarded client traffic leaving by any path other than the provider's
+  tunnel (a fail-open), for either address family;
 - the panel gaining privileges, running commands, or changing anything other
   than the desired server request;
-- the applier acting on unvalidated relay-list, desired-state or form input;
-- disclosure of the WireGuard key, the NetBird identity or other secrets.
+- the applier acting on unvalidated server-list, provider API, desired-state
+  or form input;
+- disclosure of the WireGuard key, the NetBird identity, the PIA login or
+  other secrets;
+- with PIA port forwarding on, forwarded inbound connections reaching
+  anything other than the configured overlay target.
 
-The documented [boundaries](README.md#know-the-boundary) are not
+The documented [boundaries](README.md#limits) are not
 vulnerabilities in themselves: the panel has no login of its own, the routing
 guards are not a device-wide kill switch, and client DNS stays under client
-and NetBird configuration.
+and NetBird configuration. Neither is a PIA port you deliberately forward.

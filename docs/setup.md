@@ -1,53 +1,85 @@
 # Setup
 
-Assumes everything in [prerequisites](prerequisites.md). Commands run from the
-repository root on the host.
+This takes an empty checkout to a working exit. It assumes everything in
+[requirements](prerequisites.md) is ready. Run the commands from the
+repository root on the host. On rootless Podman, use `podman-compose` wherever
+this page says `docker compose`.
 
-## 1. Configure
+Plan for about half an hour, most of it in the NetBird dashboard.
+
+## 1. Get the code and configure
+
+Check out a release tag, or a specific commit you've looked at, rather than
+whatever `main` happens to be:
 
 ```sh
+git clone https://github.com/irashack/molebridge.git
+cd molebridge
+git checkout v0.2.0      # the latest release
+
 cp .env.example .env
 mkdir -p state/panel state/applier secrets tunnel/wg_confs
 chmod 700 secrets tunnel/wg_confs
 ```
 
-Edit `.env`. At minimum set `OVERLAY_CIDR` (and `OVERLAY6_CIDR` if you use IPv6
-overlay), `PUID`/`PGID` (from `id -u` and `id -g`), `PANEL_USER`, `NB_HOSTNAME`,
-and `NB_MANAGEMENT_URL` if you self-host NetBird. Every setting is described in
-[configuration](configuration.md). On Docker, `PANEL_USER` is your
-`PUID:PGID`; on rootless Podman it is `0:0`.
+PIA support and multi-exit panels arrived after v0.2.0. Until the next
+release, use them from a specific `main` commit.
 
-The routing init script is bundled root-owned in its image. Your checkout can
-remain owned by your normal user. Make sure `state/panel` is owned and writable
-by the `PUID`/`PGID` selected above; create it as that user.
+Edit `.env`. The settings you must set:
+
+| Setting | Value |
+|---|---|
+| `OVERLAY_CIDR` | Your NetBird peer range |
+| `OVERLAY6_CIDR` | Your NetBird IPv6 range, if you have one |
+| `PUID`, `PGID` | The output of `id -u` and `id -g` |
+| `PANEL_USER` | `PUID:PGID` on Docker; `0:0` on rootless Podman |
+| `NB_HOSTNAME` | The peer name the exit should have in NetBird |
+| `NB_MANAGEMENT_URL` | Your management URL, if you self-host NetBird |
+| `PROVIDER`, `EXIT_IF`, `COMPOSE_FILE` | For PIA only: `pia`, `pia`, `compose.yaml:compose.pia.yaml` |
+
+Everything else can wait; [configuration](configuration.md) lists every
+setting. Create `state/panel` as the same user as `PUID`/`PGID`.
 
 ## 2. Create the tunnel config
 
-For PIA, follow [setting up PIA](providers.md#setting-up-pia) for this step
-instead.
+**Mullvad.** Convert the file you downloaded, then delete the original:
 
 ```sh
-tools/prepare-tunnel-config.py ~/Downloads/<mullvad-download>.conf &&
-  rm ~/Downloads/<mullvad-download>.conf
+python3 tools/prepare-tunnel-config.py ~/Downloads/<your-file>.conf &&
+  rm ~/Downloads/<your-file>.conf
 ```
 
-This writes `tunnel/wg_confs/mullvad.conf` (mode 0600). It keeps the key,
-tunnel addresses and chosen server, drops the DNS line, and replaces
-WireGuard's automatic routing with the exit table that `routing/10-exit-routing`
-guards. It prints no key material.
+This writes `tunnel/wg_confs/mullvad.conf` with mode 0600. It keeps the key,
+the tunnel addresses and the starting server, and drops the DNS line.
+WireGuard's own routing is replaced by the exit table that the routing script
+guards. Nothing secret is printed.
+
+**PIA.** Generate a key, then store the login, one value per file:
+
+```sh
+python3 tools/prepare-tunnel-config.py --pia
+
+mkdir -p secrets/pia && chmod 700 secrets/pia
+(umask 077; printf '%s' 'p1234567' > secrets/pia/username)
+(umask 077; read -rs pia_password && printf '%s' "$pia_password" > secrets/pia/password)
+```
+
+Replace `p1234567` with your username, and type the password at the prompt,
+so it stays out of your shell history. `--pia` writes `tunnel/wg_confs/pia.conf`,
+which holds only the private key, and refuses to overwrite an existing one.
 
 ## 3. Add the NetBird setup key
 
-Create `secrets/netbird.env` with an editor, so the key never appears in shell
-history or process arguments:
+Open `secrets/netbird.env` in an editor, so the key never lands in shell
+history:
 
 ```sh
 (umask 077 && ${EDITOR:-vi} secrets/netbird.env)
 ```
 
-It contains one line: `NB_SETUP_KEY=` followed by the key.
+Write one line: `NB_SETUP_KEY=` followed by the key.
 
-## 4. Start the exit (no route yet)
+## 4. Start the exit, without a route yet
 
 ```sh
 docker compose build wireguard applier
@@ -56,90 +88,90 @@ docker compose ps
 docker compose logs wireguard | grep 10-exit-routing
 ```
 
-All three should become healthy, and the routing log should show `rules installed`.
-If the routing script refuses to start, it names the setting it rejected.
-The WireGuard healthcheck requires a completed routing initialization before
-NetBird can start. Applier health checks freshness and routing, not client DNS
-or end-to-end connectivity. The peer enrolls with the Mullvad interface
-already excluded from ICE (step 5 explains why that matters).
+The log should end with `rules installed`, and `wireguard` and `netbird`
+should become healthy. With Mullvad, `applier` becomes healthy too, once it
+has verified the starting server. With PIA, `applier` stays unhealthy until
+you pick a region in step 7, because a fresh PIA tunnel has no peer yet. If
+the routing script refuses to start, it names the setting it rejected
+([troubleshooting](troubleshooting.md#startup)).
 
-In NetBird, confirm the peer `NB_HOSTNAME` appears and is in `exit-nodes`. Then
-delete `secrets/netbird.env` (the peer's identity now lives in the
-`netbird-data` volume) and revoke the setup key if it was reusable.
+In the NetBird dashboard, check that the peer appears under `NB_HOSTNAME` and
+is in `exit-nodes`. Then delete `secrets/netbird.env`: the peer's identity now
+lives in the `netbird-data` volume. Revoke the setup key if it was reusable.
 
 ## 5. Keep ICE off the tunnel interface
 
-Required, not a tuning step. The exit peer shares its network namespace with
-the Mullvad tunnel, so by default NetBird gathers ICE candidates on the tunnel
-interface too. `compose.yaml` excludes it from the first enrollment:
-`NB_EXTRA_IFACE_BLACKLIST=mullvad` binds NetBird's `--extra-iface-blacklist`
-flag on the first `netbird up`, so a peer enrolled with this file has the
-exclusion before it exchanges a candidate with anyone.
+This step is required. NetBird shares a network namespace with the tunnel, so
+by default it looks for connection candidates on the tunnel interface too.
+That has two effects. Direct connections fail and clients fall back to a
+relay. Worse, the exit's VPN tunnel address can be offered to other peers.
 
-The environment variable works only at enrollment. NetBird stores the
-blacklist in the peer's own configuration, and that stored value wins over
-`NB_*` environment variables once the peer has enrolled. A peer enrolled with
-an older `compose.yaml`, or re-enrolled without the variable, gets the
-exclusion from the flag instead:
+A peer enrolled with this repository's `compose.yaml` already has the tunnel
+interface blacklisted: `NB_EXTRA_IFACE_BLACKLIST` sets it on the first
+enrollment. Check it:
+
+```sh
+python3 tools/molebridge.py doctor
+```
+
+Doctor checks the blacklist before the provider checks. On a PIA exit, the
+provider checks fail until you pick a region in step 7; that's expected here.
+If doctor reports the interface missing from the blacklist, set it with the
+flag. This is needed for a peer enrolled with an older Compose file, or
+re-enrolled without the variable:
 
 ```sh
 docker compose exec netbird netbird down
 docker compose exec netbird netbird up --extra-iface-blacklist mullvad
 ```
 
-Two things go wrong without it, and the second is the serious one:
+Use your `EXIT_IF` in place of `mullvad` (`pia` for PIA).
 
-- **P2P stops being attempted.** A candidate gathered on the tunnel interface
-  can never complete a STUN exchange: traffic sourced from the tunnel address
-  either goes into the tunnel, which is not a path to the signalling server,
-  or leaves the host with a source address nothing will answer. NetBird logs
-  `wait for gathering timed out`, then `ICE retries exhausted (3/3), switching
-  to hourly retry`, and makes no further direct attempt for an hour. Every
-  client is relayed in the meantime.
-- **The tunnel address can leak into signalling.** With the interface in play,
-  NetBird can offer the exit's Mullvad tunnel address to peers as an ICE
-  candidate. Keeping that address inside the tunnel is the point of the
-  product.
+The setting is stored in the peer's own configuration in the `netbird-data`
+volume. It survives restarts and recreation, and environment variables can't
+change it afterwards. [Architecture](architecture.md#routing-contract) explains
+the failure in more detail.
 
-The setting lives in the `netbird-data` volume (`IFaceBlackList` in the stored
-client configuration; `default.json` on NetBird 0.78), so it survives restarts
-and recreation. It does **not** survive a re-enrollment made with a Compose
-file that lacks the variable: re-apply the flag any time the peer identity is
-recreated that way. No `netbird` command prints the stored blacklist
-(`netbird debug config` omits it); `python3 tools/molebridge.py doctor` reads
-that one field from the profile and fails, naming the commands above, when
-the exit interface is missing.
+On rootless Podman, doctor isn't available. Read the one field by hand, as
+shown in [operations](operations.md#rootless-podman).
 
-## 6. Verify before trusting it
+## 6. Check the namespace
 
-Run the namespace checks in [verification](verification.md#inside-the-namespace)
-now, before any client can route through the exit.
+Run the checks in [verification](verification.md#inside-the-namespace) now,
+while no device can route through the exit yet. With PIA, the egress check
+needs a region, so come back to it after step 7.
 
-## 7. Create the route and try a client
+## 7. Start the panel
 
-Create the exit node route and access policy from
-[prerequisites](prerequisites.md#netbird). On a device in `exit-users`, select
-the exit in the NetBird client and open <https://am.i.mullvad.net>. It should
-report a Mullvad exit IP in the starting server's city. Then run the
-[client checks](verification.md#from-a-client).
-
-## 8. Start the panel
-
-Choose an [authenticated access method](access.md). For a proxy, set
-`PANEL_PUBLIC_HOSTS` to its public hostname. For the SSH-forwarding example it
-can be empty. Then:
+Choose an [access method](access.md). Behind a proxy, set `PANEL_PUBLIC_HOSTS`
+to its public hostname. For SSH forwarding you can leave it empty. Then:
 
 ```sh
 docker compose up -d control-panel
 ```
 
-If using a host-side proxy, point it at `http://127.0.0.1:${PANEL_PORT}`. The
-applier fetches the catalogue and identifies the downloaded config's running
-peer; the first load may take a few seconds. The panel reads that state and
-does not maintain its own catalogue. No initial selection is needed.
+A proxy on the host should forward to `http://127.0.0.1:${PANEL_PORT}` (8095
+by default). The first page load can take a few seconds while the applier
+fetches the server list.
 
-Run `python3 tools/molebridge.py doctor` once the stack is running, then
-complete the real client checks; a passing doctor alone is not a leak test.
+With PIA, choose a region now. Until you do, the exit reports "No PIA region
+is registered yet" and carries no traffic.
 
-Next: [operations](operations.md) covers switching, dashboard embedding,
-installing on a phone, and failure handling.
+## 8. Create the route and try a device
+
+In NetBird, create the exit-node route and the access policy described in
+[requirements](prerequisites.md#netbird). On a device in `exit-users`, select
+the exit in the NetBird client and open the provider's check page:
+
+- Mullvad: <https://mullvad.net/check> should show a Mullvad server in the
+  starting server's city.
+- PIA: PIA's own "what is my IP" page, or any IP check, should show an
+  address in the region you picked.
+
+Then run the [client checks](verification.md#from-a-client), and finish with
+`python3 tools/molebridge.py doctor`. A passing doctor isn't a leak test; the
+[verification](verification.md) drills are.
+
+
+Next: [Switchyard](switchyard.md) covers using the panel, and
+[operations](operations.md) covers upgrades, recovery and boot on Podman.

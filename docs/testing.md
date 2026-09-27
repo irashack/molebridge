@@ -1,17 +1,14 @@
 # Testing
 
-Unit tests and the isolated Linux namespace drills in CI do not establish that a
-whole NetBird/Mullvad deployment works. This page records what has been tested
-on real hosts, and the pass to run on your own host before trusting a new
-revision.
+This page records tests on real hosts and the gaps that remain. Unit tests
+and isolated Linux namespace drills in CI do not establish that a whole
+NetBird deployment works with either provider.
 
-Revisions are given by their published hashes. The passes before 2026-09-24
-ran on pre-publication hashes that a metadata-only history rewrite replaced;
-each has an identical tree on `main` (`ae95c33` is `1390860`, `984a703` is
-`336d904`, `afa8594` is `4739352`). CI results quoted for those revisions ran
-on the old hashes. The panel switcher pass ran on branch hashes that the
-rebase merge replaced, again with identical trees (`07c7b41` is `56ac2cc`,
-`0d518e4` is `40c461c`).
+Published hashes below map to identical trees from before the metadata-only
+history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
+`afa8594` → `4739352`; their quoted CI runs used the old hashes. The panel
+switcher revisions were replaced by a rebase merge, also with identical trees:
+`07c7b41` → `56ac2cc` and `0d518e4` → `40c461c`.
 
 ## macOS / OrbStack pass
 
@@ -188,11 +185,13 @@ authentication on.
 - First start: the applier minted a token, registered the key in the seeded
   region, and reported healthy with PIA confirming the egress. Doctor 4× PASS.
   The applier logged nothing; the login and token appear in no state file.
-- Namespace: rules 90 and 94–97 in both families, with rule 94 naming the
-  PIA-assigned address; table 51821 held the tunnel default for IPv4 and only
-  the unreachable fallback for IPv6; the tunnel had one IPv4 address and no
-  global IPv6 address; `inet molebridge_guard` sat beside NetBird's own
-  iptables tables.
+- Namespace, observed 2026-09-27 on this exit: IPv4 holds rules 90, 94, 95,
+  96 and 97, with rule 94 naming the PIA-assigned address. IPv6 holds rules
+  90, 95, 96 and 97, with no rule 94. Table 51821 holds the tunnel default
+  for IPv4 and only the unreachable fallback for IPv6. The tunnel has one
+  IPv4 address and no global IPv6 address; `inet molebridge_guard` sits beside
+  NetBird's own iptables tables. The host has the `nf_tables` and `wireguard`
+  modules loaded.
 - A full recreation of the four containers registered the saved region again
   with no intervention.
 - A temporary Linux NetBird client selected the exit (`0.0.0.0/0` and `::/0`):
@@ -247,65 +246,14 @@ home-screen installation of the multi-exit page.
 
 ## Validating a new revision
 
-### Prepare
+Follow [backups](operations.md#backups) and [upgrades](operations.md#upgrades),
+then run [verification](verification.md) on your host. Record:
 
-1. Schedule an interruption for exit users. Keep an independent SSH/console
-   connection to the host that does not depend on this exit.
-2. Record the currently deployed Git revision locally for rollback. Back up
-   `.env`, state, tunnel configuration, secret files and the named NetBird
-   identity volume using your normal protected backup process. Do not commit
-   or paste these files into a task, issue or CI log.
-3. Keep the existing `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and monitoring
-   endpoint, and preserve the named identity volume.
-4. Pull the new revision.
+- Date, revision, OS, architecture, container runtime and Compose versions.
+- Provider, NetBird server and client versions, and client device types.
+- Checks run, address families tested, pass/fail results, recovery timings and
+  checks you skipped. Separate isolated namespace results from live client
+  results.
 
-### Build and deploy
-
-From the repository root on the host:
-
-```sh
-docker compose config --quiet
-python3 tools/molebridge.py recover
-python3 tools/molebridge.py doctor
-docker compose ps
-```
-
-Recovery builds both derived images before stopping dependents, recreates the
-shared namespace and all four containers, preserves the identity volume, and
-waits for health. Its final doctor can fail if the account, relay API or egress
-probe is unavailable; inspect locally without sharing secret-bearing output.
-
-The applier should create `state/applier/relays.json` and `relay-error.json`.
-Existing `desired.json` requests remain readable; no key, peer or client route
-needs to be re-enrolled.
-
-### Verify
-
-- Confirm all namespace and client checks in [verification](verification.md),
-  including **both** address families, DNS, tunnel down, route deletion, lookup
-  rule deletion and container stop. Confirm the host's ordinary Internet path
-  remains available while the client's exit path is blocked.
-- Switch between two real relay locations, then select the same location again
-  after a failed request. Confirm there is no automatic switch to another relay.
-- Stop only the applier. After at most 150 seconds plus one 30-second browser
-  poll, the panel must show unknown/stale and `/readyz` must return 503. Start
-  it again; it must recover its catalogue and report the observed peer.
-- Stop the panel or disconnect its browser access path. An already-open page
-  must lose its connected indication on the next failed poll.
-- Run `python3 tools/molebridge.py recover`, confirm the same NetBird peer
-  identity remains enrolled, then repeat after a host reboot and a deliberate
-  WireGuard container recreation. Use the helper if dependents are left in an
-  old namespace; there is no automatic Docker-socket watchdog.
-- With optional Gatus configured, confirm successful, failed and stale/missing
-  pushes are handled as expected by your monitoring policy.
-
-### Record results
-
-Record revision, OS/runtime versions, architecture, NetBird server/client
-versions, which checks ran, and pass/fail outcomes in a sanitized test report.
-Do not record real hostnames, addresses, peer IDs, account numbers or keys.
-Distinguish isolated namespace CI results from real overlay/client results.
-
-If rollback is needed, stop the exit containers first, restore the recorded
-revision and protected configuration, then recreate the old stack using the
-same project name and named volume. Never use `down -v` for rollback.
+Keep real hostnames, addresses, peer IDs, account numbers and keys out of the
+record.

@@ -1,188 +1,185 @@
 # Operations
 
-## Switching servers
+Commands assume Docker Compose from the repository root. Rootless Podman has
+its own section below, because the `doctor` and `recover` helpers only work
+with Docker.
 
-Open the panel. **Current exit** shows the chosen server, its egress IP, and a
-status: connected, switching, failed or unknown/stale. **Fastest from …** lists the
-lowest-latency cities with a Switch button. **Locations** groups every Mullvad
-WireGuard server by country and city, with a filter (press `/`).
+## Health
 
-A switch takes two clicks: the first arms the button and announces it to
-screen readers, the second (within eight seconds) confirms. Escape or moving
-focus away cancels. Without JavaScript a single click submits. The applier then
-swaps the tunnel's peer and waits for a fresh handshake and a Mullvad-confirmed
-egress, normally a few seconds. While it works, Current exit shows which server
-it is leaving and for which, and how long the switch has been running; the
-applier gives up after about a minute. The panel refreshes when it finishes.
-The initial peer is identified from the running interface without an initial
-panel selection.
+The applier rewrites `state/applier/result.json` about once a minute. The exit
+counts as healthy only when all of these hold:
 
-Some parts of the page stay hidden until you use them:
+- a recent handshake;
+- egress confirmed by the provider (Mullvad's `am.i.mullvad.net` for each
+  address family the tunnel has; PIA's `connected: true`);
+- a server list less than 24 hours old that includes the current server;
+- the NetBird interface present;
+- every routing rule and fallback route in place.
 
-- **Saved** appears once you pin a server with the star in Current exit, or
-  once this browser has connected through more than one server. Pinned servers
-  come first, then recent ones. They are kept in this browser's storage only,
-  not on the exit, so another device or browser has its own list.
-- **Fastest: …** appears at the top of an opened country once every server in
-  it has been measured. Within a city, servers are already sorted
-  fastest first.
-- **Filters**, next to the Locations heading, opens a row of toggles for
-  Mullvad-owned and RAM-only servers. A toggle appears only when it would
-  narrow the list, so when every server is RAM-only there is no RAM-only
-  toggle. Active filters are remembered in this browser, and
-  the row reopens while any are on. Filters apply to Locations, not to
-  Fastest from ….
+A result older than 150 seconds, malformed or dated in the future counts as
+unknown, whatever it says.
 
-Every device using the exit shares the one server, and open connections through
-the exit drop at the switch.
+- `/healthz` on the panel only checks that the panel process is up.
+- `/readyz` returns 200 for a fresh, verified connection and 503 otherwise.
+  Point your monitoring at this one.
+- `python3 tools/molebridge.py doctor` checks the Compose configuration, file
+  permissions, the identity volume, that all three namespace containers share
+  one namespace, the ICE blacklist, and the applier's own checks. It doesn't
+  prove that client traffic is forwarded; [verification](verification.md)
+  does that.
 
-If a switch fails, the panel shows the failure and the request is not retried
-continuously. Press **Retry** beside the message (or select the same server
-again) to retry, or select another one.
-If the request is waiting for a fresh catalogue, the overlay interface or tunnel
-routing before any peer change, its diagnostic says it will retry automatically.
-The saved selection stays pending through these startup failures.
-The applier never chooses another server on its own. A failed probe means the
-path was not verified; an approved working tunnel can still carry traffic while
-the check endpoint is unavailable. Routing prevents fallback through the host.
+### Gatus
 
-Missing or more-than-150-second-old applier checks show unknown/stale. The page
-polls every 30 seconds when settled and every two seconds while switching;
-failed browser polls clear the connected indication. Diagnostics describe the
-last check, not a live handshake age.
+To push health to [Gatus](https://gatus.io), set `GATUS_URL` and
+`GATUS_ENDPOINT`, and put `GATUS_TOKEN=…` in `secrets/applier.env` (mode 0600).
+Use HTTPS unless the connection is local and trusted. In Gatus, treat a
+missing push as a failure: a stopped applier can't report that it's down.
 
-## Latency
+## Recovery
 
-Numbers are the TCP handshake time from the exit host to each server's port 443.
-That is the round trip your host adds on its way to Mullvad, not the latency
-through the tunnel. They are measured only while a panel page is open:
-
-- on page load, one server per city plus the current server;
-- when you open a country, every server in it;
-- when the filter narrows to 64 servers or fewer, those servers;
-- when you press Retest, the per-city check again, ignoring the cache.
-
-Results are cached in memory for 15 minutes. With no panel open, nothing is
-measured.
-
-## Relay list
-
-The applier fetches Mullvad's published relay list at startup and every six
-hours. It keeps the last good catalogue if a fetch fails, retries after a
-minute and publishes a sanitized error for the panel. A catalogue older than
-24 hours cannot authorize switching or a healthy result. The panel's mount is
-read-only; it can only submit a desired server name.
-
-## Embedding in a dashboard
-
-`/embed` is a compact view (current exit, top five, locations) for iframe
-widgets. Allow your dashboard's origin to frame it:
+Recreating `wireguard` alone leaves `netbird` and `applier` in the old network
+namespace, where they carry no traffic. Docker doesn't restart unhealthy
+containers on its own. The recovery helper recreates all four together:
 
 ```sh
-PANEL_FRAME_ANCESTORS=https://dashboard.example.net
+python3 tools/molebridge.py recover
 ```
 
-For Glance or Dynacat:
+It checks the deployment and identity volume first, and builds both local
+images before touching the running exit, so a failed build changes nothing.
+It then stops the namespace users, recreates all four containers, waits for
+health and runs doctor. It never deletes a volume or enrolls a new peer. If
+it fails after recreating, the exit stays down until you fix the reported
+problem and run it again. Keep a way into the host that doesn't depend on this
+exit.
 
-```yaml
-- type: iframe
-  title: Molebridge
-  title-url: https://exit.example.net
-  source: https://exit.example.net/embed
-  height: 460
+NetBird won't start until the routing guards exist, on every start, including
+after a host reboot. An applier stranded in an old namespace reports
+unhealthy, so the problem is visible, but only recovery fixes it.
+
+## Upgrades
+
+Read the [changelog](../CHANGELOG.md) first. Then:
+
+```sh
+git fetch --tags && git checkout <new release>
+docker compose pull netbird control-panel
+python3 tools/molebridge.py recover
 ```
 
-Switchyard uses a provider-inspired appearance by default: Mullvad has navy
-country drawers and a yellow accent; PIA has rounded region cards and a green
-connection ring. With several configured exits, the track selector shows each
-exit's status and verified city. Selecting a tab changes which exit you manage;
-selecting a location changes that exit's requested server. The connection ring
-is a status indicator, not a disconnect button.
+Recovery rebuilds the routing and applier images. An uncached rebuild can pick
+up newer Debian packages; to refresh them on purpose, run `docker compose build
+--no-cache applier` first. Keep `.env`, `state/`, `tunnel/`, `secrets/` and the
+`netbird-data` volume.
 
-The panel follows the viewer's light or dark setting. Set `PANEL_THEME=dark`
-when an always-dark dashboard embeds it, and `PANEL_STYLE=dashboard` for the
-compact Catppuccin/monospace appearance. The embed omits the page header and
-uses a compact hero in either style. Long lists scroll inside the iframe.
-Provider styling uses system fonts and no provider image assets.
+Compare `.env.example` with the previous release's (`git diff <old>..<new> --
+.env.example`) for new or changed settings. If you keep local Compose
+overrides, check them against the new `compose.yaml`. After any change to
+routing, images or the applier, run the [verification](verification.md)
+drills again.
 
-Exit navigation uses view transitions in supporting browsers. Switching and
-verification have brief visual feedback; all motion follows the viewer's
-reduced-motion preference. Without JavaScript, location buttons still submit
-the selection form; search, saved lists and latency checks require JavaScript.
+To roll back, check out the previous release and run `recover` the same way.
+State files have stayed readable across releases so far, but take the
+[backup](#backups) first in case one changes.
 
-If your proxy authenticates with a session cookie, the frame needs a live
-session for the panel's hostname. When it has lapsed the frame is blank; open
-the panel directly once to sign in. The dashboard and the panel must be on the
-same site (for example two subdomains of `example.net`) for the browser to send
-that cookie inside the frame.
+## Backups
 
-## Installing on a phone
+The state worth keeping is small:
 
-The panel is an installable web app. On iPhone, open it in Safari and choose
-Share → Add to Home Screen; on Android, use the browser's Install app option. It
-opens full screen, and its status refreshes whenever you return to it.
+| What | Why | If lost |
+|---|---|---|
+| `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
+| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the applier registers it again on its own |
+| `secrets/` | Setup key, PIA login, Gatus token | Re-create them |
+| `.env` | Settings | Re-create it |
+| `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
-On iOS a home-screen app keeps cookies separate from Safari, so it signs in to
-your proxy on its own the first time and whenever that session expires. This
-has been tested with a passkey sign-in through a NetBird reverse proxy.
+`state/applier/` is a cache and rebuilds itself. Saved and recent servers in
+the panel live in each browser, not on the exit. The key files, `secrets/` and
+the volume are secrets: back them up only to encrypted storage.
+
+The volume is the one item that isn't a plain file. Stop `netbird` so the copy
+is consistent, then archive it (the volume name is `<project>_netbird-data`,
+`molebridge_netbird-data` by default):
+
+```sh
+docker compose stop netbird
+docker run --rm -v molebridge_netbird-data:/data:ro -v "$PWD":/backup \
+  docker.io/library/busybox tar czf /backup/netbird-data.tgz -C /data .
+docker compose start netbird
+```
+
+On Podman, `podman volume export molebridge_netbird-data > netbird-data.tar`
+does the same. To restore on a fresh install, fill the volume before the
+first start:
+
+```sh
+docker volume create molebridge_netbird-data
+docker run --rm -v molebridge_netbird-data:/data -v "$PWD":/backup \
+  docker.io/library/busybox tar xzf /backup/netbird-data.tgz -C /data
+```
+
+Compose then warns that it didn't create the volume, and uses it anyway. On
+Podman, use `podman volume create` and `podman volume import`. Put back `.env`, `tunnel/` and `secrets/` with mode 0600 files in 0700
+directories. Then check that the peer appears in NetBird under its old name,
+rather than as a new peer.
 
 ## DNS
 
-Molebridge leaves DNS alone. Clients keep resolving names with whatever
-resolver they already use, while traffic leaves through Mullvad. A DNS leak
-test may therefore show your usual resolver. On a tested iPhone with local
-DNS, mullvad.net/check reported no DNS or WebRTC leak, but that depends on the
-client and network.
+Molebridge leaves DNS alone. Devices keep resolving through whatever resolver
+they already use, while their traffic leaves through the provider. A DNS leak
+test may therefore show your usual resolver. On a tested iPhone using local
+DNS, mullvad.net/check reported no DNS or WebRTC leak, but that depends on
+the device and its network.
 
-Sending DNS through Mullvad instead would need a resolver inside the exit's
-namespace forwarding to Mullvad's resolver over the tunnel, plus a NetBird
-nameserver group. That would apply even when the exit is not selected, and DNS
-would fail whenever the tunnel is down. Molebridge does not provide it.
+Molebridge has no option to send DNS through the provider. One way to build
+it would be a resolver in the exit's namespace forwarding over the tunnel,
+plus a NetBird nameserver group. That would apply even when the exit isn't
+selected, and DNS would fail whenever the tunnel is down.
 
 ## Direct connections
 
-The exit peer must keep ICE off the Mullvad tunnel interface. `compose.yaml`
-sets it at the first enrollment through `NB_EXTRA_IFACE_BLACKLIST`; for a peer
-enrolled before that variable existed, the flag
-`netbird up --extra-iface-blacklist mullvad` sets it
-([setup](setup.md#5-keep-ice-off-the-tunnel-interface)). Either way it is
-stored in the peer's own configuration inside the `netbird-data` volume, where
-it survives restarts, recreation and the recovery helper, and where `NB_*`
-environment variables can no longer change it. Without it, clients are relayed
-and the exit's tunnel address can be offered to peers as an ICE candidate.
-No `netbird` command prints the stored value; `python3 tools/molebridge.py
-doctor` checks it, and the [Podman section](#rootless-podman) shows how to read
-the field by hand.
+Check how devices reach the exit with `docker compose exec netbird netbird
+status -d`. `P2P` is good. `Relayed` works, but it adds a relay server's round
+trip to every packet.
 
-To see what a peer is doing, raise the client log level, read the discovered
-local candidates and the remote ones, then put the level back:
+The exit peer must keep ICE off the tunnel interface
+([setup step 5](setup.md#5-keep-ice-off-the-tunnel-interface)); doctor checks
+it. To see what a peer is doing, raise the log level, read the local and
+remote candidates, then put it back:
 
 ```sh
 docker compose exec netbird netbird debug log level debug
 docker compose exec netbird netbird debug log level info
 ```
 
-Treat candidate addresses as private; they identify your network.
+Treat candidate addresses as private.
 
 ### Exits on a private container network
 
-A second, independent reason clients end up relayed. If the engine puts the
-exit's namespace on a private container bridge, as every rootless setup and
-Docker's default bridge do, the peer's only host candidate is that bridge
-address, which nothing outside the host can reach. The namespace is also
-behind the engine's NAT, and whether STUN then yields a usable
-server-reflexive candidate depends on that NAT; on the tested rootless host
-the peer gathered none. When neither candidate works, every client falls back
-to the relay silently: the exit works,
-it is just slower, so nothing reports a fault.
+Rootless engines and Docker's default bridge put the exit's namespace on a
+private network. The peer's only host candidate is then an address that
+nothing outside the host can reach, and whether STUN finds a usable public
+candidate depends on the engine's NAT. On the tested rootless host it found
+none. Devices then fall back to a relay silently: the exit works, just more
+slowly, and nothing reports a fault.
 
-Two settings fix it, alongside publishing the port:
+The fix is to publish a UDP port and tell NetBird to use and advertise it.
+Add the port to the `wireguard` service, for example in a
+`compose.override.yaml`. Compose reads that file automatically unless
+`COMPOSE_FILE` is set, as it is for PIA; then add it to the list
+(`COMPOSE_FILE=compose.yaml:compose.pia.yaml:compose.override.yaml`).
 
 ```yaml
+services:
   wireguard:
     ports:
       - "51825:51825/udp"
 ```
+
+Recreate the stack so the port is published (`recover`, or the Podman
+commands below), then set NetBird's side, using your `EXIT_IF` in place of
+`mullvad`:
 
 ```sh
 docker compose exec netbird netbird down
@@ -192,122 +189,37 @@ docker compose exec netbird netbird up \
   --external-ip-map 198.51.100.10/eth0
 ```
 
-- The published port and `--wireguard-port` must be the same number. Pick one
-  that is free on the host; a NetBird client running on the host itself
-  already holds 51820.
-- `--external-ip-map <address>/<interface>` is what the peer advertises in
-  place of the unreachable container address. For clients on the same LAN that
-  is the host's LAN address; for clients arriving over the Internet it is the
-  router's public address, with that UDP port forwarded to the host.
-- Publishing a UDP port is new exposure. Do it deliberately, and prefer the
-  LAN address unless remote clients actually need the direct path.
-- The remote candidate may then resolve as `prflx`. Rootless port forwarding
-  rewrites the source address, and ICE's peer-reflexive mechanism covers that;
-  it is expected, not a fault.
-
-## Health
-
-The applier rewrites `state/applier/result.json` about every minute. Healthy
-requires a recent handshake, confirmed Mullvad egress, a fresh catalogue matching
-the observed peer, an existing overlay interface, and intact routing rules and
-fallback routes for both address families. Each family configured on the tunnel
-must also have its tunnel default, its return-path rule for the live tunnel
-address, and pass its own egress probe; the ICMP source sysctl must be set. An
-IPv4-only tunnel does not require IPv6 egress. Missing, malformed and
-future-dated status is not trusted.
-
-`/healthz` checks the panel process. `/readyz` returns 200 only for fresh
-verified connectivity, otherwise 503. The host-side doctor checks configuration,
-permissions, the existing identity volume, namespace agreement and applier state:
-
-```sh
-python3 tools/molebridge.py doctor
-```
-
-For optional Gatus monitoring, configure `GATUS_URL` and `GATUS_ENDPOINT`,
-and store `GATUS_TOKEN` in `secrets/applier.env` (mode 0600). Prefer HTTPS;
-use HTTP only over a trusted local transport. Configure missing pushes as
-failures in the monitoring service: a stopped applier cannot send a failure.
-
-## Restarts and recovery
-
-A WireGuard container recreation can leave NetBird and the applier in an old
-namespace. Docker does not restart unhealthy containers by itself. Explicit
-Compose dependency updates request dependent restarts, but they do not cover
-all runtime crashes. Use the supported host-side recovery command:
-
-```sh
-python3 tools/molebridge.py recover
-```
-
-NetBird waits for both terminal routing guards before launching on every start,
-including daemon and host restarts. The applier's Docker healthcheck fails if
-its WireGuard interface or peer is missing, even when old rules and a freshly
-written failure result remain in an orphaned namespace. This makes the fault
-visible to a supervisor; recovery still needs to rejoin both namespace dependents.
-
-It validates the existing deployment and identity volume, builds both derived
-images before interrupting traffic, stops namespace dependents, recreates all
-four containers together, waits for health and runs doctor. It never deletes a
-volume or intentionally re-enrolls a peer. A failed build leaves the running
-exit alone. A failure after recreation can leave the exit unavailable; fix the
-reported issue and rerun recovery. Keep an independent host access path.
-
-Recovery is explicit. There is no bundled Docker-socket watchdog. Unattended
-recovery after a host reboot is tested on rootless Podman with the boot unit
-below ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)); Docker
-hosts rely on `restart: unless-stopped` and have not been reboot-tested.
-
-## Upgrades
-
-Keep `.env` and the named NetBird identity volume. After pulling reviewed
-source/image pin changes:
-
-```sh
-docker compose pull netbird control-panel
-python3 tools/molebridge.py recover
-```
-
-The helper rebuilds the routing and applier images from their pinned bases.
-An uncached applier build can update Debian tool packages; use `docker compose
-build --no-cache applier` when intentionally refreshing them, then recover.
-Rerun [verification](verification.md) after routing, image or applier changes.
-
-`doctor` checks the Compose configuration and files, the identity volume,
-namespace agreement, `net.ipv4.icmp_errors_use_inbound_ifaddr=1` on the
-`wireguard` service, and the exit interface in the peer's ICE interface
-blacklist, plus the applier's routing, egress, catalogue and freshness checks.
-It does not prove that client traffic is forwarded or that the panel can write
-its request directory; the [verification](verification.md) client checks and a
-server switch in the panel cover those.
+- The published port and `--wireguard-port` must match. Pick a free one; a
+  NetBird client on the host itself already uses 51820.
+- `--external-ip-map` is the address the peer advertises instead of the
+  container's: the host's LAN address for devices on the same LAN, or your
+  public address, with the port forwarded, for devices on the Internet.
+- A published port is new exposure. Prefer the LAN address unless remote
+  devices really need the direct path.
+- The remote candidate may show as `prflx`. Rootless port forwarding rewrites
+  the source address, and ICE handles that; it isn't a fault.
 
 ## Rootless Podman
 
-Tested on Debian 13 with rootless Podman 5.4 and podman-compose 1.6 on amd64,
-both as a long-running deployment and as a clean install of the unchanged
-`compose.yaml` ([testing](testing.md#clean-install-from-the-published-files));
-that clean install followed the setup and upgrade commands below.
-`tools/molebridge.py` drives `docker compose` and reads its JSON output, which
-`podman-compose config` does not offer, so on Podman the commands below
-replace `doctor` and `recover`. Substitute your project name for `molebridge`
-if you changed `COMPOSE_PROJECT_NAME`.
+Tested on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64. The
+helpers in `tools/molebridge.py` need `docker compose`'s JSON output, which
+podman-compose doesn't have, so use these commands instead. Replace
+`molebridge` with your `COMPOSE_PROJECT_NAME` if you changed it.
 
-**Before the first start**, load the `wireguard` module and set
-`PANEL_USER=0:0` as described in [prerequisites](prerequisites.md#host).
+Before the first start, load the kernel module and set `PANEL_USER=0:0`
+([requirements](prerequisites.md#rootless-podman)).
 
-**Setup** follows [setup](setup.md) with `podman-compose` in place of
-`docker compose`:
+**Setup** is [setup](setup.md) with `podman-compose` in place of `docker
+compose`:
 
 ```sh
 podman-compose build wireguard applier
 podman-compose up -d wireguard netbird applier
-podman-compose ps
 podman logs molebridge-wireguard 2>&1 | grep 10-exit-routing
 ```
 
-**Upgrade or recover.** Rebuild first, so a failed build leaves the running
-exit alone, then recreate all four containers together; recreating `wireguard`
-alone strands `netbird` and `applier` in its old namespace:
+**Upgrade or recover.** Build first, so a failed build leaves the exit
+running, then recreate all four together:
 
 ```sh
 podman-compose pull netbird control-panel
@@ -315,8 +227,9 @@ podman-compose build wireguard applier
 podman-compose up -d --force-recreate wireguard netbird applier control-panel
 ```
 
-podman-compose has no `--wait`; poll health instead, then confirm the three
-namespace users agree and the applier's own checks pass:
+podman-compose has no `--wait`, so check health yourself. The three
+`readlink` values must be identical, and `--doctor` prints four PASS/FAIL
+lines:
 
 ```sh
 for c in wireguard netbird applier control-panel; do
@@ -328,22 +241,19 @@ done
 podman exec molebridge-applier python -m applier.apply --doctor
 ```
 
-The three `readlink` values must be identical. `--doctor` prints four fixed
-PASS/FAIL lines covering routing, egress, the catalogue and freshness. It does
-not check the ICE blacklist, so read that one field from the peer profile
-yourself; the file also holds the peer's private key, so never print more of
-it:
+`--doctor` doesn't check the ICE blacklist. Read that one field from the peer
+profile yourself. The same file holds the peer's private key, so print
+nothing else from it:
 
 ```sh
 awk '/"IFaceBlackList"/ {p=1} p {print} p && /\]|null/ {exit}' \
   "$(podman volume inspect molebridge_netbird-data --format '{{.Mountpoint}}')/default.json"
 ```
 
-Never use `down -v`: the named volume is the peer's identity.
+Never run `down -v`: the named volume is the peer's identity.
 
-**Boot.** `restart: unless-stopped` restarts a container whose process dies,
-but rootless containers start at boot only through a systemd user session.
-The tested arrangement is a lingering user unit that brings the project up:
+**Starting at boot.** Rootless containers start at boot only through a
+systemd user session. This lingering user unit is the tested arrangement:
 
 ```sh
 loginctl enable-linger "$USER"
@@ -370,33 +280,35 @@ systemctl --user daemon-reload
 systemctl --user enable --now molebridge.service
 ```
 
-Set `WorkingDirectory` to your checkout. On the tested host a reboot with
-this arrangement brought the exit back healthy in 76 seconds with no
-intervention ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)).
-One reboot on one host is thin evidence, so after a reboot still run the health
-and namespace checks above before trusting the exit. Podman does not act on a
-failing healthcheck, so a stranded `netbird` or `applier` stays stranded until
-you recreate all four containers as in the upgrade step.
+Set `WorkingDirectory` to your checkout. On the tested host, a reboot brought
+the exit back healthy in 76 seconds with no intervention. That's one reboot
+on one host, so check health and the namespaces after a reboot anyway.
+Podman doesn't act on failing healthchecks: a stranded `netbird` or `applier`
+stays stranded until you recreate all four.
 
-**Direct connections.** A rootless project sits on a private bridge behind
-the engine's NAT, so expect relayed clients until you follow
-[Exits on a private container network](#exits-on-a-private-container-network),
-confirming the symptom in `netbird status -d` first.
+Expect relayed devices on rootless Podman until you follow
+[exits on a private container network](#exits-on-a-private-container-network).
 
-## Rotating the Mullvad key
+## Rotating keys
 
-Generate a new configuration for a new device on mullvad.net, run
-`tools/prepare-tunnel-config.py` on it, then:
+**Mullvad.** Generate a config for a new device on mullvad.net, run
+`tools/prepare-tunnel-config.py` on it, then `recover`. Once the exit works,
+remove the old device on mullvad.net.
 
-```sh
-python3 tools/molebridge.py recover
-```
-
-Once the exit works, remove the old device on mullvad.net.
+**PIA.** Move `tunnel/wg_confs/pia.conf` aside, run
+`tools/prepare-tunnel-config.py --pia`, then `recover`. The applier registers
+the new key in the saved region on its own. To change the PIA password, rewrite
+`secrets/pia/password` and restart the applier.
 
 ## Removing
 
-1. Delete the exit route and access policy in NetBird.
-2. `docker compose down` (add `-v` to also delete the peer's identity volume).
-3. Delete the peer in NetBird and the device on mullvad.net.
-4. Delete `tunnel/wg_confs/mullvad.conf` and `secrets/`.
+1. In NetBird, delete the exit route and the access policy.
+2. On rootless Podman, disable the boot unit first:
+   `systemctl --user disable --now molebridge.service`.
+3. `docker compose down`. Add `-v` to also delete the peer's identity volume.
+4. If a separate Switchyard serves this exit, remove the exit from its
+   `PANEL_EXITS` and its volume mounts.
+5. Delete the peer in NetBird. With Mullvad, also delete the device on
+   mullvad.net.
+6. Delete `.env`, `tunnel/wg_confs/`, `secrets/` and `state/`, or keep them
+   if you might reinstall.

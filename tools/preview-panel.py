@@ -137,7 +137,7 @@ def main():
             exits[exit_id] = (provider, relays)
         threading.Thread(target=fake_appliers, args=(state, exits, args.fail), daemon=True).start()
         env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS='mullvad=mullvad,pia=pia',
-                   PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='the preview')
+                   PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='home')
         # The sample relays' addresses answer nothing, so their latency is made
         # up: steady per address, a spread from fast to slow, one timeout.
         fake = '' if args.live else (

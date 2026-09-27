@@ -8,16 +8,18 @@
 # (COMPOSE_FILE=compose.yaml:compose.pia.yaml); see docs/providers.md.
 #
 # Namespace ownership: `wireguard` creates the network namespace and the
-# Mullvad tunnel. `netbird` and `applier` join it (`network_mode:
+# provider tunnel. `netbird` and `applier` join it (`network_mode:
 # service:wireguard`) and share its interfaces and routing. If `wireguard`
-# is recreated, those two can remain in its old namespace. Use the host-side
-# recovery helper to recreate them together (see docs/operations.md). `control-panel`
+# is recreated, those two can remain in its old namespace. Recreate all four
+# together: tools/molebridge.py recover on Docker, or the Podman commands in
+# docs/operations.md. `control-panel`
 # runs on its own network with no capabilities and talks to the applier only
 # through files under ./state.
 #
-# Images are pinned to exact multi-arch releases. Secrets live only in the
-# mode-0600 files under ./tunnel and ./secrets; never print them or paste
-# `docker compose config` output anywhere.
+# Images are pinned to exact multi-arch releases. Secrets live in the
+# mode-0600 files under ./tunnel and ./secrets, and the NetBird identity in the
+# netbird-data volume; never print them or paste `docker compose config`
+# output anywhere.
 # Keep COMPOSE_PROJECT_NAME unchanged after the first start: it scopes the
 # NetBird identity volume.
 name: molebridge

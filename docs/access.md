@@ -1,44 +1,77 @@
-# Authenticated panel access
+# Panel access
 
-The panel has no login. Anyone who can reach it can change the exit for all
-users. Keep the Compose publish on `127.0.0.1`.
+The panel has no login. Anyone who can reach it can change the exit for
+everyone who uses it. `compose.yaml` publishes it on the host's loopback
+address only (`127.0.0.1:8095`). Keep it that way, and reach it in one of the
+two ways below.
 
-## Complete example: SSH forwarding
+The panel also refuses any request whose `Host` header isn't loopback or a
+name listed in `PANEL_PUBLIC_HOSTS`, answering 421. That stops a malicious web
+page from reaching the loopback port through DNS rebinding. (`/healthz`
+answers before this check, so a local health probe works under any name.)
+Switching needs a CSRF token tied to a cookie, and, when the browser sends an
+`Origin` header, that header must name a listed host too.
 
-This option needs only an SSH account on the Docker host, with key-based login
-already working. It requires no domain, certificate or reverse proxy.
+## SSH forwarding
 
-1. Finish [setup](setup.md) on the Docker host and start the panel.
-2. From your laptop, open an authenticated tunnel, substituting your own SSH
-   user/host and the configured panel port:
+This needs nothing but SSH access to the host: no domain, certificate or
+proxy. It's the simplest option for a laptop. It doesn't suit phones.
+
+1. Start the panel on the host (`docker compose up -d control-panel`).
+2. On your laptop:
 
    ```sh
    ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8095:127.0.0.1:8095 user@example.net
    ```
 
-3. Leave that command running and open `http://127.0.0.1:8095` on the laptop.
-   Loopback names are always accepted; `PANEL_PUBLIC_HOSTS` can be empty for
-   this access method.
-4. Close the SSH connection when finished. The Docker host's panel port remains
-   available only through loopback. Do not change the publish to `0.0.0.0` to
-   make the tunnel work.
+3. Open <http://127.0.0.1:8095> while that runs. Loopback names are always
+   accepted, so `PANEL_PUBLIC_HOSTS` can stay empty.
 
-The SSH server authenticates access; the panel's CSRF token protects switching
-from cross-site form submissions. SSH forwarding is primarily a desktop access
-path, not the phone home-screen installation path.
+Don't change the publish to `0.0.0.0` to make this work; the forward
+connects to the host's loopback.
 
-## Phones and dashboards
+## An authenticating reverse proxy
 
-Use an existing HTTPS reverse proxy that authenticates every panel path,
-including `/api/*`, `/select`, and static/manifest routes. An overlay access
-policy is another option if it restricts access to exactly the people who may
-switch. The host/container topology must allow the proxy to reach the loopback
-publish; a proxy's own container loopback is not the Docker host's loopback.
+For phones, a dashboard or several people, put a reverse proxy in front that
+authenticates every request before it reaches the panel. That includes
+`/api/*`, `/select`, `/static/*` and the manifest. Identity-aware proxies
+work (oauth2-proxy, Authelia, Authentik, Pomerium), and so does NetBird's own
+reverse proxy restricted to the right access groups, which is what the tested
+setup uses.
 
-Set `PANEL_PUBLIC_HOSTS` to the public hostname and optional port. The panel
-answers 421 to any request whose `Host` is neither loopback nor listed there,
-so a proxy that rewrites the upstream `Host` (a containerized proxy reaching
-`host.docker.internal:8095`, for example) needs that name listed as well.
-Configure `PANEL_FRAME_ANCESTORS` only for an authenticated dashboard. Keep the proxy's
-session cookie valid for iframe and home-screen use; see [operations](operations.md).
-Do not expose an unauthenticated panel through a public tunnel or port forward.
+A minimal example with [Caddy](https://caddyserver.com) running on the same
+host, using a password prompt:
+
+```caddyfile
+exit.example.net {
+	basic_auth {
+		alice <output of caddy hash-password>
+	}
+	reverse_proxy 127.0.0.1:8095
+}
+```
+
+Replace the placeholder with the output of `caddy hash-password`, and set
+`PANEL_PUBLIC_HOSTS=exit.example.net` in `.env`. Basic authentication works,
+but phones and dashboard frames handle it poorly; a proxy with a proper sign-in
+page is more comfortable. Whichever you use, prefer one that is reachable only
+over NetBird, not from the whole Internet. (Caddy's automatic certificates
+need either a public name or its DNS challenge; `tls internal` is an option
+for a private-only name.)
+
+Two details trip people up:
+
+- **The proxy must reach the host's loopback.** The simplest arrangement is a
+  proxy running on the host itself. A proxy in a container has its own
+  loopback, and on Linux Docker it can't reach a port published only on the
+  host's `127.0.0.1`. Rootless Podman's `host.containers.internal` does reach
+  it on the tested host, and OrbStack's `host.docker.internal` did too. If
+  your proxy sends that upstream name as the `Host`, add it (with the port)
+  to `PANEL_PUBLIC_HOSTS`.
+- **Cookies.** For the dashboard frame and a phone's home-screen app, the
+  proxy's session cookie has to reach the panel's hostname. See
+  [Switchyard](switchyard.md#embedding-in-a-dashboard).
+
+Set `PANEL_FRAME_ANCESTORS` only if an authenticated dashboard embeds the
+panel. Never expose the panel through a public tunnel or port forward without
+authentication in front.

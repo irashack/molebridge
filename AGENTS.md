@@ -41,5 +41,17 @@ route in `SECURITY.md`, never in a public issue or commit message.
 - The panel stays Python standard library only; front-end code stays
   dependency-free.
 - Validate in proportion to impact: `pytest -q panel tools`, `sh -n` and
-  `shellcheck` on shell scripts, `docker compose config` against
-  `.env.example`. Update the docs a change affects in the same commit.
+  `shellcheck` on shell scripts, and `docker compose config` against
+  `.env.example`, with and without `compose.pia.yaml`. Update the docs a
+  change affects in the same commit.
+
+## Writing docs
+
+- Write for someone installing this on their own machine: plain sentences,
+  "you", specific numbers and commands. No marketing language, feature grids
+  or slogans.
+- Say what was tested, where and at which revision, and say what wasn't.
+  Link to `docs/testing.md` rather than restating results.
+- Use "never", "every" and "always" only where the code guarantees it.
+- Quote messages exactly as the code prints them.
+- Keep one canonical place for each procedure and link to it.

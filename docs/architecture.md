@@ -2,12 +2,17 @@
 
 ## Goal and boundary
 
-Keep a device on NetBird while Internet traffic received by this exit leaves
-through Mullvad or PIA ([providers](providers.md)); the sections below describe
-Mullvad, and the provider page lists what differs for PIA. If the tunnel is unavailable, forwarded traffic must fail.
-This is a property of the exit namespace, not a device-wide kill switch:
-deselecting the exit, disconnecting NetBird, client-local routes, DNS and client
-IPv6 behavior require separate verification.
+A device stays on NetBird while the Internet traffic it sends to this exit
+leaves through Mullvad or PIA. If the tunnel is unavailable, that forwarded
+traffic must fail rather than leave by another path.
+
+This is a property of the exit's namespace, not of the device. What happens
+when a device deselects the exit or NetBird disconnects, and what the device
+does with DNS, IPv6 and its own local routes, needs checking separately
+([verification](verification.md#from-a-client)).
+
+The sections below describe Mullvad. [Providers](providers.md#how-pia-differs)
+lists what differs for PIA.
 
 ## Components and trust
 
@@ -18,7 +23,7 @@ One Compose project, four containers:
 | `wireguard` | Local build from pinned LinuxServer WireGuard | Owns the namespace, installs routing, brings up the tunnel |
 | `netbird` | Pinned official NetBird client | Joins the namespace as the overlay exit peer |
 | `applier` | Local build from the pinned Python slim base, Debian wg/ip/curl tools | Joins the namespace, owns the relay catalogue, validates requests and controls the peer |
-| `control-panel` | Pinned official Python slim | Separate bridge, loopback publish, non-root, no capabilities or subprocesses |
+| `control-panel` | Pinned official Python slim | Separate bridge, loopback publish, no capabilities, no subprocesses. Runs as `PANEL_USER` (the host user's uid, or container root mapped to the host user under rootless Podman) |
 
 Build both derived images with `docker compose build wireguard applier`. The
 routing script is copied root-owned into the WireGuard image, so the checkout
@@ -33,10 +38,11 @@ through a read-only mount. It cannot change the relay catalogue, result or
 applier code. An old `state/panel/relays.json` has no authority and is ignored.
 
 The applier never mounts the tunnel config, invokes a shell, or reads a
-WireGuard private key. With PIA it also reads the PIA login and sets the tunnel
-address on each switch ([providers](providers.md#why-pia-works-differently)). Nevertheless it has `NET_ADMIN` in the tunnel namespace:
-a compromised applier can retrieve the live key and alter routing. It belongs
-to the trusted computing base, along with Docker, the host and NetBird.
+WireGuard private key. With PIA it also reads the PIA login and sets the
+tunnel address on each switch. It does hold `NET_ADMIN` in the tunnel
+namespace, so a compromised applier could read the live key and change
+routing. It is part of the trusted base, along with the container engine, the
+host and NetBird.
 Its filesystem is read-only except for its own state and bounded scratch space.
 
 ## Routing contract
@@ -84,14 +90,19 @@ The tunnel uses `Table = off`. Its `PostUp` adds a default route through
 `mullvad` to the exit table; `PreDown` removes it. The fallback and terminal
 guard are not removed on tunnel down. The exit's own unbound traffic continues
 through the ordinary route so NetBird and Mullvad control traffic can connect.
-The applier verifies that the overlay interface exists, rule priorities/selectors,
-both fallback routes and that the exit table contains no route through another
-interface. It requires a tunnel default and a return-path rule for exactly the
-live tunnel address and its family's ICMP protocol, in each family with a
-global address on the tunnel interface, and the ICMP source sysctl; an IPv4-only tunnel still requires IPv6
-fail-closed guards and must have no IPv6 return-path rule. An unknown rule
-ahead of the guard, an extra selector, or a temporary guard left behind prevents
-a healthy result.
+The applier checks, on every pass:
+
+- the overlay interface exists;
+- every rule has the expected priority and selectors;
+- both fallback routes are present;
+- the exit table has no route through another interface;
+- in each family with a global tunnel address, there is a tunnel default and
+  a return-path rule for exactly that address and its ICMP protocol;
+- the ICMP source sysctl is set.
+
+An IPv4-only tunnel still needs the IPv6 fail-closed guards, and must have no
+IPv6 return-path rule. An unknown rule ahead of the guard, an extra selector,
+or a leftover temporary guard means the result can't be healthy.
 
 Sharing the namespace has one consequence for NetBird itself: by default it
 gathers ICE candidates on every interface it finds there, including the exit
@@ -146,9 +157,9 @@ working tunnel merely because the API is unavailable.
 5. An unavailable fresh catalogue, overlay interface or tunnel routing leaves
    the request pending without changing peers. The applier reports the missing
    prerequisite and retries the same request when prerequisites recover.
-   A malformed or unlisted request or an attempted switch that fails is acknowledged as failed and is not
-   retried every five seconds. Selecting the same server again creates a new
-   request and retries. No other server is selected automatically. After normal
+   A malformed or unlisted request, or a switch that fails, is acknowledged
+   as failed and not retried. Selecting the same server again creates a new
+   request. No other server is selected automatically. After normal
    tunnel recreation, a previously successful desired selection is reapplied.
 
 A failed health probe does not necessarily mean traffic is blocked: a working
@@ -157,7 +168,7 @@ A failed switch remains visibly failed until a new request or process restart.
 Routing protects against a missing tunnel; probe failure does not install an
 alternate route.
 
-## Honest status
+## Status reporting
 
 Every roughly 60 seconds the applier writes a new `result.json`. The panel and
 API use the same status interpretation. A missing, malformed, future-dated or
@@ -180,9 +191,11 @@ There is no application login. Loopback publishing plus authenticated access is
 required; see [access](access.md). Every request must name a published host:
 loopback or an entry of `PANEL_PUBLIC_HOSTS`; anything else receives 421 before
 status or a token-bearing page is served, so a DNS-rebinding page reaching the
-loopback publish learns nothing. POSTs require a cookie-bound CSRF token and an
-`Origin` from the same list; the request's own `Host` and `X-Forwarded-Host`
-are never used as the allowlist, because a rebinding page controls them.
+loopback publish learns nothing (`/healthz` answers before this check). POSTs
+require a cookie-bound CSRF token, and an `Origin` header, when the browser
+sends one, must name a host from the same list. The request's own `Host` and
+`X-Forwarded-Host` are never used as the allowlist, because a rebinding page
+controls them.
 Security headers restrict scripts/styles/resources to same origin,
 and dashboard framing is opt-in. HTTP body size and socket time are bounded.
 Remote text is escaped in HTML and assigned as text in JavaScript.
@@ -204,10 +217,11 @@ host-to-relay path, not end-to-end client latency.
 
 `python3 tools/molebridge.py recover` builds first, checks for the existing
 identity volume, stops namespace dependents, then recreates all four containers
-in dependency order and waits for health. It never deletes a volume or silently
-enrolls a new peer. This is an explicit host operation, not a Docker socket
-mounted in the panel. `depends_on.restart` also handles explicit Compose
-dependency updates, but runtime crashes still require recovery.
+in dependency order and waits for health. It refuses to run if the identity
+volume is missing, and never deletes a volume. It runs on the host when you
+ask; nothing gives the panel access to the container engine.
+`depends_on.restart` covers explicit Compose dependency updates, but a crash
+at runtime still needs recovery.
 
 [Verification](verification.md) covers the live deployment; isolated namespace
 CI tests cover the Linux routing contract. Linux Docker and NetBird Cloud end

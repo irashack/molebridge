@@ -29,7 +29,10 @@ jobs:
           for script in routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
           shellcheck -S warning routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh
       - name: Compose file
-        run: cp .env.example .env && docker compose config --quiet
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.pia.yaml config --quiet
       - name: Python tests
         run: |
           python3 -m venv .venv

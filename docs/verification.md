@@ -1,12 +1,18 @@
 # Verification
 
-Run these on your own host before letting real traffic through the exit, and
-again after changing routing, the tunnel config, compose networking or the
-applier. [Testing](testing.md) records which of these checks have run, and on
-which platforms.
+Run these on your own host before relying on the exit, and again after
+changing routing, the tunnel config, Compose networking or the applier.
+[Testing](testing.md) records which checks have run and on which platforms.
+
 Keep an independent host access path. Do not share raw addresses or peer
 information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
 `wg show ... private-key` for a report: they disclose the live key.
+
+Commands use the defaults: tunnel interface `mullvad`, exit table `51821`,
+and overlay interface `wt0`. For PIA, substitute `pia` for `mullvad` in
+interface names and config paths; the table stays `51821`. If you changed
+`EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use your values. For rootless Podman,
+use the [Podman commands](operations.md#rootless-podman).
 
 ## Inside the namespace
 
@@ -16,7 +22,12 @@ information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
 docker compose exec applier sh
 ```
 
-1. **Rules are installed.** `ip rule` shows priority 90 (`iif mullvad`, overlay
+On PIA, select a region before completing checks 1–3, 6 and 7: registration
+supplies the tunnel address, peer and IPv4 rule 94. Select a region before
+the fail-closed drills and client or port-forwarding checks too. IPv6 stays
+blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
+
+1. Check the rules. `ip rule` shows priority 90 (`iif mullvad`, overlay
    destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
    → table 51821), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
    51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard
@@ -25,49 +36,63 @@ docker compose exec applier sh
    Rule 94 must carry the protocol qualifier: without it every protocol
    sourced from the tunnel address is forced into the tunnel, and the applier
    reports `routing_ok` false.
-2. **The exit table fails closed.** `ip route show table 51821` shows
+2. Check the exit table. `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
-   IPv4-only config still has the IPv6 unreachable fallback.
-3. **The tunnel egresses through Mullvad.**
-   `curl -4 -fsS --interface mullvad https://ipv4.am.i.mullvad.net/json` reports
-   `"mullvad_exit_ip": true`. When the tunnel has an IPv6 address, so does
-   `curl -6 -fsS --interface mullvad https://ipv6.am.i.mullvad.net/json`
-   (`am.i.mullvad.net` itself has no AAAA record, so `-6` against it fails to
-   resolve). Both probes must succeed; one family cannot stand in for the other.
-4. **The exit's own traffic does not.** `curl -s https://am.i.mullvad.net/json`
-   without `--interface` reports your host's normal IP. That is the path the
-   Mullvad handshake and NetBird's own control connections take; it must stay
-   off the tunnel.
-5. **Trust boundary.** The panel can read `state/applier/relays.json` but cannot
-   write the applier mount. The old panel-owned catalogue is ignored. A malformed
-   desired file and a valid request for an unlisted name must report failure
-   without changing the peer. A valid request has `server`, `requested_at`
+   IPv4-only config still has the IPv6 unreachable fallback. PIA must have
+   only that fallback for IPv6, with no tunnel default.
+3. Check provider egress with the commands below. For a dual-stack Mullvad
+   tunnel, both families must succeed. On PIA, IPv4 must report
+   `"connected": true`; IPv6 through the exit must fail on the unreachable
+   fallback.
+4. Check unbound traffic with the IPv4 probe for your provider, omitting
+   `--interface`. It should report your host's normal public IP. This is the
+   path for the provider handshake and NetBird control connections.
+5. Check the trust boundary. The panel can read `state/applier/relays.json`
+   but cannot write the applier mount. The old panel-owned catalogue is ignored.
+   A malformed desired file and a valid request for an unlisted name must
+   report failure without changing the peer. A valid request has `server`, `requested_at`
    (current UTC `YYYY-MM-DDTHH:MM:SSZ`) and an optional 32-character lowercase
    hexadecimal `request_id`. Use a fictitious unlisted name such as
    `xx-xxx-wg-999`, then restore the desired state by selecting a valid server
-   in the panel. `wg show mullvad peers` exposes only the public peer key.
-6. **The exit's ICMP errors return through the tunnel.**
+   or region in the panel. `wg show mullvad peers` exposes only public peer keys.
+6. Check that the exit's ICMP errors return through the tunnel.
    `cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr` prints `1`, and
    `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` shows
    `dev mullvad`; with an IPv6 tunnel address,
    `ip -6 route get 2001:db8::1 from <tunnel IPv6 address> ipproto ipv6-icmp`
-   does too. Under client traffic that carries replies larger than the overlay
-   MTU, `Icmp6OutPktTooBigs` in `/proc/net/snmp6` grows, and a capture on the
-   tunnel interface (`icmp6 and ip6[40] == 2`) shows the errors leaving there
-   and not on the host-side interface. Do not rely on `Ip6OutNoRoutes`: on a
+   does too. On PIA, run only the IPv4 return-path check. With an IPv6 tunnel,
+   replies larger than the overlay MTU should increase `Icmp6OutPktTooBigs`
+   in `/proc/net/snmp6`. Capture on both the tunnel and host-side interfaces
+   (`icmp6 and ip6[40] == 2`): the errors should leave through the tunnel and
+   not the host-side interface. Do not rely on `Ip6OutNoRoutes`: on a
    container network without IPv6 it also counts the exit's own IPv6
    attempts. Without this return path, oversized replies are dropped with no
-   error to the origin, and UDP flows such as QUIC through the exit stall.
-7. **Doctor.** On the host, `python3 tools/molebridge.py doctor` should pass.
+   error to the origin, which can stall UDP flows such as QUIC through the exit.
+7. On the host, `python3 tools/molebridge.py doctor` should pass.
    It checks actual namespace agreement as well as routing and status freshness.
+
+Run these egress probes inside the namespace:
+
+| Provider | Command | Expected |
+|---|---|---|
+| Mullvad, IPv4 | `curl -4 -fsS --interface mullvad https://ipv4.am.i.mullvad.net/json` | `"mullvad_exit_ip": true` |
+| Mullvad, IPv6 tunnel | `curl -6 -fsS --interface mullvad https://ipv6.am.i.mullvad.net/json` | `"mullvad_exit_ip": true` |
+| PIA, IPv4 | `curl -4 -fsS --interface pia https://www.privateinternetaccess.com/api/client/status` | `"connected": true` |
+| PIA, IPv6 | `curl -6 -fsS --max-time 10 --interface pia https://ipv6.am.i.mullvad.net/json` | Connection fails; IPv6 is blocked |
+
+The PIA IPv6 probe checks blocking. Use the explicit IPv6 hostname above;
+`am.i.mullvad.net` itself has no AAAA record. A DNS failure alone does not
+prove routing blocked the request.
 
 ## Fail-closed drills
 
-For each drill, keep a client with the exit selected loading
-<https://am.i.mullvad.net> or pinging a public IP. During the drill the client
-must lose the tested exit path. It must **never** show your host's own IP. Test
-IPv4 and IPv6 explicitly; a generic browser check may exercise only one family.
+For each drill, keep a client on the selected exit probing the provider's
+status endpoint above or pinging a public IP. During the drill, the affected
+path must fail without using your host's own public IP. Test IPv4 and IPv6
+explicitly; a browser check may exercise only one family. With PIA, IPv6 must
+remain blocked before, during and after each drill.
+
 Also record any client fallback to its own connection: server routing cannot
 enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
 
@@ -75,14 +100,16 @@ enforce a device-wide kill switch after NetBird disconnects or deselects the exi
 |---|---|---|
 | Tunnel down | `docker compose exec wireguard wg-quick down /config/wg_confs/mullvad.conf` | `docker compose exec wireguard wg-quick up /config/wg_confs/mullvad.conf` |
 | IPv4 route deleted | `docker compose exec wireguard ip route del default dev mullvad table 51821` | `docker compose exec wireguard ip route replace default dev mullvad table 51821` |
-| IPv6 route deleted (when configured) | `docker compose exec wireguard ip -6 route del default dev mullvad table 51821` | `docker compose exec wireguard ip -6 route replace default dev mullvad table 51821` |
+| IPv6 route deleted (dual-stack Mullvad only) | `docker compose exec wireguard ip -6 route del default dev mullvad table 51821` | `docker compose exec wireguard ip -6 route replace default dev mullvad table 51821` |
 | IPv4 lookup rule deleted | `docker compose exec wireguard ip rule del priority 95` | `python3 tools/molebridge.py recover` |
 | IPv6 lookup rule deleted | `docker compose exec wireguard ip -6 rule del priority 95` | `python3 tools/molebridge.py recover` |
 | Container stopped | `docker compose stop wireguard` | `python3 tools/molebridge.py recover` |
 
-After each restore, the client regains Mullvad egress. After the tunnel-down
-drill, the applier re-applies a previously successful chosen server after the
-interface returns. If a request was rejected or failed, select again to retry.
+After each restore, confirm provider egress returns on the supported families.
+After the tunnel-down drill, the applier reapplies the saved server or region
+when the interface returns. If a request was rejected or failed, select again
+to retry.
+
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked. The isolated `tools/check-routing.sh` drill also
 deletes all exit-table routes together to exercise the terminal guard, and
@@ -92,9 +119,12 @@ route gone no error reaches the tunnel side. It does not watch the host-side
 interface, so it cannot tell a dropped error from one sent over the host's
 route; a capture on that interface during a live flow can (see step 6
 above).
-For each single-family route deletion, confirm the other family still works
-while the next applier check reports `failed`, `/readyz` returns 503, and any
-monitoring push reports failure. A safe black hole must not appear healthy.
+
+For each route deletion, confirm the next applier check reports `failed`,
+`/readyz` returns 503, and any monitoring push reports failure. On a
+dual-stack Mullvad tunnel, the other family should still work. On PIA,
+deleting the IPv4 default must leave both families blocked. A blocked client
+path must not appear healthy.
 
 ## Status and recovery
 
@@ -103,8 +133,8 @@ browser poll, the panel must show stale/unknown and `/readyz` must return 503;
 `/healthz` remains 200. Restart the applier and confirm fresh status returns.
 Disconnect an open browser from the panel and confirm its next failed poll
 clears connected status. Test a failed switch followed by selecting the same
-server again. Finally, verify the recovery helper, container recreation and
-host reboot preserve the NetBird peer identity and shared namespace.
+server or region again. Finally, verify the recovery helper, container
+recreation and host reboot preserve the NetBird peer identity and shared namespace.
 After a WireGuard restart outside Compose, confirm an applier stranded without
 the WireGuard interface becomes Docker-unhealthy even if its failure result is
 fresh. On a disposable deployment, start NetBird before the routing initializer:
@@ -120,30 +150,49 @@ Malformed/unlisted requests and failed peer updates still require a new selectio
 
 With the exit selected on a device in `exit-users`:
 
-- <https://mullvad.net/check> reports that you are using Mullvad, in the chosen
-  server's city.
+- For Mullvad, <https://mullvad.net/check> reports Mullvad egress in the
+  chosen server's city. For PIA,
+  <https://www.privateinternetaccess.com/api/client/status> reports
+  `"connected": true`.
 - Addresses on the host's own LAN, such as its router, are unreachable.
-- **IPv6.** With IPv6 overlay and a `::/0` route, an IPv6 "what is my IP" check
-  shows a Mullvad address. Without IPv6 overlay, check that IPv6 either fails or
-  is unused; if a native IPv6 address shows, that traffic is bypassing the
-  exit. Mobile carriers that are IPv6-only with NAT64 are the likeliest case.
-- **Large UDP.** With the exit selected, a video call or an HTTP/3 (QUIC)
-  download does not stall after the first seconds. Browsers fall back to TCP
-  when QUIC breaks, so a stall that "fixes itself" is the symptom of a missing
-  return path, not of a slow tunnel.
-- **Direct path.** On the host, `docker compose exec netbird netbird status -d`
-  lists the client with `Connection type: P2P`. `Relayed` adds the relay
-  server's round trip to every packet; on a phone, first check that Force relay
-  connection is off in the NetBird app. If every client is relayed, confirm the
-  exit interface is in the peer's ICE blacklist
-  ([setup](setup.md#5-keep-ice-off-the-tunnel-interface)) and look for
-  `ICE retries exhausted` in `docker compose logs netbird`. A peer that has hit
-  that state retries only hourly, so re-apply the flag and bring the peer back
-  up rather than waiting. `python3 tools/molebridge.py doctor` checks the
-  stored blacklist; no `netbird` command prints it.
-- **Switch.** Choose a server in another city in the panel. The panel reports
-  the new city within about a minute, and the client's egress follows without
-  reselecting the exit.
-- **DNS.** Molebridge does not change DNS; see
-  [operations](operations.md#dns). Check that mullvad.net/check's DNS leak
-  result is acceptable to you.
+- With IPv6 overlay and a `::/0` route, an IPv6 egress check shows a Mullvad
+  address for a dual-stack Mullvad tunnel. On PIA it must fail: forwarded IPv6
+  hits the unreachable fallback. Without an IPv6 overlay and exit route,
+  check that IPv6 fails or is unused; a native IPv6 address means that traffic
+  bypasses the exit.
+- Try a video call or an HTTP/3 (QUIC) download. A stall followed by recovery
+  can be a symptom of a missing ICMP return path when a browser falls back to
+  TCP. Check the return path with namespace step 6 before drawing that
+  conclusion; a completed download alone does not test oversized UDP replies.
+- On the host, use `docker compose exec netbird netbird status -d` to check
+  whether the client's path is `P2P` or `Relayed`. If it is relayed, see
+  [direct connections](operations.md#direct-connections). Confirm the exit
+  interface is in the peer's ICE blacklist; `python3 tools/molebridge.py doctor`
+  checks the stored value.
+- Choose another Mullvad server or PIA region in the panel. Confirm the panel
+  reports the new location and the client's egress follows without reselecting
+  the exit.
+- Molebridge does not change DNS; see [operations](operations.md#dns). Run a
+  DNS leak check and confirm the resolvers shown are acceptable to you.
+
+## Optional PIA port forwarding
+
+These are acceptance checks for [port forwarding](providers.md#port-forwarding).
+Live forwarding against PIA remains untested in the [test record](testing.md).
+Enable it, select a region that offers forwarding, and wait for an allocated
+port in the panel or `forwarded_port` in `/api/status`.
+
+- Have the target service listen on that allocated port for TCP and UDP.
+  DNAT changes the destination address and keeps the port.
+- Confirm the NetBird policy allows the exit peer to reach the target on
+  that port for both protocols. Forwarded connections use the exit peer's
+  overlay address.
+- From outside your NetBird network, connect to the PIA egress address and
+  allocated port over TCP and UDP. Confirm both reach the target service.
+- Set `PIA_PORT_FORWARD=off` and clear `PIA_PORT_FORWARD_TARGET`, then
+  recreate the applier so it reads the new settings. Check that
+  `docker compose exec applier nft list table ip molebridge_forward` reports
+  the table absent after startup; the applier retries removal if it fails.
+  `docker compose exec applier nft list table inet molebridge_guard` must
+  still show the ingress guard. Use new connections for the check: existing
+  conntrack mappings can outlive the forwarding rules.

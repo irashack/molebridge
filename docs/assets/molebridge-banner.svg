@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="title description">
   <title id="title">Molebridge</title>
-  <desc id="description">Stay on NetBird. Exit through Mullvad. A bridge connects two network nodes in the panel's blue and green palette.</desc>
+  <desc id="description">Stay on NetBird. Exit through Mullvad or PIA. A bridge connects two network nodes in the panel's blue and green palette.</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1">
       <stop stop-color="#24273a"/>
@@ -20,9 +20,9 @@
   <g font-family="Arial,Helvetica,sans-serif">
     <text x="56" y="69" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">A LITTLE BRIDGE FOR YOUR MESH</text>
     <text x="52" y="142" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
-    <text x="56" y="185" fill="#b8c0e0" font-size="24">Stay on NetBird. Exit through Mullvad.</text>
-    <text x="56" y="252" fill="#a5adcb" font-size="13" letter-spacing="1.4">NETBIRD + MULLVAD</text>
-    <text x="1144" y="252" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">SELF-HOSTED · DOCKER COMPOSE</text>
+    <text x="56" y="185" fill="#b8c0e0" font-size="24">Stay on NetBird. Exit through Mullvad or PIA.</text>
+    <text x="56" y="252" fill="#a5adcb" font-size="13" letter-spacing="1.4">NETBIRD + MULLVAD OR PIA</text>
+    <text x="1144" y="252" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">SELF-HOSTED · DOCKER OR PODMAN</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
     <path d="M807 166H1126" stroke="#363a4f" stroke-width="2"/>
