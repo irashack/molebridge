@@ -642,21 +642,36 @@
   const tabs = new Map(Array.from(page.querySelectorAll('.exit-tab'), (t) => [t.dataset.exit, t]));
   const TAB_STATES = ['ok', 'failed', 'applying', 'unknown'];
 
+  function paintTab(tab, state, status, place) {
+    tab.querySelector('[data-exit-dot]').className = `exit-dot dot-${state}`;
+    tab.querySelector('[data-exit-status]').textContent = status;
+    tab.querySelector('[data-exit-place]').textContent = place;
+  }
+
   async function pollExits() {
     if (!tabs.size) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const seen = new Set();
     try {
-      const res = await fetch('/api/exits', { cache: 'no-store' });
-      if (!res.ok) return;
+      const res = await fetch('/api/exits', { cache: 'no-store', signal: controller.signal });
+      if (!res.ok) throw new Error('exits unavailable');
       const data = await res.json();
-      for (const summary of data.exits || []) {
+      for (const summary of Array.isArray(data.exits) ? data.exits : []) {
         const tab = tabs.get(summary.id);
         if (!tab || !TAB_STATES.includes(summary.state)) continue;
-        tab.querySelector('[data-exit-dot]').className = `exit-dot dot-${summary.state}`;
-        tab.querySelector('[data-exit-status]').textContent = summary.status || '';
-        tab.querySelector('[data-exit-place]').textContent = summary.place || '';
+        paintTab(tab, summary.state, String(summary.status || ''), String(summary.place || ''));
+        seen.add(summary.id);
       }
     } catch {
-      // The selected exit's own status poll reports an unreachable panel.
+      // Handled below: a tab that was not refreshed cannot claim a state.
+    } finally {
+      clearTimeout(timeout);
+    }
+    // No stale green: an exit missing from a valid answer, or every exit when
+    // the panel did not answer, shows as unknown until a refresh succeeds.
+    for (const [id, tab] of tabs) {
+      if (!seen.has(id)) paintTab(tab, 'unknown', 'status unavailable', '');
     }
   }
 
