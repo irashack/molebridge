@@ -639,7 +639,7 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
     esc = html.escape
     base = '/embed' if embed else '/'
     links = []
-    for summary in summaries:
+    for index, summary in enumerate(summaries, 1):
         selected = summary['id'] == current_id
         current = ' aria-current="page"' if selected else ''
         place = f'<span class="exit-place" data-exit-place>{esc(summary["place"])}</span>'
@@ -647,9 +647,15 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
             f'<a class="exit-tab{" is-selected" if selected else ""}" href="{base}?exit={esc(summary["id"])}" '
             f'data-exit="{esc(summary["id"])}" data-provider="{esc(summary["provider"])}"'
             f'{current}>'
-            f'<span class="exit-dot dot-{esc(summary["state"])}" data-exit-dot aria-hidden="true"></span>'
+            f'<span class="exit-track" aria-hidden="true">{esc(f"{index:02d}")}</span>'
+            '<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">'
+            '<path class="track-bed" d="M12 44V4M20 44V4M20 32L44 8M14 26L38 2"/>'
+            '<path class="track-route" d="M16 44V28L40 4"/>'
+            '<circle cx="16" cy="30" r="3"/></svg>'
             f'<span class="exit-label">{esc(summary["label"])}</span>{place}'
-            f'<span class="sr-only" data-exit-status>{esc(summary["status"])}</span></a>'
+            '<span class="exit-health">'
+            f'<span class="exit-dot dot-{esc(summary["state"])}" data-exit-dot aria-hidden="true"></span>'
+            f'<span data-exit-status>{esc(summary["status"])}</span></span></a>'
         )
     return f'<nav class="exit-tabs" aria-label="Exits">{"".join(links)}</nav>'
 
@@ -690,7 +696,11 @@ def render_index_html(
     current_info = relays.get(display_server) or {}
 
     if current_info:
-        current_place = f"{esc(str(current_info.get('city', '')))}, {esc(str(current_info.get('country', '')))}"
+        current_place = (
+            f'<span class="current-city">{esc(str(current_info.get("city", "")))}</span>'
+            '<span class="current-country"><span class="place-comma">, </span>'
+            f'{esc(str(current_info.get("country", "")))}</span>'
+        )
         current_flag = flag_emoji(current_info.get('location_code'))
     elif display_server:
         current_place, current_flag = esc(display_server), ''
@@ -704,7 +714,7 @@ def render_index_html(
     failure_note = ''
     retry = ''
     if state == 'failed' and desired_server in relays:
-        # Outside the form element but submitted with it, so it works without JS.
+        # Explicit form ownership also keeps retry working without JS.
         retry = (f' <button type="submit" form="select-form" name="server" value="{esc(desired_server)}" '
                  f'class="relay-switch" data-retry>Retry</button>')
     if state == 'failed' and (message or retry):
@@ -757,7 +767,11 @@ def render_index_html(
         home_link = (f'<a class="subdue back-link" href="{esc(PANEL_HOME_URL)}" target="_top">'
                      f'← {esc(PANEL_HOME_LABEL)}</a>')
     heading = '' if embed else (
-        f'<header class="page-header"><h1>{esc(PANEL_TITLE)}</h1>{home_link}</header>'
+        '<header class="page-header"><div class="brand">'
+        '<svg class="yard-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
+        '<path d="M10 34V6M18 34V25L32 11M18 6V14M7 10H21M7 17H15M7 24H15M7 31H21M24 14L30 20"/>'
+        f'</svg><div><span class="brand-kicker">{esc("Molebridge / exit control")}</span>'
+        f'<h1>{esc(PANEL_TITLE)}</h1></div></div>{home_link}</header>'
     )
     tabs = exit_tabs(exits, ex.id, embed) if len(exits) > 1 else ''
     open_link = (
@@ -765,6 +779,8 @@ def render_index_html(
     )
     current_heading = f'{esc(ex.label)} exit' if ex.id else 'Current exit'
     title = f'{esc(ex.label)} · {esc(PANEL_TITLE)}' if tabs else esc(PANEL_TITLE)
+    connection_label = {'ok': 'Secure connection', 'applying': 'Switching route',
+                        'failed': 'Connection needs attention', 'unknown': 'Connection unverified'}[state]
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{provider}">
@@ -789,11 +805,18 @@ def render_index_html(
 <main class="page" data-provider="{provider}" data-layout="{layout}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 {tabs}
+<form method="post" action="/select" id="select-form">
+<input type="hidden" name="csrf_token" value="{token}">
+<input type="hidden" name="return" value="{return_to}">
+<input type="hidden" name="exit" value="{esc(ex.id)}">
+<div class="switchboard">
+<div class="overview">
 <section class="widget current-widget">
   <div class="widget-header"><h2>{current_heading}</h2>{open_link}</div>
   <div class="widget-content current">
+    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(connection_label)}</span></div>
     <div class="current-row">
-      <span class="flag flag-lg" data-current-flag>{current_flag}</span>
+      <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>{current_flag}</span></span>
       <div class="current-main">
         <div class="current-place" data-current-place>{current_place}</div>
         <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></span></div>
@@ -824,11 +847,6 @@ def render_index_html(
   </div>
 </section>
 
-<form method="post" action="/select" id="select-form">
-<input type="hidden" name="csrf_token" value="{token}">
-<input type="hidden" name="return" value="{return_to}">
-<input type="hidden" name="exit" value="{esc(ex.id)}">
-
 <section class="widget" id="saved" hidden>
   <div class="widget-header"><h2>Saved</h2></div>
   <div class="widget-content">
@@ -843,15 +861,18 @@ def render_index_html(
   </div>
 </section>
 
-<section class="widget">
+</div>
+<section class="widget locations-widget">
   <div class="widget-header"><h2>Locations</h2>{filters_toggle}<span class="subdue small">{locations_count}</span></div>
   <div class="widget-content">
-    <input type="search" class="search" placeholder="{placeholder}" aria-label="Filter locations" data-filter autocomplete="off">
+    <input type="search" class="search" placeholder="{esc(placeholder)}" aria-label="Filter locations" data-filter autocomplete="off" hidden>
     {filters_row}
     {error_html}
     {locations_html}
+    <p class="empty-state" data-filter-empty role="status" hidden>{esc('No matching locations.')}<br><span class="subdue">{esc('Try another name or clear your filters.')}</span></p>
   </div>
 </section>
+</div>
 </form>
 <div class="sr-only" aria-live="polite" data-announce></div>
 </main>

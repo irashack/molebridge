@@ -29,7 +29,7 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `PANEL_HOST_LABEL` | `this exit` | Used in "Fastest from …". |
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | empty, `Home` | Optional back link in the page header. |
 | `PANEL_THEME` | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
-| `PANEL_STYLE` | `provider` | `provider` dresses each exit in its provider's colours and layout; `dashboard` keeps one neutral palette in the manner of Glance-family dashboards. Any other value means `provider`. The location layout (Mullvad's tree, PIA's region list) follows the provider either way. |
+| `PANEL_STYLE` | `provider` | `provider` dresses each exit in its provider's colours and layout; `dashboard` keeps one neutral Catppuccin palette and JetBrains Mono, in the manner of Glance-family dashboards. Any other value means `provider`. The location layout (Mullvad's tree, PIA's region list) follows the provider either way. |
 | `PANEL_EXITS` | empty | Set only on a panel that serves several exits; see [Switchyard](switchyard.md). A stack's own panel leaves it empty. |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |

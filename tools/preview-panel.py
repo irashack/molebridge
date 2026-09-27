@@ -129,7 +129,13 @@ def main():
         threading.Thread(target=fake_appliers, args=(state, exits), daemon=True).start()
         env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS='mullvad=mullvad,pia=pia',
                    PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='the preview')
-        script = (f'import sys; sys.path.insert(0, {str(ROOT / "panel")!r}); import app; '
+        # The sample relays' addresses answer nothing, so their latency is made
+        # up: steady per address, a spread from fast to slow, one timeout.
+        fake = '' if args.live else (
+            'import zlib, random; '
+            'app.probe_tcp_rtt_ms = lambda ip, *a, **k: None if ip.endswith(".13") else '
+            'round(8 + zlib.crc32(ip.encode()) % 220 + random.random() * 4, 1); ')
+        script = (f'import sys; sys.path.insert(0, {str(ROOT / "panel")!r}); import app; {fake}'
                   f'app.LISTEN_HOST, app.LISTEN_PORT = "127.0.0.1", {args.port}; app.main()')
         print(f'Switchyard preview on http://127.0.0.1:{args.port}/ (Ctrl-C stops it)', flush=True)
         try:
