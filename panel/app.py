@@ -959,6 +959,13 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             ready = all(status_payload(e)['view']['state'] == 'ok' for e in chosen)
             self._send_plain(200 if ready else 503, 'ready' if ready else 'not ready')
         elif parsed.path in ('/', '/embed'):
+            if EXITS and 'exit' not in query:
+                # Always name the exit in the address: the page reloads itself,
+                # and a reload must not follow another tab's choice.
+                ex = find_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME)) or EXITS[0]
+                self._send_body(303, 'text/plain; charset=utf-8', b'',
+                                {'Location': f'{parsed.path}?exit={ex.id}', 'Cache-Control': 'no-store'})
+                return
             self._handle_index(query, embed=parsed.path == '/embed')
         elif parsed.path == '/manifest.webmanifest':
             self._send_body(200, 'application/manifest+json', json.dumps(WEB_MANIFEST).encode('utf-8'),
@@ -1044,13 +1051,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         self._send_plain(status, message)
 
     def _handle_index(self, query: Dict[str, List[str]], *, embed: bool) -> None:
-        if 'exit' in query:
-            ex = self._requested_exit(query)
-            if ex is None:
-                return
-        else:
-            # The exit this browser last looked at, else the first.
-            ex = find_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME)) or all_exits()[0]
+        ex = self._requested_exit(query)
+        if ex is None:
+            return
         nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
         if not nonce or not re.fullmatch(r'[A-Za-z0-9_-]{32}', nonce):
             nonce = new_csrf_nonce()

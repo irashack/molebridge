@@ -738,9 +738,13 @@ class MultiExitTests(unittest.TestCase):
     def test_remembered_exit_is_the_default(self):
         resp, _ = self.request('GET', '/?exit=away')
         self.assertIn('molebridge_exit=away; Path=/', ' '.join(resp.headers.get_all('Set-Cookie')))
-        _, page = self.request('GET', '/', headers={'Cookie': 'molebridge_exit=away'})
-        self.assertIn('data-exit="away"', page)
-        _, page = self.request('GET', '/', headers={'Cookie': 'molebridge_exit=gone'})
+        # An address without ?exit= is redirected to one that names the exit,
+        # so the page's own reloads cannot follow another tab's choice.
+        resp, _ = self.request('GET', '/', headers={'Cookie': 'molebridge_exit=away'})
+        self.assertEqual((resp.status, resp.getheader('Location')), (303, '/?exit=away'))
+        resp, _ = self.request('GET', '/embed', headers={'Cookie': 'molebridge_exit=gone'})
+        self.assertEqual((resp.status, resp.getheader('Location')), (303, '/embed?exit=home'))
+        _, page = self.request('GET', '/?exit=home', headers={'Cookie': 'molebridge_exit=away'})
         self.assertIn('data-exit="home"', page)
 
     def test_status_readiness_and_summaries(self):

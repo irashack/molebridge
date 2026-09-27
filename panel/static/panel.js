@@ -174,7 +174,9 @@
     city.textContent = chip.dataset.city;
     const rest = document.createElement('span');
     rest.className = 'subdue';
-    rest.textContent = relay ? ` · ${relayLabel(host)}` : `, ${chip.dataset.country}`;
+    // A place named for its whole country (PIA's "Switzerland") says it once.
+    rest.textContent = relay ? ` · ${relayLabel(host)}` :
+      chip.dataset.city === chip.dataset.country ? '' : `, ${chip.dataset.country}`;
     if (prefix) place.append(prefix);
     place.append(city, rest);
 

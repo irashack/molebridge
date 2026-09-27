@@ -8,7 +8,8 @@ state is fabricated in a temporary directory: nothing is switched, and a
 selection only rewrites the fake exit's desired.json, which the preview then
 "applies" a few seconds later so the switching states can be seen. --live
 fills the catalogues from the providers' public server lists instead of the
-small built-in sample.
+small built-in sample. --fail <id> makes that exit's switches fail, to see
+the failed state.
 """
 from __future__ import annotations
 
@@ -78,19 +79,26 @@ def seed(state, exit_id, provider, relays, current):
     apply(state, exit_id, provider, relays)
 
 
-def apply(state, exit_id, provider, relays):
-    """What an applier would record after a verified switch."""
+def apply(state, exit_id, provider, relays, fail=False):
+    """What an applier would record after a verified (or failed) switch."""
     desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
+    previous = read_json(state / exit_id / 'applier' / 'result.json') or {}
     info = relays.get(desired.get('server'), {})
-    write_json_atomic(state / exit_id / 'applier' / 'result.json', {
+    result = {
         'server': desired.get('server'), 'request_id': desired.get('request_id'), 'status': 'ok',
         'checked_at': now_iso(), 'routing_ok': True, 'exit_confirmed': True, 'provider': provider,
         'egress_ip': '203.0.113.7', 'egress_city': info.get('city'), 'egress_country': info.get('country'),
-        'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.'}, public=True)
+        'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.'}
+    if fail:
+        result.update(server=previous.get('server'), status='failed', exit_confirmed=False, egress_ip=None,
+                      message='No handshake with the new server; the exit stays closed.')
+    write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
 
 
-def fake_appliers(state, exits):
-    seen = {}
+def fake_appliers(state, exits, failing=''):
+    # The seeded requests are already applied.
+    seen = {exit_id: ((read_json(state / exit_id / 'panel' / 'desired.json') or {}).get('request_id'), float('inf'))
+            for exit_id in exits}
     while True:
         for exit_id, (provider, relays) in exits.items():
             desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
@@ -98,7 +106,7 @@ def fake_appliers(state, exits):
             if request != seen.get(exit_id, (None,))[0]:
                 seen[exit_id] = (request, time.monotonic())
             elif time.monotonic() - seen[exit_id][1] > 4:
-                apply(state, exit_id, provider, relays)
+                apply(state, exit_id, provider, relays, fail=exit_id == failing)
                 seen[exit_id] = (request, float('inf'))
         # Keep results fresh, as the real applier's periodic checks do.
         for exit_id, (provider, relays) in exits.items():
@@ -116,6 +124,7 @@ def main():
     parser.add_argument('--live', action='store_true', help="use the providers' public server lists")
     parser.add_argument('--theme', default='auto')
     parser.add_argument('--style', default='provider')
+    parser.add_argument('--fail', default='', metavar='ID', help="make this exit's switches fail")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='switchyard-preview-') as tmp:
         state = Path(tmp)
@@ -126,7 +135,7 @@ def main():
                 current = sorted(relays)[0]
             seed(state, exit_id, provider, relays, current)
             exits[exit_id] = (provider, relays)
-        threading.Thread(target=fake_appliers, args=(state, exits), daemon=True).start()
+        threading.Thread(target=fake_appliers, args=(state, exits, args.fail), daemon=True).start()
         env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS='mullvad=mullvad,pia=pia',
                    PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='the preview')
         # The sample relays' addresses answer nothing, so their latency is made
