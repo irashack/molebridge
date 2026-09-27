@@ -149,6 +149,8 @@ target in your NetBird policies; nothing else is opened. A target outside
 
 ## Adding another provider
 
+[Provider candidates](provider-candidates.md) surveys which providers could come next.
+
 A provider fits the Mullvad model only if one WireGuard key and tunnel address
 work on every server; check that against the provider's documentation and a
 live test. A provider that registers keys per server fits the PIA model

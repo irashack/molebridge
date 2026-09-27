@@ -189,6 +189,13 @@ Remote text is escaped in HTML and assigned as text in JavaScript.
 Panel logs use fixed route names and omit client addresses, origins, query
 strings, bodies and unknown paths.
 
+One panel can serve several exits on the same host (`PANEL_EXITS`; see
+[Switchyard](switchyard.md)). Each exit is a pair of state directories under
+`$STATE_DIR/<id>`. Every request names its exit, and a selection is checked
+against that exit's own catalogue and written only to that exit's
+`desired.json`. The privilege split is unchanged: each applier alone applies
+what its own request file asks.
+
 Latency probes remain unprivileged TCP connects to port 443, cached for 15
 minutes, with bounded concurrency. They run only for open pages and measure the
 host-to-relay path, not end-to-end client latency.

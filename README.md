@@ -30,6 +30,7 @@ exit will drop.
 | :--- | :--- |
 | **Stay connected** | Keep NetBird active while sending exit traffic through Mullvad. |
 | **Pick your exit** | Browse countries and cities, compare measured latency, pin favourites, filter by hosting, and switch servers. |
+| **Run several** | One Switchyard panel can serve a Mullvad exit and a PIA exit side by side, each in its provider's colours and layout. |
 | **Make it fit** | Embed the panel in a dashboard, install it as a home-screen app, and use it in light or dark mode. |
 | **Keep it small** | Four containers, a Python standard-library panel, and dependency-free front-end code. |
 | **See what is happening** | Freshness-aware status, verified egress, and host-side doctor and recovery commands. |
@@ -126,7 +127,8 @@ in [SECURITY.md](SECURITY.md).
 | [Configuration](docs/configuration.md) | Look up a setting, secret-file location, or state-file format. |
 | [Providers](docs/providers.md) | Use PIA instead of Mullvad, or add another provider. |
 | [Architecture](docs/architecture.md) | Understand routing, catalogue ownership, and privilege separation. |
-| [Other providers](docs/providers.md) | See why Molebridge is Mullvad-only today and what another provider would need. |
+| [Switchyard](docs/switchyard.md) | Run one panel for several exits, such as a Mullvad exit and a PIA exit. |
+| [Provider candidates](docs/provider-candidates.md) | See which providers could come next and what each would take. |
 | [Verification](docs/verification.md) | Test client privacy and deliberately break the tunnel. |
 | [Testing](docs/testing.md) | See what has been tested, and validate a new revision on your host. |
 
