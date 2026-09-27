@@ -23,6 +23,9 @@ by the `PUID`/`PGID` selected above; create it as that user.
 
 ## 2. Create the tunnel config
 
+For PIA, follow [setting up PIA](providers.md#setting-up-pia) for this step
+instead.
+
 ```sh
 tools/prepare-tunnel-config.py ~/Downloads/<mullvad-download>.conf &&
   rm ~/Downloads/<mullvad-download>.conf

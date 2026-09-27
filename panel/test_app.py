@@ -603,3 +603,43 @@ class SigtermTests(unittest.TestCase):
         self.assertEqual(proc.stdout.readline().strip(), 'ready')
         proc.send_signal(signal.SIGTERM)
         self.assertEqual(proc.wait(timeout=5), 0)
+
+
+class PiaPanelTests(unittest.TestCase):
+    """The panel in PIA mode: region ids, provider-scoped catalogue, labels."""
+
+    REGION = {'hostname': 'ex_example', 'country': 'Exampleland', 'city': 'Example City',
+              'location_code': 'ex-ex_example', 'ipv4_addr_in': '198.51.100.21',
+              'port_forward': True, 'geo': True, 'servers': [{'ip': '198.51.100.20', 'cn': 'example401'}]}
+
+    def setUp(self):
+        patcher = patch.multiple(app, PROVIDER='pia', ATTRIBUTE_FILTERS={'port_forward': 'Port forwarding'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def catalogue(self, provider='pia'):
+        return {'fetched_at': app.now_iso(), 'provider': provider, 'relays': {'ex_example': self.REGION}}
+
+    def test_region_id_is_selectable_only_when_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desired = Path(tmp) / 'desired.json'
+            self.assertEqual(app.process_select(server='ex_example', allowlist={'ex_example'}, desired_path=desired)[0], 303)
+            self.assertEqual(json.loads(desired.read_text())['server'], 'ex_example')
+            for bad in ('ex_other', 'se-sto-wg-001', '../x', 'Ex'):
+                self.assertEqual(app.process_select(server=bad, allowlist={'ex_example'}, desired_path=desired)[0], 400)
+
+    def test_page_shows_regions_and_provider_labels(self):
+        result = {'checked_at': app.now_iso(), 'status': 'ok', 'server': 'ex_example', 'routing_ok': True,
+                  'exit_confirmed': True, 'provider': 'pia', 'port_forward': True, 'forwarded_port': 43210}
+        page = app.render_index_html(None, result, self.catalogue(), None, None, 'tok')
+        self.assertIn('data-provider="pia"', page)
+        self.assertIn('value="ex_example"', page)
+        self.assertIn('<dt>PIA IP</dt><dd data-f="exit_confirmed">True</dd>', page)
+        self.assertIn('data-f="forwarded_port">43210<', page)
+        self.assertIn('port forwarding · virtual location', page)
+        self.assertNotIn('Mullvad', page)
+
+    def test_catalogue_of_another_provider_is_not_offered(self):
+        page = app.render_index_html(None, None, self.catalogue('mullvad'), None, None, 'tok')
+        self.assertNotIn('value="ex_example"', page)
+        self.assertIn('No relays available.', page)

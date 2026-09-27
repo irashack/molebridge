@@ -1,0 +1,8 @@
+# Added for PIA (COMPOSE_FILE=compose.yaml:compose.pia.yaml, with PROVIDER=pia
+# and EXIT_IF=pia in .env). The applier registers the tunnel key with PIA, so
+# it reads the account login: secrets/pia/username and secrets/pia/password,
+# one value per file, mode 0600. No other container sees them.
+services:
+  applier:
+    volumes:
+      - ./secrets/pia:/run/secrets/pia:ro

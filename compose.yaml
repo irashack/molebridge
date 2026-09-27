@@ -1,8 +1,11 @@
-# Molebridge: a Mullvad WireGuard exit node for a NetBird overlay, with a web
-# panel for choosing the Mullvad server.
+# Molebridge: a Mullvad or PIA WireGuard exit node for a NetBird overlay, with a
+# web panel for choosing the server (Mullvad) or region (PIA).
 #
 # Run from the repository root after following docs/setup.md:
 #   docker compose up -d
+#
+# For PIA, set PROVIDER=pia and EXIT_IF=pia in .env and add compose.pia.yaml
+# (COMPOSE_FILE=compose.yaml:compose.pia.yaml); see docs/providers.md.
 #
 # Namespace ownership: `wireguard` creates the network namespace and the
 # Mullvad tunnel. `netbird` and `applier` join it (`network_mode:
@@ -44,13 +47,14 @@ services:
       OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
       OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
       OVERLAY_IF: "${OVERLAY_IF:-wt0}"
-      EXIT_IF: mullvad
+      EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      PROVIDER: "${PROVIDER:-mullvad}"
     volumes:
-      # wg_confs/mullvad.conf holds the Mullvad private key (mode 0600).
+      # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
       - ./tunnel/wg_confs:/config/wg_confs:ro
     healthcheck:
-      test: ["CMD-SHELL", "test -f /run/molebridge-routing-ready && ip link show mullvad >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "test -f /run/molebridge-routing-ready && ip link show \"$$EXIT_IF\" >/dev/null 2>&1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -92,7 +96,7 @@ services:
       # first `netbird up`. An already enrolled peer keeps its stored
       # blacklist, so an upgrade sets it with the flag instead
       # (docs/setup.md#5-keep-ice-off-the-tunnel-interface).
-      NB_EXTRA_IFACE_BLACKLIST: mullvad
+      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
     env_file:
       # NB_SETUP_KEY, needed only until the peer first enrolls.
       - path: ./secrets/netbird.env
@@ -136,8 +140,12 @@ services:
     tmpfs:
       - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
     environment:
-      EXIT_IF: mullvad
+      EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      PROVIDER: "${PROVIDER:-mullvad}"
+      # PIA only, off by default; see docs/providers.md#port-forwarding.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"
       OVERLAY_IF: "${OVERLAY_IF:-wt0}"
       OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env}"
       OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
@@ -183,6 +191,7 @@ services:
     command: ["python", "/app/panel/app.py"]
     environment:
       STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-mullvad}"
       PYTHONDONTWRITEBYTECODE: "1"
       PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
       PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"

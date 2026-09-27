@@ -38,10 +38,13 @@ jobs:
       - name: Build the privileged applier
         run: docker build --tag molebridge-applier:ci --file applier/Dockerfile .
       - name: Check runtime tools in the applier image
-        run: docker run --rm --network none --entrypoint sh molebridge-applier:ci -c 'python --version && wg --version && ip -Version && curl --version'
+        run: docker run --rm --network none --entrypoint sh molebridge-applier:ci -c 'python --version && wg --version && ip -Version && curl --version && nft --version && test -s /app/applier/pia-ca.rsa.4096.crt'
       - name: Build the routing image and check init ownership
         run: |
           docker build --tag molebridge-wireguard:ci --file routing/Dockerfile .
           docker run --rm --network none --entrypoint sh molebridge-wireguard:ci -c 'test -x /custom-cont-init.d/10-exit-routing && test "$(stat -c %u /custom-cont-init.d/10-exit-routing)" = 0'
       - name: Linux namespace routing drills
-        run: sudo sh tools/check-routing.sh
+        run: |
+          # nft runs the PIA port-forwarding and ingress-guard drill.
+          sudo apt-get install -y --no-install-recommends nftables >/dev/null
+          sudo sh tools/check-routing.sh

@@ -81,7 +81,11 @@ class Host:
             raise CheckError('Invalid Compose or routing configuration.') from exc
 
     def check_files(self, config):
-        for relative in ('tunnel/wg_confs/mullvad.conf',):
+        exit_if = config['services']['wireguard']['environment'].get('EXIT_IF', 'mullvad')
+        provider = config['services']['wireguard']['environment'].get('PROVIDER', 'mullvad')
+        if not re.fullmatch(r'[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,14}', exit_if):
+            raise CheckError('Invalid EXIT_IF.')
+        for relative in (f'tunnel/wg_confs/{exit_if}.conf',):
             path = self.root / relative
             if path.is_symlink() or not path.is_file():
                 raise CheckError('Missing or symlinked tunnel configuration.')
@@ -92,14 +96,26 @@ class Host:
             expected = config['services']['wireguard']['environment']['EXIT_TABLE']
             if not re.search(r'^Table\s*=\s*off\s*$', text, re.M):
                 raise CheckError('Tunnel configuration must use Table = off.')
-            families = tunnel_families(text)
+            if provider == 'pia':
+                # PIA assigns the address per registration; the config has none.
+                if re.search(r'^\s*Address\s*=', text, re.M) or re.search(r'^\s*\[Peer\]', text, re.M):
+                    raise CheckError('A PIA tunnel configuration has no Address or Peer; regenerate it with --pia.')
+                families = set()
+            else:
+                families = tunnel_families(text)
             for key, action in (('PostUp', 'replace'), ('PreDown', 'del')):
                 match = re.search(r'^' + key + r'\s*=\s*(.+)$', text, re.M)
                 for flag in ('', '-6 ') if 6 in families else ('',):
                     route = rf'ip {flag}route {action} default dev %i table {re.escape(str(expected))}(?:\s*;|\s*$)'
                     if not match or not re.search(route, match[1]):
                         raise CheckError('Tunnel configuration and EXIT_TABLE do not match for every address family; regenerate the config.')
-        for relative in ('secrets/netbird.env', 'secrets/applier.env'):
+        secrets = ['secrets/netbird.env', 'secrets/applier.env']
+        if provider == 'pia':
+            for relative in ('secrets/pia/username', 'secrets/pia/password'):
+                if not (self.root / relative).is_file():
+                    raise CheckError('PIA needs secrets/pia/username and secrets/pia/password (docs/providers.md).')
+            secrets += ['secrets/pia/username', 'secrets/pia/password']
+        for relative in secrets:
             path = self.root / relative
             if path.exists() and (path.is_symlink() or (os.name == 'posix' and stat.S_IMODE(path.stat().st_mode) != 0o600)):
                 raise CheckError('Secret files must be regular files with mode 0600.')
@@ -147,7 +163,7 @@ class Host:
         self.ice_blacklist_check(config)
         # This command deliberately prints only fixed check labels, no addresses.
         self.compose('exec', '-T', 'applier', 'python', '-m', 'applier.apply', '--doctor', timeout=30)
-        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, routing and recent Mullvad check')
+        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, routing and recent provider check')
         print('Client DNS, IPv6 and failure drills still require docs/verification.md.')
 
     def recover(self):

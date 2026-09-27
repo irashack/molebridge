@@ -3,7 +3,8 @@
 ## Goal and boundary
 
 Keep a device on NetBird while Internet traffic received by this exit leaves
-through Mullvad. If the tunnel is unavailable, forwarded traffic must fail.
+through Mullvad or PIA ([providers](providers.md)); the sections below describe
+Mullvad, and the provider page lists what differs for PIA. If the tunnel is unavailable, forwarded traffic must fail.
 This is a property of the exit namespace, not a device-wide kill switch:
 deselecting the exit, disconnecting NetBird, client-local routes, DNS and client
 IPv6 behavior require separate verification.
@@ -32,7 +33,8 @@ through a read-only mount. It cannot change the relay catalogue, result or
 applier code. An old `state/panel/relays.json` has no authority and is ignored.
 
 The applier never mounts the tunnel config, invokes a shell, or reads a
-WireGuard private key. Nevertheless it has `NET_ADMIN` in the tunnel namespace:
+WireGuard private key. With PIA it also reads the PIA login and sets the tunnel
+address on each switch ([providers](providers.md#why-pia-works-differently)). Nevertheless it has `NET_ADMIN` in the tunnel namespace:
 a compromised applier can retrieve the live key and alter routing. It belongs
 to the trusted computing base, along with Docker, the host and NetBird.
 Its filesystem is read-only except for its own state and bounded scratch space.
@@ -115,9 +117,8 @@ and bounded location strings. The optional display attributes (Mullvad-owned,
 RAM-only, hosting provider) are kept only when they are strict booleans or
 bounded text; they never affect whether a relay may be selected.
 
-The relay catalogue, egress check and naming are Mullvad-specific. See
-[other providers](providers.md) for what supporting another provider would
-involve.
+The PIA catalogue is PIA's region list, parsed and validated the same way; see
+[providers](providers.md).
 
 It atomically writes `state/applier/relays.json`. Failed or empty refreshes
 keep the last good catalogue and publish a sanitized error in

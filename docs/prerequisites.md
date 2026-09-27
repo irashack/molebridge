@@ -1,6 +1,7 @@
 # Prerequisites
 
-Gather these before [setup](setup.md).
+Gather these before [setup](setup.md). For PIA instead of Mullvad, see
+[PIA](#pia) below.
 
 ## Mullvad
 
@@ -18,6 +19,13 @@ Gather these before [setup](setup.md).
 
   The file contains the device's private key. Keep it out of repositories,
   chats and shared folders, and delete it after setup converts it.
+
+## PIA
+
+- **An active PIA account** and its username and password. The applier uses
+  them to register the tunnel key; two-factor authentication does not block
+  this. Nothing needs generating on PIA's site: `tools/prepare-tunnel-config.py
+  --pia` makes the key. See [providers](providers.md#setting-up-pia).
 
 ## NetBird
 

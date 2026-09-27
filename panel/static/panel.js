@@ -28,7 +28,8 @@
   // receives a switch request. Stored values are untrusted: anything not
   // shaped like a relay name is dropped, and only catalogued relays are shown.
 
-  const HOST_RE = /^[a-z0-9-]{1,40}-wg-[0-9]{3}$/;
+  // Mullvad relay hostnames, or PIA region ids.
+  const HOST_RE = page.dataset.provider === 'pia' ? /^[a-z0-9][a-z0-9_-]{0,47}$/ : /^[a-z0-9-]{1,40}-wg-[0-9]{3}$/;
   const PINNED_KEY = 'molebridge.pinned';
   const RECENT_KEY = 'molebridge.recent';
   const FILTERS_KEY = 'molebridge.filters';
@@ -577,6 +578,8 @@
       const key = el.dataset.f;
       if (key === 'egress') el.textContent = `${result.egress_city ?? '(unknown)'}, ${result.egress_country ?? '(unknown)'}`;
       else if (key === 'handshake_age_s') el.textContent = `${result.handshake_age_s ?? '(unknown)'}s at last check`;
+      else if (key === 'exit_confirmed') el.textContent = String((result.exit_confirmed ?? result.mullvad_exit_ip) === true);
+      else if (key === 'forwarded_port') el.textContent = result.forwarded_port ?? 'none';
       else el.textContent = result[key] ?? '';
     }
     const ip = page.querySelector('[data-current-ip]');

@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 HOSTNAME_RE = re.compile(r'[a-z0-9-]{1,40}-wg-[0-9]{3}')
+# A selectable name per provider: a Mullvad relay hostname or a PIA region id.
+PROVIDERS = ('mullvad', 'pia')
+SERVER_NAME_RE = {'mullvad': HOSTNAME_RE, 'pia': re.compile(r'[a-z0-9][a-z0-9_-]{0,47}')}
+PROVIDER_LABEL = {'mullvad': 'Mullvad', 'pia': 'PIA'}
 STATUS_MAX_AGE = 150
 CATALOG_MAX_AGE = 24 * 60 * 60
 MAX_CATALOG_BYTES = 10 * 1024 * 1024
@@ -85,12 +89,30 @@ def write_json_atomic(path: Path, obj, *, public=False):
             os.unlink(temporary)
 
 
-def desired_request(value):
+def provider_from_env(env):
+    provider = env.get('PROVIDER', '') or 'mullvad'
+    if provider not in PROVIDERS:
+        raise ValueError('PROVIDER must be one of: ' + ', '.join(PROVIDERS))
+    return provider
+
+
+def valid_server_name(value, provider='mullvad'):
+    return isinstance(value, str) and bool(SERVER_NAME_RE[provider].fullmatch(value))
+
+
+def exit_confirmed(result):
+    """The provider-side egress confirmation; older results carry the Mullvad field."""
+    if 'exit_confirmed' in result:
+        return result.get('exit_confirmed') is True
+    return result.get('mullvad_exit_ip') is True
+
+
+def desired_request(value, provider='mullvad'):
     """Accept the old two-field request and the new retry-aware request schema."""
     if not isinstance(value, dict) or set(value) - {'server', 'requested_at', 'request_id'}:
         return None
     server = value.get('server')
-    if not isinstance(server, str) or not HOSTNAME_RE.fullmatch(server):
+    if not valid_server_name(server, provider):
         return None
     if age_seconds(value.get('requested_at')) is None:
         return None
@@ -104,20 +126,20 @@ def request_token(request):
     return request.get('request_id') or f"{request['server']}@{request['requested_at']}"
 
 
-def status_view(desired, result):
+def status_view(desired, result, provider='mullvad'):
     """One interpretation for HTML, API, monitoring and browser polling."""
     desired = desired if isinstance(desired, dict) else {}
     result = result if isinstance(result, dict) else {}
     if not recent(result.get('checked_at')):
         return 'unknown', 'status stale' if result else 'awaiting status'
-    request = desired_request(desired)
+    request = desired_request(desired, provider)
     if request and result.get('request_id') != request_token(request):
         if recent(desired.get('requested_at')):
             return 'applying', 'switching'
         return 'unknown', 'request not acknowledged'
     status = result.get('status')
     if status == 'ok':
-        if result.get('routing_ok') is not True or result.get('mullvad_exit_ip') is not True:
+        if result.get('routing_ok') is not True or not exit_confirmed(result):
             return 'failed', 'verification failed'
         return 'ok', 'connected'
     if status == 'applying':

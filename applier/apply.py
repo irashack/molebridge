@@ -16,10 +16,10 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from molebridge.relays import MULLVAD_RELAYS_URL, REFRESH_INTERVAL_S, RelayCatalog, valid_key
+from molebridge.relays import CATALOG_URL, REFRESH_INTERVAL_S, RelayCatalog, valid_key
 from molebridge.routing import RETURN_PATH_SYSCTL, RoutingConfig, family_status, return_path_enabled
-from molebridge.state import (MAX_CATALOG_BYTES, decode_json, desired_request, now_iso, read_json,
-                              recent, request_token, write_json_atomic)
+from molebridge.state import (MAX_CATALOG_BYTES, PROVIDER_LABEL, decode_json, desired_request, now_iso,
+                              provider_from_env, read_json, recent, request_token, write_json_atomic)
 
 HANDSHAKE_FRESH_SEC = 180
 SWITCH_TIMEOUT_SEC = 60
@@ -45,11 +45,18 @@ def command(args, *, timeout=5, limit=1024 * 1024):
 
 
 class Applier:
+    """The Mullvad applier; `applier.pia.PiaApplier` overrides the provider seam:
+    catalogue options, `apply_relay`, `server_for`, `egress` and `tick`."""
+    provider = 'mullvad'
+    # Mullvad gives one tunnel address valid on every relay, so the interface
+    # must already carry it before a switch.
+    address_before_switch = True
+
     def __init__(self, state_dir: Path, config: RoutingConfig, *, run=command, clock=time.monotonic, sleep=time.sleep):
         self.directory = state_dir / 'applier'
         self.result_path = self.directory / 'result.json'
         self.desired_path = state_dir / 'panel' / 'desired.json'
-        self.catalog = RelayCatalog(self.directory)
+        self.catalog = self.make_catalog()
         self.config, self.run, self.clock, self.sleep = config, run, clock, sleep
         self.last_request = None
         self.request = None
@@ -58,19 +65,22 @@ class Applier:
         self.rejection = None
         self.pending = None
 
+    def make_catalog(self):
+        return RelayCatalog(self.directory, self.provider)
+
     def fetch_catalog(self):
         response = self.run(['curl', '--noproxy', '*', '--proto', '=https', '-fsS',
                              '--connect-timeout', '10', '--max-time', '20',
                              '--max-filesize', str(MAX_CATALOG_BYTES),
                              '--user-agent', 'molebridge-applier/0.2',
-                             '--write-out', '\n%{http_code}', MULLVAD_RELAYS_URL],
+                             '--write-out', '\n%{http_code}', CATALOG_URL[self.provider]],
                             timeout=22, limit=MAX_CATALOG_BYTES + 4)
         body, code = response.rsplit('\n', 1)
         if code != '200':
             raise ValueError('unexpected catalogue HTTP status; redirects refused')
         return body
 
-    def tunnel_addresses(self):
+    def tunnel_addresses(self, *, require_ipv4=True):
         """Global tunnel addresses by family, read from the interface, never its routes.
 
         Exactly one address per family is supported: the return-path rule and
@@ -91,15 +101,18 @@ class Applier:
             if address.version in found:
                 raise ValueError('multiple tunnel addresses for one family')
             found[address.version] = str(address)
-        if 4 not in found:
+        if 4 not in found and require_ipv4:
             raise ValueError('missing IPv4 tunnel address')
         return found
 
-    def routing_status(self):
+    def routing_status(self, *, require_address=True):
+        """(protected, fallback). Without `require_address` an interface that has
+        no address yet passes when its guards are intact: a provider that
+        assigns the address per server installs rule 94 with it."""
         checks = []
         try:
             self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
-            addresses = self.tunnel_addresses()
+            addresses = self.tunnel_addresses(require_ipv4=require_address)
             return_path = return_path_enabled(self.run(['cat', RETURN_PATH_SYSCTL]))
             for family in (4, 6):
                 rules = decode_json(self.run(['ip', '-j', f'-{family}', 'rule', 'show']))
@@ -132,6 +145,16 @@ class Applier:
                 return age if timestamp > 0 and age >= 0 else None
         return None
 
+    def apply_relay(self, relay, keys):
+        """Point the tunnel at an approved relay. A failed removal aborts before
+        any new peer is added."""
+        for key in keys:
+            if key != relay['public_key']:
+                self.run(['wg', 'set', self.config.exit_if, 'peer', key, 'remove'])
+        self.run(['wg', 'set', self.config.exit_if, 'peer', relay['public_key'],
+                  'endpoint', relay['ipv4_addr_in'] + ':51820', 'allowed-ips', '0.0.0.0/0,::/0',
+                  'persistent-keepalive', '25'])
+
     def egress_family(self, family):
         # am.i.mullvad.net has no AAAA record; Mullvad publishes per-family names.
         raw = self.run(['curl', f'-{family}', '--interface', self.config.exit_if, '--noproxy', '*',
@@ -153,14 +176,19 @@ class Applier:
 
     def egress(self):
         probes = {family: self.egress_family(family) for family in sorted(self.tunnel_addresses())}
-        return {**probes[4], 'mullvad_exit_ip': all(p['mullvad_exit_ip'] for p in probes.values()),
+        confirmed = all(p['mullvad_exit_ip'] for p in probes.values())
+        return {**probes[4], 'mullvad_exit_ip': confirmed, 'exit_confirmed': confirmed,
                 'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
+
+    def result_defaults(self):
+        return {'mullvad_exit_ip': False}
 
     def publish(self, status, message, *, server=None, **fields):
         result = {'server': server, 'status': status, 'message': message, 'checked_at': now_iso(),
                   'request_id': request_token(self.request) if self.request else None,
                   'requested_server': self.request['server'] if self.request else None,
-                  'routing_ok': False, 'unreachable_fallback': False, 'mullvad_exit_ip': False,
+                  'provider': self.provider, 'routing_ok': False, 'unreachable_fallback': False,
+                  'exit_confirmed': False, **self.result_defaults(),
                   'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
                   'egress_ips': {}}
         result.update(fields)
@@ -183,7 +211,7 @@ class Applier:
             keys = self.peers()
             server = self.server_for(keys)
             if len(keys) != 1:
-                return emit('failed', 'Expected exactly one tunnel peer.')
+                return emit('failed', self.rejection or 'Expected exactly one tunnel peer.')
             age = self.handshake_age(keys[0])
             fields['handshake_age_s'] = age
             if not routing_ok:
@@ -193,8 +221,8 @@ class Applier:
                 return emit('failed', self.rejection)
             if age is None or age >= HANDSHAKE_FRESH_SEC:
                 return emit('failed', 'Tunnel handshake is missing or stale; check the account and connectivity.')
-            if fields['mullvad_exit_ip'] is not True:
-                return emit('failed', 'Tunnel egress is not confirmed as Mullvad.')
+            if fields['exit_confirmed'] is not True:
+                return emit('failed', f'Tunnel egress is not confirmed as {PROVIDER_LABEL[self.provider]}.')
             if not self.catalog.usable() or server is None:
                 return emit('failed', 'Current peer cannot be verified against a fresh relay catalogue.')
             return emit('ok', 'Healthy.')
@@ -203,7 +231,7 @@ class Applier:
 
     def switch(self, request):
         # Also validate when called outside the polling loop (e.g. tests/tools).
-        request = desired_request(request)
+        request = desired_request(request, self.provider)
         self.request = request
         self.rejection = None
         self.pending = None
@@ -216,7 +244,7 @@ class Applier:
         if request['server'] not in self.catalog.relays:
             self.rejection = 'Requested server is not in a fresh trusted relay catalogue; no change applied.'
             return self.inspect()
-        routing_ok, fallback = self.routing_status()
+        routing_ok, fallback = self.routing_status(require_address=self.address_before_switch)
         if not routing_ok:
             self.pending = 'Waiting for tunnel and overlay routing; request will retry automatically. Run recovery if this persists.'
             return self.inspect()
@@ -229,13 +257,7 @@ class Applier:
         try:
             self.publish('applying', 'Applying the requested server.', server=self.server_for(keys),
                          routing_ok=True, unreachable_fallback=fallback)
-            # A failed removal aborts before any new peer is added.
-            for key in keys:
-                if key != relay['public_key']:
-                    self.run(['wg', 'set', self.config.exit_if, 'peer', key, 'remove'])
-            self.run(['wg', 'set', self.config.exit_if, 'peer', relay['public_key'],
-                      'endpoint', relay['ipv4_addr_in'] + ':51820', 'allowed-ips', '0.0.0.0/0,::/0',
-                      'persistent-keepalive', '25'])
+            self.apply_relay(relay, keys)
             deadline = self.clock() + SWITCH_TIMEOUT_SEC
             while self.clock() < deadline:
                 result = self.inspect(applying=True)
@@ -275,7 +297,7 @@ class Applier:
             refreshed = self.catalog.refresh(self.fetch_catalog)
             self.next_catalog = self.clock() + (REFRESH_INTERVAL_S if refreshed else 60)
         raw = read_json(self.desired_path, 4096)
-        request = desired_request(raw)
+        request = desired_request(raw, self.provider)
         if request is None and (raw is not None or self.desired_path.exists()):
             if self.last_request != 'invalid':
                 self.next_health = 0
@@ -324,7 +346,12 @@ def main():
     args = parser.parse_args()
     directory = Path(os.environ.get('STATE_DIR', '/state'))
     try:
-        applier = Applier(directory, RoutingConfig.from_env(os.environ))
+        provider = provider_from_env(os.environ)
+        if provider == 'pia':
+            from applier.pia import PiaApplier
+            applier = PiaApplier.from_env(directory, RoutingConfig.from_env(os.environ), os.environ)
+        else:
+            applier = Applier(directory, RoutingConfig.from_env(os.environ))
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
@@ -336,7 +363,8 @@ def main():
             checks = {'recent applier check': recent(result.get('checked_at')),
                       'routing protection': applier.routing_status()[0],
                       'fresh relay catalogue': applier.catalog.usable(),
-                      'verified Mullvad egress': recent(result.get('checked_at')) and result.get('status') == 'ok'}
+                      f'verified {PROVIDER_LABEL[applier.provider]} egress':
+                          recent(result.get('checked_at')) and result.get('status') == 'ok'}
             for label, passed in checks.items():
                 print(('PASS ' if passed else 'FAIL ') + label)
             return 0 if all(checks.values()) else 1

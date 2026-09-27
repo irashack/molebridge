@@ -108,6 +108,7 @@ groups and access policy are covered in the [NetBird prerequisites](docs/prerequ
 | **macOS / OrbStack** | Apple silicon, self-hosted NetBird 0.78, iPhone and macOS clients. A live pass ran the fail-closed, single-family, orphaned-namespace, status and monitoring drills on the revision before `1390860`; its six findings, including the path-MTU return path for UDP, are fixed in `1390860` through `336d904`. |
 | **Automated checks** | On every push: Python regression tests, shell lint, Compose validation, both derived image builds, and isolated Linux IPv4/IPv6 routing failure and recovery drills. Latest results: [View CI](https://github.com/irashack/molebridge/actions/workflows/ci.yml). |
 | **Rootless Podman** | Debian 13 / rootless Podman 5.4 / podman-compose 1.6 / amd64, NetBird 0.79, self-hosted. At `5a6e0b5`: all six fail-closed drills with a client held on the exit (no leak during any drill or the reboot), host reboot with unattended recovery, LAN isolation from the client, and the IPv6 path-MTU error leaving through the tunnel. A clean install of the unchanged `compose.yaml` started, passed doctor and survived the documented recovery. The v0.2.0 panel changes passed a live pass at `56ac2cc` and `40c461c`: doctor before and after each deployment, the live relay attributes, and one verified switch. Record: [testing](docs/testing.md). |
+| **PIA** | Experimental. Regions, per-server key registration and optional port forwarding, covered by regression tests and the isolated routing drills; live results are in [testing](docs/testing.md). See [providers](docs/providers.md). |
 | **Still unverified** | A live UDP flow larger than the overlay MTU, fail-closed drills with a phone client, and Docker Engine or NetBird Cloud end to end. |
 
 Molebridge is experimental. The latest release is
@@ -123,6 +124,7 @@ in [SECURITY.md](SECURITY.md).
 | [Authenticated access](docs/access.md) | Reach the panel through SSH, an overlay policy, or an authenticating proxy. |
 | [Operations](docs/operations.md) | Switch servers, embed the panel, upgrade, or recover the stack. |
 | [Configuration](docs/configuration.md) | Look up a setting, secret-file location, or state-file format. |
+| [Providers](docs/providers.md) | Use PIA instead of Mullvad, or add another provider. |
 | [Architecture](docs/architecture.md) | Understand routing, catalogue ownership, and privilege separation. |
 | [Other providers](docs/providers.md) | See why Molebridge is Mullvad-only today and what another provider would need. |
 | [Verification](docs/verification.md) | Test client privacy and deliberately break the tunnel. |
@@ -159,4 +161,5 @@ replace them.
 Built around [WireGuard's network namespace model](https://www.wireguard.com/netns/).
 Molebridge is not affiliated with Mullvad VPN AB or NetBird. The bundled
 JetBrains Mono font uses the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt);
+the bundled PIA certificate authority comes with [PIA's MIT notice](applier/PIA-CA-LICENSE.txt);
 the rest of Molebridge is released under the [MIT License](LICENSE).

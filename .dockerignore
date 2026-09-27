@@ -4,6 +4,8 @@
 !applier/
 !applier/*.py
 !applier/Dockerfile
+!applier/pia-ca.rsa.4096.crt
+!applier/PIA-CA-LICENSE.txt
 !routing/
 !routing/10-exit-routing
 !routing/Dockerfile

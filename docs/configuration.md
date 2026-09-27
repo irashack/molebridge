@@ -6,6 +6,11 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 
 | Setting | Default | Purpose |
 |---|---|---|
+| `PROVIDER` | `mullvad` | `mullvad` or `pia`; see [providers](providers.md). Keep it unchanged after installation. |
+| `EXIT_IF` | `mullvad` | Tunnel interface name, and the tunnel config's file name under `tunnel/wg_confs/`. Use `pia` with PIA. |
+| `COMPOSE_FILE` | `compose.yaml` | Set to `compose.yaml:compose.pia.yaml` for PIA, which mounts the PIA login into the applier. |
+| `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). |
+| `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port. Required when forwarding is on; refused otherwise. |
 | `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation: changing it creates a fresh identity volume and enrolls a new peer. |
 | `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
@@ -34,7 +39,9 @@ contents anywhere.
 
 | File | Contents | Needed |
 |---|---|---|
-| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | Always |
+| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | With Mullvad |
+| `tunnel/wg_confs/pia.conf` | PIA tunnel private key only; no address or peer | With PIA |
+| `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file | With PIA |
 | `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
 | `secrets/applier.env` | `GATUS_TOKEN` | Only with `GATUS_URL` |
 
@@ -44,13 +51,15 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 
 | File | Writer | Reader | Contents |
 |---|---|---|---|
-| `applier/relays.json` | applier | panel (read-only) | `fetched_at` and validated `relays`: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters) |
+| `applier/relays.json` | applier | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). A snapshot for another provider is ignored. |
+| `applier/tunnel.json` | applier | nobody | PIA only: the current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`). No secret. |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `mullvad_exit_ip`, `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
+| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
 
 Routing initialization reads only the `Address` line of the tunnel config, for
-the return-path rule; `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr`
+the return-path rule (a PIA config has none; the applier installs the rule per
+registration); `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr`
 on the `wireguard` service for the same reason, and the applier and doctor
 require both. See [architecture](architecture.md#routing-contract).
 

@@ -10,10 +10,12 @@ cd "$root"
 work=$(mktemp -d)
 created=''
 gate_pid=''
+listeners=''
 cleanup() {
     if [ -n "$gate_pid" ]; then kill "$gate_pid" 2>/dev/null || true; wait "$gate_pid" 2>/dev/null || true; fi
+    for pid in $listeners; do kill "$pid" 2>/dev/null || true; done
     for ns in $created; do ip netns del "$ns" 2>/dev/null || true; done
-    rm -f "$work/ready" "$work/rules.json" "$work/routes.json" "$work/gate-started" "$work/mullvad.conf" "$work/ping"
+    rm -f "$work/ready" "$work/rules.json" "$work/routes.json" "$work/gate-started" "$work/mullvad.conf" "$work/pia.conf" "$work/ping" "$work/forward.nft" "$work/guard.nft"
     rmdir "$work"
 }
 trap cleanup EXIT HUP INT TERM
@@ -82,10 +84,16 @@ PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 Address = $tunnel4/32, $tunnel6/128
 Table = off
 EOF
+# A PIA config has no Address: the applier assigns one per server.
+cat > "$work/pia.conf" <<EOF
+[Interface]
+PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+Table = off
+EOF
 install_rules() {
     ip netns exec "$exitns" env OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 \
         OVERLAY_IF="$overlay_if" EXIT_IF=mullvad EXIT_TABLE=51821 ROUTING_READY_FILE="$work/ready" \
-        TUNNEL_CONF="$work/mullvad.conf" sh "$root/routing/10-exit-routing"
+        PROVIDER="${1:-mullvad}" TUNNEL_CONF="$work/${1:-mullvad}.conf" sh "$root/routing/10-exit-routing"
 }
 restore_routes() {
     for family in -4 -6; do
@@ -159,6 +167,9 @@ validate_family() {
     ip -n "$exitns" -j "-$1" route show table 51821 > "$work/routes.json"
     address=$tunnel4
     [ "$1" = 4 ] || address=$tunnel6
+    # A third argument overrides the family's tunnel address; "none" means the
+    # tunnel does not carry that family.
+    [ -z "${3:-}" ] || address=$3
     python3 - "$work/rules.json" "$work/routes.json" "$1" "$2" "$overlay_if" "$address" <<'PY'
 import json, sys
 from molebridge.routing import RoutingConfig, family_status
@@ -167,7 +178,8 @@ with open(sys.argv[1]) as f:
 with open(sys.argv[2]) as f:
     routes = json.load(f)
 config = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64', overlay_if=sys.argv[5])
-result = family_status(rules, routes, config, int(sys.argv[3]), tunnel_address=sys.argv[6])
+address = None if sys.argv[6] == 'none' else sys.argv[6]
+result = family_status(rules, routes, config, int(sys.argv[3]), tunnel_address=address)
 assert result == (sys.argv[4] == 'healthy', True), f'IPv{sys.argv[3]} validation={result}; rules={rules!r}; routes={routes!r}'
 PY
 }
@@ -270,3 +282,113 @@ install_rules
 connected
 for family in 4 6; do validate_family "$family" healthy; done
 echo 'PASS routing reinstallation and recovery'
+
+# PIA: no Address in the config, so initialization installs every guard but no
+# return-path rule. A switch then assigns a per-server IPv4 address and rule
+# 94, as the applier does, and the tunnel carries no IPv6.
+install_rules pia
+for family in -4 -6; do
+    if [ -n "$(ip -n "$exitns" "$family" rule show priority 94)" ]; then
+        echo "FAIL address-less PIA initialization installed a return-path rule ($family)" >&2
+        exit 1
+    fi
+done
+ip -n "$exitns" -6 route del default dev mullvad table 51821
+for family in 4 6; do validate_family "$family" healthy none; done
+if probe "$client" -6; then
+    echo 'FAIL IPv6 escaped through an IPv4-only PIA tunnel' >&2
+    exit 1
+fi
+echo 'PASS PIA initialization without an address keeps every guard and blocks IPv6'
+pia4=203.0.113.5
+# The applier's order: new address first, then the old one goes, then the
+# tunnel default is re-asserted. Removing the last address first would delete
+# every route through the interface. The applier assigns /32 addresses; a
+# second address inside the old prefix would be a secondary, removed with it.
+ip -n "$exitns" -4 addr replace "$pia4/32" dev mullvad
+ip -n "$exitns" -4 addr del "$tunnel4/24" dev mullvad
+ip -n "$exitns" -4 route replace default dev mullvad table 51821
+ip -n "$exitns" -4 neigh replace 198.51.100.100 lladdr 02:00:00:00:03:02 nud permanent dev mullvad
+ip -n "$tunnel" route replace 192.0.2.0/24 via "$pia4"
+ip -n "$exitns" -4 rule add from "$pia4" ipproto icmp lookup 51821 priority 94
+probe "$client" -4 || { echo 'FAIL IPv4 did not forward after the PIA address change' >&2; exit 1; }
+validate_family 4 healthy "$pia4"
+validate_family 4 failed "$tunnel4"
+validate_family 6 healthy none
+too_big_reported -4 || { echo 'FAIL ICMP return path broken after the PIA address change' >&2; exit 1; }
+if probe "$client" -6; then
+    echo 'FAIL IPv6 escaped after the PIA address change' >&2
+    exit 1
+fi
+echo 'PASS PIA address change keeps IPv4 forwarding, its ICMP return path and the IPv6 block'
+ip -n "$exitns" -4 route del default dev mullvad table 51821
+blocked 'PIA tunnel route deleted'
+
+# PIA port forwarding, with the applier's own nftables text: a connection from
+# the Internet side to the forwarded port reaches the overlay target, and the
+# ingress guard stops it leaving any other way when the overlay route is gone.
+if ! command -v nft >/dev/null 2>&1; then
+    echo 'SKIP PIA port-forwarding drill (nft not installed)'
+    exit 0
+fi
+restore_routes
+python3 - "$work" <<'PY'
+import sys, tempfile
+from pathlib import Path
+from applier.pia import PiaApplier
+from molebridge.routing import RoutingConfig
+work = Path(sys.argv[1])
+captured = []
+config = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64')
+applier = PiaApplier(Path(tempfile.mkdtemp()), config, port_forward=True, forward_target='192.0.2.2',
+                     run=lambda args, **kw: captured.append(Path(args[2]).read_text()) or '')
+applier.install_guard()
+(work / 'guard.nft').write_text(captured[-1])
+(work / 'forward.nft').write_text(applier.forward_rules(40000))
+PY
+listen() {
+    ip netns exec "$1" python3 -c '
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((sys.argv[1], 40000)); s.listen(8)
+while True:
+    c, _ = s.accept(); c.sendall(sys.argv[2].encode()); c.close()
+' "$2" "$3" &
+    listeners="$listeners $!"
+}
+# The overlay target answers; a counter in the outside namespace, behind the
+# exit's ordinary default route, detects any forwarded packet that leaks there.
+listen "$client" 192.0.2.2 target
+ip netns exec "$outside" nft -f - <<'NFT'
+table inet leak {
+  chain input {
+    type filter hook prerouting priority raw; policy accept;
+    ip daddr 192.0.2.2 tcp dport 40000 counter name seen
+  }
+  counter seen {}
+}
+NFT
+sleep 1
+inbound() {
+    ip netns exec "$tunnel" python3 -c '
+import socket, sys
+s = socket.create_connection(("203.0.113.5", 40000), timeout=2, source_address=("198.51.100.100", 0))
+print(s.recv(16).decode())
+' 2>/dev/null || true
+}
+leaked() {
+    ip netns exec "$outside" nft reset counter inet leak seen >/dev/null
+    inbound >/dev/null
+    ip netns exec "$outside" nft list counter inet leak seen | grep -q 'packets [1-9]'
+}
+ip netns exec "$exitns" nft -f "$work/guard.nft"
+ip netns exec "$exitns" nft -f "$work/forward.nft"
+[ "$(inbound)" = target ] || { echo 'FAIL forwarded port did not reach the overlay target' >&2; exit 1; }
+echo 'PASS PIA forwarded port reaches the overlay target and replies return through the tunnel'
+ip -n "$exitns" route del 192.0.2.0/24 dev "$overlay_if"
+if leaked; then echo 'FAIL forwarded connection left through the ordinary route' >&2; exit 1; fi
+ip netns exec "$exitns" nft delete table inet molebridge_guard
+leaked || { echo 'FAIL leak detector did not see the unguarded path' >&2; exit 1; }
+ip netns exec "$exitns" nft -f "$work/guard.nft"
+if leaked; then echo 'FAIL guard reinstall did not stop the leak' >&2; exit 1; fi
+echo 'PASS ingress guard stops forwarded connections leaving other than over the overlay (drill confirmed sensitive)'

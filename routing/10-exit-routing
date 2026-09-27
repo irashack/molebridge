@@ -14,6 +14,7 @@ OVERLAY6_CIDR="${OVERLAY6_CIDR:-}"
 OVERLAY_IF="${OVERLAY_IF:-wt0}"
 EXIT_IF="${EXIT_IF:-mullvad}"
 EXIT_TABLE="${EXIT_TABLE:-51821}"
+PROVIDER="${PROVIDER:-mullvad}"
 READY_FILE="${ROUTING_READY_FILE:-/run/molebridge-routing-ready}"
 rm -f "$READY_FILE"
 
@@ -84,7 +85,13 @@ for entry in $(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$TUN
             tunnel4=$entry ;;
     esac
 done
-[ -n "$tunnel4" ] || fail "tunnel configuration needs an IPv4 Address"
+case "$PROVIDER" in
+    mullvad) [ -n "$tunnel4" ] || fail "tunnel configuration needs an IPv4 Address" ;;
+    # PIA assigns the tunnel address per server; the applier sets it and its
+    # return-path rule when it registers the key. The guards below still apply.
+    pia) [ -z "$tunnel6" ] || fail "PIA tunnels carry no IPv6; remove the IPv6 Address" ;;
+    *) fail "PROVIDER must be mullvad or pia" ;;
+esac
 if [ "$(cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr 2>/dev/null)" != 1 ]; then
     echo "10-exit-routing: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail" >&2
 fi

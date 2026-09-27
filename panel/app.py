@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Molebridge control panel.
 
-Web UI for choosing which Mullvad WireGuard server the exit uses. It has no
+Web UI for choosing which Mullvad server or PIA region the exit uses. It has no
 login of its own: publish it only behind something that authenticates people,
 such as an identity-aware reverse proxy or an overlay access policy. It:
 
@@ -40,14 +40,16 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from molebridge.state import (CATALOG_MAX_AGE, HOSTNAME_RE, now_iso, read_json,
-                              recent, status_view, write_json_atomic)
+from molebridge.state import (CATALOG_MAX_AGE, PROVIDER_LABEL, exit_confirmed, now_iso,
+                              provider_from_env, read_json, recent, status_view,
+                              valid_server_name, write_json_atomic)
 from molebridge.relays import snapshot_relays
 
 # --------------------------------------------------------------------------
 # Configuration and file contract
 # --------------------------------------------------------------------------
 
+PROVIDER = provider_from_env(os.environ)
 STATE_DIR = Path(os.environ.get('STATE_DIR', '/state'))
 PANEL_DIR = STATE_DIR / 'panel'
 RELAYS_PATH = STATE_DIR / 'applier' / 'relays.json'
@@ -59,7 +61,7 @@ MAX_BODY_BYTES = 4096
 CSRF_COOKIE_NAME = 'csrf_nonce'
 
 # Latency probe: a TCP handshake round trip to the relay's port 443, which
-# Mullvad relays accept. No ICMP, so no capabilities are needed.
+# Mullvad relays and PIA's region servers accept. No ICMP, so no capabilities are needed.
 PROBE_PORT = 443
 PROBE_TIMEOUT_S = 1.5
 PROBE_ATTEMPTS = 2
@@ -156,7 +158,7 @@ def load_allowlist() -> set:
     snapshot = read_json(RELAYS_PATH)
     if not isinstance(snapshot, dict) or not recent(snapshot.get('fetched_at'), CATALOG_MAX_AGE):
         return set()
-    return set(snapshot_relays(snapshot))
+    return set(snapshot_relays(snapshot, PROVIDER))
 
 
 def get_fetch_error():
@@ -229,7 +231,7 @@ def latency_targets(query: Dict[str, List[str]], relays: Dict[str, Dict[str, Any
 
 
 def load_relays() -> Dict[str, Dict[str, Any]]:
-    return snapshot_relays(read_json(RELAYS_PATH))
+    return snapshot_relays(read_json(RELAYS_PATH), PROVIDER)
 
 
 # --------------------------------------------------------------------------
@@ -340,7 +342,7 @@ def parse_select_form(body: bytes) -> Dict[str, str]:
 
 
 def process_select(*, server: Optional[str], allowlist: set, desired_path: Path) -> Tuple[int, str]:
-    if not isinstance(server, str) or not HOSTNAME_RE.fullmatch(server) or server not in allowlist:
+    if not valid_server_name(server, PROVIDER) or server not in allowlist:
         return 400, 'unknown or unlisted server'
     write_json_atomic(desired_path, {'server': server, 'requested_at': now_iso(), 'request_id': secrets.token_hex(16)})
     return 303, 'ok'
@@ -364,7 +366,8 @@ _STATIC_VERSIONS = _static_versions()
 
 
 # Catalogue attribute -> filter label. Shown only when some relay carries it.
-ATTRIBUTE_FILTERS = {'owned': 'Mullvad-owned', 'stboot': 'RAM-only'}
+ATTRIBUTE_FILTERS = {'mullvad': {'owned': 'Mullvad-owned', 'stboot': 'RAM-only'},
+                     'pia': {'port_forward': 'Port forwarding'}}[PROVIDER]
 
 
 def flag_emoji(location_code: Any) -> str:
@@ -394,6 +397,9 @@ def relay_title(hostname: str, info: Dict[str, Any]) -> str:
 
 def relay_details(info: Dict[str, Any]) -> str:
     """Hosting summary such as 'Example Hosting · rented · RAM-only'."""
+    if PROVIDER == 'pia':
+        return ' · '.join(label for key, label in (('port_forward', 'port forwarding'),
+                                                   ('geo', 'virtual location')) if info.get(key) is True)
     parts = []
     if isinstance(info.get('provider'), str):
         parts.append(str(info['provider']))
@@ -416,7 +422,7 @@ def status_payload():
     result = read_json(APPLIER_RESULT_PATH, 16384)
     desired = desired if isinstance(desired, dict) else None
     result = result if isinstance(result, dict) else None
-    state, label = status_view(desired, result)
+    state, label = status_view(desired, result, PROVIDER)
     return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label}}
 
 
@@ -446,12 +452,13 @@ def render_index_html(
     if isinstance(relays_data, dict):
         fetched_at = esc(str(relays_data.get('fetched_at', 'never')))
         maybe_relays = relays_data.get('relays')
-        if isinstance(maybe_relays, dict):
+        # A catalogue left behind by another provider has no authority here.
+        if isinstance(maybe_relays, dict) and relays_data.get('provider', 'mullvad') == PROVIDER:
             relays = maybe_relays
 
     desired_server = str((desired or {}).get('server') or '')
     result_server = str((result or {}).get('server') or '')
-    state, state_label = status_view(desired, result)
+    state, state_label = status_view(desired, result, PROVIDER)
     display_server = desired_server if state == 'applying' else result_server
     current_info = relays.get(display_server) or {}
 
@@ -539,6 +546,10 @@ def render_index_html(
                           'aria-expanded="false" aria-controls="relay-filters" hidden>Filters</button>')
         filters_row = f'<div class="filter-row" id="relay-filters" hidden>{filter_buttons}</div>'
     current_details = relay_details(current_info) if current_info else ''
+    forward_row = ''
+    if PROVIDER == 'pia' and result.get('port_forward') is True:
+        forward_row = (f'\n        <dt>Forwarded port</dt><dd data-f="forwarded_port">'
+                       f'{_field(result, "forwarded_port", "none")}</dd>')
 
     error_html = ''
     if fetch_error:
@@ -580,7 +591,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page" data-provider="{PROVIDER}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 <section class="widget">
   <div class="widget-header"><h2>Current exit</h2>{open_link}</div>
@@ -604,7 +615,7 @@ def render_index_html(
         <dt>Applier</dt><dd data-f="status">{_field(result, 'status')}</dd>
         <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
         <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
-        <dt>Mullvad IP</dt><dd data-f="mullvad_exit_ip">{_field(result, 'mullvad_exit_ip')}</dd>
+        <dt>{PROVIDER_LABEL[PROVIDER]} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>{forward_row}
         <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
         <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
         <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>

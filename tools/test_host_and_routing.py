@@ -194,7 +194,7 @@ def test_compose_blacklists_the_exit_interface_at_first_enrollment():
     compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
     netbird = compose['services']['netbird']['environment']
     wireguard = compose['services']['wireguard']['environment']
-    assert netbird['NB_EXTRA_IFACE_BLACKLIST'] == wireguard['EXIT_IF'] == 'mullvad'
+    assert netbird['NB_EXTRA_IFACE_BLACKLIST'] == wireguard['EXIT_IF'] == '${EXIT_IF:-mullvad}'
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='mode 0600 files')
@@ -387,3 +387,33 @@ def test_netbird_gate_accepts_exact_guards_before_overlay_exists(tmp_path, detac
     rule = f'97: from all iif mesh0 {detached}unreachable'
     assert gate_run(tmp_path, rule, rule).returncode == 0
     assert (tmp_path / 'started').exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='mode 0600 files')
+@pytest.mark.parametrize('extra,secrets,message', [
+    ('', True, None),
+    ('', False, 'secrets/pia/username'),
+    ('Address = 10.0.0.2/32\n', True, 'no Address or Peer'),
+    ('[Peer]\nPublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n', True, 'no Address or Peer'),
+])
+def test_doctor_accepts_an_addressless_pia_config_with_its_login(tmp_path, extra, secrets, message):
+    spec = importlib.util.spec_from_file_location('prepare', ROOT / 'tools' / 'prepare-tunnel-config.py')
+    prepare = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prepare)
+    path = tmp_path / 'tunnel' / 'wg_confs' / 'pia.conf'
+    path.parent.mkdir(parents=True)
+    path.write_text(prepare.build_pia_conf(prepare.new_private_key()) + extra)
+    path.chmod(0o600)
+    if secrets:
+        (tmp_path / 'secrets' / 'pia').mkdir(parents=True)
+        for name in ('username', 'password'):
+            (tmp_path / 'secrets' / 'pia' / name).write_text('x')
+            (tmp_path / 'secrets' / 'pia' / name).chmod(0o600)
+    config = compose_config()
+    config['services']['wireguard']['environment'].update(EXIT_IF='pia', PROVIDER='pia')
+    host = host_tools.Host(tmp_path, run=lambda *a, **kw: '')
+    if message is None:
+        host.check_files(config)
+    else:
+        with pytest.raises(host_tools.CheckError, match=message):
+            host.check_files(config)

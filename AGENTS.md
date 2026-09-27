@@ -9,7 +9,7 @@ route in `SECURITY.md`, never in a public issue or commit message.
 
 - Design for a person installing on an ordinary supported host: Docker with
   Compose or rootless Podman with podman-compose, a NetBird account, a Mullvad
-  account. Never require the author's
+  or PIA account. Never require the author's
   infrastructure, hostnames, directory layout, identity provider, secret store,
   monitoring or deployment tooling.
 - Site-specific deployment records and policies belong with that deployment,
@@ -29,7 +29,8 @@ route in `SECURITY.md`, never in a public issue or commit message.
 - **Privilege split:** the panel holds no capabilities, never runs `wg`, `ip` or
   subprocesses, and only writes the desired server name. The applier validates
   everything it reads and never mounts the tunnel config.
-- **Untrusted input:** Mullvad's relay list, desired-state files and form posts
+- **Untrusted input:** Mullvad's relay list, PIA's region list and API
+  responses, desired-state files and form posts
   are untrusted. Validate before use; escape before rendering.
 - **Honest status:** state what was tested and where. Untested platforms, and
   behavior described but not verified, say so.
