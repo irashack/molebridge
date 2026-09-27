@@ -92,8 +92,23 @@ For Glance or Dynacat:
   height: 460
 ```
 
+Switchyard uses a provider-inspired appearance by default: Mullvad has navy
+country drawers and a yellow accent; PIA has rounded region cards and a green
+connection ring. With several configured exits, the track selector shows each
+exit's status and verified city. Selecting a tab changes which exit you manage;
+selecting a location changes that exit's requested server. The connection ring
+is a status indicator, not a disconnect button.
+
 The panel follows the viewer's light or dark setting. Set `PANEL_THEME=dark`
-when an always-dark dashboard embeds it.
+when an always-dark dashboard embeds it, and `PANEL_STYLE=dashboard` for the
+compact Catppuccin/monospace appearance. The embed omits the page header and
+uses a compact hero in either style. Long lists scroll inside the iframe.
+Provider styling uses system fonts and no provider image assets.
+
+Exit navigation uses view transitions in supporting browsers. Switching and
+verification have brief visual feedback; all motion follows the viewer's
+reduced-motion preference. Without JavaScript, location buttons still submit
+the selection form; search, saved lists and latency checks require JavaScript.
 
 If your proxy authenticates with a session cookie, the frame needs a live
 session for the panel's hostname. When it has lapsed the frame is blank; open

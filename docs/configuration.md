@@ -24,11 +24,12 @@ Non-secret settings, read by `compose.yaml`. Start from `.env.example`.
 | `PANEL_PORT` | `8095` | Loopback port for the panel. |
 | `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Requests for any other name get 421; loopback names are always accepted. Form posts are accepted only from these origins. |
 | `PANEL_FRAME_ANCESTORS` | empty | Space-separated `https://` origins allowed to embed the panel. Empty forbids framing. |
-| `PANEL_TITLE` | `Molebridge` | Page and app name. |
-| `PANEL_SHORT_TITLE` | `Molebridge` | Home-screen icon label. |
+| `PANEL_TITLE` | `Switchyard` | Page and app name. |
+| `PANEL_SHORT_TITLE` | `Switchyard` | Home-screen icon label. |
 | `PANEL_HOST_LABEL` | `this exit` | Used in "Fastest from …". |
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | empty, `Home` | Optional back link in the page header. |
 | `PANEL_THEME` | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
+| `PANEL_STYLE` | `provider` | Provider-inspired colours and layouts: navy/yellow country drawers for Mullvad, charcoal/green region cards for PIA. `dashboard` keeps the compact Catppuccin palette and JetBrains Mono. Both support all three theme settings. |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
 

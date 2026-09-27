@@ -39,6 +39,25 @@
   const PINNED_KEY = `${KEY_PREFIX}pinned`;
   const RECENT_KEY = `${KEY_PREFIX}recent`;
   const FILTERS_KEY = `${KEY_PREFIX}filters`;
+  const SWITCH_KEY = `${KEY_PREFIX}switching`;
+
+  // A short, per-tab success moment only after this request was seen applying.
+  // Storage is optional; verification continues to come from the applier.
+  function rememberSwitch(state) {
+    try {
+      if (state === 'applying') sessionStorage.setItem(SWITCH_KEY, page.dataset.request);
+      else {
+        const request = sessionStorage.getItem(SWITCH_KEY);
+        sessionStorage.removeItem(SWITCH_KEY);
+        if (state === 'ok' && request && request === page.dataset.request) {
+          page.classList.add('just-verified');
+          announce('Exit switch verified.');
+          setTimeout(() => page.classList.remove('just-verified'), 1400);
+        }
+      }
+    } catch { /* Storage can be disabled in an iframe or private browser. */ }
+  }
+  rememberSwitch(page.dataset.state);
 
   function load(key) {
     try {
@@ -356,6 +375,8 @@
   // -- filters ---------------------------------------------------------------
 
   const filter = page.querySelector('[data-filter]');
+  if (filter) filter.hidden = false;
+  const filterEmpty = page.querySelector('[data-filter-empty]');
   const countries = Array.from(document.querySelectorAll('.country'));
   const regionRows = chips.filter((c) => c.classList.contains('region'));
   const initiallyOpen = new Set(countries.filter((d) => d.open));
@@ -385,6 +406,7 @@
       d.classList.toggle('is-filtered', !countryHit || !any);
       d.open = q ? countryHit && any : initiallyOpen.has(d);
     }
+    if (filterEmpty) filterEmpty.hidden = !chips.length || chips.some((c) => !c.closest('.is-filtered'));
     renderCountryFastest();
   }
 
@@ -546,6 +568,14 @@
       pill.textContent = label;
     }
     page.dataset.state = state;
+    const connectionLabel = page.querySelector('[data-connection-label]');
+    if (connectionLabel) connectionLabel.textContent = {
+      ok: 'Secure connection', applying: 'Switching route',
+      failed: 'Connection needs attention', unknown: 'Connection unverified',
+    }[state];
+    // A completed switch reloads to pick up the verified location. Preserve
+    // its request marker until that new document can show the success moment.
+    if (state === 'applying') rememberSwitch(state);
     paintNotes(state, message);
     paintPin();
   }
