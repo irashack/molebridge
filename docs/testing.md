@@ -177,6 +177,40 @@ Not tested live:
 - screen readers beyond the announcement text;
 - phone clients.
 
+## PIA pass at `0165147`
+
+2026-09-27, the same Debian 13 / rootless Podman 5.4 / podman-compose 1.6 /
+amd64 host, NetBird 0.79 self-hosted, as a second deployment beside the Mullvad
+exit with `PROVIDER=pia`, its own peer and port forwarding off. The tunnel key
+came from `tools/prepare-tunnel-config.py --pia`; the PIA login had two-factor
+authentication on.
+
+- First start: the applier minted a token, registered the key in the seeded
+  region, and reported healthy with PIA confirming the egress. Doctor 4× PASS.
+  The applier logged nothing; the login and token appear in no state file.
+- Namespace: rules 90 and 94–97 in both families, with rule 94 naming the
+  PIA-assigned address; table 51821 held the tunnel default for IPv4 and only
+  the unreachable fallback for IPv6; the tunnel had one IPv4 address and no
+  global IPv6 address; `inet molebridge_guard` sat beside NetBird's own
+  iptables tables.
+- A full recreation of the four containers registered the saved region again
+  with no intervention.
+- A temporary Linux NetBird client selected the exit (`0.0.0.0/0` and `::/0`):
+  PIA answered `connected: true` for its traffic, from an address other than
+  the host's; IPv6 went to the exit and got no reply; the home LAN router and
+  the host's LAN address did not answer.
+- With the client holding the exit, `wg-quick down` in the WireGuard container
+  left it with no response at all, never the host's address. After `wg-quick
+  up`, the applier found no peer, registered the saved region again, and the
+  client's traffic returned within ten seconds.
+- Switching region and back through `desired.json` reached healthy each time
+  on a new server with a new tunnel address, leaving exactly one address and
+  one priority-94 rule.
+
+Not tested live: port forwarding against PIA (the isolated drill covers the
+nftables DNAT and the ingress guard); a PIA server forgetting the key mid-run;
+a stale-catalogue period; phone clients.
+
 ## Not yet tested
 
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
