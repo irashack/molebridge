@@ -15,15 +15,12 @@ whatever `main` happens to be:
 ```sh
 git clone https://github.com/irashack/molebridge.git
 cd molebridge
-git checkout v0.2.0      # the latest release
+git checkout v0.3.0      # the latest release
 
 cp .env.example .env
 mkdir -p state/panel state/applier secrets tunnel/wg_confs
 chmod 700 secrets tunnel/wg_confs
 ```
-
-PIA support and multi-exit panels arrived after v0.2.0. Until the next
-release, use them from a specific `main` commit.
 
 Edit `.env`. The settings you must set:
 

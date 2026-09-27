@@ -121,9 +121,8 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
-release is [v0.2.0](https://github.com/irashack/molebridge/releases/tag/v0.2.0).
-PIA support and multi-exit panels are on `main` and not yet in a release; see
-the [changelog](CHANGELOG.md).
+release is [v0.3.0](https://github.com/irashack/molebridge/releases/tag/v0.3.0),
+which adds PIA support and multi-exit panels; see the [changelog](CHANGELOG.md).
 
 | Setup | Tested |
 | :--- | :--- |

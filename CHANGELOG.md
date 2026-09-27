@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.3.0 (2026-09-27)
 
 - **PIA as a second provider** (`PROVIDER=pia`). You pick a region, not a
   server. The applier holds the PIA login and registers the tunnel key on
