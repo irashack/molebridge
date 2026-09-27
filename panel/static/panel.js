@@ -8,6 +8,9 @@
   if (!page || !form) return;
 
   const embed = document.body.classList.contains('embed');
+  // Set when this panel serves several exits: every request names the exit.
+  const exitId = page.dataset.exit || '';
+  const withExit = (params = {}) => new URLSearchParams(exitId ? { exit: exitId, ...params } : params);
   const FASTEST_COUNT = embed ? 5 : 8;
   const SAVED_COUNT = embed ? 3 : 5;
   const chips = Array.from(document.querySelectorAll('.relay'));
@@ -30,9 +33,12 @@
 
   // Mullvad relay hostnames, or PIA region ids.
   const HOST_RE = page.dataset.provider === 'pia' ? /^[a-z0-9][a-z0-9_-]{0,47}$/ : /^[a-z0-9-]{1,40}-wg-[0-9]{3}$/;
-  const PINNED_KEY = 'molebridge.pinned';
-  const RECENT_KEY = 'molebridge.recent';
-  const FILTERS_KEY = 'molebridge.filters';
+  // Each exit keeps its own saved servers; a single-exit panel keeps the
+  // original keys so nothing saved before is lost.
+  const KEY_PREFIX = exitId ? `molebridge.${exitId}.` : 'molebridge.';
+  const PINNED_KEY = `${KEY_PREFIX}pinned`;
+  const RECENT_KEY = `${KEY_PREFIX}recent`;
+  const FILTERS_KEY = `${KEY_PREFIX}filters`;
 
   function load(key) {
     try {
@@ -112,7 +118,7 @@
   }
 
   async function measure(params) {
-    const res = await fetch(`/api/latency?${new URLSearchParams(params)}`, { cache: 'no-store' });
+    const res = await fetch(`/api/latency?${withExit(params)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`latency ${res.status}`);
     const data = await res.json();
     for (const [host, ms] of Object.entries(data.latency || {})) latency.set(host, ms);
@@ -351,6 +357,7 @@
 
   const filter = page.querySelector('[data-filter]');
   const countries = Array.from(document.querySelectorAll('.country'));
+  const regionRows = chips.filter((c) => c.classList.contains('region'));
   const initiallyOpen = new Set(countries.filter((d) => d.open));
   const filtersToggle = page.querySelector('[data-filters-toggle]');
   const filtersRow = document.getElementById('relay-filters');
@@ -362,6 +369,10 @@
   function applyFilter() {
     const q = filter ? filter.value.trim().toLowerCase() : '';
     for (const chip of chips) chip.classList.toggle('is-filtered', !chipAllowed(chip));
+    // Region rows stand alone, outside any country.
+    for (const row of regionRows) {
+      if (q && !row.dataset.search.includes(q)) row.classList.add('is-filtered');
+    }
     for (const d of countries) {
       const countryHit = !q || d.dataset.search.includes(q);
       const nameHit = !q || d.dataset.country.toLowerCase().includes(q);
@@ -431,9 +442,9 @@
     clearTimeout(armTimer);
     btn.classList.remove('is-armed');
     btn.removeEventListener('blur', disarm);
-    if (btn.dataset.label) {
-      if (btn.classList.contains('relay')) btn.firstChild.textContent = btn.dataset.label;
-      else btn.textContent = btn.dataset.label;
+    if ('label' in btn.dataset) {
+      (btn.querySelector('[data-arm-text]') || btn).textContent = btn.dataset.label;
+      delete btn.dataset.label;
     }
   }
 
@@ -451,13 +462,10 @@
     disarm();
     armed = btn;
     btn.classList.add('is-armed');
-    if (btn.classList.contains('relay')) {
-      btn.dataset.label = btn.firstChild.textContent;
-      btn.firstChild.textContent = 'switch?';
-    } else {
-      btn.dataset.label = btn.textContent;
-      btn.textContent = 'Confirm';
-    }
+    // A relay chip or region row shows the prompt in its own label slot.
+    const slot = btn.querySelector('[data-arm-text]');
+    btn.dataset.label = (slot || btn).textContent;
+    (slot || btn).textContent = slot ? 'switch?' : 'Confirm';
     announce(`Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
     btn.addEventListener('blur', disarm);
     armTimer = setTimeout(disarm, 8000);
@@ -550,7 +558,7 @@
     const timeout = setTimeout(() => controller.abort(), 8000);
     let data;
     try {
-      const res = await fetch('/api/status', { cache: 'no-store', signal: controller.signal });
+      const res = await fetch(`/api/status?${withExit()}`, { cache: 'no-store', signal: controller.signal });
       if (!res.ok) throw new Error('status unavailable');
       data = await res.json();
       if (!data.view || !['ok', 'failed', 'applying', 'unknown'].includes(data.view.state)) {
@@ -595,6 +603,36 @@
     renderFastest();
     renderSaved();
     return state === 'applying' ? 2000 : 30000;
+  }
+
+  // -- exit tabs: every exit's state, kept current ----------------------------
+
+  const tabs = new Map(Array.from(page.querySelectorAll('.exit-tab'), (t) => [t.dataset.exit, t]));
+  const TAB_STATES = ['ok', 'failed', 'applying', 'unknown'];
+
+  async function pollExits() {
+    if (!tabs.size) return;
+    try {
+      const res = await fetch('/api/exits', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const summary of data.exits || []) {
+        const tab = tabs.get(summary.id);
+        if (!tab || !TAB_STATES.includes(summary.state)) continue;
+        tab.querySelector('[data-exit-dot]').className = `exit-dot dot-${summary.state}`;
+        tab.querySelector('[data-exit-status]').textContent = summary.status || '';
+        tab.querySelector('[data-exit-place]').textContent = summary.place || '';
+      }
+    } catch {
+      // The selected exit's own status poll reports an unreachable panel.
+    }
+  }
+
+  if (tabs.size) {
+    setInterval(pollExits, 15000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') pollExits();
+    });
   }
 
   async function pollLoop() {

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from unittest.mock import patch
 from pathlib import Path
 import sys
@@ -481,7 +482,7 @@ class SwitcherRenderTests(unittest.TestCase):
         for theme in ('light', 'dark'):
             with patch.object(app, 'PANEL_THEME', theme):
                 page = app.render_index_html(None, None, None, None, None, 'tok')
-                self.assertIn(f'<html lang="en" data-theme="{theme}">', page)
+                self.assertIn(f'<html lang="en" data-theme="{theme}" ', page)
                 self.assertIn(f'<meta name="color-scheme" content="{theme}">', page)
         with patch.object(app, 'PANEL_THEME', 'auto'):
             page = app.render_index_html(None, None, None, None, None, 'tok')
@@ -613,7 +614,7 @@ class PiaPanelTests(unittest.TestCase):
               'port_forward': True, 'geo': True, 'servers': [{'ip': '198.51.100.20', 'cn': 'example401'}]}
 
     def setUp(self):
-        patcher = patch.multiple(app, PROVIDER='pia', ATTRIBUTE_FILTERS={'port_forward': 'Port forwarding'})
+        patcher = patch.multiple(app, PROVIDER='pia')
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -643,3 +644,120 @@ class PiaPanelTests(unittest.TestCase):
         page = app.render_index_html(None, None, self.catalogue('mullvad'), None, None, 'tok')
         self.assertNotIn('value="ex_example"', page)
         self.assertIn('No relays available.', page)
+
+
+class MultiExitTests(unittest.TestCase):
+    """One panel serving several exits (PANEL_EXITS): each exit's requests,
+    catalogue and state stay its own."""
+
+    MULLVAD = {'hostname': 'se-sto-wg-001', 'country': 'Sweden', 'city': 'Stockholm',
+               'location_code': 'se-sto', 'public_key': VALID_PUBKEY, 'ipv4_addr_in': '198.51.100.10'}
+    PIA = PiaPanelTests.REGION
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
+        exits = app.parse_exits('home=mullvad, away=pia:PIA Chicago', self.tmpdir)
+        patcher = patch.object(app, 'EXITS', exits)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.home, self.away = exits
+        app.write_json_atomic(self.home.relays_path, {'fetched_at': app.now_iso(),
+                                                      'relays': {'se-sto-wg-001': self.MULLVAD}})
+        app.write_json_atomic(self.away.relays_path, {'fetched_at': app.now_iso(), 'provider': 'pia',
+                                                      'relays': {'ex_example': self.PIA}})
+        app.write_json_atomic(self.away.result_path, {
+            'server': 'ex_example', 'status': 'ok', 'checked_at': app.now_iso(), 'routing_ok': True,
+            'exit_confirmed': True, 'provider': 'pia'})
+        self.httpd = http.server.ThreadingHTTPServer(('127.0.0.1', 0), app.PanelHandler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+
+    def request(self, method, path, body=None, headers=None):
+        conn = http.client.HTTPConnection('127.0.0.1', self.httpd.server_address[1], timeout=5)
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp, data.decode()
+
+    def select(self, exit_id, server, page_exit=None):
+        resp, page = self.request('GET', f'/?exit={page_exit or exit_id}')
+        nonce = re.search(r'csrf_nonce=([^;]+)', resp.getheader('Set-Cookie')).group(1)
+        token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
+        body = urllib.parse.urlencode({'server': server, 'csrf_token': token, 'exit': exit_id}).encode()
+        return self.request('POST', '/select', body, {
+            'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': str(len(body)),
+            'Cookie': f'csrf_nonce={nonce}'})
+
+    def test_parse_exits(self):
+        self.assertEqual([(e.id, e.provider, e.label) for e in (self.home, self.away)],
+                         [('home', 'mullvad', 'Mullvad'), ('away', 'pia', 'PIA Chicago')])
+        self.assertEqual(self.away.desired_path, self.tmpdir / 'away' / 'panel' / 'desired.json')
+        self.assertEqual(app.parse_exits('', self.tmpdir), [])
+        for bad in ('home', 'Home=mullvad', '../x=pia', 'a=nordvpn', 'a=pia,a=mullvad', 'a=pia:' + 'x' * 41,
+                    'a=pia:bad\x07label'):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                app.parse_exits(bad, self.tmpdir)
+
+    def test_each_exit_renders_in_its_own_layout_with_tabs(self):
+        _, home = self.request('GET', '/?exit=home')
+        self.assertIn('data-layout="tree"', home)
+        self.assertIn('value="se-sto-wg-001"', home)
+        self.assertNotIn('value="ex_example"', home)
+        _, away = self.request('GET', '/?exit=away')
+        self.assertIn('data-layout="regions"', away)
+        self.assertIn('data-provider="pia"', away)
+        self.assertIn('value="ex_example"', away)
+        self.assertIn('<input type="hidden" name="exit" value="away">', away)
+        for page in (home, away):
+            self.assertIn('href="/?exit=home"', page)
+            self.assertIn('href="/?exit=away"', page)
+        self.assertIn('class="exit-tab is-selected" href="/?exit=away"', away)
+        self.assertIn('<span class="exit-place" data-exit-place>Example City</span>', away)
+
+    def test_unknown_exit_is_404_everywhere(self):
+        for path in ('/?exit=nope', '/embed?exit=nope', '/api/status?exit=nope', '/api/latency?exit=nope',
+                     '/readyz?exit=nope', '/api/status', '/?exit=..%2Fhome'):
+            with self.subTest(path=path):
+                self.assertEqual(self.request('GET', path)[0].status, 404)
+
+    def test_select_writes_only_the_named_exits_request(self):
+        resp, _ = self.select('away', 'ex_example')
+        self.assertEqual((resp.status, resp.getheader('Location')), (303, '/?exit=away'))
+        self.assertEqual(app.read_json(self.away.desired_path)['server'], 'ex_example')
+        self.assertIsNone(app.read_json(self.home.desired_path))
+        # A name from another exit's catalogue is refused.
+        resp, _ = self.select('home', 'ex_example')
+        self.assertEqual(resp.status, 400)
+        self.assertIsNone(app.read_json(self.home.desired_path))
+        resp, _ = self.select('elsewhere', 'ex_example', page_exit='away')
+        self.assertEqual(resp.status, 400)
+
+    def test_remembered_exit_is_the_default(self):
+        resp, _ = self.request('GET', '/?exit=away')
+        self.assertIn('molebridge_exit=away; Path=/', ' '.join(resp.headers.get_all('Set-Cookie')))
+        _, page = self.request('GET', '/', headers={'Cookie': 'molebridge_exit=away'})
+        self.assertIn('data-exit="away"', page)
+        _, page = self.request('GET', '/', headers={'Cookie': 'molebridge_exit=gone'})
+        self.assertIn('data-exit="home"', page)
+
+    def test_status_readiness_and_summaries(self):
+        resp, body = self.request('GET', '/api/status?exit=away')
+        self.assertEqual(json.loads(body)['view']['state'], 'ok')
+        self.assertEqual(self.request('GET', '/readyz?exit=away')[0].status, 200)
+        self.assertEqual(self.request('GET', '/readyz')[0].status, 503)
+        _, body = self.request('GET', '/api/exits')
+        summaries = {s['id']: s for s in json.loads(body)['exits']}
+        self.assertEqual(summaries['away'], {'id': 'away', 'label': 'PIA Chicago', 'provider': 'pia',
+                                             'state': 'ok', 'status': 'connected', 'place': 'Example City'})
+        self.assertEqual(summaries['home']['state'], 'unknown')
+
+    def test_latency_cache_is_per_exit(self):
+        app._latency_cache.clear()
+        self.addCleanup(app._latency_cache.clear)
+        with patch.object(app, 'probe_tcp_rtt_ms', return_value=12.0) as probe:
+            app.measure_latency({'x': {'ipv4_addr_in': '198.51.100.1'}}, ['x'], scope='home')
+            app.measure_latency({'x': {'ipv4_addr_in': '198.51.100.2'}}, ['x'], scope='away')
+        self.assertEqual(probe.call_count, 2)
