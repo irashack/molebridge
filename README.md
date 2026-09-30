@@ -87,8 +87,9 @@ Details: [architecture](docs/architecture.md).
 - **A VPN account:**
   - Mullvad, which uses one free device slot;
   - or PIA, which needs your username and password on the host.
-- **A way to reach the panel with authentication.** The panel has no login of
-  its own; see [panel access](docs/access.md).
+- **A way to reach the panel with authentication.** Unless you set up
+  OpenID Connect sign-in, the panel has no login of its own; see
+  [panel access](docs/access.md).
 - **Python 3.10 or later on the host**, for the setup and maintenance helpers.
 
 The full list, with the NetBird groups, the outbound ports and the rootless
@@ -96,9 +97,11 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 ## Limits
 
-- **The panel has no login.** Anyone who can reach it can change the exit for
-  every device that uses it. Reach it through an SSH tunnel or an
-  authenticating proxy.
+- **The panel has no login unless you configure one.** By default, anyone who
+  can reach it can change the exit for every device that uses it. Reach it
+  through an SSH tunnel or an authenticating proxy, or turn on
+  [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect), which
+  has not yet been tested against a real identity provider.
 - **This is not a kill switch on your devices.** The exit fails closed for
   traffic it receives. If a device deselects the exit or NetBird disconnects,
   that device uses its own connection.
@@ -142,7 +145,7 @@ vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 - [Requirements](docs/prerequisites.md): accounts, host, NetBird groups and ports.
 - [Setup](docs/setup.md): from an empty checkout to a working exit.
 - [Verification](docs/verification.md): the checks and failure drills to run before you rely on it.
-- [Panel access](docs/access.md): SSH forwarding or an authenticating proxy.
+- [Panel access](docs/access.md): SSH forwarding, an authenticating proxy, or OpenID Connect sign-in.
 
 **Use**
 - [Switchyard](docs/switchyard.md): switching, embedding in a dashboard, phones, several exits.

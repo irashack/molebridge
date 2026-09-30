@@ -148,14 +148,16 @@ and cut throughput by more than half.
 
 ## Panel access
 
-The panel has no login. Anyone who can reach it can switch the exit for
-everyone. It listens on the host's loopback address only, and you need one
-of:
+By default the panel has no login. Anyone who can reach it can switch the
+exit for everyone. It listens on the host's loopback address only, and you
+need one of:
 
 - SSH to the host, to forward that port to your laptop;
 - a reverse proxy that authenticates every request before passing it on, for
   example an identity-aware proxy, or NetBird's reverse proxy restricted to
-  the right access groups.
+  the right access groups;
+- an OpenID Connect identity provider, if you want the panel to sign people in
+  itself. That also needs a proxy that serves the panel over https.
 
 [Panel access](access.md) walks through each. Never publish the panel on an
 open port.

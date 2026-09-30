@@ -133,6 +133,11 @@ button, summary { touch-action: manipulation; -webkit-tap-highlight-color: trans
   padding: 0 calc(var(--pad-h) + 1px);
 }
 
+.header-side { display: flex; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; gap: 4px 16px; min-width: 0; }
+.account { display: flex; align-items: baseline; gap: 10px; margin: 0; min-width: 0; }
+.account-name { overflow-wrap: anywhere; }
+.notice-widget { max-width: 32rem; }
+
 h1 {
   margin: 0;
   font-size: var(--font-size-h2);

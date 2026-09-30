@@ -32,7 +32,8 @@ Anything that breaks the properties in [the architecture](docs/architecture.md):
 - with PIA port forwarding on, forwarded inbound connections reaching
   anything other than the configured overlay target.
 
-The documented [boundaries](README.md#limits) are not
-vulnerabilities in themselves: the panel has no login of its own, the routing
-guards are not a device-wide kill switch, and client DNS stays under client
-and NetBird configuration. Neither is a PIA port you deliberately forward.
+The documented [boundaries](README.md#limits) are not vulnerabilities in
+themselves: the panel has no login of its own unless you configure OpenID
+Connect sign-in, the routing guards are not a device-wide kill switch, and
+client DNS stays under client and NetBird configuration. Neither is a PIA port
+you deliberately forward.

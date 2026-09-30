@@ -204,8 +204,15 @@ services:
       PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
       PANEL_THEME: "${PANEL_THEME:-auto}"
       PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      # Optional sign-in; empty PANEL_OIDC_ISSUER means no login. See docs/access.md.
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
     ports:
-      # Loopback only. Publish it to people through an authenticating proxy.
+      # Loopback only. Publish it through an authenticating proxy, or through
+      # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
       - "127.0.0.1:${PANEL_PORT:-8095}:8080"
     volumes:
       - ./panel:/app/panel:ro

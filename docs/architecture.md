@@ -36,6 +36,9 @@ secrets.
 The panel can write only its request directory. It reads `state/applier/`
 through a read-only mount. It cannot change the relay catalogue, result or
 applier code. An old `state/panel/relays.json` has no authority and is ignored.
+Its own outbound connections are the TCP latency probes to relays and, only
+when [sign-in](#sign-in) is configured, HTTPS requests to the identity
+provider.
 
 The applier never mounts the tunnel config, invokes a shell, or reads a
 WireGuard private key. With PIA it also reads the PIA login and sets the
@@ -187,8 +190,9 @@ recent verified egress.
 
 ## Panel and access
 
-There is no application login. Loopback publishing plus authenticated access is
-required; see [access](access.md). Every request must name a published host:
+Unless [sign-in](#sign-in) is configured, there is no application login.
+Loopback publishing plus authenticated access is required; see
+[access](access.md). Every request must name a published host:
 loopback or an entry of `PANEL_PUBLIC_HOSTS`; anything else receives 421 before
 status or a token-bearing page is served, so a DNS-rebinding page reaching the
 loopback publish learns nothing (`/healthz` answers before this check). POSTs
@@ -212,6 +216,101 @@ what its own request file asks.
 Latency probes remain unprivileged TCP connects to port 443, cached for 15
 minutes, with bounded concurrency. They run only for open pages and measure the
 host-to-relay path, not end-to-end client latency.
+
+### Sign-in
+
+Sign-in is optional and off unless `PANEL_OIDC_ISSUER` is set; without it the
+panel has no login. The setup is in [access](access.md#sign-in-with-openid-connect).
+It is OpenID Connect's authorization code flow, written with the Python
+standard library, as a public client unless a client secret file is set.
+
+**The flow.** `/login` fetches the issuer's discovery document
+(`<issuer>/.well-known/openid-configuration`, cached for an hour) and redirects
+the browser to the authorization endpoint with a PKCE challenge (S256), a state
+and a nonce. The browser keeps the state, nonce, verifier and return path in
+the `__Host-molebridge_login` cookie for 10 minutes, signed with a key that
+exists only in the panel process's memory, so the panel stores nothing per
+sign-in and starting many sign-ins cannot push out anyone else's. When the
+browser returns to `/auth/callback`, the panel checks the signature, the age
+and the state, remembers that state as used so the same callback cannot be
+replayed, then sends the code and the PKCE verifier to the token endpoint. A
+code intercepted on its way to the browser is useless without the verifier,
+which only that browser's HttpOnly cookie and the panel ever see.
+
+**Discovery.** The `issuer` in the document must equal `PANEL_OIDC_ISSUER`
+exactly. The authorization and token endpoints must be https (http only for a
+loopback test issuer), and if the document lists the PKCE methods it supports,
+S256 must be among them.
+
+**The ID token, and why its signature is not checked.** The panel takes the ID
+token from the token endpoint's answer, over a TLS connection it has verified
+against the container's CA store. OpenID Connect Core 1.0 section 3.1.3.7
+allows the client to rely on TLS server validation instead of checking the
+signature when the token comes directly from the token endpoint. The standard
+library has no RSA or elliptic-curve signature verification, so the panel uses
+that allowance and stays free of a dependency. It does refuse a token whose
+header says `none` or whose signature part is empty, but it does not verify the
+signature. It checks that:
+
+- `iss` is the configured issuer;
+- `aud` contains the client ID, and `azp`, when present or when there are
+  several audiences, is the client ID;
+- `exp` has not passed and `iat` is not in the future, each allowing two
+  minutes of clock difference;
+- `nonce` is the one this browser's sign-in created;
+- `sub` is a non-empty string.
+
+**Groups.** They come from the ID token's groups claim. If the ID token has no
+such claim, the panel calls the userinfo endpoint with the access token, and
+the `sub` there must equal the ID token's. The ID token comes first because it
+costs one request fewer, and because the nonce binds it to this sign-in, while
+a userinfo answer is not bound to it by a nonce. Pocket ID
+v2.16.0 puts the claim in both when the `groups` scope is granted (checked in
+its source, not against a running instance), so the ID token path is used
+there.
+
+**Sessions.** The session lives in the panel process's memory, under a random
+ID in the `__Host-molebridge_session` cookie. It has a fixed lifetime from
+sign-in (`PANEL_SESSION_TTL`), is not extended by use, and is gone when the
+panel restarts. At the end of it the browser goes through the flow again and
+the groups are read again. The panel does not refresh tokens, and hears nothing
+from the provider between sign-ins, so a change to someone's groups takes
+effect at their next sign-in, within `PANEL_SESSION_TTL`. It keeps at most
+4096 sessions, 16 per person: a person's extra sign-ins replace their own
+oldest session, and a full table drops the one that expires first.
+
+The cookies are `Secure`, `HttpOnly`, `Path=/`, and named with the `__Host-`
+prefix, so a sibling subdomain can't set or overwrite them. They are
+`SameSite=Lax` because the browser comes back from the provider by a
+cross-site redirect and must bring them. The CSRF token that protects `POST
+/select` and `POST /logout` is also bound to the session, and with sign-in on
+the CSRF and last-exit cookies are `Secure` too. A `/login` request whose
+`X-Forwarded-Proto` says it arrived over plain http is sent to the canonical
+https address once (marked `canonical=1`, so a proxy that always says http
+cannot loop); the header only steers that redirect.
+
+**Authorization.** The session holds the exits the person's groups grant. An
+exit they are not granted is treated everywhere as one that doesn't exist; the
+[endpoint table](configuration.md#panel-endpoints) lists the answers. A person
+whose groups grant no exit gets no session.
+
+**Sign-in adds an outbound trust boundary.** Without it, the panel's only
+outbound connections are latency probes. With it, the panel makes HTTPS
+requests to the identity provider: discovery, the token endpoint, and userinfo
+only when the ID token lacks the groups claim. These follow the URLs from the
+discovery document. Environment proxy settings are ignored, redirects are not
+followed, each request times out after 10 seconds, a response is cut off at
+256 KiB, and a JSON object with a duplicate key is refused. The panel
+container therefore needs a route to the provider.
+
+Identity rests on that TLS connection and the container's CA store. An issuer
+that is compromised, or a certificate authority that mis-issues a certificate
+for it, can sign anyone in as any member of any group. The panel still holds
+no capabilities and runs no subprocesses. With a public client it holds no
+secret either; with `PANEL_OIDC_CLIENT_SECRET_FILE` it holds that one file.
+
+Sign-in is not yet tested against a real identity provider; see
+[testing](testing.md#not-yet-tested).
 
 ## Recovery and verification
 

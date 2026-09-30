@@ -591,6 +591,11 @@
     let data;
     try {
       const res = await fetch(`/api/status?${withExit()}`, { cache: 'no-store', signal: controller.signal });
+      // The session ended: reloading leads to sign-in, or to the embed's link.
+      if (res.status === 401) {
+        location.reload();
+        return 0;
+      }
       if (!res.ok) throw new Error('status unavailable');
       data = await res.json();
       if (!data.view || !['ok', 'failed', 'applying', 'unknown'].includes(data.view.state)) {

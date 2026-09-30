@@ -243,6 +243,10 @@ home-screen installation of the multi-exit page.
   client; a phone's NetBird client may fall back to its own connection
   differently while the exit peer is offline.
 - Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
+- The panel's [OpenID Connect sign-in](access.md#sign-in-with-openid-connect)
+  against a real identity provider. `panel/test_oidc.py` covers it against a
+  fake issuer; no real provider, browser flow, dashboard frame or phone has
+  been tried.
 
 ## Validating a new revision
 

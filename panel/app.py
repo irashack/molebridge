@@ -3,9 +3,11 @@
 
 Web UI for choosing which Mullvad server or PIA region an exit uses. One panel
 can serve one exit (the default) or several exits side by side (PANEL_EXITS),
-each styled after its provider. It has no login of its own: publish it only
-behind something that authenticates people, such as an identity-aware reverse
-proxy or an overlay access policy. It:
+each styled after its provider. Without PANEL_OIDC_ISSUER it has no login of
+its own: publish it only behind something that authenticates people, such as
+an identity-aware reverse proxy or an overlay access policy. With it, people
+sign in with OpenID Connect (oidc.py) and see only the exits their groups are
+granted (PANEL_ACCESS, PANEL_ADMIN_GROUPS). It:
 
 - reads the applier-owned relay catalogue through a read-only mount;
 - shows the current desired server, the applier's last result, and relay
@@ -17,7 +19,9 @@ proxy or an overlay access policy. It:
 - serves /embed, a compact view for a dashboard iframe widget, and a web
   manifest so phones can install the panel as a home-screen app.
 
-Python standard library only. Never calls wg/ip/subprocess.
+Python standard library only. Never calls wg/ip/subprocess. With sign-in on,
+its only outbound connections besides the latency probes are HTTPS requests
+to the issuer.
 """
 from __future__ import annotations
 
@@ -46,6 +50,9 @@ from molebridge.state import (CATALOG_MAX_AGE, PROVIDER_LABEL, PROVIDERS, exit_c
                               provider_from_env, read_json, recent, status_view,
                               valid_server_name, write_json_atomic)
 from molebridge.relays import snapshot_relays
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oidc  # noqa: E402 - the panel's own sign-in module, beside this file
 
 # --------------------------------------------------------------------------
 # Configuration and file contract
@@ -123,6 +130,33 @@ def find_exit(exit_id: Optional[str]) -> Optional[Exit]:
     if not EXITS:
         return single_exit()
     return next((e for e in EXITS if e.id == exit_id), None)
+
+
+# Sign-in (optional). None: no login, exactly as before sign-in existed.
+AUTH_CONFIG = oidc.config_from_env(os.environ, [e.id for e in EXITS])
+AUTH: Optional[oidc.Authenticator] = oidc.Authenticator(AUTH_CONFIG, [e.id for e in EXITS]) if AUTH_CONFIG else None
+
+
+def granted(ex: Exit, session: Optional[oidc.Session]) -> bool:
+    """Whether the caller may see and switch this exit. Without sign-in
+    configured, everyone who reaches the panel may."""
+    if AUTH is None:
+        return True
+    if session is None:
+        return False
+    return session.admin or (bool(ex.id) and ex.id in session.exits)
+
+
+def visible_exits(session: Optional[oidc.Session]) -> List[Exit]:
+    """The configured exits this caller is granted, in configured order."""
+    return [e for e in EXITS if granted(e, session)]
+
+
+def authorized_exit(exit_id: Optional[str], session: Optional[oidc.Session]) -> Optional[Exit]:
+    """find_exit, refusing an exit the caller is not granted exactly as it
+    refuses one that does not exist."""
+    ex = find_exit(exit_id)
+    return ex if ex is not None and granted(ex, session) else None
 
 MAX_BODY_BYTES = 4096
 CSRF_COOKIE_NAME = 'csrf_nonce'
@@ -345,14 +379,17 @@ def new_csrf_nonce() -> str:
     return secrets.token_urlsafe(24)
 
 
-def csrf_token(nonce: str) -> str:
-    return hmac.new(_CSRF_SECRET, nonce.encode('utf-8'), hashlib.sha256).hexdigest()
+def csrf_token(nonce: str, binding: str = '') -> str:
+    """binding ties the token to a signed-in session, so a token read by one
+    person cannot be replayed with another person's session."""
+    message = nonce if not binding else f'{nonce}\n{binding}'
+    return hmac.new(_CSRF_SECRET, message.encode('utf-8'), hashlib.sha256).hexdigest()
 
 
-def verify_csrf(nonce: Optional[str], token: Optional[str]) -> bool:
+def verify_csrf(nonce: Optional[str], token: Optional[str], binding: str = '') -> bool:
     if not isinstance(nonce, str) or not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
         return False
-    expected = csrf_token(nonce)
+    expected = csrf_token(nonce, binding)
     return hmac.compare_digest(expected, token)
 
 
@@ -393,6 +430,8 @@ def allowed_hosts() -> List[Tuple[str, Optional[int]]]:
             parsed = _split_host(entry)
             if parsed:
                 hosts.append(parsed)
+    if AUTH_CONFIG is not None:
+        hosts.append(AUTH_CONFIG.public_host)  # PANEL_PUBLIC_URL's host
     return hosts
 
 
@@ -671,6 +710,8 @@ def render_index_html(
     embed: bool = False,
     exit: Optional[Exit] = None,  # noqa: A002 - the exit being shown
     exits: Sequence[Dict[str, Any]] = (),
+    user: Optional[str] = None,
+    show_home: bool = True,
 ) -> str:
     esc = html.escape
     ex = exit or single_exit()
@@ -763,15 +804,22 @@ def render_index_html(
     v = _STATIC_VERSIONS
     return_to = 'embed' if embed else ''
     home_link = ''
-    if PANEL_HOME_URL.startswith(('https://', 'http://')):
+    if show_home and PANEL_HOME_URL.startswith(('https://', 'http://')):
         home_link = (f'<a class="subdue back-link" href="{esc(PANEL_HOME_URL)}" target="_top">'
                      f'← {esc(PANEL_HOME_LABEL)}</a>')
+    account = ''
+    if user is not None:
+        # Signing out needs the same CSRF token as a switch.
+        account = ('<form method="post" action="/logout" class="account">'
+                   f'<input type="hidden" name="csrf_token" value="{esc(csrf_token_value)}">'
+                   f'<span class="subdue small account-name">{esc(user)}</span>'
+                   '<button type="submit" class="link-button small">Sign out</button></form>')
     heading = '' if embed else (
         '<header class="page-header"><div class="brand">'
         '<svg class="yard-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
         '<path d="M10 34V6M18 34V25L32 11M18 6V14M7 10H21M7 17H15M7 24H15M7 31H21M24 14L30 20"/>'
         f'</svg><div><span class="brand-kicker">{esc("Molebridge / exit control")}</span>'
-        f'<h1>{esc(PANEL_TITLE)}</h1></div></div>{home_link}</header>'
+        f'<h1>{esc(PANEL_TITLE)}</h1></div></div><div class="header-side">{account}{home_link}</div></header>'
     )
     tabs = exit_tabs(exits, ex.id, embed) if len(exits) > 1 else ''
     open_link = (
@@ -880,6 +928,71 @@ def render_index_html(
 </html>"""
 
 
+def render_message_page(heading: str, message: str, *, link: Optional[Tuple[str, str]] = None,
+                        embed: bool = False) -> str:
+    """A small page for sign-in states: signed out, refused, unavailable.
+    Everything shown is fixed text or a URL the panel built itself."""
+    esc = html.escape
+    v = _STATIC_VERSIONS
+    link_html = ''
+    if link:
+        href, text = link
+        # From a dashboard frame, sign-in must open at top level: issuers
+        # refuse to be framed, and a frame cannot set the session cookie.
+        target = ' target="_blank" rel="noopener"' if embed else ''
+        link_html = f'<p><a class="relay-switch" href="{esc(href)}"{target}>{esc(text)}</a></p>'
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="{'dark light' if PANEL_THEME == 'auto' else PANEL_THEME}">
+{theme_color_meta()}
+<title>{esc(heading)} · {esc(PANEL_TITLE)}</title>
+<link rel="icon" href="/static/icon-192.png?v={v['icon-192.png']}" type="image/png">
+<link rel="stylesheet" href="/static/panel.css?v={v['panel.css']}">
+</head>
+<body class="{'embed' if embed else 'full'}">
+<main class="page">
+<section class="widget notice-widget">
+  <div class="widget-header"><h2>{esc(heading)}</h2></div>
+  <div class="widget-content"><p>{esc(message)}</p>{link_html}</div>
+</section>
+</main>
+</body>
+</html>"""
+
+
+# --------------------------------------------------------------------------
+# Sign-in helpers
+# --------------------------------------------------------------------------
+
+NEXT_PATH_RE = re.compile(r'/(embed)?(\?exit=[a-z0-9][a-z0-9-]{0,31})?')
+
+
+def safe_next(value: Optional[str]) -> str:
+    """Where to land after sign-in: a panel page, never another site."""
+    return value if isinstance(value, str) and NEXT_PATH_RE.fullmatch(value) else '/'
+
+
+def login_url(next_path: str) -> str:
+    """Absolute, on the canonical https address: the proxy in front may also
+    answer plain http, where a Secure cookie can be neither set nor sent."""
+    assert AUTH_CONFIG is not None
+    return f'{AUTH_CONFIG.public_url}/login?' + urllib.parse.urlencode({'next': safe_next(next_path)})
+
+
+def _cookie(name: str, value: str, max_age: int) -> str:
+    # __Host- names require Secure, Path=/ and no Domain, so a sibling
+    # subdomain cannot plant or overwrite them. Lax, not Strict: the browser
+    # arrives from the issuer by a cross-site redirect, and must bring both.
+    return f'{name}={value}; Path=/; Max-Age={max_age}; Secure; HttpOnly; SameSite=Lax'
+
+
+def log_event(text: str) -> None:
+    sys.stderr.write(f'{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())} {text}\n')
+
+
 # --------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------
@@ -932,25 +1045,48 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         self._send_plain(421, 'unknown host; publish the panel under PANEL_PUBLIC_HOSTS')
         return True
 
-    def _requested_exit(self, query: Dict[str, List[str]]) -> Optional[Exit]:
+    def _session(self) -> Optional[oidc.Session]:
+        if AUTH is None:
+            return None
+        return AUTH.session(get_cookie(self.headers.get('Cookie'), oidc.SESSION_COOKIE))
+
+    def _signed_out(self, session: Optional[oidc.Session], *, api: bool) -> bool:
+        """With sign-in configured and no session: answer 401 and return True."""
+        if AUTH is None or session is not None:
+            return False
+        if api:
+            self._send_body(401, 'application/json', b'{"error": "sign in required"}', {'Cache-Control': 'no-store'})
+        else:
+            self._send_plain(401, 'sign in required')
+        return True
+
+    def _requested_exit(self, query: Dict[str, List[str]], session: Optional[oidc.Session]) -> Optional[Exit]:
         """The exit a request names with ?exit=; answers 404 and returns None
-        for a name that is not configured."""
-        ex = find_exit(query.get('exit', [''])[0])
+        for a name that is not configured or not granted to the caller, with
+        the same response for both."""
+        ex = authorized_exit(query.get('exit', [''])[0], session)
         if ex is None:
             self._send_plain(404, 'unknown exit')
         return ex
+
+    def _csrf_binding(self, session: Optional[oidc.Session]) -> str:
+        return session.csrf_key if session is not None else ''
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler naming
         parsed = urllib.parse.urlsplit(self.path)
         query = urllib.parse.parse_qs(parsed.query)
         if parsed.path == '/healthz':
             self._send_plain(200, 'ok')
-        elif self._misdirected():
             return
-        elif parsed.path == '/readyz':
-            # Every exit, or the one named with ?exit=.
+        if self._misdirected():
+            return
+        session = self._session()
+        if parsed.path == '/readyz':
+            # Every exit, or the one named with ?exit=. Anonymous callers get
+            # only the aggregate: with sign-in on, a named exit needs a session
+            # that is granted it, and any other name is simply unknown.
             if 'exit' in query:
-                ex = self._requested_exit(query)
+                ex = self._requested_exit(query, session)
                 if ex is None:
                     return
                 chosen = [ex]
@@ -959,81 +1095,192 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             ready = all(status_payload(e)['view']['state'] == 'ok' for e in chosen)
             self._send_plain(200 if ready else 503, 'ready' if ready else 'not ready')
         elif parsed.path in ('/', '/embed'):
+            embed = parsed.path == '/embed'
+            if AUTH is not None and session is None:
+                self._send_signed_out(query, embed=embed)
+                return
             if EXITS and 'exit' not in query:
                 # Always name the exit in the address: the page reloads itself,
                 # and a reload must not follow another tab's choice.
-                ex = find_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME)) or EXITS[0]
-                page = '/embed' if parsed.path == '/embed' else '/'
+                visible = visible_exits(session)
+                if not visible:
+                    self._send_plain(404, 'unknown exit')
+                    return
+                ex = authorized_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME), session) or visible[0]
+                page = '/embed' if embed else '/'
                 self._send_body(303, 'text/plain; charset=utf-8', b'',
                                 {'Location': f'{page}?exit={ex.id}', 'Cache-Control': 'no-store'})
                 return
-            self._handle_index(query, embed=parsed.path == '/embed')
+            self._handle_index(query, session, embed=embed)
         elif parsed.path == '/manifest.webmanifest':
             self._send_body(200, 'application/manifest+json', json.dumps(WEB_MANIFEST).encode('utf-8'),
                             {'Cache-Control': 'public, max-age=86400'})
         elif parsed.path == '/api/status':
-            ex = self._requested_exit(query)
+            if self._signed_out(session, api=True):
+                return
+            ex = self._requested_exit(query, session)
             if ex is not None:
                 self._send_json(status_payload(ex))
         elif parsed.path == '/api/exits':
-            self._send_json({'exits': [exit_summary(e) for e in EXITS]})
+            if self._signed_out(session, api=True):
+                return
+            self._send_json({'exits': [exit_summary(e) for e in visible_exits(session)]})
         elif parsed.path == '/api/latency':
-            ex = self._requested_exit(query)
+            if self._signed_out(session, api=True):
+                return
+            ex = self._requested_exit(query, session)
             if ex is None:
                 return
             relays = load_relays(ex)
             fresh = query.get('fresh', [''])[0] == '1'
             self._send_json({'latency': measure_latency(relays, latency_targets(query, relays), fresh, ex.id)})
+        elif parsed.path == '/login' and AUTH is not None:
+            self._handle_login(query, session)
+        elif parsed.path == '/auth/callback' and AUTH is not None:
+            self._handle_callback(query)
+        elif parsed.path == '/signed-out' and AUTH is not None:
+            body = render_message_page('Signed out', 'You have signed out of this panel.',
+                                       link=(login_url('/'), 'Sign in')).encode('utf-8')
+            self._send_body(200, 'text/html; charset=utf-8', body, {'Cache-Control': 'no-store'})
         elif parsed.path.startswith('/static/'):
             self._handle_static(parsed.path[len('/static/'):])
         else:
             self._send_plain(404, 'not found')
 
-    def do_POST(self) -> None:  # noqa: N802
-        parsed = urllib.parse.urlsplit(self.path)
-        if parsed.path != '/select':
-            self._send_plain(404, 'not found')
+    def _send_signed_out(self, query: Dict[str, List[str]], *, embed: bool) -> None:
+        """The full page sends a browser straight to sign-in, on the canonical
+        address. The embed shows a link instead: sign-in cannot run inside a
+        frame."""
+        exit_id = query.get('exit', [''])[0]
+        next_path = f'/?exit={exit_id}' if EXIT_ID_RE.fullmatch(exit_id or '') else '/'
+        if not embed:
+            self._send_body(303, 'text/plain; charset=utf-8', b'',
+                            {'Location': login_url(next_path), 'Cache-Control': 'no-store'})
             return
-        if self._misdirected():
-            return
+        body = render_message_page('Signed out', 'Sign in to see and switch your exit.',
+                                   link=(login_url(next_path), 'Sign in ↗'), embed=True).encode('utf-8')
+        self._send_body(200, 'text/html; charset=utf-8', body, {'Cache-Control': 'no-store'})
 
+    def _handle_login(self, query: Dict[str, List[str]], session: Optional[oidc.Session]) -> None:
+        assert AUTH is not None and AUTH_CONFIG is not None
+        next_path = safe_next(query.get('next', ['/'])[0])
+        if (self.headers.get('X-Forwarded-Proto', 'https').strip().lower() != 'https'
+                and 'canonical' not in query):
+            # A sign-in started over plain http could not keep its Secure
+            # cookie. The header only steers this redirect; nothing trusts it.
+            # Once only: a proxy that always says http must not loop.
+            self._send_body(303, 'text/plain; charset=utf-8', b'',
+                            {'Location': login_url(next_path) + '&canonical=1', 'Cache-Control': 'no-store'})
+            return
+        if session is not None:
+            self._send_body(303, 'text/plain; charset=utf-8', b'',
+                            {'Location': AUTH_CONFIG.public_url + next_path, 'Cache-Control': 'no-store'})
+            return
+        try:
+            login_cookie, authorize_url = AUTH.begin(next_path)
+        except oidc.AuthError as exc:
+            log_event(f'sign-in unavailable: {exc}')
+            body = render_message_page('Sign-in unavailable', 'The identity provider could not be reached. '
+                                       'Try again in a minute.', link=(login_url(next_path), 'Try again'))
+            self._send_body(503, 'text/html; charset=utf-8', body.encode('utf-8'), {'Cache-Control': 'no-store'})
+            return
+        self._send_body(303, 'text/plain; charset=utf-8', b'', {'Location': authorize_url, 'Cache-Control': 'no-store'},
+                        cookies=[_cookie(oidc.LOGIN_COOKIE, login_cookie, oidc.LOGIN_TTL)])
+
+    def _handle_callback(self, query: Dict[str, List[str]]) -> None:
+        assert AUTH is not None and AUTH_CONFIG is not None
+        clear_login = _cookie(oidc.LOGIN_COOKIE, '', 0)
+        login_id = get_cookie(self.headers.get('Cookie'), oidc.LOGIN_COOKIE)
+        first = {key: values[0] for key, values in query.items() if values}
+        try:
+            if 'error' in first:
+                # Consume the pending sign-in; the issuer's own text is not shown.
+                AUTH.discard(login_id)
+                raise oidc.AuthError('access: the identity provider refused the sign-in')
+            session_id, session, next_path = AUTH.finish(login_id, first.get('state'), first.get('code'))
+        except oidc.AuthError as exc:
+            log_event(f'sign-in failed: {exc}')
+            refused = str(exc).startswith('access:')
+            heading = 'Not allowed' if refused else 'Sign-in failed'
+            message = ('This account is not allowed to use this panel.' if refused else
+                       'The sign-in could not be completed. Start it again from the panel.')
+            body = render_message_page(heading, message, link=(login_url('/'), 'Try again'))
+            self._send_body(403 if refused else 400, 'text/html; charset=utf-8', body.encode('utf-8'),
+                            {'Cache-Control': 'no-store'}, cookies=[clear_login])
+            return
+        log_event(f'signed in: user={session.name} admin={"yes" if session.admin else "no"} '
+                  f'exits={",".join(sorted(session.exits)) or "-"}')
+        self._send_body(303, 'text/plain; charset=utf-8', b'',
+                        {'Location': AUTH_CONFIG.public_url + next_path, 'Cache-Control': 'no-store'},
+                        cookies=[clear_login, _cookie(oidc.SESSION_COOKIE, session_id, AUTH_CONFIG.session_ttl)])
+
+    def _read_form(self) -> Optional[Dict[str, str]]:
+        """The bounded POST body as form fields, after the Origin check; None
+        once an error response has been sent."""
         length_header = self.headers.get('Content-Length')
         if length_header is None:
             self._send_plain(411, 'length required')
-            return
+            return None
         try:
             length = int(length_header)
         except ValueError:
             self._send_plain(400, 'bad content-length')
-            return
+            return None
         if length < 0:
             self._send_plain(400, 'bad content-length')
-            return
+            return None
         if length > MAX_BODY_BYTES:
             self._send_plain(413, 'request body too large')
-            return
+            return None
 
         try:
             body = self.rfile.read(length)
         except (TimeoutError, ConnectionError):
             self._send_plain(408, 'request timeout')
-            return
+            return None
         if len(body) != length:
             self._send_plain(400, 'incomplete body')
-            return
+            return None
 
         if not origin_allowed(self.headers.get('Origin')):
             sys.stderr.write('rejected POST: origin is not a published panel host\n')
             self._send_plain(403, 'origin is not a published panel host')
+            return None
+        return parse_select_form(body)
+
+    def do_POST(self) -> None:  # noqa: N802
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path not in ('/select', '/logout') or (parsed.path == '/logout' and AUTH is None):
+            self._send_plain(404, 'not found')
+            return
+        if self._misdirected():
+            return
+        fields = self._read_form()
+        if fields is None:
+            return
+        session = self._session()
+        if parsed.path == '/logout':
+            # A missing session is fine: signing out twice lands on the same page.
+            cookie_nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
+            if session is not None and not verify_csrf(cookie_nonce, fields.get('csrf_token'), session.csrf_key):
+                self._send_plain(403, 'invalid or missing csrf token')
+                return
+            if session is not None:
+                AUTH.end(get_cookie(self.headers.get('Cookie'), oidc.SESSION_COOKIE))
+                log_event(f'signed out: user={session.name}')
+            self._send_body(303, 'text/plain; charset=utf-8', b'',
+                            {'Location': AUTH_CONFIG.public_url + '/signed-out', 'Cache-Control': 'no-store'},
+                            cookies=[_cookie(oidc.SESSION_COOKIE, '', 0)])
+            return
+        if self._signed_out(session, api=False):
             return
 
-        fields = parse_select_form(body)
         cookie_nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
-        if not verify_csrf(cookie_nonce, fields.get('csrf_token')):
+        if not verify_csrf(cookie_nonce, fields.get('csrf_token'), self._csrf_binding(session)):
             self._send_plain(403, 'invalid or missing csrf token')
             return
 
-        ex = find_exit(fields.get('exit'))
+        ex = authorized_exit(fields.get('exit'), session)
         if ex is None:
             self._send_plain(400, 'unknown exit')
             return
@@ -1044,6 +1291,8 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             provider=ex.provider,
         )
         if status == 303:
+            if session is not None:
+                log_event(f'switch: user={session.name} exit={ex.id or "-"} server={fields.get("server")}')
             location = '/embed' if fields.get('return') == 'embed' else '/'
             if ex.id:
                 location += f'?exit={ex.id}'
@@ -1051,23 +1300,29 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             return
         self._send_plain(status, message)
 
-    def _handle_index(self, query: Dict[str, List[str]], *, embed: bool) -> None:
-        ex = self._requested_exit(query)
+    def _handle_index(self, query: Dict[str, List[str]], session: Optional[oidc.Session], *, embed: bool) -> None:
+        ex = self._requested_exit(query, session)
         if ex is None:
             return
         nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
         if not nonce or not re.fullmatch(r'[A-Za-z0-9_-]{32}', nonce):
             nonce = new_csrf_nonce()
-        token = csrf_token(nonce)
+        token = csrf_token(nonce, self._csrf_binding(session))
         fetch_error, fetch_error_at = get_fetch_error(ex)
         body = render_index_html(
             read_json(ex.desired_path), read_json(ex.result_path), read_json(ex.relays_path),
             fetch_error, fetch_error_at, token, embed=embed, exit=ex,
-            exits=[exit_summary(e) for e in EXITS],
+            exits=[exit_summary(e) for e in visible_exits(session)],
+            user=session.name if session is not None else None,
+            # A home dashboard is the operator's; people granted a single exit
+            # are not sent there.
+            show_home=AUTH is None or (session is not None and session.admin),
         ).encode('utf-8')
-        cookies = [f'{CSRF_COOKIE_NAME}={nonce}; Path=/; HttpOnly; SameSite=Strict']
+        # With sign-in on the panel is served over https, so these are Secure too.
+        secure = '; Secure' if AUTH is not None else ''
+        cookies = [f'{CSRF_COOKIE_NAME}={nonce}; Path=/; HttpOnly; SameSite=Strict{secure}']
         if ex.id:
-            cookies.append(f'{EXIT_COOKIE_NAME}={ex.id}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict')
+            cookies.append(f'{EXIT_COOKIE_NAME}={ex.id}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{secure}')
         self._send_body(200, 'text/html; charset=utf-8', body, {'Cache-Control': 'no-store'}, cookies=cookies)
 
     def _handle_static(self, name: str) -> None:
@@ -1087,7 +1342,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
         path = self.path.split('?', 1)[0]
         known = {'/', '/embed', '/healthz', '/readyz', '/api/status', '/api/exits', '/api/latency',
-                 '/select', '/manifest.webmanifest'}
+                 '/select', '/manifest.webmanifest', '/login', '/auth/callback', '/logout', '/signed-out'}
         known.update('/static/' + name for name in STATIC_FILES)
         route = path if path in known else '(unknown route)'
         method = self.command if self.command in ('GET', 'POST', 'HEAD') else '(other method)'

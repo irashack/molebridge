@@ -4,6 +4,27 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- **Optional sign-in for the panel** with OpenID Connect. Set
+  `PANEL_OIDC_ISSUER` and the panel signs people in through your identity
+  provider, and each person sees only the exits their groups grant
+  (`PANEL_ADMIN_GROUPS`, `PANEL_ACCESS`). A sign-in lasts `PANEL_SESSION_TTL`
+  seconds (one hour by default). See
+  [panel access](docs/access.md#sign-in-with-openid-connect) and
+  [per-person exits](docs/switchyard.md#per-person-exits).
+- **The panel now makes HTTPS requests to the identity provider** when sign-in
+  is on, and the panel container needs a route to it. The ID token's signature
+  is not checked; the panel relies on the verified TLS connection to the token
+  endpoint instead, as OpenID Connect Core 1.0 section 3.1.3.7 allows. See
+  [architecture](docs/architecture.md#sign-in) for what that trusts.
+
+Without `PANEL_OIDC_ISSUER` the panel behaves as in 0.3.0, with no login. The
+new settings are in [configuration](docs/configuration.md#panel-sign-in).
+
+Tested: unit and integration tests against a fake issuer. Not tested against a
+real identity provider yet; see [testing](docs/testing.md#not-yet-tested).
+
 ## 0.3.0 (2026-09-27)
 
 - **PIA as a second provider** (`PROVIDER=pia`). You pick a region, not a

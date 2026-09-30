@@ -5,8 +5,9 @@ stack runs one on `127.0.0.1:8095` (`PANEL_PORT`). One Switchyard can also
 serve several exits on the same host; see
 [several exits in one panel](#several-exits-in-one-panel).
 
-It has no login. Put it behind [authenticated access](access.md) before anyone
-else can reach it.
+By default it has no login. Put it behind [authenticated access](access.md)
+before anyone else can reach it, or turn on its
+[OpenID Connect sign-in](access.md#sign-in-with-openid-connect).
 
 ## Switching
 
@@ -115,6 +116,13 @@ blank; open the panel directly once to sign in. The dashboard and the panel
 must be on the same site (two subdomains of `example.net`, for example), or
 the browser won't send that cookie inside the frame.
 
+With the panel's own sign-in on, an expired session doesn't leave the frame
+blank: it shows a small "Signed out" page with a **Sign in** link that opens in
+a new tab, because the identity provider can't be shown inside a frame. Sign
+in there, then reload the dashboard. The same-site requirement applies to the
+panel's session cookie too. See
+[access](access.md#in-a-dashboard-frame).
+
 ## On a phone
 
 The panel can be installed as an app. On iPhone, open it in Safari and choose
@@ -202,5 +210,34 @@ every exit's state for the tabs. `/readyz` returns 200 only when all exits are
 connected; `/readyz?exit=<id>` checks one. The full list is in
 [configuration](configuration.md#panel-endpoints).
 
-Anyone who can reach this panel can switch every exit it lists. Give it at
-least the access restrictions of the most restricted exit.
+Without sign-in, anyone who can reach this panel can switch every exit it
+lists. Give it at least the access restrictions of the most restricted exit,
+or use sign-in to give people different exits.
+
+### Per-person exits
+
+With [OpenID Connect sign-in](access.md#sign-in-with-openid-connect), one panel
+can show each person only their own exit. Give each person an exit, list the
+exits in `PANEL_EXITS`, and grant each group its exit with `PANEL_ACCESS`, as
+`group=exit` pairs:
+
+```sh
+PANEL_EXITS='alice=mullvad:Alice,bob=pia:Bob'
+PANEL_ACCESS='alice-exit=alice,bob-exit=bob'
+PANEL_ADMIN_GROUPS=exit-admins
+PANEL_OIDC_ISSUER=https://id.example.net
+PANEL_OIDC_CLIENT_ID=switchyard
+PANEL_PUBLIC_URL=https://exit.example.net
+```
+
+Someone in `alice-exit` sees only the Alice exit and can switch only that one.
+Repeat a group to grant it several exits (`family=alice,family=bob`). Members
+of `exit-admins` see every exit. The Bob exit is not merely hidden from Alice:
+asking for it gets the same answer as an exit that doesn't exist.
+
+The groups live at your identity provider, and the panel reads them at
+sign-in, so a change there takes effect within `PANEL_SESSION_TTL`; see
+[sessions and lockout](access.md#sessions-and-lockout). `PANEL_ACCESS`
+only controls who may use the panel. Which devices send traffic to which exit
+is still set in NetBird, and switching an exit still moves every device that
+uses it.

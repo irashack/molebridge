@@ -35,6 +35,32 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
 
+### Panel sign-in
+
+Optional OpenID Connect sign-in; the procedure is in
+[panel access](access.md#sign-in-with-openid-connect). Everything here is off
+unless `PANEL_OIDC_ISSUER` is set. Setting `PANEL_OIDC_CLIENT_ID`,
+`PANEL_ACCESS`, `PANEL_ADMIN_GROUPS` or `PANEL_PUBLIC_URL` without it stops the
+panel at start. `compose.yaml` passes `PANEL_OIDC_ISSUER`,
+`PANEL_OIDC_CLIENT_ID`, `PANEL_PUBLIC_URL`, `PANEL_ADMIN_GROUPS` and
+`PANEL_SESSION_TTL` from `.env`. The other three are for a separate Switchyard
+container, where you set them in its own environment.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PANEL_OIDC_ISSUER` | empty | The issuer, exactly as its discovery document states it. `https`, or `http` only to a loopback test issuer. Empty means no login. |
+| `PANEL_OIDC_CLIENT_ID` | empty | The client ID registered at the issuer. Required with the issuer. |
+| `PANEL_OIDC_CLIENT_SECRET_FILE` | empty | Path, inside the panel container, to a file holding the client secret, for a confidential client. The panel sends it with HTTP Basic authentication. Unset means a public client, with no secret on disk. |
+| `PANEL_PUBLIC_URL` | empty | The canonical `https` origin people open, such as `https://exit.example.net`, with no path. Its host is accepted like a `PANEL_PUBLIC_HOSTS` entry. The redirect URI to register at the issuer is this plus `/auth/callback`. Required with the issuer. |
+| `PANEL_OIDC_SCOPES` | `openid profile email groups` | Scopes to request. Must include `openid`. |
+| `PANEL_OIDC_GROUPS_CLAIM` | `groups` | The claim that lists a person's groups. |
+| `PANEL_ADMIN_GROUPS` | empty | Comma-separated groups whose members see every exit. |
+| `PANEL_ACCESS` | empty | Comma-separated `group=exit` pairs. Repeat a group to grant it several exits. Every exit must be in `PANEL_EXITS`, so a single-exit panel uses `PANEL_ADMIN_GROUPS` only. Group names can't contain spaces, commas or `=`. |
+| `PANEL_SESSION_TTL` | `3600` | Seconds a sign-in lasts, from 300 to 604800. Not extended by use. |
+
+With the issuer set, at least one of `PANEL_ADMIN_GROUPS` and `PANEL_ACCESS`
+must name a group.
+
 ## Tunnel config helper
 
 The helper accepts a Mullvad source file or `--pia`, followed by an optional
@@ -107,16 +133,43 @@ In multi-exit mode, use `?exit=<id>` to select an exit. `/` without it returns
 303 to `/?exit=<id>`, using the last-exit cookie or the first configured exit;
 `/embed` redirects the same way. `/api/status` and `/api/latency` need an exit
 ID in this mode; a missing or unknown ID returns 404. A single-exit panel
-ignores the exit parameter.
+ignores the exit parameter. With [sign-in](access.md#sign-in-with-openid-connect)
+on, the cookie and the first exit are chosen among the exits the person is
+granted.
 
 | Path | Purpose |
 |---|---|
 | `/`, `/?exit=<id>` | Full panel for the exit |
 | `/embed`, `/embed?exit=<id>` | Compact view for iframes |
 | `POST /select` | Choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode |
-| `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode |
+| `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
 | `/api/status?exit=<id>` | Desired server and applier result; omit `exit` for a single-exit panel |
 | `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>`, or `hosts=<a,b>` (64 at most); `fresh=1` ignores the cache |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |
 | `/readyz`, `/readyz?exit=<id>` | 200 only when all exits, or the named exit, have a fresh verified connected state; 503 otherwise. An unknown ID in multi-exit mode returns 404 |
+
+With sign-in on, these are added, and they answer 404 when it is off:
+
+| Path | Purpose |
+|---|---|
+| `/login?next=<path>` | Starts sign-in and redirects to the issuer. Only `/` and `/embed`, each with an optional `?exit=<id>`, are accepted as `next`; anything else lands on `/`. Someone who already has a session is redirected to `next` |
+| `/auth/callback` | Where the issuer sends the browser back. Sets the session cookie and redirects to `next`, or shows "Not allowed" (403), "Sign-in failed" (400) |
+| `POST /logout` | Ends the session. Requires the CSRF token. Redirects to `/signed-out` |
+| `/signed-out` | A page confirming the sign-out, with a sign-in link |
+
+Without a session:
+
+| Path | Answer |
+|---|---|
+| `/` | 303 to `<PANEL_PUBLIC_URL>/login?next=...`, always the absolute canonical address |
+| `/embed` | 200, a small "Signed out" page whose link opens sign-in in a new tab |
+| `/api/status`, `/api/exits`, `/api/latency` | 401 with `{"error": "sign in required"}` |
+| `POST /select` | 401 `sign in required` |
+| `/healthz`, `/static/*`, `/manifest.webmanifest`, `/readyz` without `?exit=` | As without sign-in |
+
+`/readyz?exit=<id>` needs a session granted that exit. For anyone else it
+answers 404 `unknown exit`, as for an exit that doesn't exist. The same holds
+for an exit the person isn't granted on the page, the embed, `/api/status` and
+`/api/latency` (404 `unknown exit`) and on `POST /select` (400 `unknown exit`).
+The Host check comes first for all of these except `/healthz`.
