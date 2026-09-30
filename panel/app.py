@@ -405,6 +405,24 @@ def get_cookie(cookie_header: Optional[str], name: str) -> Optional[str]:
     return morsel.value if morsel else None
 
 
+def get_cookie_strict(cookie_header: Optional[str], name: str) -> Optional[str]:
+    """One cookie by exact name; None when absent, repeated or malformed.
+    Used with sign-in on. SimpleCookie reads `a=x __Host-y=z` as two cookies
+    and lets a later duplicate win, which would let a cookie planted from a
+    sibling subdomain or over plain http stand in for a __Host- cookie."""
+    if not cookie_header:
+        return None
+    found: Optional[str] = None
+    for part in cookie_header.split(';'):
+        key, sep, value = part.strip(' \t').partition('=')
+        if key != name:
+            continue
+        if found is not None or not sep:
+            return None
+        found = value.strip(' \t')
+    return found
+
+
 LOOPBACK_HOSTS = {'localhost', '127.0.0.1', '::1'}
 
 
@@ -1045,10 +1063,15 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         self._send_plain(421, 'unknown host; publish the panel under PANEL_PUBLIC_HOSTS')
         return True
 
+    def _cookie(self, name: str) -> Optional[str]:
+        """A request cookie: parsed strictly with sign-in on, as before without."""
+        parse = get_cookie if AUTH is None else get_cookie_strict
+        return parse(self.headers.get('Cookie'), name)
+
     def _session(self) -> Optional[oidc.Session]:
         if AUTH is None:
             return None
-        return AUTH.session(get_cookie(self.headers.get('Cookie'), oidc.SESSION_COOKIE))
+        return AUTH.session(self._cookie(oidc.SESSION_COOKIE))
 
     def _signed_out(self, session: Optional[oidc.Session], *, api: bool) -> bool:
         """With sign-in configured and no session: answer 401 and return True."""
@@ -1106,7 +1129,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
                 if not visible:
                     self._send_plain(404, 'unknown exit')
                     return
-                ex = authorized_exit(get_cookie(self.headers.get('Cookie'), EXIT_COOKIE_NAME), session) or visible[0]
+                ex = authorized_exit(self._cookie(EXIT_COOKIE_NAME), session) or visible[0]
                 page = '/embed' if embed else '/'
                 self._send_body(303, 'text/plain; charset=utf-8', b'',
                                 {'Location': f'{page}?exit={ex.id}', 'Cache-Control': 'no-store'})
@@ -1190,7 +1213,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
     def _handle_callback(self, query: Dict[str, List[str]]) -> None:
         assert AUTH is not None and AUTH_CONFIG is not None
         clear_login = _cookie(oidc.LOGIN_COOKIE, '', 0)
-        login_id = get_cookie(self.headers.get('Cookie'), oidc.LOGIN_COOKIE)
+        login_id = self._cookie(oidc.LOGIN_COOKIE)
         first = {key: values[0] for key, values in query.items() if values}
         try:
             if 'error' in first:
@@ -1208,7 +1231,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             self._send_body(403 if refused else 400, 'text/html; charset=utf-8', body.encode('utf-8'),
                             {'Cache-Control': 'no-store'}, cookies=[clear_login])
             return
-        log_event(f'signed in: user={session.name} admin={"yes" if session.admin else "no"} '
+        log_event(f'signed in: user={session.name} sub={oidc.log_safe(session.sub)} admin={"yes" if session.admin else "no"} '
                   f'exits={",".join(sorted(session.exits)) or "-"}')
         self._send_body(303, 'text/plain; charset=utf-8', b'',
                         {'Location': AUTH_CONFIG.public_url + next_path, 'Cache-Control': 'no-store'},
@@ -1261,12 +1284,12 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         session = self._session()
         if parsed.path == '/logout':
             # A missing session is fine: signing out twice lands on the same page.
-            cookie_nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
+            cookie_nonce = self._cookie(CSRF_COOKIE_NAME)
             if session is not None and not verify_csrf(cookie_nonce, fields.get('csrf_token'), session.csrf_key):
                 self._send_plain(403, 'invalid or missing csrf token')
                 return
             if session is not None:
-                AUTH.end(get_cookie(self.headers.get('Cookie'), oidc.SESSION_COOKIE))
+                AUTH.end(self._cookie(oidc.SESSION_COOKIE))
                 log_event(f'signed out: user={session.name}')
             self._send_body(303, 'text/plain; charset=utf-8', b'',
                             {'Location': AUTH_CONFIG.public_url + '/signed-out', 'Cache-Control': 'no-store'},
@@ -1275,7 +1298,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         if self._signed_out(session, api=False):
             return
 
-        cookie_nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
+        cookie_nonce = self._cookie(CSRF_COOKIE_NAME)
         if not verify_csrf(cookie_nonce, fields.get('csrf_token'), self._csrf_binding(session)):
             self._send_plain(403, 'invalid or missing csrf token')
             return
@@ -1292,7 +1315,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         )
         if status == 303:
             if session is not None:
-                log_event(f'switch: user={session.name} exit={ex.id or "-"} server={fields.get("server")}')
+                log_event(f'switch: user={session.name} sub={oidc.log_safe(session.sub)} exit={ex.id or "-"} server={fields.get("server")}')
             location = '/embed' if fields.get('return') == 'embed' else '/'
             if ex.id:
                 location += f'?exit={ex.id}'
@@ -1304,7 +1327,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         ex = self._requested_exit(query, session)
         if ex is None:
             return
-        nonce = get_cookie(self.headers.get('Cookie'), CSRF_COOKIE_NAME)
+        nonce = self._cookie(CSRF_COOKIE_NAME)
         if not nonce or not re.fullmatch(r'[A-Za-z0-9_-]{32}', nonce):
             nonce = new_csrf_nonce()
         token = csrf_token(nonce, self._csrf_binding(session))

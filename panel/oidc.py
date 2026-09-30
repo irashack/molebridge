@@ -22,6 +22,7 @@ nobody can crowd out someone else's sign-in by starting many of their own.
 from __future__ import annotations
 
 import base64
+import collections
 import hashlib
 import hmac
 import ipaddress
@@ -49,6 +50,8 @@ MAX_SESSIONS = 4096
 MAX_SESSIONS_PER_SUBJECT = 16
 MAX_CONSUMED_LOGINS = 65536
 DISCOVERY_TTL = 3600
+DISCOVERY_RETRY_S = 30
+STATE_RE = re.compile(r'[A-Za-z0-9_-]{43}')
 HTTP_TIMEOUT_S = 10
 MAX_RESPONSE_BYTES = 256 * 1024
 CLOCK_SKEW_S = 120
@@ -262,10 +265,18 @@ def parse_discovery(doc: Dict[str, Any], issuer: str) -> Endpoints:
         raise AuthError('discovery: the issuer in the discovery document does not match PANEL_OIDC_ISSUER')
     authorization, token, userinfo = (doc.get(k) for k in
                                       ('authorization_endpoint', 'token_endpoint', 'userinfo_endpoint'))
+    # Plain http only when the issuer itself is a loopback test issuer; an
+    # https issuer can never send the panel to http.
+    https_only = urllib.parse.urlsplit(issuer).scheme == 'https'
+
+    def allowed(value: Any) -> bool:
+        return (isinstance(value, str) and secure_url(value)
+                and (not https_only or urllib.parse.urlsplit(value).scheme == 'https'))
+
     for value in (authorization, token):
-        if not isinstance(value, str) or not secure_url(value):
+        if not allowed(value):
             raise AuthError('discovery: the authorization and token endpoints must be https URLs')
-    if userinfo is not None and (not isinstance(userinfo, str) or not secure_url(userinfo)):
+    if userinfo is not None and not allowed(userinfo):
         userinfo = None
     methods = doc.get('code_challenge_methods_supported')
     if isinstance(methods, list) and 'S256' not in methods:
@@ -323,7 +334,7 @@ def id_token_claims(token: Any, *, issuer: str, client_id: str, nonce: str, now:
     if not isinstance(iat, (int, float)) or isinstance(iat, bool) or iat - CLOCK_SKEW_S > now:
         raise AuthError('token: the ID token was issued in the future')
     claim_nonce = claims.get('nonce')
-    if not isinstance(claim_nonce, str) or not hmac.compare_digest(claim_nonce, nonce):
+    if not isinstance(claim_nonce, str) or not hmac.compare_digest(claim_nonce.encode('utf-8'), nonce.encode('utf-8')):
         raise AuthError('token: the ID token does not belong to this sign-in')
     sub = claims.get('sub')
     if not isinstance(sub, str) or not sub or len(sub) > 255:
@@ -343,6 +354,11 @@ def groups_from(claims: Mapping[str, Any], claim: str) -> Optional[FrozenSet[str
     if not isinstance(value, list) or len(value) > MAX_GROUPS or not all(isinstance(g, str) for g in value):
         raise AuthError('token: the groups claim is malformed')
     return frozenset(g for g in value if g)
+
+
+def log_safe(value: str) -> str:
+    """A value reduced to a safe character set for one log line."""
+    return LOG_NAME_RE.sub('_', value)[:64] or '-'
 
 
 def display_name(claims: Mapping[str, Any]) -> str:
@@ -390,10 +406,12 @@ class Authenticator:
         self._sessions: Dict[str, Session] = {}
         # Signs the pending sign-in cookie; a new key per process.
         self._login_key = secrets.token_bytes(32)
-        # state -> created, for sign-ins already finished or refused, so a
-        # callback cannot be replayed with the same cookie.
-        self._consumed: Dict[str, int] = {}
-        self._endpoints: Optional[Tuple[Endpoints, float]] = None
+        # state -> created, in the order they were used, for sign-ins already
+        # finished or refused, so a callback cannot be replayed with the same
+        # cookie. Expiry and eviction both work from the oldest end.
+        self._consumed: 'collections.OrderedDict[str, int]' = collections.OrderedDict()
+        # (endpoints or None after a failure, when fetched)
+        self._endpoints: Optional[Tuple[Optional[Endpoints], float]] = None
 
     # -- discovery -----------------------------------------------------------
 
@@ -401,10 +419,18 @@ class Authenticator:
         now = self.clock()
         with self._lock:
             cached = self._endpoints
-        if cached and now - cached[1] < DISCOVERY_TTL:
+        if cached and cached[0] is not None and now - cached[1] < DISCOVERY_TTL:
             return cached[0]
-        doc = http_json(self.config.issuer.rstrip('/') + '/.well-known/openid-configuration', what='discovery')
-        endpoints = parse_discovery(doc, self.config.issuer)
+        if cached and cached[0] is None and now - cached[1] < DISCOVERY_RETRY_S:
+            # A recent failure: don't let every anonymous /login wait on it.
+            raise AuthError('discovery: the issuer could not be reached recently; retrying shortly')
+        try:
+            doc = http_json(self.config.issuer.rstrip('/') + '/.well-known/openid-configuration', what='discovery')
+            endpoints = parse_discovery(doc, self.config.issuer)
+        except AuthError:
+            with self._lock:
+                self._endpoints = (None, now)
+            raise
         with self._lock:
             self._endpoints = (endpoints, now)
         return endpoints
@@ -414,8 +440,7 @@ class Authenticator:
     def begin(self, next_path: str) -> Tuple[str, str]:
         """(value for the pending sign-in cookie, authorization URL)."""
         endpoints = self.endpoints()
-        pending = PendingLogin(secrets.token_urlsafe(32), secrets.token_urlsafe(32),
-                               secrets.token_urlsafe(48), next_path, int(self.clock()))
+        pending = self._pending(secrets.token_urlsafe(32), next_path, int(self.clock()))
         query = urllib.parse.urlencode({
             'response_type': 'code',
             'client_id': self.config.client_id,
@@ -429,8 +454,17 @@ class Authenticator:
         separator = '&' if urllib.parse.urlsplit(endpoints.authorization).query else '?'
         return self._seal(pending), f'{endpoints.authorization}{separator}{query}'
 
+    def _derive(self, purpose: str, state: str) -> str:
+        return _b64url(hmac.new(self._login_key, f'{purpose}\n{state}'.encode('ascii'), hashlib.sha256).digest())
+
+    def _pending(self, state: str, next_path: str, created: int) -> PendingLogin:
+        """The nonce and PKCE verifier are derived from the state with this
+        process's key, so the cookie never carries them."""
+        return PendingLogin(state, self._derive('nonce', state), self._derive('verifier', state), next_path, created)
+
     def _seal(self, pending: PendingLogin) -> str:
-        body = _b64url(json.dumps(pending._asdict(), separators=(',', ':')).encode('utf-8'))
+        fields = {'state': pending.state, 'next_path': pending.next_path, 'created': pending.created}
+        body = _b64url(json.dumps(fields, separators=(',', ':')).encode('utf-8'))
         mac = _b64url(hmac.new(self._login_key, body.encode('ascii'), hashlib.sha256).digest())
         return f'{body}.{mac}'
 
@@ -446,26 +480,31 @@ class Authenticator:
             raise expired
         try:
             fields = _loads(_b64url_decode(body))
-            pending = PendingLogin(**fields)
+            if not isinstance(fields, dict) or set(fields) != {'state', 'next_path', 'created'}:
+                raise ValueError('unexpected fields')
+            state, next_path, created = fields['state'], fields['next_path'], fields['created']
         except (ValueError, TypeError, UnicodeDecodeError):
             raise expired from None
+        if (not isinstance(state, str) or not STATE_RE.fullmatch(state) or not isinstance(next_path, str)
+                or not isinstance(created, int) or isinstance(created, bool)):
+            raise expired
         now = self.clock()
-        if not isinstance(pending.created, int) or not 0 <= now - pending.created <= LOGIN_TTL:
+        if not 0 <= now - created <= LOGIN_TTL:
             raise expired
         with self._lock:
-            self._prune(now)
-            if pending.state in self._consumed:
+            self._prune_consumed(now)
+            if state in self._consumed:
                 raise expired
-            if len(self._consumed) >= MAX_CONSUMED_LOGINS:
-                del self._consumed[min(self._consumed, key=self._consumed.__getitem__)]
-            self._consumed[pending.state] = pending.created
-        return pending
+            while len(self._consumed) >= MAX_CONSUMED_LOGINS:
+                self._consumed.popitem(last=False)
+            self._consumed[state] = int(now)
+        return self._pending(state, next_path, created)
 
     def finish(self, login_cookie: Optional[str], state: Optional[str], code: Optional[str]) -> Tuple[str, Session, str]:
         """Complete a sign-in: (session id, session, next path). The pending
         sign-in is used up whatever the outcome."""
         pending = self._open(login_cookie)
-        if not isinstance(state, str) or not hmac.compare_digest(state, pending.state):
+        if not isinstance(state, str) or not hmac.compare_digest(state.encode('utf-8'), pending.state.encode('ascii')):
             raise AuthError('callback: the sign-in state does not match')
         if not isinstance(code, str) or not code or len(code) > 4096:
             raise AuthError('callback: the issuer returned no code')
@@ -540,8 +579,17 @@ class Authenticator:
                 self._sessions.pop(session_id, None)
 
     def _prune(self, now: float) -> None:
-        """Drop expired sessions and sign-ins. Caller holds the lock."""
+        """Drop expired sessions and used sign-ins. Caller holds the lock."""
         for key in [k for k, s in self._sessions.items() if s.expires <= now]:
             del self._sessions[key]
-        for key in [k for k, created in self._consumed.items() if now - created > LOGIN_TTL]:
-            del self._consumed[key]
+        self._prune_consumed(now)
+
+    def _prune_consumed(self, now: float) -> None:
+        """Drop used sign-ins older than LOGIN_TTL, from the oldest end.
+        Entries are kept in the order they were used, so this stops at the
+        first one still young. Caller holds the lock."""
+        while self._consumed:
+            state, used = next(iter(self._consumed.items()))
+            if now - used <= LOGIN_TTL:
+                break
+            del self._consumed[state]

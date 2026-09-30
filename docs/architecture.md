@@ -227,15 +227,16 @@ standard library, as a public client unless a client secret file is set.
 **The flow.** `/login` fetches the issuer's discovery document
 (`<issuer>/.well-known/openid-configuration`, cached for an hour) and redirects
 the browser to the authorization endpoint with a PKCE challenge (S256), a state
-and a nonce. The browser keeps the state, nonce, verifier and return path in
-the `__Host-molebridge_login` cookie for 10 minutes, signed with a key that
-exists only in the panel process's memory, so the panel stores nothing per
-sign-in and starting many sign-ins cannot push out anyone else's. When the
+and a nonce. The nonce and the verifier are derived from the state with a
+key that exists only in the panel process's memory. The browser keeps the
+state, the return path and the start time in the `__Host-molebridge_login`
+cookie for 10 minutes, signed with the same key, so the panel stores nothing
+per sign-in and starting many sign-ins cannot push out anyone else's. When the
 browser returns to `/auth/callback`, the panel checks the signature, the age
 and the state, remembers that state as used so the same callback cannot be
 replayed, then sends the code and the PKCE verifier to the token endpoint. A
 code intercepted on its way to the browser is useless without the verifier,
-which only that browser's HttpOnly cookie and the panel ever see.
+which never leaves the panel except to the token endpoint.
 
 **Discovery.** The `issuer` in the document must equal `PANEL_OIDC_ISSUER`
 exactly. The authorization and token endpoints must be https (http only for a
@@ -294,10 +295,24 @@ exit they are not granted is treated everywhere as one that doesn't exist; the
 [endpoint table](configuration.md#panel-endpoints) lists the answers. A person
 whose groups grant no exit gets no session.
 
+With sign-in on, the panel reads its cookies with a strict parser: a cookie
+must appear once, by its exact name. Python's `SimpleCookie`, which the panel
+uses without sign-in, would read `a=x __Host-molebridge_session=…` as two
+cookies, letting a cookie planted from a sibling subdomain or over plain http
+stand in for the session.
+
+**Logs.** Each sign-in, refused sign-in, sign-out and switch writes one line to
+the panel's standard error, for example
+`switch: user=<name> sub=<subject> exit=<id> server=<server>`. The name is
+`preferred_username`, else `email`, else the subject; both are reduced to
+letters, digits and `._@+-` and 64 characters. Tokens, codes, cookies and
+session IDs are never logged. Switches are logged only with sign-in on.
+
 **Sign-in adds an outbound trust boundary.** Without it, the panel's only
 outbound connections are latency probes. With it, the panel makes HTTPS
 requests to the identity provider: discovery, the token endpoint, and userinfo
-only when the ID token lacks the groups claim. These follow the URLs from the
+only when the ID token lacks the groups claim. A failed discovery is not
+retried for 30 seconds. With an https issuer every endpoint must be https. These follow the URLs from the
 discovery document. Environment proxy settings are ignored, redirects are not
 followed, each request times out after 10 seconds, a response is cut off at
 256 KiB, and a JSON object with a duplicate key is refused. The panel

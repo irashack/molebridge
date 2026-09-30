@@ -910,7 +910,10 @@ class AuthenticatorTests(unittest.TestCase):
         self.begin()
         self.auth.discard(self.begin()[0])
         self.assertEqual(len(self.auth._consumed), 1)
-        self.assertEqual(self.auth._sessions, {})
+        # Expired sessions go at the next completed sign-in.
+        login_id, query = self.begin()
+        self.auth.finish(login_id, query['state'], 'code-0002')
+        self.assertEqual(len(self.auth._sessions), 1)
 
 
 # --------------------------------------------------------------------------
@@ -1509,7 +1512,7 @@ class SwitchTests(PanelAuthBase):
         self.assertEqual((reply.status, reply.location), (303, '/?exit=a'))
         self.assertEqual(app.read_json(self.a.desired_path)['server'], self.SELECT_SERVER)
         self.assertNoDesired(self.mine, self.b)
-        self.assertIn(f'switch: user=friend-a exit=a server={self.SELECT_SERVER}\n', self.stderr.getvalue())
+        self.assertIn(f'switch: user=friend-a sub=u-friend exit=a server={self.SELECT_SERVER}\n', self.stderr.getvalue())
 
     def test_select_returns_to_embed(self):
         reply = self.select(self.friend, 'a', **{'return': 'embed'})
@@ -1531,8 +1534,8 @@ class SwitchTests(PanelAuthBase):
         self.assertEqual(app.read_json(self.mine.desired_path)['server'], 'se-sto-wg-001')
         self.assertFalse(self.a.desired_path.exists())
         log = self.stderr.getvalue()
-        self.assertIn('switch: user=boss exit=b server=ex_example\n', log)
-        self.assertIn('switch: user=boss exit=mine server=se-sto-wg-001\n', log)
+        self.assertIn('switch: user=boss sub=u-admin exit=b server=ex_example\n', log)
+        self.assertIn('switch: user=boss sub=u-admin exit=mine server=se-sto-wg-001\n', log)
 
     def test_log_carries_no_credentials(self):
         code = 'authcode-must-not-be-logged'
@@ -1729,3 +1732,84 @@ class NoSignInConfiguredTests(PanelAuthBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# Second review (fresh-context) findings
+# --------------------------------------------------------------------------
+
+class ReviewFindingTests(AuthenticatorTests):
+    def test_login_cookie_carries_no_nonce_or_verifier(self):
+        login_cookie, query = self.begin()
+        body = json.loads(oidc._b64url_decode(login_cookie.split('.')[0]))
+        self.assertEqual(set(body), {'state', 'next_path', 'created'})
+        self.assertNotIn(query['nonce'], login_cookie)
+
+    def test_non_ascii_state_is_refused_not_crashed(self):
+        login_cookie, _ = self.begin()
+        with self.assertRaises(oidc.AuthError):
+            self.auth.finish(login_cookie, 'é' * 43, 'code-0001')
+
+    def test_https_issuer_never_accepts_http_endpoints(self):
+        doc = {'issuer': ISSUER, 'authorization_endpoint': ISSUER + '/authorize',
+               'token_endpoint': 'http://127.0.0.1:9/token'}
+        with self.assertRaises(oidc.AuthError):
+            oidc.parse_discovery(doc, ISSUER)
+        doc['token_endpoint'] = ISSUER + '/token'
+        doc['userinfo_endpoint'] = 'http://127.0.0.1:9/userinfo'
+        self.assertIsNone(oidc.parse_discovery(doc, ISSUER).userinfo)
+
+    def test_a_discovery_failure_is_not_retried_for_every_request(self):
+        auth = oidc.Authenticator(oidc.config_from_env(env_for('https://unreachable.invalid'), EXIT_IDS),
+                                  EXIT_IDS, clock=self.clock)
+        calls = []
+        real = oidc.http_json
+
+        def failing(*args, **kwargs):
+            calls.append(1)
+            raise oidc.AuthError('discovery: the issuer could not be reached')
+        oidc.http_json = failing
+        try:
+            for _ in range(3):
+                with self.assertRaises(oidc.AuthError):
+                    auth.endpoints()
+            self.assertEqual(len(calls), 1)
+            self.clock.advance(oidc.DISCOVERY_RETRY_S + 1)
+            with self.assertRaises(oidc.AuthError):
+                auth.endpoints()
+            self.assertEqual(len(calls), 2)
+        finally:
+            oidc.http_json = real
+
+    def test_consumed_states_expire_from_the_oldest_end(self):
+        for _ in range(3):
+            self.auth.discard(self.begin()[0])
+        self.assertEqual(len(self.auth._consumed), 3)
+        self.clock.advance(oidc.LOGIN_TTL + 1)
+        self.auth.discard(self.begin()[0])
+        self.assertEqual(len(self.auth._consumed), 1)
+
+
+class StrictCookieTests(unittest.TestCase):
+    def test_a_planted_cookie_cannot_stand_in_for_a_host_cookie(self):
+        name = oidc.SESSION_COOKIE
+        self.assertEqual(app.get_cookie_strict(f'{name}=REAL', name), 'REAL')
+        self.assertEqual(app.get_cookie_strict(f'a=b; {name}=REAL; c=d', name), 'REAL')
+        # SimpleCookie would read these as a session cookie named `name`.
+        self.assertIsNone(app.get_cookie_strict(f'a=x {name}=EVIL', name))
+        self.assertIsNone(app.get_cookie_strict(f'{name}=REAL; {name}=EVIL', name))
+        self.assertIsNone(app.get_cookie_strict(f'{name}', name))
+        self.assertEqual(app.get_cookie_strict(f'{name}=REAL; a=x {name}=EVIL', name), 'REAL')
+
+    def test_a_reserved_word_or_stray_quote_does_not_sign_anyone_out(self):
+        name = oidc.SESSION_COOKIE
+        for header in (f'Path=/; {name}=REAL', f'version=1; {name}=REAL', f'a=b"c; {name}=REAL'):
+            with self.subTest(header=header):
+                self.assertEqual(app.get_cookie_strict(header, name), 'REAL')
+
+
+class PlantedCookieOverHttpTests(PanelAuthBase):
+    def test_a_session_id_smuggled_inside_another_cookie_is_ignored(self):
+        cookie = self.sign_in()
+        self.assertEqual(self.get('/api/exits', cookie).status, 200)
+        self.assertEqual(self.get('/api/exits', f'planted=x {cookie}').status, 401)
