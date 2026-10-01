@@ -22,8 +22,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 Without `PANEL_OIDC_ISSUER` the panel behaves as in 0.3.0, with no login. The
 new settings are in [configuration](docs/configuration.md#panel-sign-in).
 
-Tested: unit and integration tests against a fake issuer. Not tested against a
-real identity provider yet; see [testing](docs/testing.md#not-yet-tested).
+Tested: unit and integration tests against a fake issuer, and a live pass with
+Pocket ID v2.16.0 as a public client: an admin sign-in, a switch verified by
+the applier, and the signed-out behavior through a proxy. Sign-in by someone
+granted only some exits has not been observed live; see
+[testing](docs/testing.md#sign-in-pass-at-62a0170).
 
 ## 0.3.0 (2026-09-27)
 

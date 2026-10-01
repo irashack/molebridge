@@ -100,8 +100,9 @@ Podman details, is in [requirements](docs/prerequisites.md).
 - **The panel has no login unless you configure one.** By default, anyone who
   can reach it can change the exit for every device that uses it. Reach it
   through an SSH tunnel or an authenticating proxy, or turn on
-  [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect), which
-  has not yet been tested against a real identity provider.
+  [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect). Sign-in
+  has been tried live with one provider and an admin account only; see
+  [testing](docs/testing.md#sign-in-pass-at-62a0170).
 - **This is not a kill switch on your devices.** The exit fails closed for
   traffic it receives. If a device deselects the exit or NetBird disconnects,
   that device uses its own connection.
@@ -132,6 +133,7 @@ which adds PIA support and multi-exit panels; see the [changelog](CHANGELOG.md).
 | Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64, self-hosted NetBird 0.79: Mullvad | A client held on the exit through all six failure drills, a host reboot with unattended recovery, LAN isolation, and a clean install from the published files. |
 | The same host: PIA | First start, recreation, a client held on the exit through a tunnel-down drill, IPv6 and LAN isolation, and region switches. |
 | The same host: Switchyard | One panel serving the Mullvad and PIA exits, with a selection verified on each. |
+| The same host: Switchyard sign-in | Pocket ID v2.16.0: an admin sign-in and a verified switch through it, and the signed-out behavior through a proxy. Sign-in by someone granted only some exits is covered by tests, not yet live. |
 | macOS, OrbStack, Apple silicon, self-hosted NetBird 0.78: Mullvad | An earlier live pass; the six defects it found are fixed. |
 | CI on every push | Unit tests, shell lint, Compose validation, image builds, and IPv4/IPv6 routing failure drills in isolated namespaces. |
 | Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, and PIA port forwarding against PIA itself. |

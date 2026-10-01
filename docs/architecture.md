@@ -326,8 +326,8 @@ for it, can sign anyone in as any member of any group. The panel still holds
 no capabilities and runs no subprocesses. With a public client it holds no
 secret either; with `PANEL_OIDC_CLIENT_SECRET_FILE` it holds that one file.
 
-Sign-in is not yet tested against a real identity provider; see
-[testing](testing.md#not-yet-tested).
+Sign-in has been tried live with Pocket ID v2.16.0, as an admin only; see
+[testing](testing.md#sign-in-pass-at-62a0170).
 
 ## Recovery and verification
 

@@ -85,9 +85,9 @@ and then show each person only the exits their groups allow. It is off unless
 you set `PANEL_OIDC_ISSUER`. With that unset the panel behaves as described
 above: no login.
 
-This has unit and integration tests against a fake issuer. It has not yet been
-tested against a real identity provider; see
-[testing](testing.md#not-yet-tested).
+This has unit and integration tests against a fake issuer and one live pass
+with Pocket ID v2.16.0, as an admin; see
+[testing](testing.md#sign-in-pass-at-62a0170).
 
 You still need something in front of the panel that serves it over https.
 The sign-in cookies are marked `Secure`, and the panel itself listens on plain

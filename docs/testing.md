@@ -233,6 +233,34 @@ exits stayed on their own revision, `b2a0a02`.
 Not tested live: a switch to a different location through Switchyard; phone
 home-screen installation of the multi-exit page.
 
+## Sign-in pass at `62a0170`
+
+2026-10-01, the same host, one Switchyard serving four Mullvad and PIA exits
+behind NetBird's reverse proxy (which also answers plain http), signing in
+with a self-hosted Pocket ID v2.16.0 whose public name is fronted by
+Cloudflare. Public client with PKCE, `PANEL_ADMIN_GROUPS` and a
+`PANEL_ACCESS` group per exit.
+
+- Signed out, through the proxy: `/readyz` answered 200 with no login; `/`
+  over https and over plain http both answered 303 to the https `/login`;
+  `/login` answered 303 to the provider's authorization endpoint with an S256
+  challenge; `/api/status`, `/api/latency` and `POST /select` answered 401;
+  `/readyz?exit=` gave the same 404 for every id, configured or not; `/embed`
+  showed the sign-in link that opens a new tab.
+- An admin signed in with a passkey in a browser and saw every exit. A switch
+  on one exit was logged (`switch: user=… sub=… exit=… server=…`),
+  acknowledged by that exit's applier under the same request ID, and verified
+  connected one second after the request.
+- Found and fixed during the pass: Cloudflare answered 403 to the panel's
+  discovery request, because it refuses urllib's default `Python-urllib`
+  agent (fixed in `a8fa497`); with four exits the tabs broke labels mid-word
+  (fixed in `62a0170`, checked in headless Chrome at four widths and in the
+  embed).
+
+Not tested live: a sign-in by someone granted only some exits (the per-exit
+refusals are covered by `panel/test_oidc.py`, 287 tests in all), a dashboard
+frame after sign-in, and a phone.
+
 ## Not yet tested
 
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
@@ -244,9 +272,9 @@ home-screen installation of the multi-exit page.
   differently while the exit peer is offline.
 - Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
 - The panel's [OpenID Connect sign-in](access.md#sign-in-with-openid-connect)
-  against a real identity provider. `panel/test_oidc.py` covers it against a
-  fake issuer; no real provider, browser flow, dashboard frame or phone has
-  been tried.
+  for someone granted only some exits (`PANEL_ACCESS`), live; any provider but
+  Pocket ID; a confidential client; the userinfo fallback against a real
+  provider; a phone's home-screen app signing in.
 
 ## Validating a new revision
 

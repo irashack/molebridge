@@ -67,8 +67,8 @@ running and healthy, and that the host's clock is right.
 ## Sign-in
 
 This applies only when `PANEL_OIDC_ISSUER` is set; see
-[panel access](access.md#sign-in-with-openid-connect). Sign-in has not yet been
-tested against a real identity provider, so this list comes from the code, not
+[panel access](access.md#sign-in-with-openid-connect). Sign-in has had one live
+pass, with one provider, so most of this list comes from the code rather than
 from failures seen in use.
 
 **The panel stops at start.** The last line of the container's log is the
