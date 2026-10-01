@@ -53,6 +53,7 @@ DISCOVERY_TTL = 3600
 DISCOVERY_RETRY_S = 30
 STATE_RE = re.compile(r'[A-Za-z0-9_-]{43}')
 HTTP_TIMEOUT_S = 10
+USER_AGENT = 'molebridge-panel'
 MAX_RESPONSE_BYTES = 256 * 1024
 CLOCK_SKEW_S = 120
 MAX_GROUPS = 256
@@ -231,6 +232,9 @@ def http_json(url: str, *, data: Optional[Dict[str, str]] = None, headers: Optio
     body = urllib.parse.urlencode(data).encode('ascii') if data is not None else None
     request = urllib.request.Request(url, data=body, method='POST' if body is not None else 'GET')
     request.add_header('Accept', 'application/json')
+    # Some issuer fronts (Cloudflare among them) refuse urllib's default
+    # Python-urllib agent with 403.
+    request.add_header('User-Agent', USER_AGENT)
     if body is not None:
         request.add_header('Content-Type', 'application/x-www-form-urlencoded')
     for key, value in (headers or {}).items():

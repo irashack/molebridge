@@ -312,7 +312,9 @@ session IDs are never logged. Switches are logged only with sign-in on.
 outbound connections are latency probes. With it, the panel makes HTTPS
 requests to the identity provider: discovery, the token endpoint, and userinfo
 only when the ID token lacks the groups claim. A failed discovery is not
-retried for 30 seconds. With an https issuer every endpoint must be https. These follow the URLs from the
+retried for 30 seconds. With an https issuer every endpoint must be https. The
+requests name themselves `User-Agent: molebridge-panel`; an issuer behind
+Cloudflare refused Python's default agent with 403 in the first live test. These follow the URLs from the
 discovery document. Environment proxy settings are ignored, redirects are not
 followed, each request times out after 10 seconds, a response is cut off at
 256 KiB, and a JSON object with a duplicate key is refused. The panel

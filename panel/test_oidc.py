@@ -1813,3 +1813,12 @@ class PlantedCookieOverHttpTests(PanelAuthBase):
         cookie = self.sign_in()
         self.assertEqual(self.get('/api/exits', cookie).status, 200)
         self.assertEqual(self.get('/api/exits', f'planted=x {cookie}').status, 401)
+
+
+class UserAgentTests(AuthenticatorTests):
+    def test_every_issuer_request_names_the_panel(self):
+        self.sign_in()
+        self.assertTrue(self.issuer.requests)
+        for path, _, headers in self.issuer.requests:
+            with self.subTest(path=path):
+                self.assertEqual(headers.get('User-Agent'), 'molebridge-panel')
