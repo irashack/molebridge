@@ -702,8 +702,8 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
         place = f'<span class="exit-place" data-exit-place>{esc(summary["place"])}</span>'
         links.append(
             f'<a class="exit-tab{" is-selected" if selected else ""}" href="{base}?exit={esc(summary["id"])}" '
-            f'data-exit="{esc(summary["id"])}" data-provider="{esc(summary["provider"])}"'
-            f'{current}>'
+            f'data-exit="{esc(summary["id"])}" data-provider="{esc(summary["provider"])}" '
+            f'title="{esc(summary["label"])}"{current}>'
             f'<span class="exit-track" aria-hidden="true">{esc(f"{index:02d}")}</span>'
             '<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">'
             '<path class="track-bed" d="M12 44V4M20 44V4M20 32L44 8M14 26L38 2"/>'

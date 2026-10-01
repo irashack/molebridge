@@ -455,8 +455,11 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 .exit-tab[data-provider="pia"] { --exit-accent: var(--exit-pia); }
 .exit-tab:hover { color: inherit; border-color: var(--exit-accent); }
 .exit-tab.is-selected { border-color: var(--exit-accent); }
-.exit-label { color: var(--color-text-highlight); overflow-wrap: anywhere; }
-.exit-place { grid-column: 1; font-size: var(--font-size-h5); color: var(--color-text-subdue); overflow-wrap: anywhere; }
+/* One line each, never broken mid-word: a long label or place is cut with an
+   ellipsis, and the tab's title carries the whole label. */
+.exit-label, .exit-place { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exit-label { color: var(--color-text-highlight); }
+.exit-place { grid-column: 1; font-size: var(--font-size-h5); color: var(--color-text-subdue); }
 .exit-health { grid-column: 2; grid-row: 1 / 3; align-self: center; display: flex; align-items: center; gap: 7px; font-size: var(--font-size-h6); }
 .exit-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-text-subdue); flex-shrink: 0; }
 .dot-ok { background: var(--color-positive); }
@@ -604,6 +607,9 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] h1 { font-size: 3.4rem; font-weight: 750; letter-spacing: -.045em; line-height: 1.15; margin-top: 4px; }
 :root[data-style="provider"] .yard-mark { display: block; width: 48px; height: 48px; stroke: var(--color-primary); stroke-width: 2.5; stroke-linecap: round; }
 :root[data-style="provider"] .exit-tabs {
+  /* An even grid: with three or more exits a short last row keeps tab width. */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 14px;
   padding-bottom: 16px;
   position: relative;
@@ -617,7 +623,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .exit-tab:hover { transform: translateY(-2px); }
 :root[data-style="provider"] .exit-label { font-size: 1.9rem; font-weight: 750; letter-spacing: -.025em; }
 :root[data-style="provider"] .exit-track { display: block; position: absolute; right: 18px; top: 11px; font-size: 1rem; font-variant-numeric: tabular-nums; letter-spacing: .12em; color: var(--color-text-subdue); }
-:root[data-style="provider"] .exit-health { grid-row: 2; padding-right: 0; }
+:root[data-style="provider"] .exit-health { grid-column: 1 / -1; grid-row: 3; padding-right: 0; }
 :root[data-style="provider"] .exit-place { min-height: 19px; }
 :root[data-style="provider"] .track-switch { display: block; position: absolute; left: 20px; top: 24px; width: 40px; height: 38px; stroke-linecap: round; stroke-linejoin: round; }
 .track-bed { stroke: var(--color-text-subdue); stroke-width: 1; }
@@ -717,7 +723,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 .embed .exit-health { grid-column: 1 / -1; grid-row: 3; font-size: 1rem; }
 .embed .switchboard, .embed .overview { gap: 16px; }
 :root[data-style="provider"] .embed .page { padding: 12px; gap: 16px; }
-:root[data-style="provider"] .embed .exit-tabs { gap: 8px; padding-bottom: 12px; }
+:root[data-style="provider"] .embed .exit-tabs { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 8px; padding-bottom: 12px; }
 :root[data-style="provider"] .embed .exit-tab { padding: 9px 10px; }
 :root[data-style="provider"] .embed .exit-label { font-size: 1.4rem; }
 :root[data-style="provider"] .embed .exit-place { font-size: 1.1rem; }
@@ -747,7 +753,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   :root[data-style="provider"] { --pad-h: 16px; --pad-v: 18px; --widget-gap: 24px; }
   :root[data-style="provider"] .full .page { padding-top: max(24px, env(safe-area-inset-top)); padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
   :root[data-style="provider"] h1 { font-size: 3rem; }
-  :root[data-style="provider"] .exit-tabs { gap: 10px; }
+  :root[data-style="provider"] .exit-tabs { grid-template-columns: repeat(auto-fit, minmax(min(130px, 100%), 1fr)); gap: 10px; }
   :root[data-style="provider"] .exit-tab { flex-basis: 130px; padding: 15px 12px; gap: 4px; }
   :root[data-style="provider"] .exit-label { font-size: 1.6rem; padding-right: 24px; }
   :root[data-style="provider"] .exit-track { top: 17px; right: 10px; }
