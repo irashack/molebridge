@@ -15,7 +15,7 @@ whatever `main` happens to be:
 ```sh
 git clone https://github.com/irashack/molebridge.git
 cd molebridge
-git checkout v0.3.0      # the latest release
+git checkout v0.4.0      # the latest release
 
 cp .env.example .env
 mkdir -p state/panel state/applier secrets tunnel/wg_confs

@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.4.0 (2026-10-07)
 
 - **Optional sign-in for the panel** with OpenID Connect. Set
   `PANEL_OIDC_ISSUER` and the panel signs people in through your identity
@@ -27,12 +27,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 Without `PANEL_OIDC_ISSUER` the panel behaves as in 0.3.0, with no login. The
 new settings are in [configuration](docs/configuration.md#panel-sign-in).
+Upgrading from 0.3.0: pull, then recover. No `.env` changes are needed.
 
 Tested: unit and integration tests against a fake issuer, and a live pass with
 Pocket ID v2.16.0 as a public client: an admin sign-in, a switch verified by
 the applier, and the signed-out behavior through a proxy. Sign-in by someone
 granted only some exits has not been observed live; see
-[testing](docs/testing.md#sign-in-pass-at-62a0170).
+[testing](docs/testing.md#sign-in-pass-at-62a0170). The PIA retry: unit
+tests, and a live exit that registered by itself once PIA's login API
+recovered; see [testing](docs/testing.md#pia-registration-retry-at-8587542).
 
 ## 0.3.0 (2026-09-27)
 

@@ -261,6 +261,16 @@ Not tested live: a sign-in by someone granted only some exits (the per-exit
 refusals are covered by `panel/test_oidc.py`, 287 tests in all), a dashboard
 frame after sign-in, and a phone.
 
+## PIA registration retry at `8587542`
+
+2026-10-07, the same host, the PIA exit. The host restarted while PIA's login
+API answered 502 to every request, so the recreated tunnel's first
+registration failed and the tunnel had no address. Before this change the
+applier waited for an address that never came. Running `8587542` (the same
+change as in 0.4.0), it retried the requested region, and the exit registered
+and connected by itself after PIA's API recovered. The retry without an
+address is covered by `tools/test_pia.py`.
+
 ## Not yet tested
 
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
