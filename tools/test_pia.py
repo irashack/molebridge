@@ -466,6 +466,26 @@ def test_stale_handshake_reregisters_the_same_region_with_backoff(runtime):
     assert {c[4] for c in kernel.calls if c[:2] == ['wg', 'set'] and c[-1] != 'remove'} == {SERVER_KEY}
 
 
+def test_failed_registration_on_a_fresh_tunnel_is_retried_with_backoff(runtime):
+    # A recreated tunnel has no peer and no address; PIA's API was down for the
+    # first registration. Once it answers, the applier registers on its own.
+    applier, kernel = runtime
+    desire(applier)
+    kernel.keys, kernel.addresses = [], []
+    kernel.rules[4] = rules(4)
+    kernel.token_fail = True
+    result = applier.tick()
+    assert result['status'] == 'failed' and result['message'].startswith('Peer update failed')
+    kernel.token_fail = False
+    kernel.now += 30
+    applier.next_health = 0
+    applier.tick()
+    assert kernel.keys == []
+    kernel.now += pia_module.REREGISTER_SEC
+    applier.next_health = 0
+    assert applier.tick()['status'] == 'ok' and kernel.keys == [SERVER_KEY]
+
+
 def test_container_healthcheck_needs_a_registered_tunnel(runtime):
     applier, kernel = runtime
     assert applier.routing_status() == (False, False)
