@@ -383,13 +383,20 @@ class PiaApplier(Applier):
                 self.run(['ip', '-4', 'rule', 'del', 'priority', '94', 'from', source])
 
     def retry_registration(self):
-        """Re-register the requested region when its handshake has gone stale:
-        PIA forgets a key after a server restart or long inactivity. Never
-        another region, and at most every REREGISTER_SEC."""
+        """Re-register the requested region when its handshake has gone stale
+        (PIA forgets a key after a server restart or long inactivity) or its
+        registration failed. Never another region, and at most every
+        REREGISTER_SEC."""
         request, last = self.request, self.last_result
         if not request or self.pending or not isinstance(last, dict) or last.get('status') != 'failed':
             return None
-        if request['server'] not in self.catalog.relays or not last.get('routing_ok'):
+        if request['server'] not in self.catalog.relays:
+            return None
+        # Judged as switch() judges it: a tunnel whose first registration
+        # failed (a recreated tunnel while PIA's API was down) has no address
+        # yet, so the result's routing_ok, which requires one, would keep it
+        # unregistered for good.
+        if not self.routing_status(require_address=self.address_before_switch)[0]:
             return None
         age = last.get('handshake_age_s')
         if age is not None and age < HANDSHAKE_FRESH_SEC:

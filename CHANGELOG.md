@@ -18,6 +18,12 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   is not checked; the panel relies on the verified TLS connection to the token
   endpoint instead, as OpenID Connect Core 1.0 section 3.1.3.7 allows. See
   [architecture](docs/architecture.md#sign-in) for what that trusts.
+- **A PIA exit registers on its own after PIA's API comes back.** When a
+  recreated tunnel's first registration failed (for example while PIA's
+  login API was down), the applier never retried, because the tunnel had no
+  address yet and the retry waited for one. It now retries the requested
+  region every five minutes until it registers, as it already did for a
+  stale handshake.
 
 Without `PANEL_OIDC_ISSUER` the panel behaves as in 0.3.0, with no login. The
 new settings are in [configuration](docs/configuration.md#panel-sign-in).
