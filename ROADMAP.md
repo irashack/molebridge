@@ -62,3 +62,31 @@ Not carried over: NetBird and the exit routing, and PIA's port forwarding,
 which gluetun already does for PIA. The DNS-over-TLS leak that rules 102–104
 close was found together with the exit's host table for NetBird's traffic;
 whether a plain gluetun sidecar has it has not been checked.
+
+### Our own routing image instead of LinuxServer's WireGuard image
+
+`routing/Dockerfile` builds on `lscr.io/linuxserver/wireguard`, pinned by
+digest. The native `wireguard` container relies on its init: our routing
+script runs from `/custom-cont-init.d` (it must be root-owned there, which is
+why the image carries it) before the init brings the tunnel up from
+`wg_confs`, and that order is what keeps a starting exit fail-closed. Because
+the init writes at start, that container can't have a read-only root
+filesystem. The gluetun backend's `guard` uses the same image only as a shell
+with iproute2, bypassing the init, so it carries tooling it never runs.
+
+The idea is a small image of our own, for example Alpine with iproute2 and
+wireguard-tools, whose entrypoint runs the routing script and then `wg-quick`.
+Molebridge would then own the start order outright, the container could have a
+read-only root, and one image could serve both the native exit and the guard.
+
+To review before deciding:
+
+- What LinuxServer's init does for this container that we would take over:
+  signal handling, bringing the tunnel down cleanly on stop, PUID and PGID,
+  module checks, logging. Read it at the pinned digest rather than assuming.
+- LinuxServer's terms for images built on theirs, which matter if Molebridge
+  ever publishes prebuilt images (today you build them locally), against what
+  a base we maintain ourselves would cost to keep updated.
+- Whether the change is worth the verification it needs: it touches the
+  fail-closed path, so the checks in [verification](docs/verification.md) on
+  Docker and on rootless Podman before anyone relies on it.
