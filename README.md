@@ -148,9 +148,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
-release is [v0.5.0](https://github.com/irashack/molebridge/releases/tag/v0.5.0),
-which adds experimental NordVPN support and an experimental gluetun backend;
-see the [changelog](CHANGELOG.md).
+release is [v0.5.1](https://github.com/irashack/molebridge/releases/tag/v0.5.1),
+which reworks Switchyard (gluetun's own look, switches that finish in place,
+fixes) and the documentation on top of v0.5.0's NordVPN support and gluetun
+backend; see the [changelog](CHANGELOG.md).
 
 | Setup | Tested |
 | :--- | :--- |

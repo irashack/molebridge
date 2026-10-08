@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.5.1 (2026-10-08)
+
+Switchyard and documentation only: the applier, routing, NetBird gate and
+Compose files are unchanged from 0.5.0.
 
 - **gluetun exits look like gluetun.** In the provider style, an exit on the
   gluetun backend takes gluetun's dark slate, with the provider behind it as
@@ -12,9 +15,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   colour each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
   NordVPN exit through gluetun looked like the native one, and the other four
   providers had no colours at all, so their pages lost their card
-  backgrounds. Checked in the local preview only.
-- `tools/preview-panel.py --exits` adds a NordVPN exit and two gluetun exits
-  (Mullvad and Surfshark) to the preview.
+  backgrounds.
 - **Switchyard finishes a switch in place.** The page no longer reloads when
   a switch completes or fails, or when another tab switches the exit: the
   current exit crossfades to the new server where the browser supports view
@@ -38,10 +39,24 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   applier's real limit (90 seconds with gluetun, not "about a minute").
   Arming a region on a phone no longer adds a line. Servers from gluetun's
   list show their country's flag. Sign-in and error pages in the provider
-  style have colours again.
+  style now have their colours.
+- **Documentation review.** Corrections across the guides after a review
+  against the code: recreating gluetun's namespace with `recover` after
+  rotating its key or changing its post-rules, which verification steps
+  apply to the gluetun backend, the gate's real timing, the switch
+  timeouts, backups with gluetun, and stale testing claims. New diagrams in
+  [architecture](docs/architecture.md), new screenshots, and testing
+  records for NordVPN and the gluetun backend on rootless Podman.
+- `tools/preview-panel.py --exits` adds a NordVPN exit and two gluetun exits
+  (Mullvad and Surfshark) to the preview.
 
-Checked in the local preview on desktop and phone widths, light and dark,
-both styles, with switches that succeed and fail; not yet on a live exit.
+Tested: unit tests, and the panel in the local preview
+(`tools/preview-panel.py`) on desktop and phone widths, light and dark,
+both styles, with switches that succeed and fail. Not yet on a live exit.
+
+Upgrading from 0.5.0: pull, then recover; nothing in `.env` changes. Only
+the panel behaves differently, so a Switchyard can move to 0.5.1 while its
+exits stay on 0.5.0.
 
 ## 0.5.0 (2026-10-08)
 

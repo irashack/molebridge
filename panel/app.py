@@ -1159,7 +1159,7 @@ def log_event(text: str) -> None:
 # --------------------------------------------------------------------------
 
 class PanelHandler(http.server.BaseHTTPRequestHandler):
-    server_version = 'molebridge-panel/0.5.0'
+    server_version = 'molebridge-panel/0.5.1'
     protocol_version = 'HTTP/1.1'
 
     def setup(self):
