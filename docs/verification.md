@@ -22,16 +22,17 @@ use the [Podman commands](operations.md#rootless-podman).
 docker compose exec applier sh
 ```
 
-On PIA, select a region before completing checks 1–3, 6 and 7: registration
+On PIA, select a region before completing checks 1–3, 6 and 8: registration
 supplies the tunnel address, peer and IPv4 rule 94. Select a region before
 the fail-closed drills and client or port-forwarding checks too. IPv6 stays
 blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
 
-1. Check the rules. `ip rule` shows priority 90 (`iif mullvad`, overlay
-   destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
+1. Check the rules. `ip rule` shows priority 1 (`not from all iif wt0 lookup
+   local`) and no priority-0 `from all lookup local` rule, then priority 90
+   (`iif mullvad`, overlay destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
    → table 51821), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
    51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard
-   should remain. IPv6 has 95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is
+   should remain. IPv6 has 1/95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is
    set, and 94 with `ipproto ipv6-icmp` when the tunnel has an IPv6 address.
    Rule 94 must carry the protocol qualifier: without it every protocol
    sourced from the tunnel address is forced into the tunnel, and the applier
@@ -69,8 +70,14 @@ blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
    container network without IPv6 it also counts the exit's own IPv6
    attempts. Without this return path, oversized replies are dropped with no
    error to the origin, which can stall UDP flows such as QUIC through the exit.
-7. On the host, `python3 tools/molebridge.py doctor` should pass.
-   It checks actual namespace agreement as well as routing and status freshness.
+7. Check that NetBird runs kernel WireGuard with its kernel firewall.
+   `ip -d link show wt0` shows `wireguard` on its details line, and
+   `nft list tables` shows `table ip netbird` or a `table ip filter` whose
+   chains include `NETBIRD-` ones (`nft list chains`). The applier's health
+   check requires both.
+8. On the host, `python3 tools/molebridge.py doctor` should pass.
+   It checks actual namespace agreement as well as routing, NetBird's mode,
+   Rosenpass and status freshness.
 
 Run these egress probes inside the namespace:
 
@@ -111,7 +118,9 @@ when the interface returns. If a request was rejected or failed, select again
 to retry.
 
 Confirm the exit host's own unbound traffic stays on its ordinary path while
-the client path is blocked. The isolated `tools/check-routing.sh` drill also
+the client path is blocked.
+
+The isolated `tools/check-routing.sh` drill also
 deletes all exit-table routes together to exercise the terminal guard, and
 checks that an oversized tunnel reply produces an ICMP error back over the
 tunnel, that a missing return-path rule is detected, and that with the tunnel
@@ -120,11 +129,31 @@ interface, so it cannot tell a dropped error from one sent over the host's
 route; a capture on that interface during a live flow can (see step 6
 above).
 
+For local delivery, the same drill sends TCP and UDP from the overlay side to
+the exit's overlay and host-side addresses, in both families, and checks that
+no listener in the exit's namespace receives them, also after an nftables
+DNAT to a local port. It confirms that it detects local delivery when rule 1
+is missing. It also checks that the NetBird gate refuses unsupported NetBird
+settings, profiles other than the default and a default profile for another
+interface, runs the gate's JSON reader under gawk, mawk and busybox when they
+are installed, and keeps waiting while the kernel's priority-0 rule is in
+place.
+
 For each route deletion, confirm the next applier check reports `failed`,
 `/readyz` returns 503, and any monitoring push reports failure. On a
 dual-stack Mullvad tunnel, the other family should still work. On PIA,
 deleting the IPv4 default must leave both families blocked. A blocked client
 path must not appear healthy.
+
+Check that nothing arriving over NetBird reaches the exit itself. Inside the
+namespace, `ip route get <exit overlay address> from <client overlay address>
+iif wt0` must show `dev mullvad table 51821`, not `local`; with an IPv6
+overlay, `ip -6 route get` the same way. `netbird status -d` lists both
+addresses. From a client on the exit, ping the exit's overlay address: there
+must be no reply, although the access policy allows ICMP, because the ping is
+routed into the tunnel instead of reaching the exit. Repeat the ping with the
+tunnel down. These checks have not been run on a live exit yet; see
+[testing](testing.md).
 
 ## Status and recovery
 
@@ -138,7 +167,8 @@ recreation and host reboot preserve the NetBird peer identity and shared namespa
 After a WireGuard restart outside Compose, confirm an applier stranded without
 the WireGuard interface becomes Docker-unhealthy even if its failure result is
 fresh. On a disposable deployment, start NetBird before the routing initializer:
-its entrypoint must wait until both priority-97 guards exist in its namespace.
+its entrypoint must wait until both priority-97 guards and both priority-1
+local-delivery rules exist in its namespace, with no priority-0 rule left.
 Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interface.
 
 Start with a saved desired selection, an expired catalogue and an unavailable

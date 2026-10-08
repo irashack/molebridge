@@ -16,6 +16,10 @@ cleanup() {
     for pid in $listeners; do kill "$pid" 2>/dev/null || true; done
     for ns in $created; do ip netns del "$ns" 2>/dev/null || true; done
     rm -f "$work/ready" "$work/rules.json" "$work/routes.json" "$work/gate-started" "$work/mullvad.conf" "$work/pia.conf" "$work/ping" "$work/forward.nft" "$work/guard.nft"
+    rm -f "$work/gate.err" "$work/delivered" "$work/listening" "$work/nbstate/default.json"
+    rm -f "$work/nbstate/active_profile.json" "$work/legacy.json" "$work/gate-legacy"
+    rm -rf "$work/awk-gawk" "$work/awk-mawk" "$work/awk-busybox"
+    rmdir "$work/nbstate" 2>/dev/null || true
     rmdir "$work"
 }
 trap cleanup EXIT HUP INT TERM
@@ -37,6 +41,10 @@ done
 ip -n "$exitns" link add "$overlay_if" type veth peer name client0 netns "$client"
 ip -n "$exitns" link add eth0 type veth peer name outside0 netns "$outside"
 ip -n "$exitns" link add mullvad type veth peer name tunnel0 netns "$tunnel"
+# Fixed, locally administered MACs for the synthetic overlay; see the
+# permanent neighbor entries below.
+ip -n "$exitns" link set "$overlay_if" address 02:00:00:00:01:01
+ip -n "$client" link set client0 address 02:00:00:00:01:02
 
 configure() {
     ip -n "$1" addr add "$3" dev "$2"
@@ -70,6 +78,18 @@ ip -n "$outside" route add 192.0.2.0/24 via 198.51.100.1
 ip -n "$outside" -6 route add 2001:db8:1::/64 via 2001:db8:2::1
 ip -n "$tunnel" route add 192.0.2.0/24 via "$tunnel4"
 ip -n "$tunnel" -6 route add 2001:db8:1::/64 via "$tunnel6"
+# Real WireGuard has no neighbor discovery; this veth stand-in does. The
+# local-delivery guard (rule 1) keeps everything arriving on the overlay away
+# from the exit's own stack, including ARP requests for its address (the
+# kernel answers only when the route lookup says local) and IPv6 neighbor
+# discovery. Fixed entries in both directions keep the fixture working; the
+# production guard is unchanged.
+for address in 192.0.2.1 2001:db8:1::1; do
+    ip -n "$client" neigh replace "$address" lladdr 02:00:00:00:01:01 nud permanent dev client0
+done
+for address in 192.0.2.2 2001:db8:1::2; do
+    ip -n "$exitns" neigh replace "$address" lladdr 02:00:00:00:01:02 nud permanent dev "$overlay_if"
+done
 # The same fictitious destination is reachable over both paths. A broken
 # guard would therefore turn an expected failed client probe into a success.
 ip -n "$outside" addr add 198.51.100.100/32 dev outside0
@@ -184,13 +204,123 @@ assert result == (sys.argv[4] == 'healthy', True), f'IPv{sys.argv[3]} validation
 PY
 }
 
+# The gate refuses unsupported NetBird settings before it looks at routing. No NetBird state exists here, so point it at an empty one.
+gate() {
+    ip netns exec "$exitns" env NB_INTERFACE_NAME="$overlay_if" NB_DISABLE_USERSPACE_ROUTING=true \
+        NB_STATE_DIR="$work/nbstate" "$@"
+}
+# Bounded: a gate that failed to refuse would wait here for routing guards.
+gate_refuses() {
+    if gate "$@" timeout 5 sh "$root/routing/wait-for-guards" true 2>"$work/gate.err" ||
+            ! grep -q 'refusing to start NetBird' "$work/gate.err"; then
+        echo "FAIL NetBird gate did not refuse: ${*:-a stored profile}" >&2
+        exit 1
+    fi
+}
+gate_refuses NB_FORCE_USERSPACE_FIREWALL=true
+gate_refuses NB_ENABLE_ROSENPASS=1
+gate_refuses NB_DISABLE_USERSPACE_ROUTING=false
+gate_refuses NB_CONFIG=/var/lib/netbird/peer.json
+gate_refuses NB_FOREGROUND_MODE=true
+gate_refuses WT_FOREGROUND_MODE=1
+gate_refuses WT_INTERFACE_NAME=other0
+mkdir "$work/nbstate"
+for profile in '{\n    "WgIface": "%s",\n    "RosenpassEnabled": true\n}' '{"WgIface": "%s", "RosenpassEnabled":\n  true}' \
+        '{\n    "Name": "%s",\n    "WgIface": "other0"\n}' '{"WgIface": "%s", "Rosenpass\\u0045nabled": true}'; do
+    # Deliberately a format string: %s is the guarded interface.
+    # shellcheck disable=SC2059
+    printf "$profile\n" "$overlay_if" > "$work/nbstate/default.json"
+    gate_refuses
+done
+printf '{\n    "WgIface": "%s",\n    "RosenpassEnabled": false\n}\n' "$overlay_if" > "$work/nbstate/default.json"
+if ! gate sh "$root/routing/wait-for-guards" --check-config >/dev/null; then
+    echo 'FAIL NetBird gate refused a profile for the guarded interface without Rosenpass' >&2
+    exit 1
+fi
+rm "$work/nbstate/default.json"
+echo 'PASS NetBird gate refuses unsupported settings, other profile locations, Rosenpass and other interfaces in stored profiles'
+
+gate_script=''
+# The gate's JSON reader under every awk available here, and under busybox
+# sh and awk as in the NetBird image. Configuration checks only; no routing.
+awk_dirs=''
+for impl in gawk mawk busybox; do
+    command -v "$impl" >/dev/null 2>&1 || continue
+    mkdir "$work/awk-$impl"
+    if [ "$impl" = busybox ]; then
+        for applet in sh awk tr wc; do ln -s "$(command -v busybox)" "$work/awk-$impl/$applet"; done
+    else
+        ln -s "$(command -v "$impl")" "$work/awk-$impl/awk"
+    fi
+    awk_dirs="$awk_dirs $work/awk-$impl"
+done
+# json_case accept|refuse <description> <default.json contents> [active_profile.json contents]
+json_case() {
+    printf '%s\n' "$3" > "$work/nbstate/default.json"
+    rm -f "$work/nbstate/active_profile.json"
+    [ -z "${4:-}" ] || printf '%s\n' "$4" > "$work/nbstate/active_profile.json"
+    for dir in $awk_dirs; do
+        shell='sh'
+        [ ! -e "$dir/sh" ] || shell=$dir/sh
+        if env PATH="$dir:$PATH" NB_INTERFACE_NAME=mesh0 NB_DISABLE_USERSPACE_ROUTING=true \
+                NB_STATE_DIR="$work/nbstate" "$shell" "${gate_script:-$root/routing/wait-for-guards}" \
+                --check-config >/dev/null 2>&1; then
+            got=accept
+        else
+            got=refuse
+        fi
+        if [ "$got" != "$1" ]; then
+            echo "FAIL JSON reader with $(basename "$dir"): expected $1 for $2" >&2
+            exit 1
+        fi
+    done
+}
+if [ -z "$awk_dirs" ]; then
+    echo 'SKIP JSON reader under gawk, mawk and busybox (none installed)'
+else
+    json_case accept 'a plain profile' '{"WgIface": "mesh0", "RosenpassEnabled": false}'
+    json_case accept 'escapes, Unicode and nesting in other fields' \
+        '{"Name": "R&D é 😀 \"q\" \\ \/", "WgIface": "mesh0",
+          "Nested": {"WgIface": "wt0", "RosenpassEnabled": true}, "List": [0, -2.5e3, true, null, {}, []]}'
+    json_case refuse 'Rosenpass across lines' '{"WgIface": "mesh0", "RosenpassEnabled":
+        true}'
+    json_case refuse 'an escaped Rosenpass field name' '{"WgIface": "mesh0", "RosenpassEnabled": true}'
+    json_case refuse 'Rosenpass null' '{"WgIface": "mesh0", "RosenpassEnabled": null}'
+    json_case refuse 'a field repeated in another case' '{"WgIface": "mesh0", "wgiface": "mesh0"}'
+    json_case refuse 'a nested WgIface only' '{"Extra": {"WgIface": "mesh0"}}'
+    json_case refuse 'a "Wg Iface" field only' '{"Wg Iface": "mesh0"}'
+    json_case refuse 'a field name escaped outside ASCII' '{"WgIface": "mesh0", "Key": 1}'
+    json_case refuse 'a field name with a non-ASCII byte' "$(printf '{"WgIface": "mesh0", "R\303\266senpassEnabled": true}')"
+    json_case refuse 'a top-level array' '["WgIface", "mesh0"]'
+    json_case refuse 'trailing data' '{"WgIface": "mesh0"} {}'
+    json_case refuse 'a bad number' '{"WgIface": "mesh0", "Port": 01}'
+    json_case refuse 'a bad escape' '{"WgIface": "mesh0", "Name": "a\qb"}'
+    json_case refuse 'another active profile' '{"WgIface": "mesh0"}' '{"name": "alternate", "username": ""}'
+    json_case accept 'the default active profile' '{"WgIface": "mesh0"}' '{"name": "default", "username": ""}'
+    # The legacy paths are absolute; a copy of the gate names a file here instead.
+    sed "s#/etc/netbird/config.json#$work/legacy.json#" "$root/routing/wait-for-guards" > "$work/gate-legacy"
+    printf '%s\n' '{"WgIface": "mesh0", "RosenpassEnabled": true}' > "$work/legacy.json"
+    gate_script="$work/gate-legacy"
+    json_case refuse 'Rosenpass in the legacy profile' '{"WgIface": "mesh0"}'
+    gate_script=''
+    rm -f "$work/nbstate/default.json" "$work/nbstate/active_profile.json" "$work/legacy.json"
+    echo "PASS the gate's JSON reader agrees across$(for dir in $awk_dirs; do printf ' %s' "${dir##*/awk-}"; done)"
+fi
+
 # Start NetBird's gate before initialization, just as a runtime restart can.
-ip netns exec "$exitns" env NB_INTERFACE_NAME="$overlay_if" \
-    sh "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$work/gate-started" &
+gate sh "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$work/gate-started" &
 gate_pid=$!
 sleep 2
 test ! -f "$work/gate-started"
 ip -n "$exitns" -4 rule add iif "$overlay_if" unreachable priority 97
+sleep 2
+test ! -f "$work/gate-started"
+# Both terminal rules and the local-delivery rule, but the kernel's rule 0
+# still delivers overlay packets locally: the gate must keep waiting.
+ip -n "$exitns" -6 rule add iif "$overlay_if" unreachable priority 97
+for family in -4 -6; do
+    ip -n "$exitns" "$family" rule add not iif "$overlay_if" lookup local priority 1
+done
 sleep 2
 test ! -f "$work/gate-started"
 install_rules
@@ -203,7 +333,7 @@ done
 test -f "$work/gate-started"
 wait "$gate_pid"
 gate_pid=''
-echo 'PASS overlay startup waits for both routing guards'
+echo 'PASS overlay startup waits for both routing guards and the local-delivery guard'
 restore_routes
 connected
 for family in 4 6; do validate_family "$family" healthy; done
@@ -281,7 +411,140 @@ connected
 install_rules
 connected
 for family in 4 6; do validate_family "$family" healthy; done
-echo 'PASS routing reinstallation and recovery'
+for family in -4 -6; do
+    counts=$(ip -n "$exitns" "$family" rule show | awk '$1 == "0:" { zero++ } $1 == "1:" { one++ } END { print zero + 0, one + 0 }')
+    if [ "$counts" != '0 1' ]; then
+        echo "FAIL reinstallation left local-delivery rules 0/1 at counts $counts ($family)" >&2
+        exit 1
+    fi
+done
+echo 'PASS routing reinstallation and recovery (one local-delivery rule, no rule 0)'
+
+# Exercise local-delivery regression coverage: local delivery from the overlay
+# is refused. With rule 1, nothing arriving on the overlay reaches a local
+# socket, even after a DNAT to a local port. Such packets take rule 95 into
+# the tunnel side, where this fixture drops them.
+exit_addresses='192.0.2.1 198.51.100.1 2001:db8:1::1 2001:db8:2::1'
+ip netns exec "$exitns" python3 -c '
+import selectors, socket, sys
+watch = selectors.DefaultSelector()
+for family, host in ((socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")):
+    for port in (53, 5053):
+        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+            s = socket.socket(family, kind)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            s.bind((host, port))
+            if kind == socket.SOCK_STREAM:
+                s.listen(8)
+            watch.register(s, selectors.EVENT_READ)
+open(sys.argv[2], "w").close()
+while True:
+    for key, _ in watch.select():
+        s = key.fileobj
+        if s.type == socket.SOCK_STREAM:
+            c, peer = s.accept()
+            c.close()
+        else:
+            _, peer = s.recvfrom(512)
+        with open(sys.argv[1], "a") as f:
+            f.write("%s %d\n" % (peer[0], s.getsockname()[1]))
+' "$work/delivered" "$work/listening" &
+listeners="$listeners $!"
+attempt=0
+while [ "$attempt" -lt 10 ] && [ ! -f "$work/listening" ]; do
+    sleep 1
+    attempt=$((attempt + 1))
+done
+test -f "$work/listening"
+# Three UDP datagrams and one TCP connection attempt to port 53; true when
+# the listener in the exit namespace saw any of them.
+delivered_from() {
+    : > "$work/delivered"
+    ip netns exec "$1" python3 -c '
+import socket, sys
+address = sys.argv[1]
+family = socket.AF_INET6 if ":" in address else socket.AF_INET
+with socket.socket(family, socket.SOCK_DGRAM) as u:
+    for _ in range(3):
+        try:
+            u.sendto(bytes(12), (address, 53))
+        except OSError:
+            pass
+with socket.socket(family, socket.SOCK_STREAM) as t:
+    t.settimeout(1)
+    try:
+        t.connect((address, 53))
+    except OSError:
+        pass
+' "$2"
+    sleep 1
+    [ -s "$work/delivered" ]
+}
+for address in $exit_addresses; do
+    if delivered_from "$client" "$address"; then
+        echo "FAIL overlay traffic to $address port 53 reached a local socket" >&2
+        exit 1
+    fi
+done
+echo "PASS TCP and UDP port 53 from the overlay to the exit's own addresses never reach a local socket (IPv4 and IPv6)"
+for address in 198.51.100.1 2001:db8:2::1; do
+    delivered_from "$outside" "$address" || { echo "FAIL the host interface lost local delivery ($address)" >&2; exit 1; }
+done
+for address in 127.0.0.1 ::1; do
+    delivered_from "$exitns" "$address" || { echo "FAIL loopback lost local delivery ($address)" >&2; exit 1; }
+done
+echo 'PASS the host interface and loopback keep local delivery'
+# With the kernel's rule 0 back, the validator objects and the same probes
+# arrive: the drill can see local delivery.
+for family in -4 -6; do ip -n "$exitns" "$family" rule add lookup local priority 0; done
+for family in 4 6; do validate_family "$family" failed; done
+for address in $exit_addresses; do
+    delivered_from "$client" "$address" || { echo "FAIL drill cannot see local delivery ($address)" >&2; exit 1; }
+done
+for family in -4 -6; do ip -n "$exitns" "$family" rule del priority 0; done
+for family in 4 6; do validate_family "$family" healthy; done
+echo 'PASS a restored kernel rule 0 is detected and reopens local delivery (drill confirmed sensitive)'
+
+if command -v nft >/dev/null 2>&1; then
+    # A prerouting DNAT that keeps the local address and changes the port.
+    # DNAT happens before the routing decision, so rule 1 still applies.
+    ip netns exec "$exitns" nft -f - <<NFT
+table inet mb_local_dnat {
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "$overlay_if" ip daddr 192.0.2.1 udp dport 53 counter dnat ip to 192.0.2.1:5053
+    iifname "$overlay_if" ip daddr 192.0.2.1 tcp dport 53 counter dnat ip to 192.0.2.1:5053
+    iifname "$overlay_if" ip daddr 198.51.100.1 udp dport 53 counter dnat ip to 198.51.100.1:5053
+    iifname "$overlay_if" ip daddr 198.51.100.1 tcp dport 53 counter dnat ip to 198.51.100.1:5053
+    iifname "$overlay_if" ip6 daddr 2001:db8:1::1 udp dport 53 counter dnat ip6 to [2001:db8:1::1]:5053
+    iifname "$overlay_if" ip6 daddr 2001:db8:1::1 tcp dport 53 counter dnat ip6 to [2001:db8:1::1]:5053
+    iifname "$overlay_if" ip6 daddr 2001:db8:2::1 udp dport 53 counter dnat ip6 to [2001:db8:2::1]:5053
+    iifname "$overlay_if" ip6 daddr 2001:db8:2::1 tcp dport 53 counter dnat ip6 to [2001:db8:2::1]:5053
+  }
+}
+NFT
+    for address in $exit_addresses; do
+        if delivered_from "$client" "$address"; then
+            echo "FAIL overlay traffic to $address port 53 reached a local socket after DNAT" >&2
+            exit 1
+        fi
+    done
+    matched=$(ip netns exec "$exitns" nft list table inet mb_local_dnat | grep -c 'packets [1-9]')
+    [ "$matched" -eq 8 ] || { echo "FAIL only $matched of 8 DNAT rules saw traffic" >&2; exit 1; }
+    echo 'PASS overlay traffic DNATed to a local port never reaches a local socket (IPv4 and IPv6, TCP and UDP)'
+    for family in -4 -6; do ip -n "$exitns" "$family" rule add lookup local priority 0; done
+    for address in $exit_addresses; do
+        delivered_from "$client" "$address" && grep -q ' 5053$' "$work/delivered" ||
+            { echo "FAIL drill cannot see local delivery after DNAT ($address)" >&2; exit 1; }
+    done
+    for family in -4 -6; do ip -n "$exitns" "$family" rule del priority 0; done
+    ip netns exec "$exitns" nft delete table inet mb_local_dnat
+    echo 'PASS without rule 1 the DNATed traffic is delivered (drill confirmed sensitive)'
+else
+    echo 'SKIP DNAT local-delivery drill (nft not installed)'
+fi
 
 # PIA: no Address in the config, so initialization installs every guard but no
 # return-path rule. A switch then assigns a per-server IPv4 address and rule

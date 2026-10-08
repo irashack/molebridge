@@ -44,7 +44,7 @@ def entry(**changes):
 
 def rules(family, tunnel=None):
     destination, prefix = (CONFIG.overlay if family == 4 else CONFIG.overlay6).split('/')
-    table = [{'priority': 0, 'src': 'all', 'table': 'local'},
+    table = [{'priority': 1, 'not': None, 'src': 'all', 'iif': 'wt0', 'table': 'local'},
              {'priority': 90, 'src': 'all', 'iif': 'pia', 'dst': destination, 'dstlen': int(prefix), 'table': 'main'},
              {'priority': 95, 'src': 'all', 'iif': 'wt0', 'table': 51821},
              {'priority': 96, 'src': 'all', 'oif': 'pia', 'table': 51821},
@@ -107,6 +107,8 @@ class PiaKernel:
         if args[0] == 'ip':
             if args[1:4] == ['link', 'show', 'dev']:
                 return ''
+            if args[1:7] == ['-d', '-j', 'link', 'show', 'dev', 'wt0']:
+                return json.dumps([{'ifname': 'wt0', 'linkinfo': {'info_kind': 'wireguard'}}])
             if args[1:5] == ['-j', '-4', 'address', 'show']:
                 # Every interface: the namespace's container network and the tunnel.
                 return json.dumps([{'ifname': 'eth0', 'addr_info': [{'local': '10.89.0.5', 'prefixlen': 24}]},
@@ -162,6 +164,8 @@ class PiaKernel:
             return ''
         if args[0] == 'cat':
             return '1\n'
+        if args == ['nft', '-j', 'list', 'chains']:
+            return json.dumps({'nftables': [{'chain': {'family': 'ip', 'table': 'netbird', 'name': 'netbird-rt-fwd'}}]})
         if args[0] == 'nft':
             self.nft.append(self.argument_files(['f@' + args[2]])['f'])
             return ''

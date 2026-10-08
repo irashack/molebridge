@@ -13,8 +13,10 @@ counts as healthy only when all of these hold:
 - egress confirmed by the provider (Mullvad's `am.i.mullvad.net` for each
   address family the tunnel has; PIA's `connected: true`);
 - a server list less than 24 hours old that includes the current server;
-- the NetBird interface present;
-- every routing rule and fallback route in place.
+- the NetBird interface present, as a kernel WireGuard link, with NetBird's
+  kernel firewall in place;
+- every routing rule and fallback route in place, including the
+  local-delivery rule that replaces the kernel's priority-0 rule.
 
 A result older than 150 seconds, malformed or dated in the future counts as
 unknown, whatever it says.
@@ -22,9 +24,11 @@ unknown, whatever it says.
 - `/healthz` on the panel only checks that the panel process is up.
 - `/readyz` returns 200 for a fresh, verified connection and 503 otherwise.
   Point your monitoring at this one.
-- `python3 tools/molebridge.py doctor` checks the Compose configuration, file
+- `python3 tools/molebridge.py doctor` checks the Compose configuration
+  (including the NetBird settings the entrypoint gate refuses), file
   permissions, the identity volume, that all three namespace containers share
-  one namespace, the ICE blacklist, and the applier's own checks. It doesn't
+  one namespace, the ICE blacklist, the NetBird gate's own checks of its
+  settings and stored profiles, and the applier's own checks. It doesn't
   prove that client traffic is forwarded; [verification](verification.md)
   does that.
 
@@ -228,7 +232,7 @@ podman-compose up -d --force-recreate wireguard netbird applier control-panel
 ```
 
 podman-compose has no `--wait`, so check health yourself. The three
-`readlink` values must be identical, and `--doctor` prints four PASS/FAIL
+`readlink` values must be identical, and `--doctor` prints five PASS/FAIL
 lines:
 
 ```sh
@@ -248,6 +252,16 @@ nothing else from it:
 ```sh
 awk '/"IFaceBlackList"/ {p=1} p {print} p && /\]|null/ {exit}' \
   "$(podman volume inspect molebridge_netbird-data --format '{{.Mountpoint}}')/default.json"
+```
+
+Nor does it run the NetBird gate's checks of NetBird's settings and stored
+profiles. Run them in the `netbird` container; they print one line,
+`NetBird gate: configuration accepted` or the reason for a refusal (see
+[troubleshooting](troubleshooting.md#startup)), and nothing from the
+profiles:
+
+```sh
+podman exec molebridge-netbird sh /usr/local/bin/molebridge-wait-for-guards --check-config
 ```
 
 Never run `down -v`: the named volume is the peer's identity.

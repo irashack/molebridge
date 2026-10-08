@@ -4,6 +4,45 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- **Overlay traffic is never delivered to the exit itself.** Routing
+  initialization replaces the kernel's priority-0 `lookup local` rule with
+  `not iif wt0 lookup local` at priority 1, in both address families. Packets
+  arriving over NetBird are routed into the tunnel like any other forwarded
+  traffic, or dropped; loopback and the host's other interfaces keep local
+  delivery. NetBird's entrypoint gate and the applier's routing check require
+  the new rule. See [architecture](docs/architecture.md#routing-contract).
+- **NetBird must run with kernel WireGuard and its kernel firewall.**
+  Molebridge supports only NetBird's daemon mode, the default profile and the
+  settings in [configuration](docs/configuration.md#env). `compose.yaml` sets
+  `NB_DISABLE_USERSPACE_ROUTING=true`. NetBird's entrypoint gate refuses to
+  start it when that is missing, when userspace or netstack mode is forced,
+  when a NetBird profile other than the default one could be used
+  (`NB_CONFIG`, `NB_PROFILE`, foreground mode, or an active profile other
+  than `default`), when Rosenpass is enabled in the environment or the stored
+  profile, or when the stored profile names a WireGuard interface other than
+  `OVERLAY_IF`. The applier's health check and the doctor fail unless the
+  overlay interface is a kernel WireGuard link and NetBird's kernel firewall
+  is in place; `result.json` gains `netbird_native`. See
+  [architecture](docs/architecture.md#netbird-requirements).
+- **Rosenpass, NetBird SSH, DNS nameservers and domain routes are not
+  supported on the exit peer.** Leave them off for it; Rosenpass stops NetBird
+  from starting. See [requirements](docs/prerequisites.md#netbird).
+- The exit no longer answers pings to its own overlay address. NetBird 0.79.0
+  doesn't use them.
+
+Upgrading from 0.4.0: pull, then recover, which rebuilds the routing image. If
+you ever brought the peer up with `--enable-rosenpass`, or changed
+`OVERLAY_IF` after the peer enrolled, fix the stored profile first
+([troubleshooting](docs/troubleshooting.md#startup)).
+
+Tested: unit tests for the routing validator, the gate and the health check,
+and the isolated namespace drills in `tools/check-routing.sh`, which cover
+local delivery from the overlay in both address families. The NetBird
+settings were checked against the 0.79.0 source. Not yet run on a live exit;
+see [testing](docs/testing.md#not-yet-tested).
+
 ## 0.4.0 (2026-10-07)
 
 - **Optional sign-in for the panel** with OpenID Connect. Set

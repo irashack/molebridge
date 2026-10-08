@@ -50,17 +50,23 @@ Its filesystem is read-only except for its own state and bounded scratch space.
 
 ## Routing contract
 
-Initialization installs temporary IPv4 and IPv6 `iif wt0 unreachable` rules at
-priority 80. They block forwarding while the permanent rules are rebuilt. The
-temporary rules are removed only after all installation commands succeed.
-A readiness marker gates the WireGuard healthcheck and Compose startup.
-NetBird's entrypoint also waits for the exact priority-97 terminal rule in both
-address families in its own namespace before launching the official entrypoint.
-This gate runs even when daemon or host restarts bypass Compose ordering.
-`NB_INTERFACE_NAME` uses the same `OVERLAY_IF` as routing and the applier.
+Initialization first replaces the kernel's priority-0 `lookup local` rule with
+the local-delivery guard at priority 1, adding the new rule before deleting
+the old one. It then installs temporary IPv4 and IPv6 `iif wt0 unreachable`
+rules at priority 80. They block forwarding while the permanent rules are
+rebuilt. The temporary rules are removed only after all installation commands
+succeed. A readiness marker gates the WireGuard healthcheck and Compose
+startup. NetBird's entrypoint also waits, in its own namespace and in both
+address families, for the exact priority-97 terminal rule and the priority-1
+guard, with no other `lookup local` rule that could match `wt0`, before
+launching the official entrypoint. This gate runs even when daemon or host
+restarts bypass Compose ordering; [NetBird requirements](#netbird-requirements)
+lists what else it refuses. `NB_INTERFACE_NAME` uses the same `OVERLAY_IF` as
+routing and the applier.
 
 | Priority | Rule | Purpose |
 |---|---|---|
+| 1 | `not iif wt0 lookup local` | Replaces the kernel's priority-0 rule. Packets arriving on the overlay are never delivered to a socket on the exit; they fall through to rules 90–97. Loopback and every other interface keep local delivery. |
 | 90 | `iif mullvad to <overlay range> lookup main` | Tunnel replies return over the overlay. Client-originated traffic cannot use this exception. |
 | 94 | `from <tunnel address> ipproto icmp lookup 51821` | ICMP errors the exit generates for tunnel traffic (fragmentation needed, packet too big) return through the tunnel. With the tunnel route gone they hit the unreachable fallback, never the host's default route. IPv6 uses `ipproto ipv6-icmp`. |
 | 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
@@ -89,14 +95,63 @@ address; the kernel already selects the inbound interface's address for IPv6.
 Without rule 94 the errors would leave over the host's route with an
 unroutable source, and large UDP flows through the exit would silently stall.
 
+### NetBird requirements
+
+Rule 1 means overlay traffic is never delivered to the exit itself. A packet
+arriving on `wt0` for one of the exit's own addresses, on the overlay or the
+host side, is routed like any other forwarded packet, into the tunnel, or it
+hits the terminal guard. The exit's own addresses become ordinary
+destinations, which the LAN isolation check in
+[verification](verification.md#from-a-client) already covers. Loopback and
+every other interface keep local delivery.
+
+Molebridge requires NetBird to run with kernel WireGuard and its kernel
+firewall, and supports only NetBird's daemon mode, its default profile and the
+settings listed in [configuration](configuration.md#env):
+
+- `compose.yaml` sets `NB_DISABLE_USERSPACE_ROUTING=true`.
+- The entrypoint gate refuses to launch NetBird when
+  `NB_DISABLE_USERSPACE_ROUTING` is not true, or when
+  `NB_FORCE_USERSPACE_FIREWALL`, `NB_FORCE_USERSPACE_ROUTER`,
+  `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` is.
+- The applier's health check and the host doctor fail unless the overlay
+  interface is a kernel WireGuard link and NetBird's kernel firewall is in
+  place (its `netbird` nftables table, or its `NETBIRD-` chains through
+  iptables-nft). With kernel WireGuard, NetBird uses its kernel firewall or
+  does not start.
+
+Rosenpass, NetBird SSH, DNS nameservers and domain routes are not supported on
+the exit peer; leave them off for its groups
+([requirements](prerequisites.md#netbird)). Rosenpass's key exchange needs
+local delivery from the overlay, so the gate refuses to launch NetBird when
+`NB_ENABLE_ROSENPASS` is set or a stored NetBird profile has
+`RosenpassEnabled`.
+
+The guards name `OVERLAY_IF`, and NetBird uses the interface its stored
+profile names. The gate therefore supports only NetBird's default profile at
+its default location: it refuses `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE`,
+`WT_PROFILE` and an active profile other than `default`, and refuses a default
+profile whose `WgIface` differs from `OVERLAY_IF`. The NetBird image has no
+JSON tool, so the gate carries a small JSON reader in POSIX awk. It validates
+the whole file and reads only the root object's own fields, matching names in
+any ASCII case as Go's decoder does; it refuses a checked field that appears
+twice and a root field name outside printable ASCII. Other fields may hold
+anything. The [configuration](configuration.md#env) page lists exactly what it
+refuses. The host doctor runs the same checks in the running container.
+
+These NetBird settings were checked against the 0.79.0 source, the release
+Molebridge pins; a NetBird upgrade needs them checked again.
+
 The tunnel uses `Table = off`. Its `PostUp` adds a default route through
 `mullvad` to the exit table; `PreDown` removes it. The fallback and terminal
 guard are not removed on tunnel down. The exit's own unbound traffic continues
 through the ordinary route so NetBird and Mullvad control traffic can connect.
 The applier checks, on every pass:
 
-- the overlay interface exists;
-- every rule has the expected priority and selectors;
+- the overlay interface exists, is a kernel WireGuard link, and NetBird's
+  kernel firewall is in place;
+- every rule has the expected priority and selectors, and no `lookup local`
+  rule other than rule 1's form could match the overlay interface;
 - both fallback routes are present;
 - the exit table has no route through another interface;
 - in each family with a global tunnel address, there is a tunnel default and
@@ -182,8 +237,9 @@ explicitly historical.
 
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
 verified connected result; otherwise 503. Docker's applier healthcheck checks
-freshness, a live WireGuard exit interface with exactly one peer, and current
-routing protection after a completed inspection; startup
+freshness, a live WireGuard exit interface with exactly one peer, current
+routing protection, and NetBird on kernel WireGuard with its kernel firewall,
+after a completed inspection; startup
 and an in-progress switch do not count as completed checks. It does not restart unhealthy
 containers. The host-side doctor additionally checks the shared namespace and
 recent verified egress.

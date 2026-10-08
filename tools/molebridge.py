@@ -21,6 +21,21 @@ class CheckError(Exception):
     pass
 
 
+# Go's strconv.ParseBool true values.
+TRUE_VALUES = {'1', 't', 'T', 'TRUE', 'true', 'True'}
+# The NetBird settings routing/wait-for-guards refuses, each with the values
+# NetBird itself reads as on: ParseBool for most, the exact "true" for the
+# netstack and kernel-module switches.
+NETBIRD_MUST_BE_OFF = {'NB_FORCE_USERSPACE_FIREWALL': TRUE_VALUES, 'NB_FORCE_USERSPACE_ROUTER': TRUE_VALUES,
+                       'NB_USE_NETSTACK_MODE': {'true'}, 'NB_WG_KERNEL_DISABLED': {'true'},
+                       'NB_ENABLE_ROSENPASS': TRUE_VALUES, 'WT_ENABLE_ROSENPASS': TRUE_VALUES}
+# Molebridge supports only NetBird's daemon mode.
+NETBIRD_DAEMON_ONLY = ('NB_FOREGROUND_MODE', 'WT_FOREGROUND_MODE')
+# Unsupported in any value: Molebridge supports only NetBird's default profile.
+NETBIRD_UNSUPPORTED = ('NB_CONFIG', 'WT_CONFIG', 'NB_PROFILE', 'WT_PROFILE')
+GATE_REFUSAL = 'NetBird gate: refusing to start NetBird: '
+
+
 def tunnel_families(text):
     """Address families of the tunnel config, requiring one address per family.
 
@@ -76,6 +91,24 @@ class Host:
                 raise CheckError('The panel must have no capabilities.')
             if any(v['target'].startswith('/config') for v in data['services']['applier']['volumes']):
                 raise CheckError('The applier must not mount the tunnel configuration.')
+            netbird = data['services']['netbird'].get('environment') or {}
+            if str(netbird.get('NB_DISABLE_USERSPACE_ROUTING')) not in TRUE_VALUES:
+                raise CheckError('The netbird service must set NB_DISABLE_USERSPACE_ROUTING=true (compose.yaml).')
+            for name, values in NETBIRD_MUST_BE_OFF.items():
+                if str(netbird.get(name)) in values:
+                    raise CheckError(f'The netbird service sets {name}; Molebridge needs kernel WireGuard, '
+                                     f"NetBird's kernel firewall and no Rosenpass (docs/troubleshooting.md).")
+            for name in NETBIRD_DAEMON_ONLY:
+                if str(netbird.get(name)) in TRUE_VALUES:
+                    raise CheckError(f'The netbird service sets {name}; Molebridge supports only '
+                                     f"NetBird's daemon mode (docs/troubleshooting.md).")
+            if 'WT_INTERFACE_NAME' in netbird and netbird['WT_INTERFACE_NAME'] != netbird.get('NB_INTERFACE_NAME', 'wt0'):
+                raise CheckError('The netbird service sets WT_INTERFACE_NAME to another interface than '
+                                 'NB_INTERFACE_NAME (docs/troubleshooting.md).')
+            for name in NETBIRD_UNSUPPORTED:
+                if name in netbird:
+                    raise CheckError(f'The netbird service sets {name}; Molebridge supports only '
+                                     f"NetBird's default profile (docs/troubleshooting.md).")
             return data
         except (KeyError, TypeError, ValueError) as exc:
             raise CheckError('Invalid Compose or routing configuration.') from exc
@@ -155,15 +188,34 @@ class Host:
                              f'run docker compose exec netbird netbird down, then docker compose exec netbird '
                              f'netbird up --extra-iface-blacklist {exit_if} (docs/setup.md).')
 
+    def netbird_config_check(self):
+        """Run the NetBird gate's configuration checks inside the netbird
+        container, where they see its environment and stored profiles. The
+        same code refuses to launch NetBird. Only the gate's own refusal line
+        is shown; the profiles also hold the peer's private key, and the gate
+        prints nothing from them."""
+        script = 'sh /usr/local/bin/molebridge-wait-for-guards --check-config 2>&1; echo "exit=$?"'
+        try:
+            lines = self.compose('exec', '-T', 'netbird', 'sh', '-c', script).strip().splitlines()
+        except CheckError:
+            raise CheckError('Unable to check the NetBird configuration; is the netbird container running?') from None
+        if lines[-1:] == ['exit=0'] and 'NetBird gate: configuration accepted' in lines:
+            return
+        refusal = next((line for line in lines if line.startswith(GATE_REFUSAL)
+                        and len(line) <= 300 and line.isprintable()), None)
+        raise CheckError(refusal or 'The NetBird gate did not accept the configuration (docs/troubleshooting.md).')
+
     def doctor(self):
         config = self.config()
         self.check_files(config)
         self.check_volume(config)
         self.namespace_checks()
         self.ice_blacklist_check(config)
+        self.netbird_config_check()
         # This command deliberately prints only fixed check labels, no addresses.
         self.compose('exec', '-T', 'applier', 'python', '-m', 'applier.apply', '--doctor', timeout=30)
-        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, routing and recent provider check')
+        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, NetBird settings '
+              'and profiles, NetBird kernel mode, routing and recent provider check')
         print('Client DNS, IPv6 and failure drills still require docs/verification.md.')
 
     def recover(self):

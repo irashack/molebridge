@@ -273,6 +273,12 @@ address is covered by `tools/test_pia.py`.
 
 ## Not yet tested
 
+- The local-delivery guard (rule 1), the NetBird gate's refusals and the
+  NetBird kernel-mode health check, on any live exit. Unit tests cover the
+  validator, the gate and the health check; `tools/check-routing.sh`
+  exercises the guard in isolated namespaces, including traffic to the
+  exit's own addresses after a DNAT to a local port. The NetBird settings
+  were checked against the 0.79.0 source, not on a running peer.
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
   fragmentation-needed error on a live flow. The isolated CI drill covers both
   return paths; the live pass above shows the IPv6 error leaving through the

@@ -102,7 +102,9 @@ people. Some forbid it.
   and NetBird's access policies don't filter the destinations of forwarded
   traffic.
 - **An access policy** from `exit-users` to `exit-nodes`. ICMP alone is
-  enough; NetBird uses it to decide whether the exit is reachable.
+  enough: NetBird connects peers that a policy links. The exit doesn't answer
+  pings to its own overlay address, because nothing arriving over NetBird is
+  delivered to the exit itself ([architecture](architecture.md#netbird-requirements)).
 - **A setup key** for the peer's first enrollment: one-off, auto-assigning
   `exit-nodes`, with a short expiry.
 - **The exit-node route**, created during setup: network `0.0.0.0/0`, routing
@@ -110,6 +112,14 @@ people. Some forbid it.
   `exit-users`. With IPv6 overlay, NetBird adds a matching `::/0` route; check
   that it's there. NetBird's [exit node guide](https://docs.netbird.io/use-cases/remote-access/exit-nodes)
   covers the dashboard steps.
+
+- **Nothing else for the exit peer.** Don't enable NetBird SSH for it, don't
+  give `exit-nodes` DNS nameservers, don't route domain resources or domain
+  routes through it, and don't turn on Rosenpass for it. None of them is
+  supported on the exit peer: overlay traffic is never delivered to the exit
+  itself, so they don't work there. NetBird's entrypoint gate refuses to
+  start the peer with Rosenpass on
+  ([troubleshooting](troubleshooting.md#startup)).
 
 On phones, turn off *Force relay connection* in the NetBird app (Settings →
 Advanced). It's on by default to save battery, and it routes all exit traffic

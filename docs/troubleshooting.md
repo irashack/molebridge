@@ -27,9 +27,101 @@ The `netbird` service needs `NET_RAW`. Docker grants it by default; Podman
 does not. `compose.yaml` adds it, so this means a modified Compose file.
 
 **NetBird's log stops at `NetBird gate: waiting for IPv4 and IPv6 routing
-guards`.** NetBird won't start until both priority-97 routing guards exist in
-the namespace, so the `wireguard` container didn't finish initializing. Check
-its log first.
+guards`.** NetBird won't start until, in both address families, the
+priority-97 terminal guard and the priority-1 local-delivery rule exist and
+no other `lookup local` rule (such as the kernel's own priority-0 rule) could
+match the overlay interface. So the `wireguard` container didn't finish
+initializing. Check its log first. `ip rule` inside the namespace shows which
+rule is missing or left over.
+
+**NetBird keeps restarting, and its log says `NetBird gate: refusing to start
+NetBird: <reason> (see docs/troubleshooting.md)`.** The gate in front of
+NetBird's entrypoint refuses settings Molebridge doesn't support on the exit
+([architecture](architecture.md#netbird-requirements)). The reasons:
+
+- `<name> is set; Molebridge needs kernel WireGuard and NetBird's kernel
+  firewall`, for `NB_FORCE_USERSPACE_FIREWALL`, `NB_FORCE_USERSPACE_ROUTER`,
+  `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED`. Remove the variable from
+  your Compose override or `secrets/netbird.env`, then recreate `netbird`.
+  [Configuration](configuration.md#env) lists the values each one is
+  refused with.
+- `NB_CONFIG is set; Molebridge supports only NetBird's default profile`,
+  or the same for `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE`. Remove the
+  variable; the profile belongs in the `netbird-data` volume at its default
+  path.
+- `NB_FOREGROUND_MODE is set; Molebridge supports only NetBird's daemon
+  mode`, or the same for `WT_FOREGROUND_MODE`. Remove the variable; the
+  image's entrypoint runs NetBird as a daemon.
+- `NB_INTERFACE_NAME is empty`, or `WT_INTERFACE_NAME is set and differs
+  from the guarded interface <name>`. Set the interface through
+  `OVERLAY_IF` in `.env` only, and remove `WT_INTERFACE_NAME`.
+- `the active NetBird profile is not the default profile (<file>)`. Someone
+  switched the peer to another NetBird profile. Switch back without starting
+  NetBird by removing the active-profile record, which makes NetBird use
+  `default` again:
+
+  ```sh
+  docker compose run --rm --no-deps --entrypoint rm netbird /var/lib/netbird/active_profile.json
+  docker compose up -d netbird
+  ```
+
+  On rootless Podman, remove `active_profile.json` from the volume's
+  mountpoint instead (see below for the path).
+- `NB_DISABLE_USERSPACE_ROUTING must be "true" (compose.yaml sets it)`.
+  Something overrides the value in `compose.yaml`; remove the override.
+- `NB_ENABLE_ROSENPASS is set; Rosenpass cannot work on this exit`, or the
+  same for `WT_ENABLE_ROSENPASS`. Remove the variable.
+- `Rosenpass is enabled in a stored NetBird profile (RosenpassEnabled)`. The
+  peer was once brought up with `--enable-rosenpass`, and its profile in the
+  `netbird-data` volume keeps the setting. Turn it off in the profile without
+  printing the file, which holds the peer's private key, then start NetBird:
+
+  ```sh
+  docker compose run --rm --no-deps --entrypoint sed netbird -i \
+    's/"RosenpassEnabled": true/"RosenpassEnabled": false/' /var/lib/netbird/default.json
+  docker compose up -d netbird
+  ```
+
+  On rootless Podman, run the same `sed -i` on
+  `"$(podman volume inspect molebridge_netbird-data --format '{{.Mountpoint}}')/default.json"`.
+  The gate checks the default profile, `default.json`, and the legacy
+  `/etc/netbird/config.json` and `/etc/wiretrustee/config.json` in the
+  container if they exist.
+- `a stored NetBird profile (<file>) uses a WireGuard interface other than
+  <name> (WgIface)`. The peer's profile keeps the interface name it enrolled
+  with (`wt0` if it names none), and it no longer matches `OVERLAY_IF`,
+  usually because `OVERLAY_IF` changed after enrollment. Either set
+  `OVERLAY_IF` back, or change the stored name to match, the same way as for
+  Rosenpass above, for example from `wt0` to `mesh0`:
+
+  ```sh
+  docker compose run --rm --no-deps --entrypoint sed netbird -i \
+    's/"WgIface": "wt0"/"WgIface": "mesh0"/' /var/lib/netbird/default.json
+  ```
+
+  NetBird writes the field whenever it loads a profile, so one without it
+  is rare; it means `wt0`, so keep `OVERLAY_IF=wt0` for such a profile.
+- `cannot read the stored NetBird profile <file>`, `the stored NetBird
+  profile <file> is not a valid JSON object`, `the stored NetBird profile
+  <file> repeats WgIface or RosenpassEnabled` or `the stored NetBird profile
+  <file> has a field name outside printable ASCII`, and the same for the
+  active profile state (`cannot read the active NetBird profile state
+  <file>`, `... is not a valid JSON object`). NetBird doesn't write files
+  like these; the file was edited by hand or damaged. Fix the JSON or the
+  repeated field, keeping one `WgIface` and at most one `RosenpassEnabled`
+  set to `false`.
+
+`python3 tools/molebridge.py doctor` reports the Compose settings as `The
+netbird service sets <name>; Molebridge needs kernel WireGuard, NetBird's
+kernel firewall and no Rosenpass (docs/troubleshooting.md).`, `The netbird
+service sets <name>; Molebridge supports only NetBird's default profile
+(docs/troubleshooting.md).`, `The netbird service sets <name>; Molebridge
+supports only NetBird's daemon mode (docs/troubleshooting.md).`, `The
+netbird service sets WT_INTERFACE_NAME to another interface than
+NB_INTERFACE_NAME (docs/troubleshooting.md).` or `The netbird service must set
+NB_DISABLE_USERSPACE_ROUTING=true (compose.yaml).` It then runs the gate's
+own checks in the running `netbird` container and shows the gate's refusal
+line, if any.
 
 ## The panel
 
@@ -175,7 +267,29 @@ unreachable from the exit.
 
 **"Routing protection is incomplete; run the recovery helper."** A routing
 rule or fallback route is missing, usually after part of the stack was
-recreated. Run recovery (below).
+recreated. Run recovery (below). The kernel's priority-0 `lookup local` rule
+reappearing counts too.
+
+**"NetBird is not running kernel WireGuard with its kernel firewall on the
+overlay interface; see the troubleshooting guide."** A selection waits with
+"Waiting for NetBird to run kernel WireGuard with its kernel firewall; request
+will retry automatically.", and the applier's `--doctor` prints `FAIL NetBird
+kernel WireGuard and kernel firewall`. The exit is never reported as
+connected in this state. The applier found one of these:
+
+- **The overlay interface isn't a kernel WireGuard link.** NetBird found no
+  usable WireGuard kernel module and fell back to userspace WireGuard. Inside
+  the namespace, `ip -d link show wt0` shows `wireguard` on its details line
+  when it's right. Load the module on the host as in
+  [requirements](prerequisites.md#host), then run recovery.
+- **NetBird's kernel firewall isn't visible.** `nft list tables` inside the
+  namespace should show `table ip netbird` (NetBird's nftables backend) or
+  `table ip filter` holding chains named `NETBIRD-…` (its iptables backend).
+  The check looks for those names, so a renamed table (`NB_NFTABLES_TABLE`)
+  fails it, and so would iptables rules in the legacy backend, which `nft`
+  can't see. The pinned NetBird image is Alpine-based, and Alpine's
+  `iptables` uses the nftables backend by default; this hasn't been checked
+  on a running exit yet.
 
 ## Clients
 

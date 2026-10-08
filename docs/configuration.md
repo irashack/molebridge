@@ -15,7 +15,7 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation: changing it creates a fresh identity volume and enrolls a new peer. |
 | `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
-| `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. Compose passes it as `NB_INTERFACE_NAME` and uses it for the startup gate, routing and health checks. |
+| `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. Compose passes it as `NB_INTERFACE_NAME` and uses it for the startup gate, routing and health checks. Keep it unchanged after the peer enrolls: the peer's stored profile keeps the name, and the gate refuses a profile for another interface ([troubleshooting](troubleshooting.md#startup)). |
 | `EXIT_TABLE` | `51821` | Dedicated table (256..2147483647). Must match the table in the tunnel config's `PostUp` and `PreDown` hooks; see the [config helper](#tunnel-config-helper). |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
@@ -34,6 +34,34 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `PANEL_EXITS` | empty | Set on a separate Switchyard container serving several exits. `compose.yaml` does not pass it to the bundled panel. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
+
+`compose.yaml` also sets fixed NetBird settings that aren't in `.env`.
+`NB_DISABLE_DNS=true` stops NetBird configuring the namespace's resolver.
+`NB_DISABLE_USERSPACE_ROUTING=true` is part of Molebridge's supported NetBird
+configuration. NetBird's entrypoint gate refuses to start without it. It also
+refuses:
+
+- `NB_FORCE_USERSPACE_FIREWALL`, `NB_FORCE_USERSPACE_ROUTER`,
+  `NB_ENABLE_ROSENPASS` or `WT_ENABLE_ROSENPASS` set to a value NetBird reads
+  as true (Go's `strconv.ParseBool`: `1`, `t`, `T`, `TRUE`, `true`, `True`);
+- `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` set to `true`, the only
+  value NetBird acts on for these two;
+- `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE` set to anything,
+  or an active profile other than NetBird's `default` one: Molebridge
+  supports only the default profile, at its default location;
+- `NB_FOREGROUND_MODE` or `WT_FOREGROUND_MODE` set to a value NetBird reads
+  as true: Molebridge supports only NetBird's daemon mode, which the image's
+  entrypoint uses;
+- an empty `NB_INTERFACE_NAME` (Compose sets it from `OVERLAY_IF`), or a
+  `WT_INTERFACE_NAME` that names another interface;
+- a default profile (or a legacy `/etc/netbird/config.json` or
+  `/etc/wiretrustee/config.json`, which NetBird copies into it) with
+  Rosenpass on, with a `WgIface` other than `OVERLAY_IF` (none, or an empty
+  one, means `wt0`), with either field repeated, with a field name outside
+  printable ASCII, or that isn't valid JSON.
+
+See [architecture](architecture.md#netbird-requirements) and
+[troubleshooting](troubleshooting.md#startup).
 
 ### Panel sign-in
 
@@ -113,7 +141,7 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | `applier/tunnel.json` | PIA applier | PIA applier | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `checked_at` |
+| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`. A result with `netbird_native` false never counts as connected. |
 
 Routing initialization reads only the `Address` line of the tunnel config, for
 the return-path rule (a PIA config has none; the applier installs the rule per

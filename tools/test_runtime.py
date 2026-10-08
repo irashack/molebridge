@@ -11,10 +11,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from applier.apply import Applier, command
+from applier.apply import NETBIRD_MODE_FAILED, Applier, command
 from applier import apply as applier_module
 from molebridge import relays
-from molebridge.routing import RoutingConfig, family_status
+from molebridge.routing import (RoutingConfig, family_status, local_rule_admits_overlay,
+                                netbird_firewall_present, overlay_is_kernel_wireguard)
 from molebridge.state import (decode_json, desired_request, now_iso, read_json,
                               request_token, status_view, write_json_atomic)
 
@@ -42,7 +43,7 @@ def payload(**changes):
 
 def rules(family):
     destination, prefix = (CONFIG.overlay if family == 4 else CONFIG.overlay6).split('/')
-    return [{'priority': 0, 'src': 'all', 'table': 'local'},
+    return [{'priority': 1, 'not': None, 'src': 'all', 'iif': 'wt0', 'table': 'local'},
             {'priority': 90, 'src': 'all', 'iif': 'mullvad', 'dst': destination, 'dstlen': int(prefix), 'table': 'main'},
             {'priority': 94, 'src': TUNNEL[family], 'table': 51821,
              'ipproto': 'icmp' if family == 4 else 'ipv6-icmp'},
@@ -50,6 +51,12 @@ def rules(family):
             {'priority': 96, 'src': 'all', 'oif': 'mullvad', 'table': 51821},
             {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'},
             {'priority': 105, 'src': 'all', 'table': 7120}]
+
+
+# `nft -j list chains` with NetBird's iptables backend through iptables-nft.
+NETBIRD_CHAINS = {'nftables': [{'metainfo': {'version': '1.1.3', 'json_schema_version': 1}},
+                               {'chain': {'family': 'ip', 'table': 'filter', 'name': 'INPUT', 'handle': 1}},
+                               {'chain': {'family': 'ip', 'table': 'filter', 'name': 'NETBIRD-RT-FWD-IN', 'handle': 4}}]}
 
 
 def routes():
@@ -72,6 +79,8 @@ class Kernel:
         self.routes = {4: routes(), 6: routes()}
         self.keys = [KEY]
         self.overlay_present = True
+        self.overlay_kind = 'wireguard'
+        self.nft_chains = NETBIRD_CHAINS
         self.tunnel_present = True
         self.families = [4, 6]
         self.return_path = '1\n'
@@ -93,6 +102,11 @@ class Kernel:
                 if not self.overlay_present:
                     raise RuntimeError('missing overlay interface')
                 return ''
+            if args[1:7] == ['-d', '-j', 'link', 'show', 'dev', 'wt0']:
+                if not self.overlay_present:
+                    raise RuntimeError('missing overlay interface')
+                kind = {'linkinfo': {'info_kind': self.overlay_kind}} if self.overlay_kind else {}
+                return json.dumps([{'ifname': 'wt0', **kind}])
             if args[1:4] == ['-j', 'address', 'show']:
                 if not self.tunnel_present:
                     return '[]'
@@ -118,6 +132,8 @@ class Kernel:
         if args[0] == 'cat':
             assert args[1].endswith('icmp_errors_use_inbound_ifaddr')
             return self.return_path
+        if args == ['nft', '-j', 'list', 'chains']:
+            return json.dumps(self.nft_chains)
         if args[0] == 'curl':
             family = 4 if '-4' in args else 6
             assert f'-{family}' in args
@@ -308,7 +324,7 @@ def test_switch_and_observed_initial_peer(runtime):
 
 
 @pytest.mark.parametrize('family', [4, 6])
-@pytest.mark.parametrize('priority', [90, 94, 95, 96, 97])
+@pytest.mark.parametrize('priority', [1, 90, 94, 95, 96, 97])
 def test_missing_rule_prevents_success_and_switch(runtime, family, priority):
     app, kernel = runtime
     kernel.rules[family] = [r for r in kernel.rules[family] if r['priority'] != priority]
@@ -386,6 +402,134 @@ def test_narrowed_or_inverted_rule_is_not_healthy(extra):
     table = rules(4)
     by_priority(table, 95).update(extra)
     assert not status(table, routes(), 4)[0]
+
+
+@pytest.mark.parametrize('family', [4, 6])
+def test_kernel_local_rule_left_in_place_is_unhealthy(family):
+    # Rule 1 present, but the kernel's priority-0 rule still delivers overlay
+    # packets locally.
+    table = [{'priority': 0, 'src': 'all', 'table': 'local'}, *rules(family)]
+    assert status(table, routes(), family) == (False, True)
+    assert status(rules(family), routes(), family) == (True, True)
+
+
+@pytest.mark.parametrize('change', [
+    {'not': False},                      # not an inversion flag iproute2 prints
+    {'iif': 'eth0'},                     # inverted, but for the wrong interface
+    {'iif': 'mullvad'},
+    {'table': 'main'},
+    {'table': 254},
+    {'fwmark': '0x1bd00'},               # an extra selector narrows the inversion
+    {'src': '192.0.2.0', 'srclen': 24},
+    {'iif_detached': None},              # iproute2 prints this flag as null
+    {'action': 'unreachable'},
+])
+def test_local_delivery_rule_must_be_exact(change):
+    table = rules(4)
+    by_priority(table, 1).update(change)
+    assert not status(table, routes(), 4)[0]
+
+
+def test_local_delivery_rule_must_be_inverted():
+    table = rules(4)
+    del by_priority(table, 1)['not']
+    assert not status(table, routes(), 4)[0]
+
+
+def test_local_delivery_rule_accepts_both_inversion_renderings():
+    table = rules(4)
+    by_priority(table, 1)['not'] = True
+    assert status(table, routes(), 4) == (True, True)
+    by_priority(table, 1)['table'] = 255
+    assert status(table, routes(), 4) == (True, True)
+
+
+@pytest.mark.parametrize('rule,healthy', [
+    ({'priority': 32765, 'src': 'all', 'table': 'local'}, False),
+    ({'priority': 32765, 'src': 'all', 'table': 255}, False),
+    ({'priority': 200, 'src': 'all', 'iif': 'wt0', 'table': 'local'}, False),
+    ({'priority': 200, 'not': None, 'src': 'all', 'iif': 'eth0', 'table': 'local'}, False),
+    ({'priority': 200, 'not': None, 'src': 'all', 'iif': 'wt0', 'fwmark': '0x1', 'table': 'local'}, False),
+    ({'priority': 200, 'src': 'all', 'oif': 'wt0', 'table': 'local'}, False),
+    ({'priority': 200, 'src': 'all', 'iif': 'lo', 'table': 'local'}, True),
+    ({'priority': 200, 'not': None, 'src': 'all', 'iif': 'wt0', 'table': 'local'}, True),
+    ({'priority': 200, 'src': 'all', 'table': 'main'}, True),
+])
+def test_no_later_local_rule_may_match_the_overlay(rule, healthy):
+    assert local_rule_admits_overlay(rule, 'wt0') is not healthy
+    assert status([*rules(4), rule], routes(), 4)[0] is healthy
+
+
+@pytest.mark.parametrize('links,expected', [
+    ([{'ifname': 'wt0', 'linkinfo': {'info_kind': 'wireguard'}}], True),
+    ([{'ifname': 'wt0', 'linkinfo': {'info_kind': 'tun'}}], False),
+    ([{'ifname': 'wt0'}], False),
+    ([{'ifname': 'wt1', 'linkinfo': {'info_kind': 'wireguard'}}], False),
+    ([{'ifname': 'wt0', 'linkinfo': {'info_kind': 'wireguard'}}] * 2, False),
+    ([], False), ({}, False), (None, False), ([{'ifname': 'wt0', 'linkinfo': 'wireguard'}], False),
+])
+def test_overlay_must_be_kernel_wireguard(links, expected):
+    assert overlay_is_kernel_wireguard(links, 'wt0') is expected
+
+
+def chains(*entries):
+    return {'nftables': [{'metainfo': {'version': '1.1.3'}},
+                         *({'chain': {'family': f, 'table': t, 'name': n}} for f, t, n in entries)]}
+
+
+@pytest.mark.parametrize('listing,expected', [
+    (NETBIRD_CHAINS, True),
+    (chains(('ip', 'netbird', 'netbird-acl-input-rules')), True),
+    (chains(('ip', 'nat', 'NETBIRD-RT-NAT')), True),
+    (chains(('ip', 'filter', 'INPUT'), ('inet', 'molebridge_guard', 'prerouting')), False),
+    (chains(('ip6', 'netbird', 'netbird-acl-input-rules')), False),
+    (chains(), False), ({'nftables': 'x'}, False), ([], False), (None, False),
+])
+def test_netbird_kernel_firewall_detection(listing, expected):
+    assert netbird_firewall_present(listing) is expected
+
+
+def test_healthy_result_records_netbird_kernel_mode(runtime):
+    app, kernel = runtime
+    result = app.inspect()
+    assert result['status'] == 'ok' and result['netbird_native'] is True
+    assert ['nft', '-j', 'list', 'chains'] in kernel.calls
+
+
+@pytest.mark.parametrize('fault', ['tun', 'no-linkinfo', 'no-netbird-chains', 'nft-fails'])
+def test_netbird_outside_kernel_mode_is_never_connected(runtime, fault):
+    app, kernel = runtime
+    if fault == 'tun':
+        kernel.overlay_kind = 'tun'
+    elif fault == 'no-linkinfo':
+        kernel.overlay_kind = None
+    elif fault == 'no-netbird-chains':
+        kernel.nft_chains = chains(('ip', 'filter', 'INPUT'))
+    else:
+        kernel.nft_chains = None
+        real = kernel.run
+
+        def run(args, **kwargs):
+            if args[0] == 'nft':
+                raise RuntimeError('command failed')
+            return real(args, **kwargs)
+        app.run = run
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == NETBIRD_MODE_FAILED
+    assert result['routing_ok'] is True and result['netbird_native'] is False
+    assert status_view(None, result) == ('failed', 'failed')
+    # A switch waits instead of changing the tunnel, and retries later.
+    result = app.switch(request())
+    assert result['status'] == 'failed' and 'kernel firewall' in result['message']
+    assert app.pending and not kernel.mutations
+
+
+def test_status_never_connected_when_netbird_mode_failed():
+    result = {'status': 'ok', 'checked_at': now_iso(), 'routing_ok': True, 'exit_confirmed': True}
+    assert status_view(None, result)[0] == 'ok'
+    assert status_view(None, {**result, 'netbird_native': True})[0] == 'ok'
+    for value in (False, None, 'true'):
+        assert status_view(None, {**result, 'netbird_native': value}) == ('failed', 'verification failed')
 
 
 def test_earlier_rule_and_unsafe_table_route_rejected():

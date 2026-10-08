@@ -139,7 +139,9 @@ def status_view(desired, result, provider='mullvad'):
         return 'unknown', 'request not acknowledged'
     status = result.get('status')
     if status == 'ok':
-        if result.get('routing_ok') is not True or not exit_confirmed(result):
+        # Results written before the NetBird mode check have no such field.
+        if (result.get('routing_ok') is not True or not exit_confirmed(result)
+                or result.get('netbird_native', True) is not True):
             return 'failed', 'verification failed'
         return 'ok', 'connected'
     if status == 'applying':

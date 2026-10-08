@@ -17,7 +17,8 @@ import urllib.parse
 from pathlib import Path
 
 from molebridge.relays import CATALOG_URL, REFRESH_INTERVAL_S, RelayCatalog, valid_key
-from molebridge.routing import RETURN_PATH_SYSCTL, RoutingConfig, family_status, return_path_enabled
+from molebridge.routing import (RETURN_PATH_SYSCTL, RoutingConfig, family_status, netbird_firewall_present,
+                                overlay_is_kernel_wireguard, return_path_enabled)
 from molebridge.state import (MAX_CATALOG_BYTES, PROVIDER_LABEL, decode_json, desired_request, now_iso,
                               provider_from_env, read_json, recent, request_token, write_json_atomic)
 
@@ -25,6 +26,8 @@ HANDSHAKE_FRESH_SEC = 180
 SWITCH_TIMEOUT_SEC = 60
 REFRESH_SEC = 60
 POLL_SEC = 5
+NETBIRD_MODE_FAILED = ('NetBird is not running kernel WireGuard with its kernel firewall on the overlay '
+                       'interface; see the troubleshooting guide.')
 
 
 def command(args, *, timeout=5, limit=1024 * 1024):
@@ -123,6 +126,17 @@ class Applier:
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
 
+    def netbird_native(self):
+        """True when NetBird runs kernel WireGuard on the overlay interface and
+        its own kernel firewall is in place, as Molebridge requires."""
+        try:
+            links = decode_json(self.run(['ip', '-d', '-j', 'link', 'show', 'dev', self.config.overlay_if]))
+            if not overlay_is_kernel_wireguard(links, self.config.overlay_if):
+                return False
+            return netbird_firewall_present(decode_json(self.run(['nft', '-j', 'list', 'chains'])))
+        except (RuntimeError, ValueError, UnicodeError):
+            return False
+
     def peers(self):
         keys = self.run(['wg', 'show', self.config.exit_if, 'peers']).split()
         if any(not valid_key(key) for key in keys):
@@ -188,7 +202,7 @@ class Applier:
                   'request_id': request_token(self.request) if self.request else None,
                   'requested_server': self.request['server'] if self.request else None,
                   'provider': self.provider, 'routing_ok': False, 'unreachable_fallback': False,
-                  'exit_confirmed': False, **self.result_defaults(),
+                  'netbird_native': False, 'exit_confirmed': False, **self.result_defaults(),
                   'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
                   'egress_ips': {}}
         result.update(fields)
@@ -197,13 +211,14 @@ class Applier:
 
     def inspect(self, *, applying=False):
         routing_ok, fallback = self.routing_status()
-        fields = {'routing_ok': routing_ok, 'unreachable_fallback': fallback}
+        native = self.netbird_native()
+        fields = {'routing_ok': routing_ok, 'unreachable_fallback': fallback, 'netbird_native': native}
         server = None
 
         def emit(status, message):
             if self.pending:
                 status, message = 'failed', self.pending
-            if applying and routing_ok and status == 'failed' and not self.rejection:
+            if applying and routing_ok and native and status == 'failed' and not self.rejection:
                 status, message = 'applying', 'Waiting for tunnel verification.'
             return self.publish(status, message, server=server, **fields)
 
@@ -216,6 +231,8 @@ class Applier:
             fields['handshake_age_s'] = age
             if not routing_ok:
                 return emit('failed', 'Routing protection is incomplete; run the recovery helper.')
+            if not native:
+                return emit('failed', NETBIRD_MODE_FAILED)
             fields.update(self.egress())
             if self.rejection:
                 return emit('failed', self.rejection)
@@ -248,6 +265,9 @@ class Applier:
         if not routing_ok:
             self.pending = 'Waiting for tunnel and overlay routing; request will retry automatically. Run recovery if this persists.'
             return self.inspect()
+        if not self.netbird_native():
+            self.pending = 'Waiting for NetBird to run kernel WireGuard with its kernel firewall; request will retry automatically.'
+            return self.inspect()
         relay = self.catalog.relays[request['server']]
         try:
             keys = self.peers()
@@ -256,7 +276,7 @@ class Applier:
             return self.inspect()
         try:
             self.publish('applying', 'Applying the requested server.', server=self.server_for(keys),
-                         routing_ok=True, unreachable_fallback=fallback)
+                         routing_ok=True, unreachable_fallback=fallback, netbird_native=True)
             self.apply_relay(relay, keys)
             deadline = self.clock() + SWITCH_TIMEOUT_SEC
             while self.clock() < deadline:
@@ -356,12 +376,14 @@ def main():
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
             return 0 if (completed and recent(result.get('checked_at'))
-                         and len(applier.peers()) == 1 and applier.routing_status()[0]) else 1
+                         and len(applier.peers()) == 1 and applier.routing_status()[0]
+                         and applier.netbird_native()) else 1
         if args.doctor:
             result = read_json(applier.result_path, 16384)
             result = result if isinstance(result, dict) else {}
             checks = {'recent applier check': recent(result.get('checked_at')),
                       'routing protection': applier.routing_status()[0],
+                      'NetBird kernel WireGuard and kernel firewall': applier.netbird_native(),
                       'fresh relay catalogue': applier.catalog.usable(),
                       f'verified {PROVIDER_LABEL[applier.provider]} egress':
                           recent(result.get('checked_at')) and result.get('status') == 'ok'}

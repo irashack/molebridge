@@ -48,6 +48,7 @@ jobs:
           docker run --rm --network none --entrypoint sh molebridge-wireguard:ci -c 'test -x /custom-cont-init.d/10-exit-routing && test "$(stat -c %u /custom-cont-init.d/10-exit-routing)" = 0'
       - name: Linux namespace routing drills
         run: |
-          # nft runs the PIA port-forwarding and ingress-guard drill.
-          sudo apt-get install -y --no-install-recommends nftables >/dev/null
+          # nft runs the PIA port-forwarding and ingress-guard drill; busybox,
+          # mawk and gawk run the NetBird gate's JSON reader under each awk.
+          sudo apt-get install -y --no-install-recommends nftables busybox mawk gawk >/dev/null
           sudo sh tools/check-routing.sh

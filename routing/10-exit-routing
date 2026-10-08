@@ -1,5 +1,9 @@
 #!/usr/bin/env sh
 # Install Molebridge's namespace routing before the overlay can start.
+# Priority 1 replaces the kernel's priority-0 `lookup local` rule with one that
+# skips packets arriving on the overlay interface, so overlay traffic is never
+# delivered to this host: every overlay packet falls through to rules 90-97.
+# Loopback and every other interface keep local delivery.
 # Priority 80 blocks forwarded traffic while rules are being rebuilt.
 # Priority 94 routes the exit's own ICMP errors, sourced from the tunnel
 # address, back through the tunnel instead of the host's default route. It
@@ -41,6 +45,17 @@ parse_ipv4() {
         [ "${#octet}" -le 3 ] && [ "$octet" -le 255 ] || fail "invalid IPv4 octet"
         address_num=$((address_num * 256 + octet))
     done
+}
+# True when the family already has exactly this script's local-delivery rule.
+# iproute2 marks the selector detached until NetBird creates the interface.
+local_guard_present() {
+    ip "$1" rule show | awk -v iface="$OVERLAY_IF" '
+        $1 == "1:" && $2 == "not" && $3 == "from" && $4 == "all" && $5 == "iif" && $6 == iface {
+            if ((NF == 8 && $7 == "lookup" && $8 == "local") ||
+                (NF == 9 && $7 == "[detached]" && $8 == "lookup" && $9 == "local")) found = 1
+        }
+        END { exit !found }
+    '
 }
 valid_if "$OVERLAY_IF" && valid_if "$EXIT_IF" || fail "invalid interface name"
 [ "$OVERLAY_IF" != "$EXIT_IF" ] || fail "overlay and exit interfaces must differ"
@@ -96,6 +111,15 @@ if [ "$(cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr 2>/dev/null)" != 1
     echo "10-exit-routing: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail" >&2
 fi
 
+# Local delivery first: the new rule goes in before the kernel's rule 0 comes
+# out, so loopback and the host interface never lose it. The local table and
+# its routes stay. A rerun finds rule 1 in place and rule 0 already gone.
+for family in -4 -6; do
+    if ! local_guard_present "$family"; then
+        ip "$family" rule add not iif "$OVERLAY_IF" lookup local priority 1
+    fi
+    while ip "$family" rule del priority 0 2>/dev/null; do :; done
+done
 # These priorities are owned by Molebridge in this dedicated namespace.
 # Never remove the temporary guard if any later command fails.
 for family in -4 -6; do
@@ -135,4 +159,4 @@ for family in -4 -6; do
     while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
 done
 touch "$READY_FILE"
-echo "10-exit-routing: rules installed (90/94/95/96/97, protected table)"
+echo "10-exit-routing: rules installed (1/90/94/95/96/97, protected table)"

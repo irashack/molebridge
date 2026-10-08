@@ -1,6 +1,13 @@
 #!/usr/bin/env sh
 # Runtime restarts do not honor Compose depends_on. Check this namespace
 # before handing off to the pinned image's original NetBird entrypoint.
+#
+# First refuse NetBird settings Molebridge does not support: it needs kernel
+# WireGuard, NetBird's kernel firewall, daemon mode and the default profile,
+# without Rosenpass. Then wait until both address families have
+# the terminal guard (priority 97) and the local-delivery guard (priority 1),
+# with no other `lookup local` rule that could match the overlay interface.
+# NetBird source references are to the pinned release, 0.79.0.
 set -eu
 set -f
 overlay_if=${NB_INTERFACE_NAME:-wt0}
@@ -9,16 +16,321 @@ case "$overlay_if" in
 esac
 [ "${#overlay_if}" -le 15 ] && [ "$#" -gt 0 ] || exit 1
 
+refuse() {
+    echo "NetBird gate: refusing to start NetBird: $1 (see docs/troubleshooting.md)" >&2
+    exit 1
+}
+# Go's strconv.ParseBool true values, used by the switches NetBird parses
+# that way (client/firewall/create_linux.go:231-239,
+# client/firewall/uspfilter/filter.go:512-519, and pflag for `netbird up`).
+truthy() {
+    case "$1" in 1|t|T|TRUE|true|True) return 0 ;; *) return 1 ;; esac
+}
+must_be_off() {
+    if truthy "$2"; then refuse "$1 is set; $3"; fi
+}
+# NetBird enables these two only on the exact value "true".
+must_not_be_true() {
+    if [ "$2" = true ]; then refuse "$1 is set; $3"; fi
+}
+
+# Validate supported runtime settings: kernel WireGuard and NetBird's kernel
+# firewall (client/iface/netstack/env.go:14,33-35;
+# client/iface/device/kernel_module_linux.go:37,89-92).
+kernel_needed="Molebridge needs kernel WireGuard and NetBird's kernel firewall"
+must_be_off NB_FORCE_USERSPACE_FIREWALL "${NB_FORCE_USERSPACE_FIREWALL:-}" "$kernel_needed"
+must_be_off NB_FORCE_USERSPACE_ROUTER "${NB_FORCE_USERSPACE_ROUTER:-}" "$kernel_needed"
+must_not_be_true NB_USE_NETSTACK_MODE "${NB_USE_NETSTACK_MODE:-}" "$kernel_needed"
+must_not_be_true NB_WG_KERNEL_DISABLED "${NB_WG_KERNEL_DISABLED:-}" "$kernel_needed"
+# compose.yaml sets this; it is part of the supported configuration.
+truthy "${NB_DISABLE_USERSPACE_ROUTING:-}" ||
+    refuse 'NB_DISABLE_USERSPACE_ROUTING must be "true" (compose.yaml sets it)'
+# Rosenpass is not supported on the exit: its key exchange needs local
+# delivery from the overlay. `netbird up` reads NB_ENABLE_ROSENPASS and the
+# older WT_ name (client/cmd/root.go:220,245-267; client/cmd/up.go:99-100).
+must_be_off NB_ENABLE_ROSENPASS "${NB_ENABLE_ROSENPASS:-}" 'Rosenpass cannot work on this exit'
+must_be_off WT_ENABLE_ROSENPASS "${WT_ENABLE_ROSENPASS:-}" 'Rosenpass cannot work on this exit'
+# Foreground mode runs NetBird inside `netbird up`, with the profile chosen
+# there instead of the daemon's (client/cmd/up.go:72,99-100,143-150,203-240).
+must_be_off NB_FOREGROUND_MODE "${NB_FOREGROUND_MODE:-}" "Molebridge supports only NetBird's daemon mode"
+must_be_off WT_FOREGROUND_MODE "${WT_FOREGROUND_MODE:-}" "Molebridge supports only NetBird's daemon mode"
+# `netbird up` takes the interface name from NB_INTERFACE_NAME, and from
+# WT_INTERFACE_NAME when NB_ is unset (client/cmd/up.go:73,
+# client/cmd/root.go:245-267). Both must name the guarded interface.
+if [ -n "${NB_INTERFACE_NAME+set}" ] && [ -z "$NB_INTERFACE_NAME" ]; then
+    refuse 'NB_INTERFACE_NAME is empty'
+fi
+if [ -n "${WT_INTERFACE_NAME+set}" ] && [ "$WT_INTERFACE_NAME" != "$overlay_if" ]; then
+    refuse "WT_INTERFACE_NAME is set and differs from the guarded interface $overlay_if"
+fi
+# Only NetBird's default profile, at its default location, is supported: the
+# checks below read that one. NB_CONFIG and WT_CONFIG move it
+# (client/cmd/root.go:168,245-267); NB_PROFILE and WT_PROFILE make
+# `netbird up` switch to another (client/cmd/up.go:93,99-100,136-141).
+for name in NB_CONFIG WT_CONFIG NB_PROFILE WT_PROFILE; do
+    if eval "[ -n \"\${$name+set}\" ]"; then
+        refuse "$name is set; Molebridge supports only NetBird's default profile"
+    fi
+done
+
+# A JSON reader for the checks below; the NetBird image has no JSON tool.
+# It validates the whole file as JSON (strings with every escape, numbers,
+# literals, nesting) and reports on the root object's own fields only,
+# matched as Go's encoding/json matches struct fields: by name, without
+# regard to ASCII case (client/util/file.go:196-209). It prints one verdict
+# and nothing from the file:
+#   malformed  not a single valid JSON object
+#   badkey     a root field name with a byte or escape outside printable ASCII
+#   duplicate  a checked field appears more than once, in any case
+#   rosenpass  (profile) RosenpassEnabled present and not false
+#   interface  (profile) WgIface not a string naming the guarded interface;
+#              absent or empty means wt0 (client/internal/profilemanager/
+#              config.go:397-405, client/iface/configurer/name.go:6)
+#   other      (active) the active profile is not "default"
+#   ok
+# POSIX awk only, run with LC_ALL=C; tools/check-routing.sh runs it under busybox
+# awk, mawk and gawk.
+json_reader='
+function skip_ws(   c) {
+    while (pos <= n) {
+        c = substr(text, pos, 1)
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") pos++
+        else break
+    }
+}
+function is_digit(c) { return c != "" && index("0123456789", c) > 0 }
+function read_string(   c, e, h, v, k, d) {
+    pos++
+    str_val = ""
+    str_plain = 1
+    while (1) {
+        if (pos > n) { bad = 1; return }
+        c = substr(text, pos, 1)
+        if (c == "\"") { pos++; return }
+        if (c == "\\") {
+            e = substr(text, pos + 1, 1)
+            if (e == "\"" || e == "\\" || e == "/") { str_val = str_val e; pos += 2 }
+            else if (e == "b" || e == "f" || e == "n" || e == "r" || e == "t") {
+                str_val = str_val "?"; str_plain = 0; pos += 2
+            } else if (e == "u") {
+                h = tolower(substr(text, pos + 2, 4))
+                if (length(h) != 4) { bad = 1; return }
+                v = 0
+                for (k = 1; k <= 4; k++) {
+                    d = index(hexdigits, substr(h, k, 1))
+                    if (d == 0) { bad = 1; return }
+                    v = v * 16 + d - 1
+                }
+                if (v >= 32 && v < 127) str_val = str_val sprintf("%c", v)
+                else { str_val = str_val "?"; str_plain = 0 }
+                pos += 6
+            } else { bad = 1; return }
+            continue
+        }
+        if (index(control, c)) { bad = 1; return }
+        if (!index(printable, c)) str_plain = 0
+        str_val = str_val c
+        pos++
+    }
+}
+function read_digits(   start) {
+    start = pos
+    while (is_digit(substr(text, pos, 1))) pos++
+    return pos > start
+}
+function read_number(   c) {
+    if (substr(text, pos, 1) == "-") pos++
+    c = substr(text, pos, 1)
+    if (c == "0") pos++
+    else if (is_digit(c)) read_digits()
+    else { bad = 1; return }
+    if (substr(text, pos, 1) == ".") { pos++; if (!read_digits()) { bad = 1; return } }
+    c = substr(text, pos, 1)
+    if (c == "e" || c == "E") {
+        pos++
+        c = substr(text, pos, 1)
+        if (c == "+" || c == "-") pos++
+        if (!read_digits()) { bad = 1; return }
+    }
+}
+function note_value(type, value, plain) {
+    if (depth != 1 || field == "") return
+    vtype[field] = type
+    vval[field] = value
+    vplain[field] = plain
+}
+function close_container() {
+    depth--
+    expect = depth == 0 ? "end" : "next"
+}
+BEGIN {
+    for (i = 32; i < 127; i++) printable = printable sprintf("%c", i)
+    for (i = 1; i < 32; i++) control = control sprintf("%c", i)
+    hexdigits = "0123456789abcdef"
+    if (mode == "profile") { checked["wgiface"] = 1; checked["rosenpassenabled"] = 1 }
+    else { checked["name"] = 1 }
+}
+{ text = text $0 "\n" }
+END {
+    n = length(text)
+    pos = 1
+    depth = 0
+    expect = "value"
+    while (!bad) {
+        skip_ws()
+        if (pos > n) { if (expect != "end") bad = 1; break }
+        c = substr(text, pos, 1)
+        if (expect == "end") { bad = 1; break }
+        if (expect == "colon") {
+            if (c != ":") { bad = 1; break }
+            pos++
+            expect = "value"
+            continue
+        }
+        if (expect == "next") {
+            if (c == ",") { pos++; expect = kind[depth] == "o" ? "key" : "value"; continue }
+            if ((c == "}" && kind[depth] == "o") || (c == "]" && kind[depth] == "a")) { pos++; close_container(); continue }
+            bad = 1
+            break
+        }
+        if (expect == "key" || expect == "key_or_close") {
+            if (c == "}" && expect == "key_or_close") { pos++; close_container(); continue }
+            if (c != "\"") { bad = 1; break }
+            read_string()
+            if (bad) break
+            if (depth == 1) {
+                if (!str_plain) badkey = 1
+                field = tolower(str_val)
+                if (field in checked) count[field]++
+                else field = ""
+            }
+            expect = "colon"
+            continue
+        }
+        if (c == "]" && expect == "value_or_close") { pos++; close_container(); continue }
+        if (c == "{" || c == "[") {
+            if (depth == 0 && c == "[") { bad = 1; break }
+            note_value(c == "{" ? "object" : "array", "", 1)
+            depth++
+            kind[depth] = c == "{" ? "o" : "a"
+            pos++
+            expect = c == "{" ? "key_or_close" : "value_or_close"
+            continue
+        }
+        if (depth == 0) { bad = 1; break }
+        if (c == "\"") {
+            read_string()
+            if (bad) break
+            note_value("string", str_val, str_plain)
+        } else if (substr(text, pos, 4) == "true") { pos += 4; note_value("true", "", 1) }
+        else if (substr(text, pos, 5) == "false") { pos += 5; note_value("false", "", 1) }
+        else if (substr(text, pos, 4) == "null") { pos += 4; note_value("null", "", 1) }
+        else if (c == "-" || is_digit(c)) {
+            read_number()
+            if (bad) break
+            note_value("number", "", 1)
+        } else { bad = 1; break }
+        expect = "next"
+    }
+    if (bad) { print "malformed"; exit }
+    if (badkey) { print "badkey"; exit }
+    for (f in count) if (count[f] > 1) { print "duplicate"; exit }
+    if (mode == "profile") {
+        if (count["rosenpassenabled"] && vtype["rosenpassenabled"] != "false") { print "rosenpass"; exit }
+        value = "wt0"
+        if (count["wgiface"]) {
+            if (vtype["wgiface"] != "string" || !vplain["wgiface"]) { print "interface"; exit }
+            if (vval["wgiface"] != "") value = vval["wgiface"]
+        }
+        if (value != iface) { print "interface"; exit }
+    } else if (count["name"]) {
+        if (vtype["name"] != "string" || !vplain["name"]) { print "other"; exit }
+        if (vval["name"] != "" && vval["name"] != "default") { print "other"; exit }
+    }
+    print "ok"
+}
+'
+# Prints the reader's verdict for a file, or "unreadable".
+read_json() {
+    if [ ! -r "$2" ] || ! size=$(wc -c < "$2" | tr -d ' '); then echo unreadable; return; fi
+    # A profile is a few kilobytes. awk strings cannot hold NUL bytes, and
+    # JSON text never contains one.
+    if [ "$size" -gt 1048576 ] || [ "$(tr -d '\000' < "$2" | wc -c | tr -d ' ')" != "$size" ]; then
+        echo malformed
+        return
+    fi
+    LC_ALL=C awk -v mode="$1" -v iface="$overlay_if" "$json_reader" < "$2" || echo unreadable
+}
+
+# NetBird's daemon loads the active profile at start, and `netbird up` run
+# as plain root uses the daemon's choice (client/server/server.go:285-326,
+# 1488-1495; client/cmd/up.go:316-336). An absent active_profile.json, or one
+# whose name is empty or "default", means the default profile at
+# <state>/default.json (client/internal/profilemanager/service.go:65-87,
+# 98-118,212-243). No other profile file is read at start, so only these are
+# checked: the active-profile state, the default profile, and the legacy
+# files NetBird copies into it when it is missing (service.go:142-172;
+# client/cmd/root.go:128-148,343-350). The default profile must keep
+# Rosenpass off and name the guarded interface. Nothing from the files is
+# printed: profiles also hold the peer's private key.
+state_dir=${NB_STATE_DIR:-/var/lib/netbird}
+active=$state_dir/active_profile.json
+if [ -e "$active" ] || [ -L "$active" ]; then
+    case "$(read_json active "$active")" in
+        ok) ;;
+        other) refuse "the active NetBird profile is not the default profile ($active)" ;;
+        unreadable) refuse "cannot read the active NetBird profile state $active" ;;
+        *) refuse "the active NetBird profile state $active is not a valid JSON object" ;;
+    esac
+fi
+for file in "$state_dir/default.json" /etc/netbird/config.json /etc/wiretrustee/config.json; do
+    [ -e "$file" ] || [ -L "$file" ] || continue
+    case "$(read_json profile "$file")" in
+        ok) ;;
+        rosenpass) refuse 'Rosenpass is enabled in a stored NetBird profile (RosenpassEnabled)' ;;
+        interface) refuse "a stored NetBird profile ($file) uses a WireGuard interface other than $overlay_if (WgIface)" ;;
+        duplicate) refuse "the stored NetBird profile $file repeats WgIface or RosenpassEnabled" ;;
+        badkey) refuse "the stored NetBird profile $file has a field name outside printable ASCII" ;;
+        unreadable) refuse "cannot read the stored NetBird profile $file" ;;
+        *) refuse "the stored NetBird profile $file is not a valid JSON object" ;;
+    esac
+done
+
+if [ "$1" = --check-config ]; then
+    echo 'NetBird gate: configuration accepted'
+    exit 0
+fi
+
 guard_present() {
     # iproute2 marks a selector detached until NetBird creates the interface.
-    # Require the whole terminal rule, not a substring or a narrowed selector.
+    # Require the whole terminal rule, not a substring or a narrowed selector,
+    # and the exact local-delivery rule. A `lookup local` rule is safe only as
+    # that rule (inverted, with the overlay interface as its only selector) or
+    # with a positive iif naming another interface. The kernel's own
+    # priority-0 rule is neither.
     rules=$(ip "$1" rule show 2>/dev/null) || return 1
     printf '%s\n' "$rules" | awk -v iface="$overlay_if" '
         $1 == "97:" && $2 == "from" && $3 == "all" && $4 == "iif" && $5 == iface {
             if ((NF == 6 && $6 == "unreachable") ||
-                (NF == 7 && $6 == "[detached]" && $7 == "unreachable")) found = 1
+                (NF == 7 && $6 == "[detached]" && $7 == "unreachable")) terminal = 1
         }
-        END { exit !found }
+        {
+            local_lookup = 0
+            iif = ""
+            for (i = 2; i < NF; i++) {
+                if ($i == "lookup" && $(i + 1) == "local") local_lookup = 1
+                if ($i == "iif") iif = $(i + 1)
+            }
+            if (!local_lookup) next
+            overlay_only = $2 == "not" && $3 == "from" && $4 == "all" && $5 == "iif" && $6 == iface &&
+                           ((NF == 8 && $7 == "lookup") || (NF == 9 && $7 == "[detached]" && $8 == "lookup"))
+            if (overlay_only) {
+                if ($1 == "1:") guarded = 1
+            } else if ($2 == "not" || iif == "" || iif == iface) {
+                exposed = 1
+            }
+        }
+        END { exit !(terminal && guarded && !exposed) }
     '
 }
 

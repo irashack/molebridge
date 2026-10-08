@@ -16,6 +16,19 @@ RETURN_PATH_SYSCTL = '/proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr'
 # both forms mean the same rule.
 ICMP_PROTOCOL = {4: 'icmp', 6: 'ipv6-icmp'}
 PROTOCOL_ALIASES = {'1': 'icmp', '58': 'ipv6-icmp'}
+TABLE_NAMES = {254: 'main', 255: 'local'}
+
+# NetBird's own netfilter objects in the pinned release (0.79.0): the nftables
+# backend creates table `netbird` (client/firewall/nftables/manager_linux.go:25,
+# 748-763); the iptables backend creates chains such as NETBIRD-RT-FWD-IN
+# (client/firewall/iptables/family_linux.go:40-46, chains_linux.go:16-36).
+# NetBird picks iptables whenever its iptables lists filter chains
+# (client/firewall/create_linux.go:157-201). `nft` sees those chains only when
+# that iptables uses the nftables backend, Alpine's default, which the pinned
+# Alpine-based image is expected to use; legacy iptables would fail this
+# check, closed.
+NETBIRD_NFT_TABLE = 'netbird'
+NETBIRD_IPTABLES_PREFIX = 'NETBIRD-'
 
 
 @dataclass(frozen=True)
@@ -65,6 +78,29 @@ def _normalize_prefix(rule, key, family):
     return str(network)
 
 
+def _table_name(value):
+    return TABLE_NAMES.get(value, str(value)) if type(value) in (int, str) else None
+
+
+def local_rule_admits_overlay(rule, overlay_if):
+    """True when `rule` looks up the local table and could match a packet that
+    arrives on the overlay interface.
+
+    Only two shapes cannot: the local-delivery guard itself (inverted, with
+    the overlay interface as its only selector) and a rule whose positive
+    `iif` names another interface. The kernel's default priority-0 rule
+    matches everything. Anything unparseable counts as admitting the overlay."""
+    if not isinstance(rule, dict):
+        return True
+    if _table_name(rule.get('table')) != 'local':
+        return False
+    if 'not' in rule:
+        selectors = set(rule) - {'priority', 'not', 'src', 'iif', 'iif_detached', 'table', 'protocol'}
+        return selectors != set() or rule.get('src', 'all') != 'all' or rule.get('iif') != overlay_if
+    iif = rule.get('iif')
+    return not isinstance(iif, str) or iif == overlay_if
+
+
 def family_status(rules, routes, config, family, *, tunnel_address=None):
     """Check exact selectors, rule ordering, terminal guard and safe table routes.
 
@@ -75,7 +111,9 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
     if not isinstance(rules, list) or not isinstance(routes, list):
         return False, False
     overlay = config.overlay if family == 4 else config.overlay6
-    expected = {0: {'table': 'local'},
+    # Rule 1 replaces the kernel's priority-0 local lookup: packets arriving on
+    # the overlay never get local delivery.
+    expected = {1: {'not': True, 'iif': config.overlay_if, 'table': 'local'},
                 95: {'iif': config.overlay_if, 'table': config.table},
                 96: {'oif': config.exit_if, 'table': config.table},
                 97: {'iif': config.overlay_if, 'action': 'unreachable'}}
@@ -95,6 +133,8 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
     for rule in rules:
         if not isinstance(rule, dict) or not isinstance(rule.get('priority'), int):
             return False, False
+        if local_rule_admits_overlay(rule, config.overlay_if):
+            rules_ok = False
         priority = rule['priority']
         if priority > 97:
             continue
@@ -105,10 +145,16 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
         found.add(priority)
         normalized = dict(rule)
         if 'table' in normalized:
-            if type(normalized['table']) not in (int, str):
+            normalized['table'] = _table_name(normalized['table'])
+            if normalized['table'] is None:
                 rules_ok = False
                 continue
-            normalized['table'] = {254: 'main', 255: 'local'}.get(normalized['table'], str(normalized['table']))
+        if 'not' in normalized:
+            # iproute2 prints an inverted rule's flag as `"not": null`.
+            if normalized['not'] not in (None, True):
+                rules_ok = False
+                continue
+            normalized['not'] = True
         if 'ipproto' in normalized:
             if type(normalized['ipproto']) not in (int, str):
                 rules_ok = False
@@ -122,16 +168,18 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
         except ValueError:
             rules_ok = False
             continue
-        # Reject extra selectors, inversion, suppressors and goto actions.
+        # Reject extra selectors, inversion other than rule 1's, suppressors
+        # and goto actions.
         metadata = {'priority', 'protocol', 'src', 'dst', 'iif_detached', 'oif_detached'}
         if set(normalized) - (set(spec) | metadata):
             rules_ok = False
         for key in ('src', 'dst'):
             if normalized.get(key, 'all') != spec.get(key, 'all'):
                 rules_ok = False
-        if any(normalized.get(k) != v for k, v in spec.items()):
+        if any(k not in normalized or normalized[k] != v for k, v in spec.items()):
             rules_ok = False
-        if normalized.get('iif_detached') or normalized.get('oif_detached'):
+        # iproute2 prints these flags as null, so their presence is what counts.
+        if 'iif_detached' in normalized or 'oif_detached' in normalized:
             rules_ok = False
     rules_ok = rules_ok and found == set(expected)
     fallback = False
@@ -149,6 +197,33 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
         else:
             routes_ok = False
     return rules_ok and routes_ok and fallback and (tunnel_default or tunnel_address is None), fallback
+
+
+def overlay_is_kernel_wireguard(links, overlay_if):
+    """`ip -d -j link show dev <overlay>`: exactly one link, the overlay, and of
+    kind wireguard, as Molebridge requires. A userspace bind (a tun device) or
+    netstack mode is not wireguard or has no link."""
+    if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
+        return False
+    info = links[0].get('linkinfo')
+    return (links[0].get('ifname') == overlay_if and isinstance(info, dict)
+            and info.get('info_kind') == 'wireguard')
+
+
+def netbird_firewall_present(listing):
+    """`nft -j list chains`: NetBird's kernel firewall has its IPv4 table or
+    chains in place. With kernel WireGuard NetBird's engine does not start
+    without that firewall (client/internal/engine.go:750-753)."""
+    if not isinstance(listing, dict) or not isinstance(listing.get('nftables'), list):
+        return False
+    for item in listing['nftables']:
+        chain = item.get('chain') if isinstance(item, dict) else None
+        if not isinstance(chain, dict) or chain.get('family') != 'ip':
+            continue
+        name, table = chain.get('name'), chain.get('table')
+        if table == NETBIRD_NFT_TABLE or (isinstance(name, str) and name.startswith(NETBIRD_IPTABLES_PREFIX)):
+            return True
+    return False
 
 
 def return_path_enabled(value):

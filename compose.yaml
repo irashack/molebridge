@@ -76,7 +76,8 @@ services:
 
   netbird:
     image: docker.io/netbirdio/netbird:0.79.0@sha256:9d8480d87b7f7c10d67b820eecf332ecca5c2756792d4bdfa532182b4fc3005f
-    # This gate also runs on daemon/host restarts, which ignore depends_on.
+    # This gate also runs on daemon/host restarts, which ignore depends_on. It
+    # refuses NetBird settings Molebridge does not support (docs/configuration.md).
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-wait-for-guards", "/usr/local/bin/netbird-entrypoint.sh"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
     restart: unless-stopped
@@ -91,8 +92,12 @@ services:
       NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
       NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
       NB_LOG_LEVEL: info
-      # This peer only forwards traffic; it serves and uses no overlay DNS.
+      # This peer only forwards traffic; NetBird leaves the namespace's
+      # resolver alone.
       NB_DISABLE_DNS: "true"
+      # Part of Molebridge's supported NetBird configuration; the entrypoint
+      # gate refuses to start without it.
+      NB_DISABLE_USERSPACE_ROUTING: "true"
       # Keeps ICE off the exit tunnel interface from the peer's first
       # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
       # first `netbird up`. An already enrolled peer keeps its stored
