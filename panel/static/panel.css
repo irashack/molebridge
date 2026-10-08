@@ -249,6 +249,10 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 /* latency */
 .ms { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: var(--font-size-h5); }
 .ms:empty { display: none; }
+/* Where a latency arrives later, its space is held from the start, so chips
+   and rows keep their size and nothing rewraps when the numbers come in. */
+:is(.relay, .fastest-item, .country summary, .city-name) .ms { display: inline-flex; align-items: center; justify-content: flex-end; min-inline-size: 7ch; }
+:is(.relay, .fastest-item, .country summary, .city-name) .ms:empty { visibility: hidden; }
 .ms-fast { color: var(--color-positive); }
 .ms-ok { color: var(--color-upcoming); }
 .ms-slow { color: var(--color-negative); }
@@ -275,8 +279,8 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 }
 .fastest-item + .fastest-item { border-top: 1px solid var(--color-separator); }
 .fastest-place { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.fastest-place .city { color: var(--color-text-highlight); }
-.fastest-item.is-current .fastest-place .city { color: var(--color-primary); }
+.fastest-city { color: var(--color-text-highlight); }
+.fastest-item.is-current .fastest-city { color: var(--color-primary); }
 
 /* search */
 .search {
@@ -599,11 +603,12 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --signal-positive: #44ad4d;
   --border-radius: 12px;
 }
-/* gluetun: every exit gluetun runs takes gluetun's surfaces, a dark slate
+/* gluetun, and pages that belong to no exit (sign-in, errors): every exit
+   gluetun runs takes gluetun's surfaces, a dark slate
    with a cyan accent, and the provider behind it (data-accent) supplies the
    accent instead: Mullvad's yellow through gluetun on gluetun's slate. Colours
    only. Every accent keeps at least 4.5:1 on each surface, in both themes. */
-:root[data-style="provider"][data-provider="gluetun"] {
+:root[data-style="provider"]:is([data-provider="gluetun"], :not([data-provider])) {
   --p-bg-dark: #11181c;
   --p-card-dark: #192227;
   --p-row-dark: #222e35;
@@ -701,10 +706,17 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .exit-place { min-height: 19px; }
 :root[data-style="provider"] .track-switch { display: block; position: absolute; left: 20px; top: 24px; width: 40px; height: 38px; stroke-linecap: round; stroke-linejoin: round; }
 .track-bed { stroke: var(--color-text-subdue); stroke-width: 1; }
-.track-route { stroke: var(--color-text-subdue); stroke-width: 3; d: path('M16 44V4'); transition: d .25s ease; }
+/* The points: a fixed stem, and a blade that swings from straight on to the
+   diverging track, pivoting where the two meet. Transforms only, so it stays
+   on the compositor. */
+.track-stem, .track-route { stroke: var(--color-text-subdue); stroke-width: 3; }
+.track-route { transform-box: view-box; transform-origin: 16px 28px; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+.exit-tab:not(.is-selected):hover .track-route { transform: rotate(12deg); }
 .track-switch circle { fill: var(--color-text-subdue); }
-.is-selected .track-route { stroke: var(--exit-accent); d: path('M16 44V28L40 4'); }
+.is-selected :is(.track-stem, .track-route) { stroke: var(--exit-accent); }
+.is-selected .track-route { transform: rotate(45deg) scaleY(1.414214); animation: track-throw .45s cubic-bezier(.3, 1.4, .5, 1) both; }
 .is-selected .track-switch circle { fill: var(--exit-accent); }
+@keyframes track-throw { from { transform: rotate(0deg) scaleY(1); } }
 :root[data-style="provider"] .widget-header { padding: 0 2px; margin-bottom: 10px; gap: 12px; }
 :root[data-style="provider"] .widget-header h2 { font-size: 1.1rem; letter-spacing: .13em; font-weight: 750; }
 :root[data-style="provider"] .widget-content { box-shadow: none; }
@@ -839,7 +851,8 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   :root[data-style="provider"] .region { padding: 12px 10px; gap: 8px; flex-wrap: wrap; }
   :root[data-style="provider"] .region-place { flex-basis: 90px; }
   :root[data-style="provider"] .region .badge { font-size: .9rem; }
-  :root[data-style="provider"] .region.is-armed .region-action { flex-basis: 100%; text-align: center; }
+  /* The prompt takes the latency's place, so arming doesn't add a line. */
+  :root[data-style="provider"] .region.is-armed .ms { display: none; }
 }
 @media (pointer: coarse), (max-width: 600px) {
   :is(.relay, .relay-switch, .filter-chip, .link-button, .diagnostics summary) { min-height: 44px; }
@@ -856,19 +869,66 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   dl { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
 }
 
-/* Browsers without view transitions simply navigate as before. */
+/* Browsers without view transitions simply navigate as before. The page
+   uses the same names for changes in place: a switch finishing, or another
+   tab's switch arriving, crossfades the current exit instead of reloading. */
 @view-transition { navigation: auto; }
 .page-header { view-transition-name: masthead; }
 .exit-tabs { view-transition-name: exit-yard; }
 .current-widget { view-transition-name: current-exit; }
-::view-transition-old(root), ::view-transition-new(root) { animation-duration: .25s; }
+::view-transition-group(*) { animation-duration: .22s; animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .2s; }
+::view-transition-old(current-exit) { animation: fade-out .12s ease-out both; }
+::view-transition-new(current-exit) { animation: rise-in .26s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes rise-in { from { opacity: 0; transform: translateY(6px); } }
 @keyframes arm-in { from { transform: scale(.97); } to { transform: scale(1); } }
 @keyframes route-travel { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 @keyframes orbit { to { rotate: 360deg; } }
-@keyframes verified { 50% { box-shadow: inset 0 0 0 2px var(--state-color), 0 0 30px var(--hero-glow); } }
 :root[data-style="provider"] .page[data-state="applying"] .current::after { width: 30%; animation: route-travel 2.2s ease-in-out infinite; }
 :root[data-style="provider"][data-provider="pia"] .page[data-state="applying"] .connection-orbit::after { border: 2px solid transparent; border-top-color: var(--state-color); animation: orbit 1.5s linear infinite; }
-:root[data-style="provider"] .page.just-verified .current { animation: verified 1.2s ease-out; }
+
+/* Verified: a ring drawn once and faded with opacity and scale, which the
+   compositor can run, rather than an animated shadow. */
+.current { position: relative; }
+.current::before { content: ''; position: absolute; inset: 0; border: 2px solid var(--state-color); border-radius: inherit; pointer-events: none; opacity: 0; z-index: 1; }
+.page.just-verified .current::before { animation: verified-settle .9s cubic-bezier(.2, .8, .2, 1) both; }
+.page.just-verified .connection-light { animation: light-pop .6s cubic-bezier(.3, 1.6, .5, 1) both; }
+@keyframes verified-settle { from { opacity: 1; transform: scale(.985); } 40% { opacity: .9; } to { opacity: 0; transform: scale(1); } }
+@keyframes light-pop { 40% { transform: scale(2.2); } }
+
+/* A country someone opens unfolds; search opens matches at once. Browsers
+   without these features open it as before. */
+@supports (interpolate-size: allow-keywords) and selector(::details-content) {
+  .country { interpolate-size: allow-keywords; }
+  .country::details-content { block-size: 0; overflow: clip; }
+  .country[open]::details-content { block-size: auto; }
+  .country.motion-disclosure::details-content { transition: block-size .22s cubic-bezier(.2, .8, .2, 1), content-visibility .22s allow-discrete; }
+}
+
+/* Latency: the signal bars grow in when a value first arrives. Scale only,
+   so the bars' own opacity per tone stays. */
+:root[data-style="provider"] :is(.relay, .fastest-item, .country summary, .city-name) .ms { min-inline-size: calc(7ch + 17px); }
+:root[data-style="provider"] .ms-arrived::before { transform-origin: center bottom; animation: bars-in .3s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes bars-in { from { transform: scaleY(.15); } }
+
+/* Placeholder rows while the first measurement runs, and the previous
+   answers dimmed while Retest measures again. */
+.skeleton-line { display: block; flex: 1; block-size: 1em; max-inline-size: 70%; border-radius: 4px; background: var(--color-widget-background-highlight); animation: skeleton-breathe 1.2s ease-in-out infinite; }
+.fastest-item[data-skeleton]:nth-child(2n) .skeleton-line { max-inline-size: 55%; }
+.fastest-item[data-skeleton]:nth-child(3n) .skeleton-line { max-inline-size: 62%; }
+@keyframes skeleton-breathe { 50% { opacity: .5; } }
+.fastest-list { transition: opacity .2s; }
+.fastest-list.is-refreshing { opacity: .55; }
+
+/* Press feedback on everything that switches or filters. */
+:is(.relay, .relay-switch, .filter-chip, .exit-tab) { transition: transform .12s cubic-bezier(.2, .8, .2, 1), border-color .15s, color .15s, background-color .15s; }
+:is(.relay, .relay-switch, .filter-chip):active:not(.is-armed) { transform: scale(.97); }
+
+/* The current exit's freshness, and copying its address. */
+.checked-ago { font-size: var(--font-size-h6); white-space: nowrap; }
+.copy-ip { font-size: inherit; padding: 0 0 0 .4rem; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }

@@ -23,6 +23,12 @@ The page has three parts:
   | failed | The last switch, or the latest periodic check, failed |
   | unknown | Status is stale or unavailable |
 
+  Beside the state, "checked 20 s ago" says how old the applier's last check
+  is, counting up live; status is polled every 30 seconds, and every 2 while
+  switching. Once the exit is connected, **Copy** next to the egress address
+  copies it (or selects it where the browser allows no clipboard, as in some
+  dashboard frames).
+
   A connected exit whose egress was verified only by Molebridge's own tunnel
   checks, because its provider has no check of its own, also shows "tunnel
   checks only"; Diagnostics says which check passed
@@ -44,7 +50,10 @@ The applier then changes the tunnel and waits for a fresh handshake, intact
 routing and the egress check: the provider's own, or the tunnel checks for a
 provider without one. That normally takes a few seconds. The page shows which
 server it is leaving and for how long it has been switching. The applier
-gives up after 60 seconds with the default backend and 90 with gluetun. Every device using the exit moves together,
+gives up after 60 seconds with the default backend and 90 with gluetun. When
+it finishes, the page updates in place, without reloading; a switch started
+in another tab or by another person shows up the same way at the next status
+check. Every device using the exit moves together,
 and connections open through the exit drop.
 
 If a switch fails, press **Retry** or pick something else;
@@ -52,8 +61,8 @@ If a switch fails, press **Retry** or pick something else;
 failed check doesn't always mean traffic stopped: the previous or new tunnel
 may still be carrying it. What can't happen is forwarded traffic leaving
 through the host's own connection. Molebridge never picks a different server
-as failover. With PIA, choosing the region you're already on registers
-again; PIA may pick the same server. With gluetun, the applier puts your
+as failover. With PIA, choosing the region you're already on (it asks
+"reconnect?") registers again; PIA may pick the same server. With gluetun, the applier puts your
 selection back when gluetun restarts on another one.
 
 Some parts appear only once they're useful:

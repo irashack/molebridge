@@ -924,9 +924,21 @@ class NordPanelTests(unittest.TestCase):
         self.assertIn(':root[data-style="provider"][data-provider="nordvpn"] {', css)
         self.assertIn('.exit-tab[data-provider="nordvpn"] { --exit-accent: var(--exit-nordvpn); }', css)
 
+    def test_switch_timeouts_match_the_appliers(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from applier import apply as native, gluetun_applier
+        self.assertEqual(app.SWITCH_TIMEOUT_S, {'native': native.SWITCH_TIMEOUT_SEC,
+                                                'gluetun': gluetun_applier.GLUETUN_SWITCH_TIMEOUT_SEC})
+
+    def test_flags_come_from_the_country_when_there_is_no_location_code(self):
+        self.assertEqual(app.place_code({'location_code': 'se-sto', 'country': 'Sweden'}), 'se-sto')
+        self.assertEqual(app.place_code({'country': 'United States'}), 'US')
+        self.assertEqual(app.place_code({'country': 'Atlantis'}), '')
+        self.assertEqual(app.flag_emoji(app.place_code({'country': 'Netherlands'})), '\U0001F1F3\U0001F1F1')
+
     def test_gluetun_style_takes_the_provider_as_its_accent(self):
         css = (app.STATIC_DIR / 'panel.css').read_text()
-        self.assertIn(':root[data-style="provider"][data-provider="gluetun"] {', css)
+        self.assertIn(':root[data-style="provider"]:is([data-provider="gluetun"], :not([data-provider])) {', css)
         for spec in app.providers.REGISTRY.values():
             if spec.backend != 'gluetun':
                 continue

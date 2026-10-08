@@ -26,6 +26,19 @@
     if (live) live.textContent = text;
   }
 
+  // Animate a change of the page in place when the browser can and the
+  // viewer hasn't asked for less motion; otherwise just make it.
+  const lessMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  function transition(update) {
+    if (document.startViewTransition && !lessMotion?.matches && document.visibilityState === 'visible') {
+      // A skipped transition still runs the update; nothing to report.
+      const t = document.startViewTransition(update);
+      for (const done of [t.ready, t.updateCallbackDone, t.finished]) done?.catch(() => {});
+    } else {
+      update();
+    }
+  }
+
   // -- per-browser storage ---------------------------------------------------
   // Saved servers and filters stay in this browser; the panel only ever
   // receives a switch request. Stored values are untrusted: anything not
@@ -80,7 +93,8 @@
   let pinned = load(PINNED_KEY).filter((h) => HOST_RE.test(h));
   let recent = load(RECENT_KEY).filter((h) => HOST_RE.test(h));
 
-  const relayLabel = (host) => host.slice(host.lastIndexOf('-wg-') + 1);
+  // The provider's short name for a server ('wg-001', 'us9001'), as rendered.
+  const relayLabel = (host) => chipByHost.get(host)?.dataset.label || host;
   const placeOf = (host) => {
     const chip = chipByHost.get(host);
     return chip ? `${chip.dataset.city} (${host})` : host;
@@ -94,8 +108,20 @@
 
   function paintMs(el, ms) {
     if (!el) return;
-    el.textContent = msText(ms);
-    el.className = `ms ${msClass(ms)}`;
+    const text = msText(ms);
+    const tone = msClass(ms);
+    if (el.textContent === text && el.classList.contains(tone)) return;
+    // The bars grow in once, when a value first arrives.
+    const first = el.dataset.measured !== '1';
+    el.dataset.measured = '1';
+    el.textContent = text;
+    el.className = `ms ${tone}${first && ms != null ? ' ms-arrived' : ''}`;
+  }
+
+  function clearMs(el) {
+    el.textContent = '';
+    el.className = 'ms';
+    delete el.dataset.measured;
   }
 
   function bestOf(hosts) {
@@ -112,7 +138,7 @@
       const chip = chipByHost.get(host);
       if (chip) paintMs(chip.querySelector('[data-ms]'), ms);
     }
-    for (const city of document.querySelectorAll('.city')) {
+    for (const city of document.querySelectorAll('.city[data-search]')) {
       const cityChips = Array.from(city.querySelectorAll('.relay'));
       const measured = cityChips.filter((c) => latency.has(c.dataset.host));
       if (!measured.length) continue;
@@ -131,7 +157,8 @@
       const best = bestOf(hosts);
       paintMs(country.querySelector('[data-country-ms]'), best ?? null);
     }
-    if (latency.has(desired)) paintMs(page.querySelector('[data-current-ms]'), latency.get(desired));
+    const shown = shownServer();
+    if (latency.has(shown)) paintMs(page.querySelector('[data-current-ms]'), latency.get(shown));
     renderFastest();
     renderSaved();
     renderCountryFastest();
@@ -188,7 +215,7 @@
     const place = document.createElement('span');
     place.className = 'fastest-place';
     const city = document.createElement('span');
-    city.className = 'city';
+    city.className = 'fastest-city';
     city.textContent = chip.dataset.city;
     const rest = document.createElement('span');
     rest.className = 'subdue';
@@ -216,9 +243,11 @@
     return li;
   }
 
-  // Re-rendering a list would silently drop an armed confirmation.
+  // Re-rendering a list would silently drop an armed confirmation, or pull
+  // a focused button out from under the keyboard; the next render catches up.
   function replaceRows(list, rows) {
     if (armed && list.contains(armed)) return;
+    if (list.contains(document.activeElement) && document.activeElement !== list) return;
     list.replaceChildren(...rows);
   }
 
@@ -254,24 +283,53 @@
     );
   }
 
+  function message(list, text) {
+    const li = document.createElement('li');
+    li.className = 'subdue';
+    li.textContent = text;
+    list.replaceChildren(li);
+  }
+
+  // Placeholder rows the size of the answer, so the list doesn't jump.
+  function showSkeleton() {
+    const places = new Set(chips.map((c) => `${c.dataset.country}|${c.dataset.city}`));
+    const rows = Array.from({ length: Math.max(1, Math.min(FASTEST_COUNT, places.size)) }, () => {
+      const li = document.createElement('li');
+      li.className = 'fastest-item';
+      li.dataset.skeleton = '';
+      li.setAttribute('aria-hidden', 'true');
+      const line = document.createElement('span');
+      line.className = 'skeleton-line';
+      li.append(line);
+      return li;
+    });
+    fastestList.replaceChildren(...rows);
+  }
+
   async function sweep(force) {
     if (!fastestSection) return;
     fastestSection.hidden = false;
     retest.disabled = true;
+    fastestList.setAttribute('aria-busy', 'true');
     if (force) {
-      fastestList.innerHTML = '<li class="subdue">Measuring…</li>';
+      // Keep the old rows in view, dimmed, until the new answers replace
+      // them; every other measurement starts over.
+      fastestList.classList.add('is-refreshing');
       latency.clear();
+      for (const el of page.querySelectorAll('[data-ms], [data-city-ms], [data-country-ms], [data-current-ms]')) clearMs(el);
+      countryMeasured.clear();
     }
-    const hosts = [desired, ...savedHosts()].filter(Boolean);
+    if (!fastestList.querySelector('.fastest-item:not([data-skeleton])')) showSkeleton();
+    const hosts = [shownServer(), ...savedHosts()].filter(Boolean);
     try {
       await measure({ scope: 'cities', hosts: [...new Set(hosts)].join(','), ...(force ? { fresh: '1' } : {}) });
-      if (!fastestList.querySelector('.fastest-item')) {
-        fastestList.innerHTML = '<li class="subdue">No relays answered.</li>';
-      }
+      if (![...latency.values()].some((ms) => ms != null)) message(fastestList, 'No relays answered.');
     } catch {
-      fastestList.innerHTML = '<li class="subdue">Latency check failed.</li>';
+      message(fastestList, 'Latency check failed.');
     } finally {
       retest.disabled = false;
+      fastestList.classList.remove('is-refreshing');
+      fastestList.removeAttribute('aria-busy');
     }
     // Countries opened before the sweep finished get their full measurement.
     for (const d of document.querySelectorAll('.country[open]')) measureCountry(d);
@@ -336,15 +394,17 @@
   });
 
   // A verified connection is remembered as recent.
-  if (page.dataset.state === 'ok' && chipByHost.has(page.dataset.actual)) {
+  function noteRecent() {
     const actual = page.dataset.actual;
+    if (page.dataset.state !== 'ok' || !chipByHost.has(actual) || recent[0] === actual) return;
     recent = [actual, ...recent.filter((h) => h !== actual)].slice(0, 5);
     save(RECENT_KEY, recent);
   }
+  noteRecent();
 
   // -- countries: measure lazily on open ----------------------------------
 
-  const countryMeasured = new WeakSet();
+  const countryMeasured = new Set();
   function measureCountry(details) {
     if (countryMeasured.has(details)) return;
     countryMeasured.add(details);
@@ -379,6 +439,8 @@
   // match must not fan out across the whole relay list.
   for (const details of document.querySelectorAll('.country')) {
     details.querySelector('summary').addEventListener('click', () => {
+      // Only a country someone opens animates; search opens many at once.
+      details.classList.add('motion-disclosure');
       if (!details.open) measureCountry(details);
     });
     details.addEventListener('toggle', renderCountryFastest);
@@ -429,6 +491,7 @@
 
   function applyFilter() {
     const q = filter ? filter.value.trim().toLowerCase() : '';
+    for (const d of countries) d.classList.remove('motion-disclosure');
     for (const chip of chips) chip.classList.toggle('is-filtered', !chipAllowed(chip));
     // Region rows stand alone, outside any country.
     for (const row of regionRows) {
@@ -438,7 +501,7 @@
       const countryHit = !q || d.dataset.search.includes(q);
       const nameHit = !q || d.dataset.country.toLowerCase().includes(q);
       let any = false;
-      for (const c of d.querySelectorAll('.city')) {
+      for (const c of d.querySelectorAll('.city[data-search]')) {
         const show = (nameHit || c.dataset.search.includes(q)) && !!c.querySelector('.relay:not(.is-filtered)');
         c.classList.toggle('is-filtered', !show);
         any ||= show;
@@ -503,6 +566,7 @@
     armed = null;
     clearTimeout(armTimer);
     btn.classList.remove('is-armed');
+    btn.style.minInlineSize = '';
     btn.removeEventListener('blur', disarm);
     if ('label' in btn.dataset) {
       (btn.querySelector('[data-arm-text]') || btn).textContent = btn.dataset.label;
@@ -515,7 +579,9 @@
     const btn = e.target.closest('button[name="server"]');
     if (!btn || btn.form !== form) return;
     // Re-requesting the server being switched to would restart that switch.
-    if (btn.value === desired && ['ok', 'applying'].includes(page.dataset.state)) {
+    // A connected PIA region may be chosen again: PIA registers anew.
+    const again = page.dataset.layout === 'regions' && page.dataset.state === 'ok';
+    if (btn.value === desired && (page.dataset.state === 'applying' || (page.dataset.state === 'ok' && !again))) {
       e.preventDefault();
       return;
     }
@@ -523,12 +589,16 @@
     e.preventDefault();
     disarm();
     armed = btn;
+    // Hold the button's width so the prompt doesn't move what's beside it.
+    btn.style.minInlineSize = `${Math.ceil(btn.getBoundingClientRect().width)}px`;
     btn.classList.add('is-armed');
     // A relay chip or region row shows the prompt in its own label slot.
     const slot = btn.querySelector('[data-arm-text]');
     btn.dataset.label = (slot || btn).textContent;
-    (slot || btn).textContent = slot ? 'switch?' : 'Confirm';
-    announce(`Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
+    const reconnect = btn.value === desired;
+    (slot || btn).textContent = slot ? (reconnect ? 'reconnect?' : 'switch?') : 'Confirm';
+    announce(reconnect ? `Press again to register ${placeOf(btn.value)} again. Escape cancels.` :
+      `Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
     btn.addEventListener('blur', disarm);
     armTimer = setTimeout(disarm, 8000);
   });
@@ -550,6 +620,7 @@
   // -- status: notes, progress and polling ------------------------------------
 
   const pill = page.querySelector('[data-state-pill]');
+  const switchTimeout = Number(page.dataset.switchTimeout) || 60;
   const notes = page.querySelector('[data-notes]');
   let progress = null;
 
@@ -572,7 +643,7 @@
       progress.append('');
       const hint = document.createElement('span');
       hint.className = 'subdue small';
-      hint.textContent = ' Open connections through the exit will drop. Verification gives up after about a minute.';
+      hint.textContent = ` Open connections through the exit will drop. Verification gives up after ${switchTimeout} seconds.`;
       progress.append(document.createElement('br'), hint);
       children.push(progress);
     }
@@ -594,13 +665,96 @@
       children.push(note);
     }
     if (armed && notes.contains(armed)) return;
+    if (notes.contains(document.activeElement)) return;
     notes.replaceChildren(...children);
     paintProgress();
   }
 
+  // "checked 12 s ago": how old the applier's last verdict is, kept live.
+  const checkedAgo = page.querySelector('[data-checked-ago]');
+  function paintChecked() {
+    if (!checkedAgo) return;
+    const at = Date.parse(page.dataset.checked || '');
+    checkedAgo.hidden = Number.isNaN(at);
+    if (Number.isNaN(at)) return;
+    const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+    checkedAgo.textContent = s < 5 ? 'checked just now' : s < 60 ? `checked ${s} s ago` :
+      s < 3600 ? `checked ${Math.floor(s / 60)} min ago` : 'checked over an hour ago';
+    checkedAgo.dateTime = page.dataset.checked;
+  }
+  paintChecked();
+
   setInterval(() => {
     if (page.dataset.state === 'applying') paintProgress();
+    paintChecked();
   }, 1000);
+
+  // -- current exit: who it is, kept in place as status changes -------------
+
+  function markCurrent(from, to) {
+    chipByHost.get(from)?.classList.remove('is-current');
+    chipByHost.get(from)?.closest('.country')?.classList.remove('is-current');
+    chipByHost.get(to)?.classList.add('is-current');
+    chipByHost.get(to)?.closest('.country')?.classList.add('is-current');
+  }
+
+  function paintCurrent() {
+    const host = shownServer();
+    const chip = chipByHost.get(host);
+    const placeEl = page.querySelector('[data-current-place]');
+    const flagEl = page.querySelector('[data-current-flag]');
+    if (placeEl) {
+      if (chip) {
+        const city = document.createElement('span');
+        city.className = 'current-city';
+        city.textContent = chip.dataset.city;
+        const country = document.createElement('span');
+        country.className = 'current-country';
+        const comma = document.createElement('span');
+        comma.className = 'place-comma';
+        comma.textContent = ', ';
+        country.append(comma, chip.dataset.country);
+        placeEl.replaceChildren(city, country);
+      } else {
+        placeEl.textContent = host || 'Awaiting verified server';
+      }
+    }
+    if (flagEl) flagEl.textContent = chip ? chip.dataset.flag || '🌐' : '';
+    const hostEl = page.querySelector('[data-current-host]');
+    if (hostEl) hostEl.textContent = host || '—';
+    const details = page.querySelector('[data-current-details]');
+    if (details) details.textContent = chip?.dataset.details || '(unknown)';
+    const ms = page.querySelector('[data-current-ms]');
+    if (ms) {
+      if (latency.has(host)) paintMs(ms, latency.get(host));
+      else clearMs(ms);
+    }
+  }
+
+  // The egress address, copied on request; only a verified one is offered.
+  const copyIp = page.querySelector('[data-copy-ip]');
+  function paintCopy() {
+    if (!copyIp) return;
+    const ip = page.querySelector('[data-current-ip]')?.textContent || '';
+    copyIp.hidden = page.dataset.state !== 'ok' || !/^[0-9a-f.:]+$/i.test(ip);
+  }
+  copyIp?.addEventListener('click', async () => {
+    const ip = page.querySelector('[data-current-ip]')?.textContent || '';
+    try {
+      await navigator.clipboard.writeText(ip);
+      copyIp.textContent = 'Copied';
+      announce('Egress address copied.');
+    } catch {
+      // No clipboard here (an iframe, an old browser): select it instead.
+      const range = document.createRange();
+      range.selectNodeContents(page.querySelector('[data-current-ip]'));
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+      copyIp.textContent = 'Selected';
+    }
+    setTimeout(() => { copyIp.textContent = 'Copy'; }, 1600);
+  });
+  paintCopy();
 
   function paintStatus(state, label, message = '') {
     if (pill) {
@@ -613,11 +767,10 @@
       ok: 'Secure connection', applying: 'Switching route',
       failed: 'Connection needs attention', unknown: 'Connection unverified',
     }[state];
-    // A completed switch reloads to pick up the verified location. Preserve
-    // its request marker until that new document can show the success moment.
     if (state === 'applying') rememberSwitch(state);
     paintNotes(state, message);
     paintPin();
+    paintCopy();
   }
 
   // How the egress was confirmed, worded as the server renders it. The
@@ -660,11 +813,14 @@
     const request = data.desired?.request_id || '';
     const result = data.result || {};
     const state = data.view.state;
-    if (want !== desired || request !== page.dataset.request ||
-        (state !== 'applying' && (result.server || '') !== page.dataset.actual)) {
-      location.reload();
-      return 0;
-    }
+    const actual = result.server || '';
+    const previousState = page.dataset.state;
+    // Who the exit is, as of this answer. A change (a switch finishing, one
+    // started elsewhere, gluetun putting a server back) is painted in place.
+    const moved = want !== desired || actual !== page.dataset.actual ||
+      (state === 'applying') !== (previousState === 'applying');
+    page.dataset.checked = result.checked_at || '';
+    paintChecked();
     for (const el of page.querySelectorAll('[data-f]')) {
       const key = el.dataset.f;
       if (key === 'egress') el.textContent = `${result.egress_city ?? '(unknown)'}, ${result.egress_country ?? '(unknown)'}`;
@@ -680,14 +836,29 @@
     if (tierNote) tierNote.hidden = !(state === 'ok' && data.view.tier === 'tunnel');
     const message = state === 'unknown' ? 'Status is stale or unavailable. Details are from the last check.' :
       state === 'failed' ? (result.message || 'Tunnel verification failed.') : '';
-    const previousState = page.dataset.state;
-    paintStatus(state, data.view.label, message);
-    if (previousState === 'applying' && state === 'ok') {
-      location.reload();
-      return 0;
-    }
-    renderFastest();
-    renderSaved();
+    const requested = page.querySelector('[data-requested-at]');
+    if (requested) requested.textContent = data.desired?.requested_at || '';
+    const update = () => {
+      if (want !== desired) {
+        markCurrent(desired, want);
+        desired = want;
+        page.dataset.desired = want;
+      }
+      page.dataset.request = request;
+      page.dataset.requested = data.desired?.requested_at || '';
+      page.dataset.actual = actual;
+      paintStatus(state, data.view.label, message);
+      paintCurrent();
+      if (previousState === 'applying' && state !== 'applying') {
+        // The success moment, only for the request this tab saw applying.
+        rememberSwitch(state);
+        noteRecent();
+      }
+      renderFastest();
+      renderSaved();
+    };
+    if (moved) transition(update);
+    else update();
     return state === 'applying' ? 2000 : 30000;
   }
 

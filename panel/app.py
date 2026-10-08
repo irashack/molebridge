@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from molebridge import providers
+from molebridge import countries, providers
 from molebridge.gluetun_catalog import DATA_STALE_SEC as GLUETUN_DATA_STALE_SEC
 from molebridge.state import (CATALOG_MAX_AGE, age_seconds, egress_tier, exit_confirmed, now_iso,
                               provider_from_env, read_json, recent, status_view, valid_server_name,
@@ -611,6 +611,15 @@ def _static_versions() -> Dict[str, str]:
 _STATIC_VERSIONS = _static_versions()
 
 
+def place_code(info: Dict[str, Any]) -> str:
+    """The code a flag comes from: the catalogue's location code, or for a
+    list that names countries only (gluetun's) the country's ISO code."""
+    code = info.get('location_code')
+    if isinstance(code, str) and code:
+        return code
+    return countries.code_for(info.get('country')) or ''
+
+
 def flag_emoji(location_code: Any) -> str:
     """Regional-indicator flag from a Mullvad location code like 'se-sto'."""
     code = str(location_code or '')[:2].upper()
@@ -639,6 +648,19 @@ def relay_badges(info: Dict[str, Any], provider: Optional[str] = None) -> str:
 def relay_title(hostname: str, info: Dict[str, Any], provider: Optional[str] = None) -> str:
     details = relay_details(info, provider)
     return f'{hostname} · {details}' if details else hostname
+
+
+def relay_data(hostname: str, info: Dict[str, Any], provider: Optional[str] = None) -> str:
+    """The short label and summary the page script shows for a server
+    outside its chip (Saved, Fastest, the current exit)."""
+    return (f' data-label="{html.escape(relay_label(hostname, provider))}"'
+            f' data-details="{html.escape(relay_details(info, provider))}"')
+
+
+# How long the applier gives a switch before it fails it, per backend
+# (applier/apply.py SWITCH_TIMEOUT_SEC, applier/gluetun_applier.py
+# GLUETUN_SWITCH_TIMEOUT_SEC); the page says so while a switch runs.
+SWITCH_TIMEOUT_S = {'native': 60, 'gluetun': 90}
 
 
 def relay_details(info: Dict[str, Any], provider: Optional[str] = None) -> str:
@@ -699,14 +721,14 @@ def region_rows(relays: Dict[str, Dict[str, Any]], desired_server: str, provider
     for hostname, info in order:
         hn = esc(hostname)
         country, city = str(info.get('country', '')), str(info.get('city', ''))
-        flag = flag_emoji(info.get('location_code'))
+        flag = flag_emoji(place_code(info))
         current = ' is-current' if hostname == desired_server else ''
         country_html = f' <span class="subdue region-country">{esc(country)}</span>' if country != city else ''
         badges = relay_badges(info, provider)
         rows.append(
             f'<button type="submit" name="server" value="{hn}" class="relay region{current}" '
             f'data-host="{hn}" data-city="{esc(city)}" data-country="{esc(country)}" '
-            f'data-flag="{flag}"{relay_attributes(info, provider)} '
+            f'data-flag="{flag}"{relay_attributes(info, provider)}{relay_data(hostname, info, provider)} '
             f'data-search="{esc(" ".join([country, city, hostname]).lower())}" '
             f'title="{esc(relay_title(hostname, info, provider))}">'
             f'<span class="flag">{flag}</span>'
@@ -726,7 +748,7 @@ def country_tree(relays: Dict[str, Dict[str, Any]], desired_server: str, provide
         country = str(info.get('country', ''))
         city = str(info.get('city', ''))
         grouped.setdefault(country, {}).setdefault(city, []).append(hostname)
-        codes.setdefault(country, str(info.get('location_code', '')))
+        codes.setdefault(country, place_code(info))
 
     country_html = []
     for country in sorted(grouped):
@@ -744,7 +766,8 @@ def country_tree(relays: Dict[str, Dict[str, Any]], desired_server: str, provide
                 chips.append(
                     f'<button type="submit" name="server" value="{hn}" class="relay{current}" '
                     f'data-host="{hn}" data-city="{esc(city)}" data-country="{esc(country)}" '
-                    f'data-flag="{flag_emoji(info.get("location_code"))}"{relay_attributes(info, provider)} '
+                    f'data-flag="{flag_emoji(place_code(info))}"{relay_attributes(info, provider)}'
+                    f'{relay_data(hostname, info, provider)} '
                     f'title="{esc(relay_title(hostname, info, provider))}">'
                     f'<span class="relay-name" data-arm-text>{esc(relay_label(hostname, provider))}</span>'
                     f'{relay_badges(info, provider)}<span class="ms" data-ms></span></button>'
@@ -820,7 +843,7 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
             f'<span class="exit-track" aria-hidden="true">{esc(f"{index:02d}")}</span>'
             '<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">'
             '<path class="track-bed" d="M12 44V4M20 44V4M20 32L44 8M14 26L38 2"/>'
-            '<path class="track-route" d="M16 44V28L40 4"/>'
+            '<path class="track-stem" d="M16 44V28"/><path class="track-route" d="M16 28V4"/>'
             '<circle cx="16" cy="30" r="3"/></svg>'
             f'<span class="exit-label">{esc(summary["label"])}{provider_note(summary["provider"])}</span>{place}'
             '<span class="exit-health">'
@@ -876,7 +899,7 @@ def render_index_html(
             '<span class="current-country"><span class="place-comma">, </span>'
             f'{esc(str(current_info.get("country", "")))}</span>'
         )
-        current_flag = flag_emoji(current_info.get('location_code'))
+        current_flag = flag_emoji(place_code(current_info)) or '🌐'
     elif display_server:
         current_place, current_flag = esc(display_server), ''
     else:
@@ -985,7 +1008,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page" data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-switch-timeout="{SWITCH_TIMEOUT_S.get(spec.backend, 60)}" data-checked="{esc(str(result.get('checked_at') or ''))}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 {tabs}
 <form method="post" action="/select" id="select-form">
@@ -1002,11 +1025,12 @@ def render_index_html(
       <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>{current_flag}</span></span>
       <div class="current-main">
         <div class="current-place" data-current-place>{current_place}</div>
-        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span></span></div>
+        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span> <button type="button" class="link-button copy-ip" data-copy-ip hidden>Copy</button></span></div>
       </div>
       <button type="button" class="link-button pin" data-pin aria-pressed="false" aria-label="Pin this server" title="Pin this server" hidden>☆</button>
       <div class="current-side">
         <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
+        <time class="checked-ago subdue" data-checked-ago hidden></time>
         <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if tunnel_only else ' hidden'}>{esc(TIER_TEXT['tunnel'])}</span>
         <span class="ms" data-current-ms></span>
       </div>
@@ -1023,9 +1047,9 @@ def render_index_html(
         <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
         <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
         <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
-        <dt>Server</dt><dd>{esc(current_details) or '(unknown)'}</dd>
+        <dt>Server</dt><dd data-current-details>{esc(current_details) or '(unknown)'}</dd>
         <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
-        <dt>Requested</dt><dd>{_field(desired, 'requested_at', '')}</dd>
+        <dt>Requested</dt><dd data-requested-at>{_field(desired, 'requested_at', '')}</dd>
         <dt>Relay list</dt><dd>{len(relays)} relays, {catalogue_age_text(relays_data, fetched_at)}{SERVER_LIST_UPDATE.get(result.get('server_list_update'), '')}</dd>
       </dl>
     </details>

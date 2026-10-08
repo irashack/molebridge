@@ -15,6 +15,33 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   backgrounds. Checked in the local preview only.
 - `tools/preview-panel.py --exits` adds a NordVPN exit and two gluetun exits
   (Mullvad and Surfshark) to the preview.
+- **Switchyard finishes a switch in place.** The page no longer reloads when
+  a switch completes or fails, or when another tab switches the exit: the
+  current exit crossfades to the new server where the browser supports view
+  transitions. A failed switch now shows the server the exit is actually
+  on, which the pin and latency follow; before, the page could keep showing
+  the server that failed.
+- **Switchyard shows how fresh the status is** ("checked 20 s ago", live),
+  and offers **Copy** for a verified egress address.
+- **Smoother panel.** Latency values no longer resize chips and rows when
+  they arrive; their signal bars grow in. The first measurement shows
+  placeholder rows, and Retest keeps the previous answers dimmed instead of
+  collapsing the list. Countries unfold when opened (where the browser
+  supports animating `<details>`), the exit tabs' points swing over, and
+  pressing a switch or filter gives feedback. All of it stops when the
+  system asks for reduced motion.
+- **Panel fixes.** Searching after a country's "Fastest" line appeared
+  could throw and stop filtering. A status poll no longer replaces a
+  button that has keyboard focus. Saved and Fastest show NordVPN's and
+  gluetun's short server names. Choosing the current PIA region works with
+  JavaScript too, as the docs said. While switching, the page names the
+  applier's real limit (90 seconds with gluetun, not "about a minute").
+  Arming a region on a phone no longer adds a line. Servers from gluetun's
+  list show their country's flag. Sign-in and error pages in the provider
+  style have colours again.
+
+Checked in the local preview on desktop and phone widths, light and dark,
+both styles, with switches that succeed and fail; not yet on a live exit.
 
 ## 0.5.0 (2026-10-08)
 
