@@ -1,10 +1,12 @@
 # Other VPN providers
 
-Molebridge supports Mullvad and PIA, and NordVPN as an experiment with one
-live pass so far ([providers](providers.md#how-nordvpn-differs)).
-Nothing else works today, and there's no generic "bring your own WireGuard
-config" mode, because each provider handles keys, server lists and switching
-differently.
+Molebridge supports Mullvad and PIA natively, and NordVPN natively as an
+experiment ([providers](providers.md#how-nordvpn-differs)). The experimental
+[gluetun backend](providers.md#the-gluetun-backend) also selects servers for
+FastestVPN, IVPN, Surfshark and Windscribe, through gluetun; those four are
+covered by automated tests and have had no live pass. This page is about
+native support. There's no generic "bring your own WireGuard config" mode,
+because each provider handles keys, server lists and switching differently.
 
 Some other providers could be added if people want them. If you'd use one,
 open an issue saying which, and whether you could help test it. Interest is
@@ -39,8 +41,9 @@ what decides whether a provider gets attempted.
 
 Findings from a survey in September 2026. NordVPN, the closest fit, has since
 been built ([providers](providers.md#how-nordvpn-differs)); it fetches the
-key once at setup, so the exit stores no NordVPN token. Nothing below has
-been built or tested in Molebridge; the endpoints come from the providers' own
+key once at setup, so the exit stores no NordVPN token. No native support
+below has been built or tested in Molebridge; Surfshark, IVPN and Windscribe
+work through the gluetun backend instead. The endpoints come from the providers' own
 documentation, their open-source clients, and
 [gluetun](https://github.com/qdm12/gluetun), which integrates many of them.
 
@@ -51,8 +54,8 @@ and a server list that can be fetched without a browser.
 
 | Provider | How keys work | Server list | Egress check | Port forwarding | What adding it would involve |
 |---|---|---|---|---|---|
-| **Surfshark** | A key made or uploaded in the dashboard. Automating registration takes the account password through an unofficial API, and keys expire | Public, with keys (`api.surfshark.com/v4/server/clusters`) | `surfshark.com/api/v1/server/user` | No | Likely a dashboard-made key, with Molebridge warning before it expires. Automatic renewal would mean storing the account password. |
-| **IVPN** | Your own public key, added in the client area | Public (`api.ivpn.net/v5/servers.json`) | `api.ivpn.net/v4/geo-lookup` | Removed in 2023 | Technically close to Mullvad. |
+| **Surfshark** (through gluetun today) | A key made or uploaded in the dashboard. Automating registration takes the account password through an unofficial API, and keys expire | Public, with keys (`api.surfshark.com/v4/server/clusters`) | `surfshark.com/api/v1/server/user` | No | Likely a dashboard-made key, with Molebridge warning before it expires. Automatic renewal would mean storing the account password. |
+| **IVPN** (through gluetun today) | Your own public key, added in the client area | Public (`api.ivpn.net/v5/servers.json`) | `api.ivpn.net/v4/geo-lookup` | Removed in 2023 | Technically close to Mullvad. |
 | **AirVPN** | A per-device config from the client area's generator; there is an official API keyed per user | Public status list; all servers share one public key | `airvpn.org/api/whatismyip/` | Yes: static ports reserved in the client area | Needs preshared-key support (the config converter drops it today), a way to identify the server other than its shared public key, and live testing of the config and forwarding. It would suit people who want port forwarding. |
 
 ### Harder
@@ -60,7 +63,7 @@ and a server list that can be fetched without a browser.
 | Provider | Why |
 |---|---|
 | **Proton VPN** | WireGuard configs are certificates that expire after at most a year and can be revoked only in the dashboard. The server list now needs a logged-in session, possibly with two-factor authentication. It does offer port forwarding (NAT-PMP on P2P servers). Support would probably mean a config you create in the dashboard, plus stored credentials to refresh the server list, and a warning before the certificate expires. |
-| **Windscribe** | Manual WireGuard needs a paid account (Pro, or Build-A-Plan for the locations bought), and it hasn't been confirmed whether switching servers needs a per-server API call. Seven-day port forwarding needs Pro. |
+| **Windscribe** (through gluetun today) | Manual WireGuard needs a paid account (Pro, or Build-A-Plan for the locations bought), and it hasn't been confirmed whether switching servers needs a per-server API call. Seven-day port forwarding needs Pro. |
 | **TorGuard** | Configs are tied to one server and have historically expired. TorGuard publishes [API examples](https://torguard.github.io/openwrt-scripts/#torguards-wireguard-api-v1) for registration and renewal; whether they still work, and how renewal behaves now, needs live testing. It would work like PIA. |
 
 ### Not possible now

@@ -219,8 +219,9 @@ reaches gluetun's rule 101. The gate therefore does four things.
 NetBird can sign in to management before its overlay interface exists, so the
 gate cannot wait for the fwmark before launching. If NetBird's own start-up
 capability check fails, its TLS and relay connections go through the provider
-tunnel for up to 30 seconds, until the gate sees the log line or the missing
-fwmark. That is a metadata and availability cost for NetBird's control
+tunnel until the gate sees the log line or the missing fwmark: 30 seconds
+of grace, plus the gate's two-second checks, plus up to 20 seconds for
+NetBird to exit once the gate stops it. That is a metadata and availability cost for NetBird's control
 traffic. It does not let your devices' traffic out: rules 1, 95 and 97 hold
 forwarded traffic throughout.
 
@@ -263,6 +264,7 @@ read it before you start.
    ```sh
    git clone https://github.com/irashack/molebridge.git
    cd molebridge
+   git checkout v0.5.0
    ls compose.gluetun.yaml routing/gluetun-rules
    cp .env.example .env
    mkdir -p secrets/gluetun
@@ -379,6 +381,10 @@ You can add the guard and NetBird to a gluetun you have, instead of using
   listens on every interface in the namespace. No `ports:` entry for it.
 - The post-rules file mounted at `/iptables/post-rules.txt`, and the key from
   `WIREGUARD_PRIVATE_KEY_SECRETFILE` (a file, never the environment).
+- The role-file check: the `routing/gluetun-preflight` mount and the
+  `entrypoint` that runs it before `/gluetun-entrypoint`. It refuses a role
+  file other than the one `gluetun-auth` writes, so gluetun never logs an
+  excerpt of a malformed file, key included.
 - Gluetun pinned as `compose.gluetun.yaml` pins it. The design was read against
   that release's source; another release may differ.
 - The `guard` and `netbird` services as defined in that file, with
@@ -511,24 +517,33 @@ here for a hostname:
 {"provider":{"server_selection":{"hostnames":["<hostname>"],"countries":[],"regions":[],"cities":[],"names":[],"numbers":[],"categories":[],"isps":[],"owned_only":false,"free_only":false,"premium_only":false,"stream_only":false,"multi_hop_only":false,"port_forward_only":false,"secure_core_only":false,"tor_only":false}}}
 ```
 
-Save it as `secrets/gluetun/select.json`, mount it with a second `-v`, and add
-`-X PUT -H 'Content-Type: application/json' -d @/select.json` to the `curl`
-command. To refresh gluetun's server list now, once the tunnel works, send
+Save it as `secrets/gluetun/select.json` and send it:
+
+```sh
+docker run --rm --network container:molebridge-gluetun \
+  -v "$PWD/secrets/gluetun/api_header:/header:ro" \
+  -v "$PWD/secrets/gluetun/select.json:/select.json:ro" <image-with-curl> \
+  curl -fsS -H @/header -X PUT -H 'Content-Type: application/json' \
+  --data-binary @/select.json http://127.0.0.1:8000/v1/vpn/settings
+```
+ To refresh gluetun's server list now, once the tunnel works, send
 `PUT /v1/updater/status` with the body `{"status":"running"}`; gluetun fetches
 the provider's list through the tunnel. Delete `api_header` and `select.json`
 when you are done. Settings put this way are lost when gluetun restarts, which
 starts again from the values in `.env`.
 
-**NordVPN.** Avoid dedicated-IP and Double VPN servers, and Onion Over VPN and
-obfuscated ones too: a plain subscription cannot use them, and Molebridge's
-panel does not list them. Gluetun stores the category of each server
+**NordVPN.** Pick a standard server. Molebridge's panel lists only those, not
+Dedicated IP servers (a separate purchase), Double VPN, Onion Over VPN or
+obfuscated ones, and this setup was tested only with standard servers. Gluetun stores the category of each server
 (`Standard VPN servers`, `Dedicated IP`, `Double VPN`, `Onion Over VPN`,
 `Obfuscated Servers`). Molebridge's rule is a server in the standard category
 and in none of the others, so pick a hostname you know is in NordVPN's standard
 list. A country filter alone does not exclude the others. Gluetun's
 `SERVER_CATEGORIES` setting selects by category, but `compose.gluetun.yaml`
 does not pass it through; you would add it to the gluetun service in a
-`compose.override.yaml`. That has not been tried.
+`compose.override.yaml` and set `COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`,
+since Compose reads the override by itself only when `COMPOSE_FILE` is unset.
+That has not been tried.
 
 **Checking the result.** Nothing reports it. Check the exit address as
 [Verification](#verification) check 4 does, and compare it with your
@@ -553,13 +568,12 @@ list. The list is about not leaving on a feature that cannot work.
 ## Verification
 
 Run these on your own host before you rely on the exit, and again after you
-change routing, the gluetun settings or the compose file. The checks in
-[verification](verification.md) apply with the names changed: where it says
-`wireguard` or `applier`, use `guard` (it has `ip`, `wg` and a shell in the
-namespace), and `wg0` where it says `mullvad`. In particular the [client and
+change routing, the gluetun settings or the compose file. The namespace
+checks and drills in [verification](verification.md) are for the default
+backend and don't carry over by renaming; use the ones below, which also
+apply to the full gluetun backend with the applier and panel. The [client and
 LAN isolation checks](verification.md#from-a-client) and a host reboot with
-unattended recovery apply as written. The commands below are the checks that
-need no applier; [What was tested](#what-was-tested) says which of them have
+unattended recovery apply as written. The commands below need no applier; [What was tested](#what-was-tested) says which of them have
 run in this form.
 
 Keep an independent way into the host. Do not paste raw addresses from these
@@ -620,7 +634,10 @@ families. Run the capture below in a second terminal, so you see what appears
 on the host interface.
 
 **The capture.** It watches the host interface inside the namespace for the
-probe address. Use any image that ships `tcpdump`. The container joins
+probe address. It stays in the namespace it joined, so it can't see a new
+one: for the drills that recreate gluetun, start it again once gluetun is
+back and note the gap, or capture on the host side instead (on Linux, the
+host's own interface, filtered the same way). Use any image that ships `tcpdump`. The container joins
 gluetun's namespace, so the command is the same on Linux and on Docker with a
 VM, such as OrbStack:
 
@@ -631,7 +648,7 @@ docker run --rm --network container:molebridge-gluetun \
 ```
 
 This must print nothing for the whole drill, including the time between the
-break and the reconnect. A packet here means a client's traffic left the
+break and the reconnect, or from the restart of the capture on. A packet here means a client's traffic left the
 namespace by the host's route. The same with `podman run` under rootless Podman
 has not been tried. To see what the host interface does carry, use a broader
 filter: you should see NetBird's WireGuard port, STUN and its TCP control
@@ -708,8 +725,9 @@ Containers that join gluetun's namespace, `netbird` included, resolve names
 through gluetun's own DNS server on 127.0.0.1, which forwards through the
 tunnel. While the tunnel is down, NetBird cannot look up its management, signal
 or relay hostnames; connections it already has carry on, and new lookups work
-again once gluetun reconnects. This was observed in the test; nothing leaves
-outside the tunnel because of it.
+again once gluetun reconnects. This was observed in the test on Docker with
+OrbStack; other engines haven't been checked. Nothing leaves outside the
+tunnel because of it.
 
 ## Client notes
 

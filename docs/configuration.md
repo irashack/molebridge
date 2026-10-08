@@ -91,8 +91,8 @@ must name a group.
 
 ## gluetun backend
 
-Experimental, with one live pass, NordVPN on Docker
-([testing](testing.md#gluetun-backend-pass-at-a3bb14f)); the design is in
+Experimental. Its live passes used NordVPN, on Docker and on rootless
+Podman ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)); the design is in
 [architecture](architecture.md#gluetun-backend) and what differs for you in
 [providers](providers.md#the-gluetun-backend). Set
 `COMPOSE_FILE=compose.gluetun.yaml` in `.env`; this file replaces
@@ -120,10 +120,13 @@ own; `TUNNEL_BACKEND=gluetun` for the guard, NetBird's gate and the applier;
 and for the applier `GLUETUN_CONTROL_URL`, `GLUETUN_API_KEY_FILE` and
 `GLUETUN_SERVERS_FILE`, where it finds the control server, the API key and
 the read-only server list. The guard reads `ROUTING_RECONCILE_INTERVAL`
-(seconds between full passes, 1–60, default 2); it rewrites the fwmark
+(seconds between full passes, 1–60, default 2); it aims to rewrite the fwmark
 record for the gate every 2 seconds whatever that interval is. The gate
-reads `FWMARK_GRACE` (seconds NetBird may run without a good fwmark record,
-5–30, default 30). With
+reads `FWMARK_GRACE` (seconds without a good fwmark record before the gate
+stops NetBird, 5–30, default 30). Neither is passed through from `.env`: to
+change them, set `ROUTING_RECONCILE_INTERVAL` on the `guard` service and
+`FWMARK_GRACE` on the `netbird` service in a `compose.override.yaml`, and add
+that file to `COMPOSE_FILE`. With
 this backend the gate also refuses `NB_USE_LEGACY_ROUTING`,
 `NB_SKIP_SOCKET_MARK` and `NB_DISABLE_CUSTOM_ROUTING` set to a true value,
 and an `NB_FWMARK_BASE` other than `CONTROL_MARK`.
@@ -138,8 +141,7 @@ Before the first start:
    /v1/vpn/settings`, `GET /v1/vpn/status`, `GET /v1/publicip/ip`, and
    `GET` and `PUT /v1/updater/status` (to refresh the server list); and
    into `secrets/gluetun/api_key`, which only the applier mounts. The key is
-   never printed. Run it again with `--rotate` to replace both, then
-   recreate `gluetun` and `applier`. Compose refuses to start without the
+   never printed. Run it again with `--rotate` to replace both, then run `python3 tools/molebridge.py recover`, which recreates gluetun and everything that shares its namespace (on rootless Podman, the [Podman commands](operations.md#rootless-podman)). Compose refuses to start without the
    role file: without one, gluetun answers several routes with no
    authentication, including one that stops the VPN.
 3. Run `python3 tools/molebridge.py gluetun-post-rules` to write
@@ -150,7 +152,7 @@ Before the first start:
    with Docker and with podman-compose. Write the values literally: it
    refuses a `$` reference. Run it again after
    changing `HOST_IF`, `EXIT_IF`, `OVERLAY_IF`, `CONTROL_MARK` or
-   `NB_WIREGUARD_PORT`, then recreate `gluetun`, `guard` and `netbird`.
+   `NB_WIREGUARD_PORT`, then run `python3 tools/molebridge.py recover`, which recreates gluetun and everything that shares its namespace (on rootless Podman, the [Podman commands](operations.md#rootless-podman)).
 
 ## Tunnel config helper
 
@@ -240,8 +242,11 @@ applier snapshots are mode 0644 so the non-root panel can read them; requests
 are mode 0600. The panel cannot write the applier directory. Catalogue refresh
 is every six hours (one-minute retry on failure), maximum catalogue age is 24
 hours, and maximum status age is 150 seconds. A server list download may take
-20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. The validated
-`relays.json` may be 10 MiB, NordVPN's 16 MiB; the applier refuses to write a
+20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. With the
+gluetun backend nothing is downloaded: the applier reads gluetun's server
+file, up to 32 MiB, every minute when it changed and at least every six
+hours. The validated `relays.json` may be 10 MiB, NordVPN's and gluetun's
+16 MiB; the applier refuses to write a
 larger one and keeps the last good catalogue, reporting it in
 `relay-error.json` like any failed refresh, and neither the applier nor the
 panel reads a larger one. These are fixed safety defaults, set per provider

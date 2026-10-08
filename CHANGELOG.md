@@ -25,8 +25,9 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   provider's own endpoint confirmed the egress (`exit_confirmed`, unchanged),
   `tunnel` when only Molebridge's tunnel checks did, for a provider without
   its own check, or null. The panel labels a tunnel-verified exit "tunnel
-  checks only", and `/readyz` passes for both. No current provider uses the
-  `tunnel` tier; it is covered by unit tests only. See
+  checks only", and `/readyz` passes for both. No native provider uses the `tunnel` tier;
+  FastestVPN, IVPN, Surfshark and Windscribe through the gluetun backend do.
+  It is covered by unit tests only. See
   [status reporting](docs/architecture.md#status-reporting).
 - **NordVPN, experimental.** `PROVIDER=nordvpn` with
   `EXIT_IF=nordvpn` and `COMPOSE_FILE=compose.yaml:compose.nordvpn.yaml`.
@@ -86,8 +87,9 @@ rootless Podman, and the fail-closed drills.
   - `python3 tools/molebridge.py gluetun-auth` writes gluetun's role file
     and the applier's API key, which is full gluetun administration;
     `gluetun-post-rules` writes gluetun's firewall post-rules, in forms
-    gluetun's own rule parser accepts. Both read
-    `.env` and work with Docker and podman-compose. `doctor` and `recover`
+    gluetun's own rule parser accepts. Neither calls the container engine,
+    so both work with Docker and podman-compose; `gluetun-post-rules` reads
+    `.env`. `doctor` and `recover`
     support the gluetun file.
 
   See [providers](docs/providers.md#the-gluetun-backend),

@@ -1,10 +1,34 @@
 # Architecture
 
+- [Goal and boundary](#goal-and-boundary)
+- [Components and trust](#components-and-trust)
+- [Routing contract](#routing-contract)
+- [gluetun backend](#gluetun-backend)
+- [Relay catalogue](#relay-catalogue)
+- [Requests and switching](#requests-and-switching)
+- [Status reporting](#status-reporting)
+- [Panel and access](#panel-and-access)
+- [Recovery and verification](#recovery-and-verification)
+
 ## Goal and boundary
 
 A device stays on NetBird while the Internet traffic it sends to this exit
-leaves through Mullvad, PIA or NordVPN. If the tunnel is unavailable, that forwarded
+leaves through a VPN provider. If the tunnel is unavailable, that forwarded
 traffic must fail rather than leave by another path.
+
+There are two backends, and the same promise holds for both:
+
+- **Default** (`compose.yaml`): Molebridge's own WireGuard container owns the
+  namespace and the tunnel, for Mullvad, PIA and NordVPN. The sections from
+  [components and trust](#components-and-trust) to the
+  [routing contract](#routing-contract) describe it.
+- **gluetun** (`compose.gluetun.yaml`, experimental): gluetun owns the
+  namespace and the tunnel, and a Molebridge guard keeps the routing rules in
+  place beside it. [gluetun backend](#gluetun-backend) describes what
+  differs.
+
+The applier, the panel, the request and status files, and the
+[status reporting](#status-reporting) are shared.
 
 This is a property of the exit's namespace, not of the device. What happens
 when a device deselects the exit or NetBird disconnects, and what the device
@@ -25,6 +49,46 @@ One Compose project, four containers:
 | `netbird` | Pinned official NetBird client | Joins the namespace as the overlay exit peer |
 | `applier` | Local build from the pinned Python slim base, Debian wg/ip/curl tools | Joins the namespace, owns the relay catalogue, validates requests and controls the peer |
 | `control-panel` | Pinned official Python slim | Separate bridge, loopback publish, no capabilities, no subprocesses. Runs as `PANEL_USER` (the host user's uid, or container root mapped to the host user under rootless Podman) |
+
+```mermaid
+flowchart TB
+    panel("control-panel<br/>no capabilities, no subprocesses")
+    subgraph statedir["state/ on the host"]
+        direction LR
+        desired[("panel/desired.json")]
+        result[("applier/relays.json<br/>applier/result.json")]
+    end
+    subgraph ns["Exit namespace"]
+        direction LR
+        applier("applier<br/>NET_ADMIN, wg and ip")
+        wireguard("wireguard<br/>routing rules, tunnel")
+        netbird("netbird<br/>exit peer on wt0")
+    end
+    provider("Provider API<br/>server list, egress check")
+
+    panel -- "writes one server name" --> desired
+    result -- "read-only mount" --> panel
+    desired -- "validated every 5 s" --> applier
+    applier -- "catalogue, status" --> result
+    applier -- "sets the peer" --> wireguard
+    applier -. "checks" .-> netbird
+    provider -- "downloaded, validated" --> applier
+
+    classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
+    classDef routing fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
+    classDef file fill:#1e2030,stroke:#eed49f,color:#cad3f5,stroke-width:1px
+    classDef panel fill:#24273a,stroke:#c6a0f6,color:#cad3f5,stroke-width:2px
+    class provider,netbird endpoint
+    class wireguard,applier routing
+    class panel panel
+    class desired,result file
+    style ns fill:#1e2030,stroke:#494d64,color:#cad3f5
+    style statedir fill:#1e2030,stroke:#494d64,color:#cad3f5
+    linkStyle default stroke:#8087a2,stroke-width:2px
+```
+
+The panel holds nothing that can change routing: it writes one
+file, and the applier decides whether that file names a server it will use.
 
 Build both derived images with `docker compose build wireguard applier`. The
 routing script is copied root-owned into the WireGuard image, so the checkout
@@ -74,6 +138,38 @@ routing and the applier.
 | 96 | `oif mullvad lookup 51821` | Interface-bound health probes use the same table. |
 | 97 | `iif wt0 unreachable` | Terminal guard if lookup 95 or all exit-table routes disappear. |
 | — | `unreachable default metric 4096 table 51821` | Fallback when the tunnel route is absent. |
+
+A forwarded packet, one that arrived from a device on `wt0`, meets the rules
+in priority order and stops at the first that decides:
+
+```mermaid
+flowchart TD
+    packet("Packet from a device<br/>arrives on wt0")
+    r1{"Rule 1<br/>not iif wt0 lookup local"}
+    r95{"Rule 95<br/>iif wt0 lookup 51821"}
+    tunnel("Default route through<br/>the tunnel: leaves encrypted")
+    fallback("unreachable default<br/>metric 4096: dropped")
+    r97("Rule 97<br/>iif wt0 unreachable: dropped")
+
+    packet --> r1
+    r1 -- "never matches wt0, so no local delivery" --> r95
+    r95 -- "tunnel up" --> tunnel
+    r95 -- "tunnel route gone" --> fallback
+    r95 -. "rule 95 or table 51821 missing" .-> r97
+
+    classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
+    classDef routing fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
+    classDef stopped fill:#24273a,stroke:#ed8796,color:#f4dbd6,stroke-width:2px
+    classDef file fill:#1e2030,stroke:#eed49f,color:#cad3f5,stroke-width:1px
+    class packet endpoint
+    class r1,r95,tunnel routing
+    class fallback,r97 stopped
+    linkStyle default stroke:#8087a2,stroke-width:2px
+```
+
+Replies from the provider come back in on the tunnel and reach the device
+through rule 90. Nothing in this path falls through to the main table, which
+holds the host's default route.
 
 IPv6 uses the same contract. Rule 90 is omitted for IPv6 when no IPv6 overlay
 range is configured. Rule 94 exists for each family that has a tunnel address:
@@ -179,9 +275,9 @@ detects drift; it is not an instantaneous defense against a compromised host.
 
 ## gluetun backend
 
-**Experimental.** One live pass, with NordVPN on Docker; see
-[testing](testing.md#gluetun-backend-pass-at-a3bb14f) for what it covered
-and what it didn't. Everything below was also read in the source of the
+**Experimental.** Live passes with NordVPN on Docker and on rootless
+Podman; see [testing](testing.md#gluetun-backend-pass-at-a3bb14f) for what
+they covered and what they didn't. Everything below was also read in the source of the
 pinned releases (gluetun v3.41.3, NetBird 0.79.0), exercised in isolated
 namespaces by `tools/check-routing.sh` (routing, guard and gate) and covered
 by unit tests against fakes (the applier). Without the applier and the panel,
@@ -207,6 +303,46 @@ and is dropped when the tunnel or its routes are gone.
 | `netbird` | Pinned official NetBird client | Joins the namespace; starts only through the gate, which stays its parent |
 | `applier` | The applier image from `compose.yaml` | Joins the namespace; reads gluetun's server list, selects servers through gluetun's control server and verifies the result |
 | `control-panel` | Unchanged | Shows the provider's name with "via gluetun" |
+
+```mermaid
+flowchart LR
+    device("Your devices<br/>on NetBird")
+    provider("Provider server")
+    subgraph ns["Exit namespace, owned by gluetun"]
+        gluetun("gluetun<br/>firewall, tunnel wg0,<br/>control server :8000")
+        guard("guard<br/>rules 1, 88-97, 102-104,<br/>every 2 s")
+        gate("NetBird gate")
+        netbird("netbird<br/>exit peer on wt0")
+        applier("applier")
+    end
+    servers[("gluetun's servers.json<br/>read-only")]
+    panel("control-panel<br/>no key, no capabilities")
+    host("Host connection")
+
+    device --> netbird
+    netbird -- "forwarded traffic, rule 95" --> gluetun
+    gluetun --> provider
+    gate -- "launches only when the<br/>guard is whole" --> netbird
+    guard -. "rules and tables" .-> gate
+    applier -- "API key: select server" --> gluetun
+    servers --> applier
+    panel -- "desired.json" --> applier
+    netbird -- "control traffic, mark 0x1bd00,<br/>rules 88-89" --> host
+
+    classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
+    classDef routing fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
+    classDef stopped fill:#24273a,stroke:#ed8796,color:#f4dbd6,stroke-width:2px
+    classDef file fill:#1e2030,stroke:#eed49f,color:#cad3f5,stroke-width:1px
+    classDef gluetun fill:#192227,stroke:#6fcfe0,color:#d8e3e8,stroke-width:2px
+    classDef panel fill:#24273a,stroke:#c6a0f6,color:#cad3f5,stroke-width:2px
+    class device,provider,netbird,host endpoint
+    class guard,gate,applier routing
+    class panel panel
+    class servers file
+    class gluetun gluetun
+    style ns fill:#11181c,stroke:#384a54,color:#d8e3e8
+    linkStyle default stroke:#8087a2,stroke-width:2px
+```
 
 gluetun's control server listens on the namespace's loopback only, port 8000,
 and is never published. Its role file (`secrets/gluetun/auth.toml`) gives
@@ -342,7 +478,10 @@ If the check does fail, NetBird's own TLS and relay connections go through
 the provider tunnel until the gate sees the log line, or at most 30 seconds
 until the missing fwmark stops NetBird. That is an availability and
 metadata cost for NetBird's control traffic, not a leak of your devices'
-traffic: rules 1, 95 and 97 hold forwarded traffic throughout. Closing this
+traffic: rules 1, 95 and 97 hold forwarded traffic throughout. The 30 seconds
+are the grace period, not a hard ceiling: the gate checks every two seconds,
+and once it decides to stop NetBird it allows up to 20 seconds for NetBird to
+exit before killing it. Closing this
 gap would need a per-process identity for NetBird inside the shared
 namespace (a uid or cgroup to match on), which costs more than the gap.
 
@@ -482,14 +621,18 @@ others with it, with `python3 tools/molebridge.py recover` on Docker, which
 knows this file.
 
 gluetun runs its own DNS server in the namespace by default, which resolves
-over the tunnel, and points its own container's resolver at it. Whether the
-NetBird container resolves management's name through it, and so fails to
-reach management with the tunnel down, depends on the engine. Not yet tested.
+over the tunnel, and points its own container's resolver at it. On Docker
+with OrbStack, at `4933360`, NetBird in the namespace resolved names through
+it, so through the tunnel ([testing](testing.md#gluetun-backend-at-4933360-and-the-standalone-form));
+so with the tunnel down it would not reach management by name. Other
+engines haven't been checked.
 
 ## Relay catalogue
 
-The applier fetches the fixed HTTPS Mullvad relay API at startup and every six
-hours. Redirects and proxy environment overrides are refused. Input is size
+With the default backend, the applier downloads the catalogue; with gluetun
+it reads gluetun's file instead ([the applier with
+gluetun](#the-applier-with-gluetun)). The applier fetches the fixed HTTPS
+Mullvad relay API at startup and every six hours. Redirects and proxy environment overrides are refused. Input is size
 limited, decoded as JSON with duplicate keys rejected, and checked for active
 WireGuard entries, hostname shape, canonical 32-byte base64 keys, IPv4 endpoints
 and bounded location strings. The optional display attributes (Mullvad-owned,
@@ -508,6 +651,26 @@ hours cannot authorize a new switch or a healthy result. It does not remove a
 working tunnel merely because the API is unavailable.
 
 ## Requests and switching
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as Panel
+    participant D as desired.json
+    participant A as Applier
+    participant T as Tunnel
+    participant E as Provider's check
+    P->>P: server is in the catalogue
+    P->>D: server, requested_at, request_id
+    A->>D: read within 5 s, validate
+    A->>A: routing protection intact?
+    A->>T: remove old peer, set new key and endpoint
+    T-->>A: fresh handshake
+    A->>E: egress through the tunnel
+    E-->>A: confirmed (provider tier)
+    A->>A: result.json: ok, request_id
+    P->>P: reads result.json, shows connected
+```
 
 1. The panel checks membership in the read-only catalogue and atomically writes
    `desired.json` with `server`, `requested_at` and a random `request_id`.
@@ -738,9 +901,11 @@ Sign-in has been tried live with Pocket ID v2.16.0, as an admin only; see
 
 ## Recovery and verification
 
-`python3 tools/molebridge.py recover` builds first, checks for the existing
-identity volume, stops namespace dependents, then recreates all four containers
-in dependency order and waits for health. It refuses to run if the identity
+`python3 tools/molebridge.py recover` checks the configuration, files and
+existing identity volume, builds, stops namespace dependents, then recreates
+the containers in dependency order (four with the default backend, five with
+gluetun), waits for health and for the applier to verify the exit, and runs
+the doctor. It refuses to run if the identity
 volume is missing, and never deletes a volume. It runs on the host when you
 ask; nothing gives the panel access to the container engine.
 `depends_on.restart` covers explicit Compose dependency updates, but a crash

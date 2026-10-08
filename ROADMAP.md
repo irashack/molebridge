@@ -7,9 +7,12 @@ would take as far as we know today.
 
 ### A server set in configuration
 
-Today the server an exit uses is whatever `state/panel/desired.json` names.
-The panel writes it, but the applier doesn't care who did, so an exit runs
-without a panel if you write that file yourself (its fields are in
+Today a valid request in `state/panel/desired.json` decides the server an
+exit uses. Without one, a native Mullvad exit keeps the peer in its tunnel
+config, a new PIA or NordVPN exit waits for a selection, and gluetun starts
+from its `GLUETUN_SERVER_*` filters. The panel writes the request, but the
+applier doesn't care who did, so an exit runs without a panel if you write
+that file yourself (its fields are in
 [configuration](docs/configuration.md#state-files)). That works, but it isn't
 a documented way to run, and it isn't declarative: after the first selection
 in a panel, the file is the panel's, and with the gluetun backend the applier
@@ -34,8 +37,8 @@ now and is the confusing option.
 
 ### A sidecar mode: Switchyard for an ordinary gluetun container
 
-Most people run gluetun as a sidecar: other containers share its network
-namespace, so their traffic goes through the tunnel and gluetun's firewall
+gluetun's own documentation describes it as a sidecar: other containers
+share its network namespace, so their traffic goes through the tunnel and gluetun's firewall
 blocks anything else. They forward nobody's traffic, so Molebridge's routing
 contract, guard and NetBird gate have nothing to do there. gluetun ships no
 interface for choosing a server; you change its settings and restart it, or
@@ -44,9 +47,9 @@ call its control server.
 The parts of Molebridge that are not about forwarding would serve them as
 they are: the provider registry and catalogues, the egress checks that ask the
 provider whether the address is theirs, server switching through gluetun's
-control server, and the panel with sign-in and one tab per gluetun. By line
-count that is roughly two-thirds of the code; the routing scripts,
-`molebridge/routing.py` and the gate, about a quarter, would not apply.
+control server, and the panel with sign-in and one tab per gluetun. The
+routing scripts, `molebridge/routing.py` and the NetBird gate would not
+apply.
 
 What it takes:
 

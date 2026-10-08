@@ -112,7 +112,8 @@ docker compose ps
 docker compose logs wireguard | grep 10-exit-routing
 ```
 
-The log should end with `rules installed`, and `wireguard` and `netbird`
+The log should end with a line that starts `10-exit-routing: rules
+installed`, and `wireguard` and `netbird`
 should become healthy. With Mullvad, `applier` becomes healthy too, once it
 has verified the starting server. With PIA, `applier` stays unhealthy until
 you pick a region in step 7, because a fresh PIA tunnel has no peer yet; the
@@ -182,8 +183,9 @@ by default). The first page load can take a few seconds while the applier
 fetches the server list.
 
 With PIA, choose a region now. Until you do, the exit reports "No PIA region
-is registered yet" and carries no traffic. With NordVPN, choose a server; until
-then it reports "No NordVPN server is selected yet".
+is registered yet; choose one in the panel." and carries no traffic. With
+NordVPN, choose a server; until then it reports "No NordVPN server is selected
+yet; choose one in the panel."
 
 ## 8. Create the route and try a device
 
@@ -204,8 +206,8 @@ Then run the [client checks](verification.md#from-a-client), and finish with
 
 ## With the gluetun backend instead
 
-**Experimental:** one live pass, with NordVPN on Docker
-([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). With this path gluetun owns the tunnel
+**Experimental:** live passes with NordVPN, on Docker and on rootless
+Podman ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). With this path gluetun owns the tunnel
 and brings its provider support ([providers](providers.md#the-gluetun-backend)).
 The steps above still apply, with these changes:
 
@@ -235,7 +237,9 @@ The steps above still apply, with these changes:
 
    The key file holds one line, the private key. Add `--ipv4-only` to the
    last command if gluetun later logs that it found no working ip6tables.
-   Both helpers read `.env` only and work the same with podman-compose.
+   Neither helper calls the container engine, so both work the same with
+   podman-compose; `gluetun-post-rules` reads `.env`, with a setting
+   exported in your shell taking precedence.
 3. The NetBird setup key is the same.
 4. Start with `docker compose build guard applier` and `docker compose up -d
    gluetun guard netbird applier`, and read `docker compose logs guard`: it
@@ -249,8 +253,11 @@ The steps above still apply, with these changes:
    list`, and a minute or two after it finishes the panel lists the current
    servers. Choose a server after that. gluetun starts on any server (or
    the one from `GLUETUN_SERVER_*`); picking one in the panel takes over.
-8. The same. For providers other than Mullvad and NordVPN, the panel shows
-   a connected exit as "tunnel checks only": there is no provider check.
+8. Create the route and try a device the same way. For providers other
+   than Mullvad and NordVPN, the panel shows a connected exit as "tunnel
+   checks only": there is no provider check. For the checks before you rely
+   on it, use the gluetun ones that
+   [verification](verification.md) points to, not its default-backend drills.
 
 Next: [Switchyard](switchyard.md) covers using the panel, and
 [operations](operations.md) covers upgrades, recovery and boot on Podman.

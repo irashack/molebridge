@@ -198,20 +198,20 @@ through the tunnel; gluetun's log says why. gluetun tries again every
 `GLUETUN_UPDATER_PERIOD`, and recreating the applier starts another
 refresh. A role file written before the applier could refresh the list
 lacks the updater routes: run `python3 tools/molebridge.py gluetun-auth
---rotate`, then recreate `gluetun` and `applier`.
+--rotate`, then run `python3 tools/molebridge.py recover`.
 
 **gluetun backend: gluetun exits with `molebridge: not starting gluetun:
 ...`.** The role-file check refused `secrets/gluetun/auth.toml`: it is
 missing, edited, or written by an older version with fewer routes. Run
-`python3 tools/molebridge.py gluetun-auth --rotate`, then recreate `gluetun`
-and `applier`. The check never prints the file, which holds the API key.
+`python3 tools/molebridge.py gluetun-auth --rotate`, then run `python3 tools/molebridge.py recover`. The
+check never prints the file, which holds the API key.
 
 **gluetun backend: the panel says "gluetun did not accept the server
-selection".** The applier's request to gluetun's control server failed:
+selection; choose a server again to retry."** The applier's request to gluetun's control server failed:
 gluetun isn't running, the API key in `secrets/gluetun/api_key` doesn't
 match the one in `secrets/gluetun/auth.toml` (run `python3
-tools/molebridge.py gluetun-auth --rotate`, then recreate `gluetun` and
-`applier`), or gluetun refused the server. `python3 tools/molebridge.py
+tools/molebridge.py gluetun-auth --rotate`, then run `python3 tools/molebridge.py recover`), or gluetun refused
+the server. `python3 tools/molebridge.py
 doctor` checks that the control server answers with the key.
 
 ## The panel
@@ -345,8 +345,9 @@ whitespace), then select the region again. If one PIA region keeps failing
 while others work, the problem is on PIA's side.
 
 **"Switch verification timed out; choose a server again to retry."** The peer
-changed, but no handshake or provider-confirmed egress followed within about
-a minute. Try again, or try another server.
+changed, but the handshake, the routing checks or the egress check didn't all
+pass in time: 60 seconds with the default backend, 90 with gluetun. Try
+again, or try another server.
 
 **"No PIA region is registered yet; choose one in the panel."** It's a fresh
 PIA install. Pick a region.
@@ -364,7 +365,8 @@ later, or pick another server. See
 [providers](providers.md#how-nordvpn-differs).
 
 **"Tunnel egress did not pass the tunnel checks."** Only for a provider
-without its own egress check (none at present): the IP echo services
+without its own egress check, which today means FastestVPN, IVPN, Surfshark
+and Windscribe through the gluetun backend: the IP echo services
 disagreed, or answered with the host's own address or one the server list
 doesn't name. See [status reporting](architecture.md#status-reporting).
 
@@ -396,8 +398,9 @@ connected in this state. The applier found one of these:
   The check looks for those names, so a renamed table (`NB_NFTABLES_TABLE`)
   fails it, and so would iptables rules in the legacy backend, which `nft`
   can't see. The pinned NetBird image is Alpine-based, and Alpine's
-  `iptables` uses the nftables backend by default; this hasn't been checked
-  on a running exit yet.
+  `iptables` uses the nftables backend by default; the recorded passes saw
+  NetBird's iptables tables through `nft` and the check passed, but not
+  every firewall backend or override has been tried.
 
 ## Clients
 

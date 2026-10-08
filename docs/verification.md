@@ -17,6 +17,16 @@ IPv6 checks and the local-delivery refusal, not the fail-closed drills
 `EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use your values. For rootless Podman,
 use the [Podman commands](operations.md#rootless-podman).
 
+**The gluetun backend** has other containers and other rules, so the namespace
+checks and drills on this page don't carry over by renaming. Use the ones in
+[gluetun as a NetBird exit](gluetun-netbird-exit.md#verification), which
+apply with the applier and panel running too, then
+`python3 tools/molebridge.py doctor`. The [client checks](#from-a-client)
+below apply as written. One difference matters when you read results: in
+gluetun's namespace, unmarked traffic the exit sends goes into gluetun's
+tunnel, and only NetBird's marked control traffic uses the host's
+connection, so check 4 below doesn't apply.
+
 ## Inside the namespace
 
 `applier` shares the exit's network namespace, so use it for inspection:
@@ -161,8 +171,9 @@ overlay, `ip -6 route get` the same way. `netbird status -d` lists both
 addresses. From a client on the exit, ping the exit's overlay address: there
 must be no reply, although the access policy allows ICMP, because the ping is
 routed into the tunnel instead of reaching the exit. Repeat the ping with the
-tunnel down. These checks have not been run on a live exit yet; see
-[testing](testing.md).
+tunnel down. The local-delivery refusal has been checked on live PIA,
+NordVPN and gluetun exits; [testing](testing.md) says which protocols and
+families each covered.
 
 ## Status and recovery
 

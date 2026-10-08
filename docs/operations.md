@@ -28,8 +28,8 @@ unknown, whatever it says.
   Point your monitoring at this one.
 - `python3 tools/molebridge.py doctor` checks the Compose configuration
   (including the NetBird settings the entrypoint gate refuses), file
-  permissions, the identity volume, that all three namespace containers share
-  one namespace, the ICE blacklist, the NetBird gate's own checks of its
+  permissions, the identity volume, that every container in the exit's
+  namespace shares it (three with the default backend, four with gluetun), the ICE blacklist, the NetBird gate's own checks of its
   settings and stored profiles, and the applier's own checks. It doesn't
   prove that client traffic is forwarded; [verification](verification.md)
   does that.
@@ -44,24 +44,29 @@ missing push as a failure: a stopped applier can't report that it's down.
 ## Recovery
 
 Recreating `wireguard` alone leaves `netbird` and `applier` in the old network
-namespace, where they carry no traffic. Docker doesn't restart unhealthy
-containers on its own. The recovery helper recreates all four together:
+namespace, where they carry no traffic; the same goes for `gluetun` and the
+three containers that join it. Docker doesn't restart unhealthy containers on
+its own. The recovery helper recreates them all together, with the panel:
 
 ```sh
 python3 tools/molebridge.py recover
 ```
 
-It checks the deployment and identity volume first, and builds both local
-images before touching the running exit, so a failed build changes nothing.
-It then stops the namespace users, recreates all four containers, waits for
-health, waits up to 180 seconds for the applier to verify the exit (with the
-gluetun backend it may first put your last server back), and runs doctor.
+It checks the configuration, the files and the identity volume first, and
+builds both local images before touching the running exit, so a failed build
+changes nothing. It then stops the namespace users, recreates the containers
+(four with the default backend, five with gluetun), waits up to 180 seconds
+for them to become healthy, then polls for up to about 180 seconds more for
+the applier to verify the exit (with the gluetun backend it may first put
+your last server back), and runs doctor.
 A failure names the step, or the applier's checks that still fail, for
-example `The applier reports: verified Mullvad egress`. With the gluetun
+example `The applier reports: verified Mullvad egress (docs/troubleshooting.md).` With the gluetun
 backend it recreates `gluetun`, `guard`, `netbird`, `applier` and the panel.
 It never deletes a volume or enrolls a new peer. If it fails after
-recreating, the exit stays down until you fix the reported problem and run
-it again. Keep a way into the host that doesn't depend on this
+recreating, the exit hasn't passed every check, but the containers it
+recreated keep running and the tunnel may carry traffic; read the reported
+failure and the panel's status before you rely on the exit, fix the problem,
+and run it again. Keep a way into the host that doesn't depend on this
 exit.
 
 NetBird won't start until the routing guards exist, on every start, including
@@ -101,11 +106,16 @@ The state worth keeping is small:
 |---|---|---|
 | `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
 | `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the applier registers it again on its own. NordVPN: run `tools/nordvpn-key.py` again with a new access token |
-| `secrets/` | Setup key, PIA login, Gatus token | Re-create them |
+| `secrets/` | Setup key, PIA login, Gatus token; with gluetun, the provider's WireGuard key, the role file and the API key | Re-create them; for gluetun, `gluetun-auth --rotate` writes a new role file and key |
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
-`state/applier/` is a cache and rebuilds itself. Saved and recent servers in
+`state/applier/` rebuilds itself, except one file with the gluetun backend:
+`gluetun-selection.json` remembers the last server the applier put and the
+last one it verified, which it puts back after gluetun restarts when the
+panel's request is absent or was refused. Without it, the request in
+`state/panel/desired.json` is still applied again; only that fallback is
+lost. Saved and recent servers in
 the panel live in each browser, not on the exit. The key files, `secrets/` and
 the volume are secrets: back them up only to encrypted storage.
 
@@ -294,8 +304,10 @@ address and port, the STUN server reported the public mapping on that same
 port, and a LAN datagram arrived with its real source address. `ss -ulnp` on
 the host showed the port held by pasta, not by `rootlessport`; the pasta log
 had no `Dropping datagram`; NetBird no longer logged `wait for gathering timed
-out`; and NetBird showed a P2P pair. A LAN client connected directly. A remote
-client off Wi-Fi getting a direct path has not been checked yet. The
+out`; and NetBird showed a P2P pair. A LAN client connected directly. On
+2026-10-08 a phone on cellular, off Wi-Fi, also got a direct (P2P) path, with
+host and server-reflexive (`srflx`) candidates, to two exits set up this way,
+one Mullvad and one NordVPN, and held it through a speed test. The
 podman-compose form shown above, Docker with this method, and rootless Docker
 are untested.
 
@@ -310,6 +322,13 @@ and works the same under Podman. Replace
 
 Before the first start, load the kernel module and set `PANEL_USER=0:0`
 ([requirements](prerequisites.md#rootless-podman)).
+
+With the gluetun backend, the applier refuses `secrets/gluetun/api_key` if its
+mode allows anything beyond `0600`, so a group-readable file with an ACL
+doesn't work. Under podman-compose the container's root is your own user, and
+the file `gluetun-auth` writes works as it is. If you remap the container's
+root to another host ID, as some Quadlet setups do, the file must belong to
+that ID with mode `0600`.
 
 **Setup** is [setup](setup.md) with `podman-compose` in place of `docker
 compose`:
@@ -328,6 +347,10 @@ podman-compose pull netbird control-panel
 podman-compose build wireguard applier
 podman-compose up -d --force-recreate wireguard netbird applier control-panel
 ```
+
+With the gluetun backend, build `guard applier` and recreate `gluetun guard
+netbird applier control-panel` instead; recreate all five together, since a
+new `gluetun` container is a new namespace.
 
 podman-compose has no `--wait`, so check health yourself. The three
 `readlink` values must be identical, and `--doctor` prints five PASS/FAIL

@@ -1,13 +1,16 @@
 # VPN providers
 
-Each Molebridge exit uses one provider, set with `PROVIDER` in `.env`:
+Each Molebridge exit uses one provider. A native exit sets it with `PROVIDER`
+in `.env`; with the gluetun backend you set `GLUETUN_PROVIDER` instead, and
+Compose gives the applier and the panel the registry id
+`gluetun-<provider>`. These ids also name providers in `PANEL_EXITS`:
 
 | Provider | Status | You pick | Keys |
 |---|---|---|---|
 | `mullvad` (default) | Tested on the hosts in [testing](testing.md) | a server | One device key and tunnel address, valid on every server |
 | `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | a region | A key registered on each server, with a different tunnel address on each |
 | `nordvpn` | Experimental: one live pass on macOS with OrbStack, see [testing](testing.md#nordvpn-pass-at-036e1cc) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
-| `gluetun-<provider>` | Experimental: one live pass with NordVPN, see [testing](testing.md#gluetun-backend-pass-at-a3bb14f); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
+| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#gluetun-backend-pass-at-a3bb14f); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
 
 To offer more than one, run one exit per provider with different
 `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and `PANEL_PORT`, each with its own
@@ -196,9 +199,9 @@ With `compose.gluetun.yaml`, [gluetun](https://github.com/qdm12/gluetun)
 v3.41.3 owns the tunnel instead of Molebridge's WireGuard container, and
 brings its own provider support. Molebridge keeps its routing guard, NetBird
 gate, applier and panel; [architecture](architecture.md#gluetun-backend)
-describes how. It has had one live pass, with NordVPN on Docker; other
-providers and rootless Podman are untested
-([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). To run gluetun and
+describes how. Its live passes used NordVPN, on Docker and on rootless
+Podman; other providers, and client traffic through it on rootless Podman,
+are untested ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). To run gluetun and
 NetBird with only Molebridge's routing guard and no panel, see
 [gluetun as a NetBird exit](gluetun-netbird-exit.md).
 
@@ -227,9 +230,10 @@ How it differs from a native provider:
   the switch counts as failed.
 - gluetun starts with the server named in `GLUETUN_SERVER_*`. After gluetun
   restarts, the applier puts your last selection back.
-- The panel lists only servers a plain subscription can use. For NordVPN
-  that is the same rule as the native provider: standard servers, without
-  dedicated-IP, Double VPN, Onion Over VPN and obfuscated ones. gluetun
+- The panel lists only ordinary servers. For NordVPN that is the same rule
+  as the native provider: standard servers, without Dedicated IP (a separate
+  purchase), Double VPN, Onion Over VPN and obfuscated ones, which Molebridge
+  doesn't select. gluetun
   stores Surfshark's multi-hop and obfuscated servers in the same list
   without marking them, so for Surfshark only the ordinary and static-IP
   servers (`xx-yyy.prod.surfshark.com`, `xx-yyy-st001.prod.surfshark.com`)

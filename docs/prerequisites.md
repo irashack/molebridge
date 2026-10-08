@@ -23,13 +23,16 @@ been tested in one configuration, this page says so.
 - **amd64 or arm64.** All pinned images are multi-arch.
 - **Python 3.10 or later on the host**, for `tools/prepare-tunnel-config.py`
   and the `doctor` and `recover` helpers. The containers bring their own
-  Python.
+  Python. NordVPN's key setup, `tools/nordvpn-key.py`, also needs `curl` and
+  the usual CA certificates on the host.
 - **Build access on first setup.** Two small images are built locally from
   pinned bases. The applier installs `wg`, `ip`, `curl` and `nft` from Debian's
   signed repositories.
-- **Resources.** Measured on the tested Debian host while idle: about 100 MB
-  of RAM across the four containers, and about 500 MB of disk for images.
-  The Compose memory limits add up to 896 MB. CPU use is mostly WireGuard
+- **Resources.** Measured on the tested Debian host while idle, with a
+  Mullvad exit: about 100 MB of RAM across the four containers, and about
+  500 MB of disk for images. The Compose memory limits add up to 896 MiB for
+  that stack, 1,280 MiB with NordVPN's larger applier limit, and 1,216 MiB
+  with the gluetun backend; NordVPN and gluetun weren't measured. CPU use is mostly WireGuard
   encryption and scales with traffic.
 - **Upload bandwidth.** Every device's traffic crosses the host twice, in from
   the device and out to the provider. The host's upload speed is the ceiling
@@ -75,6 +78,8 @@ you want direct NetBird connections from a rootless or bridged setup (see
 | PIA, through the tunnel: HTTPS to `www.privateinternetaccess.com`; TCP 19999 to the server (port forwarding only) | Egress check, port forwarding |
 | NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list (and, once from the host at setup, the key), latency probes |
 | NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
+| gluetun backend: what gluetun needs for its provider, including its server list updater and DNS, which go through the tunnel | Tunnel, server list |
+| gluetun backend with FastestVPN, IVPN, Surfshark or Windscribe: HTTPS to `api.ipify.org` and `ipv4.icanhazip.com` (and `api6.ipify.org`, `ipv6.icanhazip.com` for IPv6), through the tunnel and from the host | The tunnel checks, which compare the address seen through the tunnel with the host's own |
 
 Check your ISP's or hosting provider's terms before relaying traffic for other
 people. Some forbid it.

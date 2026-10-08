@@ -2,7 +2,7 @@
 
 This page records tests on real hosts and the gaps that remain. Unit tests
 and isolated Linux namespace drills in CI do not establish that a whole
-NetBird deployment works with either provider.
+NetBird deployment works with any provider or backend.
 
 Published hashes below map to identical trees from before the metadata-only
 history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
@@ -278,8 +278,8 @@ and Docker, a self-hosted NetBird server and the 0.79.0 client, with a Linux
 NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
 0.4.1 changes only wording on top of `0f9511a`.
 
-- Initialization installed rules 1 and 90 to 97 in both families and no rule
-  0; `recover` reinstalled them after recreating the containers, and
+- Initialization installed the native rules, 1, 90 and 94 to 97 (no rule 94
+  in IPv6, where PIA's tunnel has no address), and no rule 0; `recover` reinstalled them after recreating the containers, and
   `doctor` passed, including the NetBird settings, stored profile and kernel
   mode checks.
 - The client's traffic left through PIA. TCP, UDP and ping from the client to
@@ -294,7 +294,7 @@ NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
 ## NordVPN pass at `036e1cc`
 
 2026-10-08, a test exit built from `036e1cc`: macOS, OrbStack, Docker, a
-self-hosted NetBird 0.79.0 client, `PROVIDER=nordvpn` with a NordVPN
+self-hosted NetBird server and the NetBird 0.79.0 client, `PROVIDER=nordvpn` with a NordVPN
 account.
 
 - `tools/nordvpn-key.py` exchanged a real access token for the account's
@@ -380,6 +380,43 @@ are covered by unit tests and drills, not by this pass.
 
 Not tested: rootless Podman, other providers, IPv6 through gluetun.
 
+## NordVPN on rootless Podman at v0.5.0
+
+2026-10-08, the same long-running Debian host with rootless Podman 5.8.6, a
+native NordVPN exit (`compose.nordvpn.yaml`) at the release `v0.5.0`, run
+as Quadlet units rather than through podman-compose.
+
+- The after-deploy checks: every container healthy, the doctor's five
+  `PASS` lines, NordVPN-confirmed egress.
+- Namespace checks with no exit route enabled: forwarded IPv4 left only
+  through the tunnel; forwarded IPv6, the exit's own overlay address and the
+  LAN were never delivered or routed outside it; with the exit-table route
+  deleted, forwarded traffic was unreachable.
+- Then, with the route enabled, a phone used the exit on cellular over a
+  direct (P2P) path for about 1 GB of traffic.
+
+Not done on this host: the client-held fail-closed drills, and a DNS or IPv6
+leak test from the phone.
+
+## gluetun backend on rootless Podman at v0.5.0
+
+2026-10-08, the same host, gluetun v3.41.3 with NordVPN, a self-hosted NetBird server, the release `v0.5.0`.
+The four containers of `compose.gluetun.yaml` ran as Quadlet units rather
+than through podman-compose, with the container's root remapped to another
+host ID, on their own pasta network as in
+[operations](operations.md#exits-on-a-private-container-network).
+
+- gluetun, the guard, NetBird and the applier all became healthy.
+- The applier verified the exit with NordVPN-confirmed egress.
+- The exit peer enrolled and its exit routes were created.
+- Found: with the container's root remapped, `secrets/gluetun/api_key` must
+  belong to the container's root with mode `0600`; the applier refuses a
+  group-readable copy. [Operations](operations.md#rootless-podman) now says
+  so.
+
+Not done on this host: traffic from a client through the exit, a switch
+from the panel, the fail-closed drills, and podman-compose.
+
 ## Not yet tested
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
@@ -387,10 +424,12 @@ Not tested: rootless Podman, other providers, IPv6 through gluetun.
   tests and `tools/check-routing.sh` cover them; the NetBird settings were
   checked against the 0.79.0 source. A Mullvad exit and rootless Podman with
   these checks are untested.
-- The [gluetun backend](architecture.md#gluetun-backend) beyond the
-  [pass above](#gluetun-backend-pass-at-a3bb14f): other providers than
-  NordVPN, rootless Podman, IPv6 through gluetun, and gluetun restarting
-  into a new namespace outside a drill. `tools/check-routing.sh`
+- The [gluetun backend](architecture.md#gluetun-backend) beyond the passes
+  [on Docker](#gluetun-backend-pass-at-a3bb14f) and
+  [on rootless Podman](#gluetun-backend-on-rootless-podman-at-v050): other
+  providers than NordVPN, client traffic and the drills on rootless Podman,
+  podman-compose, IPv6 through gluetun, and gluetun restarting into a new
+  namespace outside a drill. `tools/check-routing.sh`
   exercises the guard and gate in isolated namespaces with gluetun's rules
   98–101 and NetBird's 105/110 simulated; unit tests cover the scripts
   against a stand-in for iproute2 and the applier against fakes of the
@@ -406,11 +445,13 @@ Not tested: rootless Podman, other providers, IPv6 through gluetun.
   client; a phone's NetBird client may fall back to its own connection
   differently while the exit peer is offline.
 - Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
-- NordVPN beyond the [pass above](#nordvpn-pass-at-036e1cc): the insights
+- NordVPN beyond the passes [at `036e1cc`](#nordvpn-pass-at-036e1cc) and
+  [on rootless Podman](#nordvpn-on-rootless-podman-at-v050): the insights
   cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with
-  NordVPN's catalogue, rootless Podman, and the fail-closed drills.
-- The `tunnel` egress tier, on any provider: no current provider uses it, and
-  `tools/test_egress.py` covers it with a made-up provider entry.
+  NordVPN's catalogue, and the client-held fail-closed drills.
+- The `tunnel` egress tier, live: FastestVPN, IVPN, Surfshark and Windscribe
+  through gluetun use it, and none of them has had a live pass.
+  `tools/test_egress.py` and the gluetun tests cover it.
 - The panel's [OpenID Connect sign-in](access.md#sign-in-with-openid-connect)
   for someone granted only some exits (`PANEL_ACCESS`), live; any provider but
   Pocket ID; a confidential client; the userinfo fallback against a real

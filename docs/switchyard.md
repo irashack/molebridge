@@ -20,7 +20,7 @@ The page has three parts:
   |---|---|
   | connected | Verified in the last 150 seconds |
   | switching | A switch is running |
-  | failed | The last switch failed |
+  | failed | The last switch, or the latest periodic check, failed |
   | unknown | Status is stale or unavailable |
 
   A connected exit whose egress was verified only by Molebridge's own tunnel
@@ -40,19 +40,21 @@ A switch takes two taps: the first arms the button, and the second confirms
 it within eight seconds. Escape, or moving focus away, cancels. Without
 JavaScript a single tap submits.
 
-The applier then changes the tunnel and waits for a fresh handshake and for
-the provider to confirm the new egress. That normally takes a few seconds. The
-page shows which server it is leaving and for how long it has been switching,
-and gives up after about a minute. Every device using the exit moves together,
+The applier then changes the tunnel and waits for a fresh handshake, intact
+routing and the egress check: the provider's own, or the tunnel checks for a
+provider without one. That normally takes a few seconds. The page shows which
+server it is leaving and for how long it has been switching. The applier
+gives up after 60 seconds with the default backend and 90 with gluetun. Every device using the exit moves together,
 and connections open through the exit drop.
 
 If a switch fails, press **Retry** or pick something else;
 [troubleshooting](troubleshooting.md#switching) explains each message. A
 failed check doesn't always mean traffic stopped: the previous or new tunnel
 may still be carrying it. What can't happen is forwarded traffic leaving
-through the host's own connection. Molebridge also never moves to another
-server by itself. With PIA, choosing the region you're already on registers
-again; PIA may pick the same server.
+through the host's own connection. Molebridge never picks a different server
+as failover. With PIA, choosing the region you're already on registers
+again; PIA may pick the same server. With gluetun, the applier puts your
+selection back when gluetun restarts on another one.
 
 Some parts appear only once they're useful:
 
@@ -85,7 +87,9 @@ answered 429 and the page tries again a few seconds later.
 ## The server list
 
 The applier downloads the provider's server list at startup and every six
-hours, and keeps the last good copy if a download fails. A list older than 24
+hours, and keeps the last good copy if a download fails. With the gluetun
+backend it reads gluetun's own list instead; Diagnostics shows the date of
+gluetun's data, stale after 30 days. A list older than 24
 hours can't authorize a switch. The panel only reads the applier's copy; it
 can't change it.
 
@@ -101,6 +105,10 @@ By default each exit is drawn in its provider's colors, using system fonts:
   dark slate, with the provider behind it as the accent, such as Mullvad's
   yellow or Surfshark's teal, so a gluetun exit and a native exit of the same
   provider look different.
+
+<p align="center">
+  <img src="assets/switchyard-gluetun.png" alt="Switchyard with a native Mullvad exit, Mullvad through gluetun (selected, on gluetun's slate with Mullvad's yellow) and Surfshark through gluetun" width="900">
+</p>
 
 `PANEL_STYLE=dashboard` switches to a neutral monospace look that matches
 Glance-style dashboards. `PANEL_THEME` picks light, dark, or `auto` (follow the
@@ -172,7 +180,9 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
 - `id` is 1–32 characters of `a-z`, `0-9` and `-`, starting with a letter or
   digit. It appears in URLs (`/?exit=pia`) and names the exit's state
   directory, `$STATE_DIR/<id>`.
-- `provider` is `mullvad`, `pia` or `nordvpn`.
+- `provider` is `mullvad`, `pia`, `nordvpn`, or for an exit on the gluetun
+  backend `gluetun-<provider>`, such as `gluetun-surfshark`
+  ([the ids](providers.md)).
 - `label` is optional (40 characters at most). It defaults to the provider's
   name.
 
