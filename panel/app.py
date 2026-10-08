@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Switchyard, the Molebridge control panel.
 
-Web UI for choosing which Mullvad server or PIA region an exit uses. One panel
-can serve one exit (the default) or several exits side by side (PANEL_EXITS),
-each styled after its provider. Without PANEL_OIDC_ISSUER it has no login of
-its own: publish it only behind something that authenticates people, such as
-an identity-aware reverse proxy or an overlay access policy. With it, people
+Web UI for choosing which Mullvad or NordVPN server, or PIA region, an exit
+uses. One panel can serve one exit (the default) or several exits side by
+side (PANEL_EXITS), each styled after its provider. Without
+PANEL_OIDC_ISSUER it has no login of its own: publish it only behind
+something that authenticates people, such as an identity-aware reverse proxy
+or an overlay access policy. With it, people
 sign in with OpenID Connect (oidc.py) and see only the exits their groups are
 granted (PANEL_ACCESS, PANEL_ADMIN_GROUPS). It:
 
@@ -41,15 +42,17 @@ import socket
 import threading
 import time
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait as wait_futures
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from molebridge.state import (CATALOG_MAX_AGE, PROVIDER_LABEL, PROVIDERS, exit_confirmed, now_iso,
-                              provider_from_env, read_json, recent, status_view,
-                              valid_server_name, write_json_atomic)
-from molebridge.relays import snapshot_relays
+from molebridge import providers
+from molebridge.gluetun_catalog import DATA_STALE_SEC as GLUETUN_DATA_STALE_SEC
+from molebridge.state import (CATALOG_MAX_AGE, age_seconds, egress_tier, exit_confirmed, now_iso,
+                              provider_from_env, read_json, recent, status_view, valid_server_name,
+                              write_json_atomic)
+from molebridge.relays import read_snapshot, snapshot_relays
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import oidc  # noqa: E402 - the panel's own sign-in module, beside this file
@@ -101,9 +104,9 @@ def parse_exits(raw: str, state_dir: Path) -> List[Exit]:
         exit_id, provider, label = exit_id.strip(), provider.strip(), label.strip()
         if not sep or not EXIT_ID_RE.fullmatch(exit_id):
             raise ValueError(f'PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in {entry!r}')
-        if provider not in PROVIDERS:
-            raise ValueError(f'PANEL_EXITS: provider must be one of {", ".join(PROVIDERS)}, in {entry!r}')
-        label = label or PROVIDER_LABEL[provider]
+        if provider not in providers.REGISTRY:
+            raise ValueError(f'PANEL_EXITS: provider must be one of {", ".join(providers.PROVIDERS)}, in {entry!r}')
+        label = label or providers.get(provider).label
         if len(label) > 40 or not label.isprintable():
             raise ValueError(f'PANEL_EXITS: labels are at most 40 printable characters, in {entry!r}')
         if any(e.id == exit_id for e in exits):
@@ -117,7 +120,7 @@ EXITS = parse_exits(os.environ.get('PANEL_EXITS', ''), STATE_DIR)
 
 def single_exit() -> Exit:
     """The one exit of a panel without PANEL_EXITS; read at call time."""
-    return Exit('', PROVIDER, PROVIDER_LABEL[PROVIDER], DESIRED_PATH, APPLIER_RESULT_PATH,
+    return Exit('', PROVIDER, providers.get(PROVIDER).label, DESIRED_PATH, APPLIER_RESULT_PATH,
                 RELAYS_PATH, RELAY_ERROR_PATH)
 
 
@@ -162,13 +165,26 @@ MAX_BODY_BYTES = 4096
 CSRF_COOKIE_NAME = 'csrf_nonce'
 
 # Latency probe: a TCP handshake round trip to the relay's port 443, which
-# Mullvad relays and PIA's region servers accept. No ICMP, so no capabilities are needed.
+# Mullvad relays and PIA's region servers accept; NordVPN's are expected to
+# (untested). A refused connection still times the round trip. No ICMP, so no
+# capabilities are needed.
 PROBE_PORT = 443
 PROBE_TIMEOUT_S = 1.5
 PROBE_ATTEMPTS = 2
 PROBE_WORKERS = 24
 LATENCY_TTL_S = 15 * 60
 MAX_PROBE_HOSTS = 64
+# A country larger than this is timed on a sample: the lowest-load servers,
+# taken in turn from each city, so a large provider cannot turn one click
+# into thousands of connections. A smaller country is timed whole, as before.
+MAX_COUNTRY_PROBES = 128
+# Every target of one latency request, after duplicates are dropped.
+MAX_PROBE_TARGETS = 256
+# Latency requests running at once, panel-wide, and per exit. A request that
+# finds no free slot is answered 429 at once, before it loads anything.
+LATENCY_SLOTS = 4
+# How long a request waits for probes another request already started.
+PROBE_WAIT_S = 60
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / 'static'
@@ -207,8 +223,6 @@ PANEL_STYLE = style_setting(os.environ.get('PANEL_STYLE', 'provider'))
 
 THEME_COLOR = '#232638'
 THEME_COLOR_LIGHT = '#eff1f5'
-# (dark, light) browser chrome colour per provider style.
-PROVIDER_THEME_COLORS = {'mullvad': ('#192e45', '#e9eef3'), 'pia': ('#1c1e22', '#f2f4f5')}
 WEB_MANIFEST = {
     'name': PANEL_TITLE,
     'short_name': PANEL_SHORT_TITLE,
@@ -263,7 +277,30 @@ def security_headers() -> Dict[str, str]:
 _CSRF_SECRET = secrets.token_bytes(32)
 # (exit id, hostname) -> (round-trip ms or None when unreachable, time.monotonic() measured)
 _latency_cache: Dict[Tuple[str, str], Tuple[Optional[float], float]] = {}
+# Guards the cache and the in-flight table only; never held while probing.
 _probe_lock = threading.Lock()
+# (exit id, hostname) -> Future of a probe some request is running now, so a
+# host is never probed twice at once.
+_probes_in_flight: Dict[Tuple[str, str], Future] = {}
+_latency_slots = threading.BoundedSemaphore(LATENCY_SLOTS)
+_latency_exits: set = set()
+_latency_admission = threading.Lock()
+
+
+def latency_admit(exit_id: str) -> bool:
+    """Take a latency slot for this exit: one request per exit, LATENCY_SLOTS
+    panel-wide. False means busy; the caller answers 429."""
+    with _latency_admission:
+        if exit_id in _latency_exits or not _latency_slots.acquire(blocking=False):
+            return False
+        _latency_exits.add(exit_id)
+        return True
+
+
+def latency_release(exit_id: str) -> None:
+    with _latency_admission:
+        _latency_exits.discard(exit_id)
+        _latency_slots.release()
 # relays path -> ((mtime_ns, size), relays), for the exit tabs' place names.
 _relay_cache: Dict[Path, Tuple[Tuple[int, int], Dict[str, Dict[str, Any]]]] = {}
 _relay_cache_lock = threading.Lock()
@@ -271,7 +308,7 @@ _relay_cache_lock = threading.Lock()
 
 def load_allowlist(ex: Optional[Exit] = None) -> set:
     ex = ex or single_exit()
-    snapshot = read_json(ex.relays_path)
+    snapshot = read_snapshot(ex.relays_path, ex.provider)
     if not isinstance(snapshot, dict) or not recent(snapshot.get('fetched_at'), CATALOG_MAX_AGE):
         return set()
     return set(snapshot_relays(snapshot, ex.provider))
@@ -280,7 +317,7 @@ def load_allowlist(ex: Optional[Exit] = None) -> set:
 def get_fetch_error(ex: Optional[Exit] = None):
     ex = ex or single_exit()
     data = read_json(ex.relay_error_path, 4096)
-    snapshot = read_json(ex.relays_path)
+    snapshot = read_snapshot(ex.relays_path, ex.provider)
     if not isinstance(snapshot, dict) or not recent(snapshot.get('fetched_at'), CATALOG_MAX_AGE):
         return 'No fresh trusted relay catalogue; selections are unavailable.', None
     return (data.get('message'), data.get('checked_at')) if isinstance(data, dict) else (None, None)
@@ -312,19 +349,41 @@ def measure_latency(relays: Dict[str, Dict[str, Any]], hostnames: Iterable[str],
                     fresh: bool = False, scope: str = '') -> Dict[str, Optional[float]]:
     """Latency for each listed hostname present in the allowlist, probing
     only entries missing from or stale in the cache (or all, when fresh).
-    scope is the exit id: each exit's names are cached apart."""
+    scope is the exit id: each exit's names are cached apart. A host another
+    request is probing right now is waited for, not probed again; no lock is
+    held while probing, so one exit's probes never hold up another's."""
     wanted = [h for h in dict.fromkeys(hostnames) if h in relays]
+    own: List[Tuple[str, Future]] = []
+    others: List[Future] = []
     with _probe_lock:
         now = time.monotonic()
-        stale = [h for h in wanted
-                 if fresh or (scope, h) not in _latency_cache or now - _latency_cache[(scope, h)][1] > LATENCY_TTL_S]
-        if stale:
-            with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(stale))) as pool:
-                results = pool.map(lambda h: probe_tcp_rtt_ms(str(relays[h]['ipv4_addr_in'])), stale)
-                measured_at = time.monotonic()
-                for hostname, ms in zip(stale, results):
+        for hostname in wanted:
+            key = (scope, hostname)
+            if key in _probes_in_flight:
+                others.append(_probes_in_flight[key])
+                continue
+            cached = _latency_cache.get(key)
+            if fresh or cached is None or now - cached[1] > LATENCY_TTL_S:
+                future: Future = Future()
+                _probes_in_flight[key] = future
+                own.append((hostname, future))
+    try:
+        if own:
+            with ThreadPoolExecutor(max_workers=min(PROBE_WORKERS, len(own))) as pool:
+                results = list(pool.map(lambda item: probe_tcp_rtt_ms(str(relays[item[0]]['ipv4_addr_in'])), own))
+            measured_at = time.monotonic()
+            with _probe_lock:
+                for (hostname, _), ms in zip(own, results):
                     _latency_cache[(scope, hostname)] = (ms, measured_at)
-        return {h: _latency_cache[(scope, h)][0] for h in wanted}
+    finally:
+        with _probe_lock:
+            for hostname, future in own:
+                _probes_in_flight.pop((scope, hostname), None)
+                future.set_result(None)
+    if others:
+        wait_futures(others, timeout=PROBE_WAIT_S)
+    with _probe_lock:
+        return {h: _latency_cache.get((scope, h), (None, 0.0))[0] for h in wanted}
 
 
 def city_representatives(relays: Dict[str, Dict[str, Any]]) -> List[str]:
@@ -336,21 +395,47 @@ def city_representatives(relays: Dict[str, Dict[str, Any]]) -> List[str]:
     return list(chosen.values())
 
 
+def country_sample(relays: Dict[str, Dict[str, Any]], country: str) -> Tuple[List[str], int]:
+    """(servers to time, servers in the country). Up to MAX_COUNTRY_PROBES,
+    chosen the same way every time: each city's servers ordered by load
+    (unknown last), then name, taken one city at a time in turn."""
+    cities: Dict[str, List[str]] = {}
+    for hostname in sorted(relays):
+        info = relays[hostname]
+        if info.get('country') == country:
+            cities.setdefault(str(info.get('city', '')), []).append(hostname)
+    total = sum(len(hosts) for hosts in cities.values())
+    if total <= MAX_COUNTRY_PROBES:
+        return sorted(h for hosts in cities.values() for h in hosts), total
+
+    def load(hostname: str) -> int:
+        value = relays[hostname].get('load')
+        return value if type(value) is int else 101
+
+    queues = [sorted(hosts, key=lambda h: (load(h), h)) for _, hosts in sorted(cities.items())]
+    chosen: List[str] = []
+    depth = 0
+    while len(chosen) < MAX_COUNTRY_PROBES:
+        chosen.extend(queue[depth] for queue in queues if depth < len(queue))
+        depth += 1
+    return chosen[:MAX_COUNTRY_PROBES], total
+
+
 def latency_targets(query: Dict[str, List[str]], relays: Dict[str, Dict[str, Any]]) -> List[str]:
-    targets: List[str] = []
+    """At most MAX_PROBE_TARGETS: the named hosts first, then the city sweep,
+    then a country's servers (sampled when it is large)."""
+    targets = [h for h in query.get('hosts', [''])[0].split(',') if h][:MAX_PROBE_HOSTS]
     if query.get('scope', [''])[0] == 'cities':
         targets.extend(city_representatives(relays))
     country = query.get('country', [''])[0]
     if country:
-        targets.extend(sorted(h for h, info in relays.items() if info.get('country') == country))
-    hosts = [h for h in query.get('hosts', [''])[0].split(',') if h][:MAX_PROBE_HOSTS]
-    targets.extend(hosts)
-    return targets
+        targets.extend(country_sample(relays, country)[0])
+    return list(dict.fromkeys(targets))[:MAX_PROBE_TARGETS]
 
 
 def load_relays(ex: Optional[Exit] = None) -> Dict[str, Dict[str, Any]]:
     ex = ex or single_exit()
-    return snapshot_relays(read_json(ex.relays_path), ex.provider)
+    return snapshot_relays(read_snapshot(ex.relays_path, ex.provider), ex.provider)
 
 
 def cached_relays(ex: Exit) -> Dict[str, Dict[str, Any]]:
@@ -526,11 +611,6 @@ def _static_versions() -> Dict[str, str]:
 _STATIC_VERSIONS = _static_versions()
 
 
-# Catalogue attribute -> filter label. Shown only when some relay carries it.
-PROVIDER_FILTERS = {'mullvad': {'owned': 'Mullvad-owned', 'stboot': 'RAM-only'},
-                    'pia': {'port_forward': 'Port forwarding'}}
-
-
 def flag_emoji(location_code: Any) -> str:
     """Regional-indicator flag from a Mullvad location code like 'se-sto'."""
     code = str(location_code or '')[:2].upper()
@@ -539,16 +619,21 @@ def flag_emoji(location_code: Any) -> str:
     return ''.join(chr(0x1F1E6 + ord(c) - ord('A')) for c in code)
 
 
-def relay_label(hostname: str) -> str:
-    """Short chip label: 'se-sto-wg-001' -> 'wg-001'."""
-    marker = hostname.rfind('-wg-')
-    return hostname[marker + 1:] if marker >= 0 else hostname
+def relay_label(hostname: str, provider: Optional[str] = None) -> str:
+    """Short chip label, such as 'wg-001' for Mullvad's 'se-sto-wg-001'."""
+    return providers.get(provider or PROVIDER).chip_label(hostname)
 
 
 def relay_attributes(info: Dict[str, Any], provider: Optional[str] = None) -> str:
     """data-owned/data-stboot for the filters, only when the catalogue knows."""
     return ''.join(f' data-{key}="{"1" if info[key] else "0"}"'
-                   for key in PROVIDER_FILTERS[provider or PROVIDER] if isinstance(info.get(key), bool))
+                   for key in providers.get(provider or PROVIDER).filters if isinstance(info.get(key), bool))
+
+
+def relay_badges(info: Dict[str, Any], provider: Optional[str] = None) -> str:
+    """Badges such as 'PF' or 'virtual' for what the catalogue says is true."""
+    return ''.join(f'<span class="badge" title="{label}">{short}</span>'
+                   for key, short, label in providers.get(provider or PROVIDER).badges if info.get(key) is True)
 
 
 def relay_title(hostname: str, info: Dict[str, Any], provider: Optional[str] = None) -> str:
@@ -557,18 +642,8 @@ def relay_title(hostname: str, info: Dict[str, Any], provider: Optional[str] = N
 
 
 def relay_details(info: Dict[str, Any], provider: Optional[str] = None) -> str:
-    """Hosting summary such as 'Example Hosting · rented · RAM-only'."""
-    if (provider or PROVIDER) == 'pia':
-        return ' · '.join(label for key, label in (('port_forward', 'port forwarding'),
-                                                   ('geo', 'virtual location')) if info.get(key) is True)
-    parts = []
-    if isinstance(info.get('provider'), str):
-        parts.append(str(info['provider']))
-    if isinstance(info.get('owned'), bool):
-        parts.append('Mullvad-owned' if info['owned'] else 'rented')
-    if info.get('stboot') is True:
-        parts.append('RAM-only')
-    return ' · '.join(parts)
+    """Server summary such as 'Example Hosting · rented · RAM-only'."""
+    return providers.get(provider or PROVIDER).details(info)
 
 
 def _field(container: Optional[Dict[str, Any]], key: str, default: str = '(unknown)') -> str:
@@ -585,7 +660,13 @@ def status_payload(ex: Optional[Exit] = None):
     desired = desired if isinstance(desired, dict) else None
     result = result if isinstance(result, dict) else None
     state, label = status_view(desired, result, ex.provider)
-    return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label}}
+    # How a connected exit's egress was confirmed: 'provider' or 'tunnel'.
+    tier = egress_tier(result, ex.provider) if state == 'ok' and result else None
+    return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label, 'tier': tier}}
+
+
+# Diagnostics wording per egress tier; the panel script keeps the same words.
+TIER_TEXT = {'provider': 'provider-confirmed', 'tunnel': 'tunnel checks only', None: 'not confirmed'}
 
 
 def exit_summary(ex: Exit) -> Dict[str, Any]:
@@ -601,8 +682,8 @@ def exit_summary(ex: Exit) -> Dict[str, Any]:
 
 def theme_color_meta(provider: Optional[str] = None) -> str:
     dark, light = THEME_COLOR, THEME_COLOR_LIGHT
-    if PANEL_STYLE == 'provider' and provider in PROVIDER_THEME_COLORS:
-        dark, light = PROVIDER_THEME_COLORS[provider]
+    if PANEL_STYLE == 'provider' and provider in providers.REGISTRY:
+        dark, light = providers.get(provider).theme_colors
     if PANEL_THEME == 'auto':
         return (f'<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">\n'
                 f'<meta name="theme-color" content="{light}" media="(prefers-color-scheme: light)">')
@@ -621,10 +702,7 @@ def region_rows(relays: Dict[str, Dict[str, Any]], desired_server: str, provider
         flag = flag_emoji(info.get('location_code'))
         current = ' is-current' if hostname == desired_server else ''
         country_html = f' <span class="subdue region-country">{esc(country)}</span>' if country != city else ''
-        badges = ''.join(f'<span class="badge" title="{label}">{short}</span>'
-                         for key, short, label in (('port_forward', 'PF', 'Port forwarding'),
-                                                   ('geo', 'virtual', 'Virtual location'))
-                         if info.get(key) is True)
+        badges = relay_badges(info, provider)
         rows.append(
             f'<button type="submit" name="server" value="{hn}" class="relay region{current}" '
             f'data-host="{hn}" data-city="{esc(city)}" data-country="{esc(country)}" '
@@ -668,8 +746,8 @@ def country_tree(relays: Dict[str, Dict[str, Any]], desired_server: str, provide
                     f'data-host="{hn}" data-city="{esc(city)}" data-country="{esc(country)}" '
                     f'data-flag="{flag_emoji(info.get("location_code"))}"{relay_attributes(info, provider)} '
                     f'title="{esc(relay_title(hostname, info, provider))}">'
-                    f'<span class="relay-name" data-arm-text>{esc(relay_label(hostname))}</span>'
-                    '<span class="ms" data-ms></span></button>'
+                    f'<span class="relay-name" data-arm-text>{esc(relay_label(hostname, provider))}</span>'
+                    f'{relay_badges(info, provider)}<span class="ms" data-ms></span></button>'
                 )
             city_html.append(
                 f'<div class="city" data-search="{esc(" ".join([country, city, *cities[city]]).lower())}">'
@@ -690,6 +768,34 @@ def country_tree(relays: Dict[str, Dict[str, Any]], desired_server: str, provide
     return f'<div class="countries">{html_out}</div>', len(grouped)
 
 
+def provider_css(provider: str) -> str:
+    """The provider style a page or tab takes: gluetun's entries look like the
+    same provider's native one."""
+    spec = providers.REGISTRY.get(provider)
+    return spec.css_id if spec else provider
+
+
+def provider_note(provider: str) -> str:
+    """A short note after the provider's label, such as 'via gluetun'."""
+    spec = providers.REGISTRY.get(provider)
+    return f' <span class="provider-note">{html.escape(spec.note)}</span>' if spec and spec.note else ''
+
+
+# The gluetun applier's one refresh of gluetun's server list after it starts.
+SERVER_LIST_UPDATE = {'updating': '; updating server list', 'failed': '; server list update failed'}
+
+
+def catalogue_age_text(relays_data: Optional[Dict[str, Any]], fetched_at: str) -> str:
+    """'fetched <time>', and for a list read from gluetun the date of
+    gluetun's provider data, which is what says how current it is."""
+    data = relays_data.get('data_timestamp') if isinstance(relays_data, dict) else None
+    if not isinstance(relays_data, dict) or relays_data.get('source') != 'gluetun' or not isinstance(data, str):
+        return f'fetched {fetched_at}'
+    age = age_seconds(data)
+    stale = ' (stale: older than 30 days)' if age is None or age > GLUETUN_DATA_STALE_SEC else ''
+    return f'read {fetched_at}; gluetun data from {html.escape(data)}{stale}'
+
+
 def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool) -> str:
     """The Switchyard's exit picker: one tab per exit, in its provider's colours,
     with its state and, when connected, where it exits."""
@@ -702,14 +808,14 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
         place = f'<span class="exit-place" data-exit-place>{esc(summary["place"])}</span>'
         links.append(
             f'<a class="exit-tab{" is-selected" if selected else ""}" href="{base}?exit={esc(summary["id"])}" '
-            f'data-exit="{esc(summary["id"])}" data-provider="{esc(summary["provider"])}" '
+            f'data-exit="{esc(summary["id"])}" data-provider="{esc(provider_css(summary["provider"]))}" '
             f'title="{esc(summary["label"])}"{current}>'
             f'<span class="exit-track" aria-hidden="true">{esc(f"{index:02d}")}</span>'
             '<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">'
             '<path class="track-bed" d="M12 44V4M20 44V4M20 32L44 8M14 26L38 2"/>'
             '<path class="track-route" d="M16 44V28L40 4"/>'
             '<circle cx="16" cy="30" r="3"/></svg>'
-            f'<span class="exit-label">{esc(summary["label"])}</span>{place}'
+            f'<span class="exit-label">{esc(summary["label"])}{provider_note(summary["provider"])}</span>{place}'
             '<span class="exit-health">'
             f'<span class="exit-dot dot-{esc(summary["state"])}" data-exit-dot aria-hidden="true"></span>'
             f'<span data-exit-status>{esc(summary["status"])}</span></span></a>'
@@ -734,7 +840,8 @@ def render_index_html(
     esc = html.escape
     ex = exit or single_exit()
     provider = ex.provider
-    filters = PROVIDER_FILTERS[provider]
+    spec = providers.get(provider)
+    filters = spec.filters
     desired = desired if isinstance(desired, dict) else {}
     result = result if isinstance(result, dict) else {}
     query = f'?exit={esc(ex.id)}' if ex.id else ''
@@ -751,6 +858,8 @@ def render_index_html(
     desired_server = str((desired or {}).get('server') or '')
     result_server = str((result or {}).get('server') or '')
     state, state_label = status_view(desired, result, provider)
+    tier = egress_tier(result, provider) if result else None
+    tunnel_only = state == 'ok' and tier == 'tunnel'
     display_server = desired_server if state == 'applying' else result_server
     current_info = relays.get(display_server) or {}
 
@@ -784,7 +893,7 @@ def render_index_html(
 
     token = esc(csrf_token_value)
     # Each provider's own way of listing locations.
-    layout = 'regions' if provider == 'pia' else 'tree'
+    layout = spec.layout
     if layout == 'regions':
         locations_html = region_rows(relays, desired_server, provider)
         locations_count = f'{len(relays)} {"region" if len(relays) == 1 else "regions"}'
@@ -808,7 +917,8 @@ def render_index_html(
         filters_row = f'<div class="filter-row" id="relay-filters" hidden>{filter_buttons}</div>'
     current_details = relay_details(current_info, provider) if current_info else ''
     forward_row = ''
-    if provider == 'pia' and result.get('port_forward') is True:
+    # Only a provider with port forwarding (PIA) reports it.
+    if result.get('port_forward') is True:
         forward_row = (f'\n        <dt>Forwarded port</dt><dd data-f="forwarded_port">'
                        f'{_field(result, "forwarded_port", "none")}</dd>')
 
@@ -849,7 +959,7 @@ def render_index_html(
                         'failed': 'Connection needs attention', 'unknown': 'Connection unverified'}[state]
 
     return f"""<!DOCTYPE html>
-<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{provider}">
+<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{esc(spec.css_id)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -868,7 +978,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-provider="{provider}" data-layout="{layout}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page" data-provider="{esc(spec.css_id)}" data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 {tabs}
 <form method="post" action="/select" id="select-form">
@@ -878,7 +988,7 @@ def render_index_html(
 <div class="switchboard">
 <div class="overview">
 <section class="widget current-widget">
-  <div class="widget-header"><h2>{current_heading}</h2>{open_link}</div>
+  <div class="widget-header"><h2>{current_heading}{provider_note(provider)}</h2>{open_link}</div>
   <div class="widget-content current">
     <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(connection_label)}</span></div>
     <div class="current-row">
@@ -890,6 +1000,7 @@ def render_index_html(
       <button type="button" class="link-button pin" data-pin aria-pressed="false" aria-label="Pin this server" title="Pin this server" hidden>☆</button>
       <div class="current-side">
         <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
+        <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if tunnel_only else ' hidden'}>{esc(TIER_TEXT['tunnel'])}</span>
         <span class="ms" data-current-ms></span>
       </div>
     </div>
@@ -900,14 +1011,15 @@ def render_index_html(
         <dt>Applier</dt><dd data-f="status">{_field(result, 'status')}</dd>
         <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
         <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
-        <dt>{PROVIDER_LABEL[provider]} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>{forward_row}
+        <dt>{esc(spec.label)} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>
+        <dt>Egress check</dt><dd data-f="egress_tier">{esc(TIER_TEXT[tier]) if result else '(unknown)'}</dd>{forward_row}
         <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
         <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
         <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
         <dt>Server</dt><dd>{esc(current_details) or '(unknown)'}</dd>
         <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
         <dt>Requested</dt><dd>{_field(desired, 'requested_at', '')}</dd>
-        <dt>Relay list</dt><dd>{len(relays)} relays, fetched {fetched_at}</dd>
+        <dt>Relay list</dt><dd>{len(relays)} relays, {catalogue_age_text(relays_data, fetched_at)}{SERVER_LIST_UPDATE.get(result.get('server_list_update'), '')}</dd>
       </dl>
     </details>
   </div>
@@ -1154,9 +1266,23 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             ex = self._requested_exit(query, session)
             if ex is None:
                 return
-            relays = load_relays(ex)
-            fresh = query.get('fresh', [''])[0] == '1'
-            self._send_json({'latency': measure_latency(relays, latency_targets(query, relays), fresh, ex.id)})
+            if not latency_admit(ex.id):
+                # Backpressure: this exit already has a request running, or
+                # the panel is at its limit. Nothing has been loaded yet.
+                self._send_body(429, 'application/json', b'{"error": "latency busy"}',
+                                {'Cache-Control': 'no-store', 'Retry-After': '3'})
+                return
+            try:
+                relays = load_relays(ex)
+                fresh = query.get('fresh', [''])[0] == '1'
+                body: Dict[str, Any] = {'latency': measure_latency(relays, latency_targets(query, relays), fresh, ex.id)}
+                country = query.get('country', [''])[0]
+                if country:
+                    probed, total = country_sample(relays, country)
+                    body['country'] = {'probed': len(probed), 'total': total}
+            finally:
+                latency_release(ex.id)
+            self._send_json(body)
         elif parsed.path == '/login' and AUTH is not None:
             self._handle_login(query, session)
         elif parsed.path == '/auth/callback' and AUTH is not None:
@@ -1333,7 +1459,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         token = csrf_token(nonce, self._csrf_binding(session))
         fetch_error, fetch_error_at = get_fetch_error(ex)
         body = render_index_html(
-            read_json(ex.desired_path), read_json(ex.result_path), read_json(ex.relays_path),
+            read_json(ex.desired_path), read_json(ex.result_path), read_snapshot(ex.relays_path, ex.provider),
             fetch_error, fetch_error_at, token, embed=embed, exit=ex,
             exits=[exit_summary(e) for e in visible_exits(session)],
             user=session.name if session is not None else None,

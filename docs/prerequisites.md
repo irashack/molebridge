@@ -73,6 +73,8 @@ you want direct NetBird connections from a rootless or bridged setup (see
 | Mullvad, through the tunnel: HTTPS to `ipv4.am.i.mullvad.net` and `ipv6.am.i.mullvad.net` | Egress checks |
 | PIA: HTTPS to `serverlist.piaservers.net` and `www.privateinternetaccess.com`; TCP 1337 to PIA servers; the UDP port each server assigns | Server list, login, key registration, tunnel |
 | PIA, through the tunnel: HTTPS to `www.privateinternetaccess.com`; TCP 19999 to the server (port forwarding only) | Egress check, port forwarding |
+| NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list (and, once from the host at setup, the key), latency probes |
+| NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
 
 Check your ISP's or hosting provider's terms before relaying traffic for other
 people. Some forbid it.
@@ -155,6 +157,22 @@ and cut throughput by more than half.
 - Nothing to download: `tools/prepare-tunnel-config.py --pia` generates the key.
 - PIA carries IPv4 only. See [providers](providers.md) for what else differs,
   and for port forwarding.
+
+### NordVPN (experimental)
+
+One live pass so far, on macOS with OrbStack; see
+[testing](testing.md#nordvpn-pass-at-036e1cc).
+
+- **An active account** with NordVPN's VPN service.
+- **An access token**, from your Nord Account: NordVPN, then Advanced
+  settings, then "Get access token". `tools/nordvpn-key.py` uses it once, at
+  setup, to fetch the account's NordLynx private key; the exit never stores
+  it. The private key is the same on every server.
+- **More memory for the applier.** Parsing NordVPN's server list every six
+  hours took about 70 MB in a local test with a synthetic list of today's
+  size, and about 300 MB at the 32 MiB limit; `compose.nordvpn.yaml` raises
+  the applier's limit from 128 MB to 512 MB.
+- NordVPN carries IPv4 only. See [providers](providers.md#how-nordvpn-differs).
 
 ## Panel access
 

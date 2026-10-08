@@ -1,11 +1,13 @@
-# Molebridge: a Mullvad or PIA WireGuard exit node for a NetBird overlay, with a
-# web panel for choosing the server (Mullvad) or region (PIA).
+# Molebridge: a Mullvad, PIA or NordVPN WireGuard exit node for a NetBird
+# overlay, with a web panel for choosing the server (Mullvad, NordVPN) or
+# region (PIA).
 #
 # Run from the repository root after following docs/setup.md:
 #   docker compose up -d
 #
 # For PIA, set PROVIDER=pia and EXIT_IF=pia in .env and add compose.pia.yaml
-# (COMPOSE_FILE=compose.yaml:compose.pia.yaml); see docs/providers.md.
+# (COMPOSE_FILE=compose.yaml:compose.pia.yaml); for NordVPN, nordvpn and
+# compose.nordvpn.yaml the same way. See docs/providers.md.
 #
 # Namespace ownership: `wireguard` creates the network namespace and the
 # provider tunnel. `netbird` and `applier` join it (`network_mode:
@@ -145,7 +147,10 @@ services:
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+      # curl's output lands here before it is parsed: room for the largest
+      # server list any provider may send (NordVPN's, capped at 32 MiB). It
+      # takes memory only while a download is there.
+      - /tmp:size=48m,mode=1777,noexec,nosuid,nodev
     environment:
       EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"

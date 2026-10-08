@@ -123,6 +123,97 @@ NB_DISABLE_USERSPACE_ROUTING=true (compose.yaml).` It then runs the gate's
 own checks in the running `netbird` container and shows the gate's refusal
 line, if any.
 
+With the [gluetun backend](architecture.md#gluetun-backend) the gate also
+refuses `<name> is set; the gluetun backend needs NetBird to mark its control
+traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
+`NB_DISABLE_CUSTOM_ROUTING`, and `NB_FWMARK_BASE must equal CONTROL_MARK
+(<mark>)`. Remove the variable, or set the mark only through `CONTROL_MARK`
+in `.env`. It also refuses settings the guard would refuse (`OVERLAY_CIDR`,
+`EXIT_IF`, the tables and `CONTROL_MARK`, with the guard's own message),
+`the guard's rule definitions are missing (<file>)` when
+`routing/gluetun-rules` isn't mounted, `FWMARK_GRACE must be 5..30 seconds`,
+and `cannot read the boot clock (/proc/uptime and the boot id)`.
+
+**gluetun backend: NetBird exits with `NetBird gate: stopping NetBird:
+<reason> (see docs/troubleshooting.md)`.** The gate stopped NetBird because
+its control traffic could have used the provider tunnel:
+
+- `NetBird logged that it runs without advanced routing, so its control
+  traffic would be unmarked`: NetBird's start-up check of socket marks and
+  `ip rule` support failed. Check NetBird's log just before this line and
+  that the `netbird` service still has `NET_ADMIN`.
+- `wt0 has not carried the control mark 0x1bd00 for 30 seconds (last
+  reported: <value>)`: `absent` or `nothing` means the overlay interface
+  didn't come up, or the `guard` container isn't running (it reports the
+  mark; check `docker compose ps guard` and its log); `off` or another mark
+  means NetBird runs without its control mark.
+- `routing guards missing for 30 seconds`: the guard's rules disappeared and
+  weren't restored; check the `guard` log.
+
+- `the boot clock changed identity`: the kernel's boot id changed under a
+  running gate, which shouldn't happen; restart the stack.
+
+**gluetun backend: NetBird's log stops at `NetBird gate: gluetun backend:
+waiting for the whole guard (rules 1-97 with control mark 0x1bd00, exit
+table 51821, host table 51822)`.** The guard isn't ready, or something else
+changed rules at priorities 0–97 or the exit or host table. The guard's log
+ends with `10-exit-routing: not ready:` and what is missing; `no IPv4
+default route through eth0 in the main table` means `HOST_IF` doesn't name
+the namespace's interface toward the host
+([configuration](configuration.md#gluetun-backend)). The gate and the guard
+check the same definitions, so if the guard reports every rule in place
+and the gate still waits, check that the NetBird container has the same
+`OVERLAY_CIDR`, `OVERLAY6_CIDR`, `EXIT_IF`, `EXIT_TABLE`, `HOST_IF`,
+`HOST_TABLE` and `CONTROL_MARK` as the guard (`compose.gluetun.yaml` passes
+them).
+
+**gluetun backend: the guard's log says `not ready: ... eth0 is not in this
+namespace` or `no IPv4 default route through eth0 in the main table`.**
+The guard's namespace lost its host interface or its default route,
+usually because the engine restarted `gluetun` into a new namespace and
+left `guard`, `netbird` and `applier` in the old one. NetBird's gate keeps
+waiting and says so every 30 seconds. Recreate the stack with `python3
+tools/molebridge.py recover`. `kill switch (rule 104) held until host table
+51822 has eth0's routes` is normal for a moment at start.
+
+**gluetun backend: gluetun stops at start with `the hostname specified is
+not valid`** (or the country or city). `GLUETUN_SERVER_*` names a server
+that isn't in the data gluetun has when it starts, which on a fresh install
+is its built-in list. Set only `GLUETUN_SERVER_COUNTRIES`, to your own
+country, and choose the server in the panel once the list has been
+refreshed.
+
+**gluetun backend: on a first start gluetun restarts its VPN several times
+before it connects.** Its built-in server list is old, and it picked servers
+that no longer answer; its health check restarts the VPN with another one.
+Setting `GLUETUN_SERVER_COUNTRIES` to your own country makes a working
+server likelier. The applier waits for a working tunnel before asking
+gluetun to refresh the list.
+
+**gluetun backend: the panel lists old servers, or Diagnostics says
+`server list update failed`.** The applier asks gluetun to refresh its
+server list once at start when the data is old, after gluetun's tunnel has a
+fresh handshake. A failure means gluetun's updater couldn't fetch the provider's list
+through the tunnel; gluetun's log says why. gluetun tries again every
+`GLUETUN_UPDATER_PERIOD`, and recreating the applier starts another
+refresh. A role file written before the applier could refresh the list
+lacks the updater routes: run `python3 tools/molebridge.py gluetun-auth
+--rotate`, then recreate `gluetun` and `applier`.
+
+**gluetun backend: gluetun exits with `molebridge: not starting gluetun:
+...`.** The role-file check refused `secrets/gluetun/auth.toml`: it is
+missing, edited, or written by an older version with fewer routes. Run
+`python3 tools/molebridge.py gluetun-auth --rotate`, then recreate `gluetun`
+and `applier`. The check never prints the file, which holds the API key.
+
+**gluetun backend: the panel says "gluetun did not accept the server
+selection".** The applier's request to gluetun's control server failed:
+gluetun isn't running, the API key in `secrets/gluetun/api_key` doesn't
+match the one in `secrets/gluetun/auth.toml` (run `python3
+tools/molebridge.py gluetun-auth --rotate`, then recreate `gluetun` and
+`applier`), or gluetun refused the server. `python3 tools/molebridge.py
+doctor` checks that the control server answers with the key.
+
 ## The panel
 
 **`421 unknown host; publish the panel under PANEL_PUBLIC_HOSTS`.** The
@@ -242,7 +333,7 @@ connectivity."** The provider isn't answering the tunnel. Possible causes:
 
 - The Mullvad account ran out of time, or the device was removed from the
   account. Check the account page.
-- The PIA subscription lapsed.
+- The PIA or NordVPN subscription lapsed.
 - Outbound UDP to the provider is blocked. Check the host's firewall and
   [the ports it needs](prerequisites.md#network).
 - The selected server is down. If another server works, that's the cause.
@@ -259,6 +350,23 @@ a minute. Try again, or try another server.
 
 **"No PIA region is registered yet; choose one in the panel."** It's a fresh
 PIA install. Pick a region.
+
+**"No NordVPN server is selected yet; choose one in the panel."** It's a
+fresh NordVPN install, or its tunnel was recreated before any selection.
+Pick a server.
+
+**"Tunnel egress is not confirmed as NordVPN."** NordVPN's insights check
+said the traffic wasn't protected. If the egress address in Diagnostics is
+the selected server's own address, NordVPN may be serving an answer it cached
+before that address was a VPN exit for you; it caches for up to an hour, and
+the applier asks again for up to a minute before reporting this. Try again
+later, or pick another server. See
+[providers](providers.md#how-nordvpn-differs).
+
+**"Tunnel egress did not pass the tunnel checks."** Only for a provider
+without its own egress check (none at present): the IP echo services
+disagreed, or answered with the host's own address or one the server list
+doesn't name. See [status reporting](architecture.md#status-reporting).
 
 **"Waiting for a fresh trusted relay catalogue; request will retry
 automatically."** The selection is saved and will be applied once the
@@ -301,7 +409,7 @@ network namespace. Recreate all four containers together:
 
 **Everything works, but slowly: clients are relayed.** Run `netbird status
 -d` inside the `netbird` container and look at `Connection type`. `Relayed`
-has three common causes:
+has four common causes:
 
 - **A phone with NetBird's "Force relay connection" setting on.** It's on by
   default on mobile; turn it off under Settings → Advanced.
@@ -311,6 +419,45 @@ has three common causes:
 - **The exit on a private container bridge** with no reachable candidate. This
   is normal for rootless setups; see
   [exits on a private container network](operations.md#exits-on-a-private-container-network).
+- **Rootless Podman with pasta, where you published the NetBird WireGuard
+  port.** Remote devices are always relayed, while devices on the same LAN
+  still connect directly through `--external-ip-map`, which hides the fault.
+  The published port holds the host port, so pasta can't bind it for NetBird's
+  outgoing STUN. The passt or pasta log shows `Dropping datagram` for port
+  3478, and the NetBird log shows `wait for gathering timed out` every 5
+  minutes. Observed on Debian with passt 0.0~git20261002 and Podman 5.8.6;
+  Docker is untested. Remove the published port and forward it through a pasta
+  network instead, as described in
+  [exits on a private container network](operations.md#exits-on-a-private-container-network).
+
+**The exit is healthy, but a device loads nothing on a restrictive network
+(hotel Wi-Fi).** The panel and doctor report the exit as fine. On the exit, the device sits at Connecting
+and its handshakes time out. On the device, the relay connection drops every
+few seconds to minutes.
+
+The cause is NetBird's relay transport, not Molebridge. The NetBird client
+prefers QUIC to reach the relay. Some networks break long-lived UDP flows:
+QUIC connects, then dies. The client falls back to WebSocket only when QUIC
+cannot connect or a datagram is too large. This is NetBird client behavior and affects any NetBird
+setup whose relay offers QUIC.
+
+On the device, with a NetBird desktop client 0.79.0 or later, tell the client
+to prefer WebSocket:
+
+```sh
+sudo netbird service reconfigure --service-env NB_RELAY_TRANSPORT=prefer-ws
+```
+
+The setting survives restarts and upgrades. To undo it:
+
+```sh
+sudo netbird service reconfigure --service-env ""
+```
+
+Run `netbird status -d` on the device to confirm. The relay line ends with
+`via ws` once the client uses WebSocket. `NB_RELAY_TRANSPORT` accepts `auto`
+(the default), `quic`, `ws`, `prefer-quic` and `prefer-ws`. This was confirmed
+on macOS; other platforms are untested.
 
 **A video call or download stalls after a few seconds, then sometimes
 recovers.** One possible cause is path MTU: oversized replies whose ICMP error

@@ -100,9 +100,8 @@ def parse_flag(value, name):
 
 
 class PiaApplier(Applier):
+    # The registry entry says the address arrives with each registration.
     provider = 'pia'
-    # The address arrives with each registration.
-    address_before_switch = False
 
     def __init__(self, state_dir: Path, config, *, secrets_dir=Path('/run/secrets/pia'),
                  port_forward=False, forward_target=None, run=command, clock=None, sleep=None,

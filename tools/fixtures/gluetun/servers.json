@@ -1,0 +1,394 @@
+{
+  "version": 1,
+  "airvpn": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "ExampleNodeA",
+        "hostname": "regional.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "ExampleNodeA",
+        "hostname": "regional-v6.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "ExampleNodeB",
+        "hostname": "regional.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.2"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "ExampleNodeB",
+        "hostname": "regional-v6.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "2001:db8::2"
+        ]
+      }
+    ]
+  },
+  "custom": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "custom-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.2",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "custom-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.2",
+          "2001:db8::1"
+        ]
+      }
+    ]
+  },
+  "fastestvpn": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "hostname": "fastestvpn-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.3",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "fastestvpn-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.3",
+          "2001:db8::1"
+        ]
+      }
+    ]
+  },
+  "ivpn": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "ivpn-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.4",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "ivpn-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.4",
+          "2001:db8::1"
+        ]
+      }
+    ]
+  },
+  "mullvad": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "mullvad-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "invalid-ip",
+          "2001:db8::1",
+          "198.51.100.5",
+          "198.51.100.50",
+          "2001:db8::2",
+          "2001:db8::1%zone"
+        ],
+        "region": "Example Region",
+        "categories": [
+          "Standard",
+          "Example Category"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "mullvad-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.5",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "openvpn",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "mullvad-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "invalid-ip",
+          "2001:db8::1",
+          "198.51.100.5",
+          "198.51.100.50",
+          "2001:db8::2",
+          "2001:db8::1%zone"
+        ],
+        "region": "Example Region",
+        "categories": [
+          "Standard",
+          "Example Category"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "malformed.example.test",
+        "wgpubkey": "not-a-key",
+        "ips": [
+          "invalid-ip",
+          "2001:db8::1",
+          "198.51.100.5",
+          "198.51.100.50",
+          "2001:db8::2",
+          "2001:db8::1%zone"
+        ],
+        "region": "Example Region",
+        "categories": [
+          "Standard",
+          "Example Category"
+        ]
+      }
+    ]
+  },
+  "nordvpn": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "nordvpn-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.6",
+          "2001:db8::1"
+        ],
+        "categories": [
+          "Standard VPN servers",
+          "P2P"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "nordvpn-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.6",
+          "2001:db8::1"
+        ],
+        "categories": [
+          "Standard VPN servers",
+          "P2P"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "nordvpn-dedicated.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.60"
+        ],
+        "categories": [
+          "Dedicated IP"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "nordvpn-double.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.61"
+        ],
+        "categories": [
+          "Standard VPN servers",
+          "Double VPN"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "nordvpn-obfuscated.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.62"
+        ],
+        "categories": [
+          "Obfuscated Servers"
+        ]
+      }
+    ]
+  },
+  "protonvpn": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "EX#26",
+        "hostname": "shared.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.26"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "CORE-EX#2",
+        "hostname": "shared.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.26"
+        ],
+        "secure_core": true
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "server_name": "EX#26",
+        "hostname": "another.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.27"
+        ]
+      }
+    ]
+  },
+  "surfshark": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "zz-one.prod.surfshark.com",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.8",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "zz-two-st001.prod.surfshark.com",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.8",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "zz-one-zz-two.prod.surfshark.com",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.63"
+        ]
+      }
+    ]
+  },
+  "windscribe": {
+    "version": 1,
+    "timestamp": 900,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "city": "Example City",
+        "hostname": "windscribe-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "198.51.100.9",
+          "2001:db8::1"
+        ]
+      },
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "windscribe-two.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "203.0.113.9",
+          "2001:db8::1"
+        ]
+      }
+    ]
+  }
+}

@@ -25,7 +25,23 @@ def test_recovery_rebuilds_and_recreates_all_namespace_users(monkeypatch, tmp_pa
     assert calls[1] == ['docker', 'compose', 'stop', 'netbird', 'applier']
     assert calls[2][-4:] == ['wireguard', 'netbird', 'applier', 'control-panel']
     assert '--force-recreate' in calls[2] and '--wait' in calls[2]
-    assert calls[3] == ['doctor']
+    assert calls[3][-2:] == ['applier.apply', '--doctor']
+    assert calls[4] == ['doctor']
+    assert all('down' not in c and '-v' not in c and 'volume' not in c for c in calls)
+
+
+def test_recovery_of_the_gluetun_backend_recreates_its_namespace_users(monkeypatch, tmp_path):
+    calls = []
+    host = host_tools.Host(tmp_path, run=lambda args, **kw: calls.append(args) or '')
+    monkeypatch.setattr(host, 'config', lambda: {'services': {'gluetun': {}}})
+    monkeypatch.setattr(host, 'check_files', lambda _: None)
+    monkeypatch.setattr(host, 'check_volume', lambda _: None)
+    monkeypatch.setattr(host, 'doctor', lambda: calls.append(['doctor']))
+    host.recover()
+    assert calls[0] == ['docker', 'compose', 'build', 'guard', 'applier']
+    assert calls[1] == ['docker', 'compose', 'stop', 'netbird', 'applier', 'guard']
+    assert calls[2][-5:] == ['gluetun', 'guard', 'netbird', 'applier', 'control-panel']
+    assert '--force-recreate' in calls[2] and calls[-1] == ['doctor']
     assert all('down' not in c and '-v' not in c and 'volume' not in c for c in calls)
 
 
@@ -252,11 +268,11 @@ def test_doctor_checks_the_blacklist_before_trusting_applier_state(monkeypatch, 
     monkeypatch.setattr(host, 'config', lambda: compose_config())
     monkeypatch.setattr(host, 'check_files', lambda _: None)
     monkeypatch.setattr(host, 'check_volume', lambda _: None)
-    monkeypatch.setattr(host, 'namespace_checks', lambda: order.append(['namespace']))
+    monkeypatch.setattr(host, 'namespace_checks', lambda owner: order.append(['namespace', owner]))
     monkeypatch.setattr(host, 'ice_blacklist_check', lambda _: order.append(['blacklist']))
     monkeypatch.setattr(host, 'netbird_config_check', lambda: order.append(['rosenpass']))
     host.doctor()
-    assert order[:3] == [['namespace'], ['blacklist'], ['rosenpass']]
+    assert order[:3] == [['namespace', 'wireguard'], ['blacklist'], ['rosenpass']]
     assert order[3][-2:] == ['applier.apply', '--doctor']
 
 
@@ -782,3 +798,68 @@ def test_doctor_accepts_an_addressless_pia_config_with_its_login(tmp_path, extra
     else:
         with pytest.raises(host_tools.CheckError, match=message):
             host.check_files(config)
+
+
+APPLIER_SETTLING = 'PASS recent applier check\nPASS routing protection\nFAIL verified Mullvad egress\n'
+APPLIER_OK = 'PASS recent applier check\nPASS routing protection\nPASS verified Mullvad egress\n'
+
+
+def test_recover_waits_for_the_applier_to_verify_the_exit(monkeypatch, tmp_path, capsys):
+    """Right after a recreation the applier has no verified result yet (with
+    gluetun it may first put the last verified server back); recover waits
+    for it instead of failing with a bare 'Command failed'."""
+    answers = [(1, APPLIER_SETTLING)] * 3 + [(0, APPLIER_OK)]
+    calls, now = [], [0.0]
+
+    def run(args, **kwargs):
+        calls.append(args)
+        if args[-1] == '--doctor':
+            assert kwargs.get('allow_failure') is True
+            return answers.pop(0) if answers else (0, APPLIER_OK)
+        return ''
+    host = host_tools.Host(tmp_path, run=run, sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
+    monkeypatch.setattr(host, 'config', lambda: {})
+    monkeypatch.setattr(host, 'check_files', lambda _: None)
+    monkeypatch.setattr(host, 'check_volume', lambda _: None)
+    monkeypatch.setattr(host, 'namespace_checks', lambda owner: None)
+    monkeypatch.setattr(host, 'ice_blacklist_check', lambda _: None)
+    monkeypatch.setattr(host, 'netbird_config_check', lambda: None)
+    host.recover()
+    assert now[0] == 3 * host_tools.SETTLE_POLL_SEC
+    assert 'PASS configuration' in capsys.readouterr().out
+
+
+def test_recover_names_the_check_that_never_passed(monkeypatch, tmp_path):
+    now = [0.0]
+
+    def run(args, **kwargs):
+        if args[-1] == '--doctor':
+            return (1, APPLIER_SETTLING + 'unexpected text 198.51.100.1\n')
+        return ''
+    host = host_tools.Host(tmp_path, run=run, sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0])
+    for name in ('config', 'netbird_config_check'):
+        monkeypatch.setattr(host, name, lambda: {})
+    for name in ('check_files', 'check_volume', 'namespace_checks', 'ice_blacklist_check'):
+        monkeypatch.setattr(host, name, lambda _: None)
+    with pytest.raises(host_tools.CheckError) as error:
+        host.recover()
+    assert str(error.value) == 'The applier reports: verified Mullvad egress (docs/troubleshooting.md).'
+    assert host_tools.SETTLE_SEC <= now[0] <= host_tools.SETTLE_SEC + host_tools.SETTLE_POLL_SEC
+
+
+def test_recover_names_the_compose_step_that_failed(monkeypatch, tmp_path):
+    def run(args, **kwargs):
+        if 'up' in args:
+            raise host_tools.CheckError('Command failed; check Docker/Compose locally. Expanded output was withheld.')
+        return ''
+    host = host_tools.Host(tmp_path, run=run)
+    monkeypatch.setattr(host, 'config', lambda: {})
+    monkeypatch.setattr(host, 'check_files', lambda _: None)
+    monkeypatch.setattr(host, 'check_volume', lambda _: None)
+    with pytest.raises(host_tools.CheckError, match='^Recreating the containers .* failed: Command failed'):
+        host.recover()
+
+
+def test_applier_checks_report_a_dead_applier(tmp_path):
+    host = host_tools.Host(tmp_path, run=lambda args, **kw: (1, ''))
+    assert host.applier_checks() == [(False, 'the applier check itself (is the applier container running?)')]

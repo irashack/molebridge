@@ -1,0 +1,14 @@
+# Added for NordVPN (COMPOSE_FILE=compose.yaml:compose.nordvpn.yaml, with
+# PROVIDER=nordvpn and EXIT_IF=nordvpn in .env). NordVPN needs no account file
+# at runtime: tools/nordvpn-key.py wrote the private key into the tunnel
+# config at setup, and the applier never mounts that file.
+#
+# NordVPN's server list is about 8 MB of JSON, downloaded and parsed every six
+# hours; the applier caps it at 32 MiB. Parsing a list near that cap takes
+# about 300 MB, so the applier gets more room than the default 128m.
+services:
+  applier:
+    deploy:
+      resources:
+        limits:
+          memory: 512m

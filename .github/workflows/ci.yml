@@ -26,13 +26,15 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Shell scripts
         run: |
-          for script in routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
-          shellcheck -S warning routing/10-exit-routing routing/wait-for-guards applier/apply.sh tools/check-routing.sh
+          for script in routing/10-exit-routing routing/wait-for-guards routing/gluetun-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
+          shellcheck -S warning routing/10-exit-routing routing/wait-for-guards routing/gluetun-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh
       - name: Compose file
         run: |
           cp .env.example .env
           docker compose config --quiet
           docker compose -f compose.yaml -f compose.pia.yaml config --quiet
+          docker compose -f compose.yaml -f compose.nordvpn.yaml config --quiet
+          docker compose -f compose.gluetun.yaml config --quiet
       - name: Python tests
         run: |
           python3 -m venv .venv
@@ -45,7 +47,10 @@ jobs:
       - name: Build the routing image and check init ownership
         run: |
           docker build --tag molebridge-wireguard:ci --file routing/Dockerfile .
-          docker run --rm --network none --entrypoint sh molebridge-wireguard:ci -c 'test -x /custom-cont-init.d/10-exit-routing && test "$(stat -c %u /custom-cont-init.d/10-exit-routing)" = 0'
+          docker run --rm --network none --entrypoint sh molebridge-wireguard:ci -c 'test -x /custom-cont-init.d/10-exit-routing && test "$(stat -c %u /custom-cont-init.d/10-exit-routing)" = 0 && test "$(stat -c %u /usr/local/lib/molebridge/gluetun-rules)" = 0 && test "$(stat -c %a:%u /usr/local/lib/molebridge)" = 755:0'
+          # The guard runs as root with every capability dropped but NET_ADMIN:
+          # it must be able to read the shared rules without DAC override.
+          docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --entrypoint sh molebridge-wireguard:ci -c 'test -r /usr/local/lib/molebridge/gluetun-rules && . /usr/local/lib/molebridge/gluetun-rules'
       - name: Linux namespace routing drills
         run: |
           # nft runs the PIA port-forwarding and ingress-guard drill; busybox,

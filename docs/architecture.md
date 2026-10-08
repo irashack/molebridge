@@ -3,7 +3,7 @@
 ## Goal and boundary
 
 A device stays on NetBird while the Internet traffic it sends to this exit
-leaves through Mullvad or PIA. If the tunnel is unavailable, that forwarded
+leaves through Mullvad, PIA or NordVPN. If the tunnel is unavailable, that forwarded
 traffic must fail rather than leave by another path.
 
 This is a property of the exit's namespace, not of the device. What happens
@@ -12,7 +12,8 @@ does with DNS, IPv6 and its own local routes, needs checking separately
 ([verification](verification.md#from-a-client)).
 
 The sections below describe Mullvad. [Providers](providers.md#how-pia-differs)
-lists what differs for PIA.
+lists what differs for PIA and NordVPN. Everything provider-specific is one
+entry in the provider registry, `molebridge/providers.py`.
 
 ## Components and trust
 
@@ -176,6 +177,315 @@ stored field because no `netbird` command prints it. See
 A privileged actor can remove or bypass these protections. Health polling
 detects drift; it is not an instantaneous defense against a compromised host.
 
+## gluetun backend
+
+**Experimental.** One live pass, with NordVPN on Docker; see
+[testing](testing.md#gluetun-backend-pass-at-a3bb14f) for what it covered
+and what it didn't. Everything below was also read in the source of the
+pinned releases (gluetun v3.41.3, NetBird 0.79.0), exercised in isolated
+namespaces by `tools/check-routing.sh` (routing, guard and gate) and covered
+by unit tests against fakes (the applier). Without the applier and the panel,
+the guard and gate alone make a smaller setup:
+[gluetun as a NetBird exit](gluetun-netbird-exit.md).
+
+With this backend [gluetun](https://github.com/qdm12/gluetun) owns the
+provider tunnel instead of Molebridge, which brings its provider list. Only
+gluetun's WireGuard providers are supported. Molebridge keeps the same
+promise: traffic forwarded from your devices leaves only through the tunnel,
+and is dropped when the tunnel or its routes are gone.
+
+### Containers
+
+`compose.gluetun.yaml` replaces `compose.yaml` (set
+`COMPOSE_FILE=compose.gluetun.yaml`; the settings are in
+[configuration](configuration.md#gluetun-backend)).
+
+| Container | Image | Role |
+|---|---|---|
+| `gluetun` | Pinned `qmcgaw/gluetun` v3.41.3 | Owns the namespace, its firewall and the tunnel interface (`EXIT_IF`, kernel WireGuard) |
+| `guard` | The routing image from `compose.yaml` | Joins the namespace, installs the rules below and keeps them in place; `NET_ADMIN` only |
+| `netbird` | Pinned official NetBird client | Joins the namespace; starts only through the gate, which stays its parent |
+| `applier` | The applier image from `compose.yaml` | Joins the namespace; reads gluetun's server list, selects servers through gluetun's control server and verifies the result |
+| `control-panel` | Unchanged | Shows the provider's name with "via gluetun" |
+
+gluetun's control server listens on the namespace's loopback only, port 8000,
+and is never published. Its role file (`secrets/gluetun/auth.toml`) gives
+one role exactly five routes, `PUT /v1/vpn/settings`, `GET /v1/vpn/status`,
+`GET /v1/publicip/ip`, and `GET` and `PUT /v1/updater/status`, with an API key; with any role in the file gluetun
+answers no other route. Without the file gluetun would apply a public
+default role that includes `PUT /v1/vpn/status`, so `compose.gluetun.yaml`
+binds it in a way that makes Compose fail when it is missing. gluetun logs
+a role file it can't decode with an excerpt of the offending line, which
+could include the key, so gluetun starts through `routing/gluetun-preflight`,
+which accepts only the exact file `gluetun-auth` writes and refuses
+anything else with a fixed message, on every start and restart.
+
+**The API key is full gluetun administration.** gluetun authorizes by route
+and method only, and `PUT /v1/vpn/settings` accepts any VPN setting: keys,
+addresses, the provider, command hooks. Whoever holds the key controls the
+tunnel. The applier holds it as part of the trusted base, as it holds
+`NET_ADMIN` in the namespace, which already lets it read the live WireGuard
+key and change routing. Only gluetun (in its role file) and the applier
+mount it; the panel never does. The applier never calls `GET
+/v1/vpn/settings`, which returns the WireGuard private key, and refuses to.
+
+### Why the guard is policy routing
+
+gluetun routes every locally generated packet that lacks its own mark into
+its tunnel: rule 101, `not fwmark 51820 lookup 51820`. That includes
+NetBird's control traffic (management, signal, relays, STUN and the
+WireGuard socket), which must use the host's connection. gluetun's firewall
+drops forwarding by default, but NetBird inserts its own `FORWARD` accepts,
+so the firewall can't be what keeps forwarded traffic in the tunnel. The
+guard therefore sits in policy routing, ahead of gluetun's rules 98–101 and
+NetBird's 105 and 110, both address families:
+
+| Priority | Rule | Purpose |
+|---|---|---|
+| 1 | `not iif wt0 lookup local` | The [local-delivery guard](#netbird-requirements), replacing the kernel's priority-0 rule. |
+| 80 | `iif wt0 unreachable` | Temporary, while the rules are first installed. |
+| 88 | `iif lo fwmark 0x1bd00/0xffffffff lookup 51822` | NetBird's control traffic uses the host table. `iif lo` limits it to packets the exit itself sends, and the exact mark leaves out NetBird's data-plane marks (0x1bd10–0x1bdff), so no forwarded packet can match. |
+| 89 | `iif lo fwmark 0x1bd00/0xffffffff unreachable` | Control traffic with no host route fails here instead of reaching rule 101 and the tunnel. |
+| 90 | `iif wg0 to <overlay range> lookup main` | Tunnel replies return over the overlay. |
+| 91 | `iif lo to <overlay range> lookup main suppress_prefixlength 0` | What the exit itself sends to the overlay, above all the ICMP errors it returns to clients (fragmentation needed, packet too big, unreachable), uses NetBird's overlay route in the main table. `suppress_prefixlength 0` ignores main's default route, so only a route to the overlay counts. Without this rule those errors would reach gluetun's rule 101 and go into the tunnel, and path MTU discovery for clients would fail. |
+| 92 | `iif lo to <overlay range> unreachable` | With no overlay route (NetBird down, `wt0` gone), that traffic fails here instead of reaching rule 101 and the tunnel. |
+| 94 | `from <tunnel address> ipproto icmp lookup 51821` | ICMP errors the exit generates for tunnel traffic return through the tunnel, or hit the fallback. Follows the address gluetun gives the interface. |
+| 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
+| 96 | `oif wg0 lookup 51821` | Interface-bound probes use the same table. |
+| 97 | `iif wt0 unreachable` | Terminal guard if rule 95 or the exit table's routes disappear. Without both, a forwarded packet carrying gluetun's mark 51820 would skip rule 101 and leave by the main table; the namespace drill shows it. |
+
+`wg0` stands for `EXIT_IF`, `0x1bd00` for `CONTROL_MARK`, 51821 for
+`EXIT_TABLE` and 51822 for `HOST_TABLE`. Rules 90–92 exist for each family
+with an overlay range. The guard owns priorities 0–97 and 102–104 in this
+namespace and removes anything else it finds there; 102–104 are
+[below](#the-exits-own-traffic-rules-102104). The default backend has no rules 91
+and 92: without gluetun's rule 101, the exit's own traffic to the overlay
+already reaches the main table and NetBird's overlay route.
+
+**Exit table** (51821): the permanent `unreachable default metric 4096`
+fallback, and `default dev wg0` while the interface is up with an address
+in that family. Not gluetun's table 51820: when gluetun's table is empty,
+traffic would fall through to later rules instead of the fallback.
+
+**Host table** (51822): copies of the main table's default and on-link
+routes through `HOST_IF`, the namespace's interface toward the host, and
+nothing else, so never a route through the tunnel. It is a separate table
+so that rule 88 does not depend on the main table being complete in each
+family. An empty IPv6 host table is fine on a host without IPv6; NetBird's
+IPv6 control traffic then fails at rule 89.
+
+### The reconcile loop
+
+gluetun deletes and recreates its interface on every reconnect, health
+restart and settings change, and the kernel drops the routes through it.
+The guard therefore keeps running, as its own container, and every
+`ROUTING_RECONCILE_INTERVAL` seconds (2 by default):
+
+- puts back the exit table's tunnel route once the interface is up again,
+  and rule 94 for its current address; until then forwarded traffic hits the
+  fallback;
+- refreshes the host table when the main table's host routes change;
+- checks every rule in 0–97 in both families, adds a missing one and removes
+  any other. The expected rules and tables are defined once, in
+  `routing/gluetun-rules`, which the gate reads too. A wrong rule whose selectors are a subset of the right one's
+  could take the right one with it when deleted, so that priority is rebuilt
+  behind a copy one priority earlier. The fallback route and the correct
+  rules 1 and 97 are never removed otherwise;
+- writes the readiness marker only when every rule and route is in place,
+  including an IPv4 host default route, and removes it otherwise. Readiness
+  doesn't depend on the tunnel being up;
+- writes `wg show wt0 fwmark` to a file the gate reads (the NetBird image
+  has no `wg`), every 2 seconds whatever the reconcile interval, stamped with the kernel's boot id and its boot clock
+  (`/proc/uptime`), which changes to the wall clock don't move.
+
+### NetBird's control mark and the gate
+
+Rules 88 and 89 only see marked packets. NetBird marks its sockets with its
+control mark only when its advanced routing is on; with it off, its control
+traffic is unmarked and reaches rule 101, the tunnel. In gluetun mode the
+gate in front of NetBird's entrypoint (`routing/wait-for-guards`, with
+`TUNNEL_BACKEND=gluetun`) therefore also:
+
+- refuses to start NetBird when `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK`
+  or `NB_DISABLE_CUSTOM_ROUTING` is true, or when `NB_FWMARK_BASE` differs
+  from `CONTROL_MARK` (NetBird 0.79.0 honors that variable;
+  `compose.gluetun.yaml` sets both from `CONTROL_MARK`);
+- waits, in both families, for the whole guard, judged by the same
+  definitions the guard itself uses (`routing/gluetun-rules`, mounted into
+  the NetBird container next to the gate): every rule in the table above
+  that applies, exactly, including 102–104, and nothing else at
+  priorities 0–97 or 102–104; the exit
+  table's fallback and no route in it but the tunnel default; and a host
+  table equal to the main table's host routes, with an IPv4 default. An
+  early rule such as `iif wt0 lookup main` at priority 50, or a host route
+  in the exit table, keeps NetBird from starting;
+- then stays in front of NetBird instead of handing over, and stops it, so
+  the container exits with status 1 and the restart policy and health show
+  it, when NetBird's log shows `advanced routing has been requested to be
+  disabled` or `system doesn't support required routing features, falling
+  back to legacy routing`; when `wg show wt0 fwmark` hasn't been the control
+  mark for 30 seconds, counted on the boot clock from launch or from when
+  the last good record was written (rereading the same record doesn't
+  extend it, and a record from another boot or from the future counts for
+  nothing); or when
+  any part of that guard stays missing or wrong for 30 seconds.
+
+**The accepted residual.** The settings above are checked before launch, so
+only a failed capability check inside NetBird can leave its control traffic
+unmarked. NetBird runs that check at startup: it fails if setting the socket
+mark, a loopback UDP dial, a deadline or a write fails, or if a test `ip
+rule` add fails. All of these are local loopback and netlink operations in a
+namespace where NetBird holds `NET_ADMIN` and gluetun's own rule 101 already
+relies on socket marks. NetBird can sign in to management before its overlay
+interface exists, so the gate can't wait for the fwmark before launching.
+If the check does fail, NetBird's own TLS and relay connections go through
+the provider tunnel until the gate sees the log line, or at most 30 seconds
+until the missing fwmark stops NetBird. That is an availability and
+metadata cost for NetBird's control traffic, not a leak of your devices'
+traffic: rules 1, 95 and 97 hold forwarded traffic throughout. Closing this
+gap would need a per-process identity for NetBird inside the shared
+namespace (a uid or cgroup to match on), which costs more than the gap.
+
+### gluetun's firewall
+
+gluetun sets DROP policies and its own accepts at startup, then runs
+`/iptables/post-rules.txt` once. `python3 tools/molebridge.py
+gluetun-post-rules` writes that file from your settings: `FORWARD` accepts
+from `wt0` to the tunnel and for established replies back, an `OUTPUT`
+accept for everything leaving by `HOST_IF`, and an `INPUT` accept for
+NetBird's WireGuard port, in IPv4 and IPv6. These let the exit work; they
+are not the guard. A line that fails stops gluetun, including every
+`ip6tables` line when gluetun found no working ip6tables; generate the file
+with `--ipv4-only` on such a host. gluetun doesn't rerun post-rules after
+its in-process VPN restarts, which don't clear them either.
+
+The `OUTPUT` accept can't name NetBird's control mark. To remove its own
+rules, as it does on every reconnect, gluetun lists the whole `INPUT` or
+`OUTPUT` chain and parses every line, and its parser knows only the targets
+`ACCEPT`, `DROP`, `REJECT` and `REDIRECT` and the matches for a TCP or UDP
+destination port and a connection state (`internal/firewall/list.go` at
+v3.41.3). A mark match, or a jump to a chain of Molebridge's own, makes it
+fail, and its old accepts pile up; an earlier version of these rules did
+exactly that. So the accept covers the whole host interface, like gluetun's
+own accept for its tunnel interface, and the kill switch for the exit's own
+traffic is in policy routing instead: rules 102–104.
+
+### The exit's own traffic: rules 102–104
+
+gluetun's kill switch for traffic the namespace itself sends is its
+firewall, and it doesn't hold through a reconnect: when gluetun empties its
+tunnel table, or removes rule 101 while it restarts the VPN, unmarked local
+traffic falls through to the main table and the host's default route, and
+gluetun's own `OUTPUT` accept for established connections lets existing
+flows out (seen on a test exit: gluetun's DNS-over-TLS connections left by
+the host interface just after the tunnel went down). The guard therefore
+adds, in both families, between gluetun's rule 101 and NetBird's 105:
+
+| Priority | Rule | Purpose |
+|---|---|---|
+| 102 | `iif lo fwmark 0xca6c lookup main` | gluetun's WireGuard socket, which carries mark 51820 (0xca6c, fixed in gluetun v3.41.3) and which rule 101 skips, reaches its server by the main table. |
+| 103 | `iif lo lookup 51822 suppress_prefixlength 0` | The host interface's own subnets: the host table's on-link routes, never its default. |
+| 104 | `iif lo unreachable` | Anything else the exit sends that rule 101 didn't take into the tunnel fails: new and established flows of gluetun (DNS, health checks, updates, public IP) and of other processes in the namespace. |
+
+Rule 103 is needed at gluetun's start. gluetun adds `default via <gateway>
+dev eth0 table 200` (its inbound routing) before its own rule 98 for local
+subnets exists, and the kernel checks the gateway with a route lookup that
+passes the policy rules as locally generated traffic. Without rule 103 that
+lookup reached rule 104, the kernel refused the route with "network is
+unreachable", and gluetun stopped; this happened on a test exit during
+`recover`. The guard therefore fills the host table first and adds rule 104
+only once rule 103 and the host table are in place; until then it reports
+the kill switch as held back and isn't ready.
+
+What still uses the host's connection is what is meant to: NetBird's
+marked control traffic (rules 88 and 89), gluetun's WireGuard socket (102),
+traffic to the host's local subnets (103, and gluetun's rule 98), replies from the
+host's own address (gluetun's rule 100), and loopback and the exit's own
+addresses (rule 1's local lookup, including Docker's DNS at 127.0.0.11).
+The applier's probes are bound to the tunnel interface (rule 96) or carry
+the control mark. NetBird's unmarked DNS lookups now go into the tunnel or
+fail, instead of using the host while gluetun reconnects. Forwarded traffic
+never matches `iif lo`.
+
+### The applier with gluetun
+
+The applier works as it does with the default backend ([requests and
+switching](#requests-and-switching)); these parts differ.
+
+**Catalogue.** gluetun's own server list, not a download: gluetun keeps it
+in `servers.json` (`STORAGE_FILEPATH`), which `compose.gluetun.yaml` puts in
+a volume of its own so the applier can mount only that directory,
+read-only. The file is untrusted. The applier reads it with the same limits
+as a download (32 MiB, no symlinks, duplicate keys refused), keeps only
+the configured provider's WireGuard servers with a valid key, hostname and
+IPv4 endpoint, and keeps the last good catalogue when the file fails to
+parse, as it does while gluetun rewrites it in place. It checks the file
+every minute and reads it again when it changed, or at least every six
+hours. gluetun dates each provider's data when it last changed; the panel
+and the doctor show that date and call the data stale after 30 days.
+gluetun's updater refreshes it every `GLUETUN_UPDATER_PERIOD` (24 hours by
+default), first one period after gluetun starts, so a fresh install would
+list gluetun's built-in data, which is from 2024 for NordVPN in v3.41.3.
+The applier therefore starts one refresh itself (`PUT /v1/updater/status`)
+once gluetun's VPN is running and its tunnel has had a handshake in the
+last 150 seconds (gluetun reports running while it still tries servers that
+don't answer), when the data is older than the period or than 7 days: at most three tries per applier start, each given 15 minutes,
+reported as `server_list_update` in `result.json`. gluetun's updater
+fetches the provider's public list from gluetun's own process, so through
+the tunnel, and doesn't restart the VPN; for Surfshark and FastestVPN it
+also resolves every server name. Only providers whose servers one gluetun filter selects exactly
+are offered: FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and Windscribe,
+all by hostname. AirVPN and ProtonVPN repeat hostnames and names across
+servers, and gluetun's custom provider has no list.
+
+**Switching.** The applier sends `PUT /v1/vpn/settings` setting gluetun's
+hostname filter to the selected server and clearing every other server
+filter. gluetun then restarts its VPN in-process: its interface disappears
+and comes back, and the guard puts the exit route back within a couple of
+seconds. The applier reports that as switching, not as a failure, for up to
+90 seconds. Success needs, as with the default backend: exactly one peer
+whose endpoint and key identify the selected server in the catalogue (`wg
+show wg0 endpoints`, IPv4 or IPv6, matched against every address the
+server lists, since gluetun connects to any of them at random; an address
+listed for several servers stays unidentified), a fresh handshake, the whole guard in both families
+(including rules 88, 89, 91 and 92 and the host table), and egress
+confirmation at the provider's [tier](#status-reporting): Mullvad's
+`am.i.mullvad.net` and NordVPN's `ips/insights` through the tunnel, using
+the same code as those native providers; the tunnel checks for the others.
+
+**The host's own address.** The tunnel checks compare the address seen
+through the tunnel with the host's own. In gluetun's namespace every socket
+without gluetun's mark goes into the tunnel (rule 101), so the applier
+measures the host's address over HTTPS from a socket carrying NetBird's
+control mark: rule 88 sends it to the host table, and the post-rules accept
+it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN`, which the applier
+holds.
+
+**gluetun restarting.** Settings put at runtime are lost when gluetun
+restarts; it starts again from `GLUETUN_SERVER_*`. The applier keeps the
+server it last put and the last one it verified in
+`state/applier/gluetun-selection.json`. A request from the panel that was
+accepted is put again by the usual path whenever the live server differs
+from it. When there is no such request, or the last one was refused, and
+gluetun runs a server other than the one last put, the applier puts the
+last verified one again. It waits until gluetun's peer can be identified,
+and never within 90 seconds of its last selection.
+
+### Startup and recovery
+
+`gluetun` starts first and enables its firewall; `guard` starts once
+`gluetun` has started and becomes healthy when its rules are in; `netbird`
+waits for that, and its gate checks again by itself, also on daemon or host
+restarts that ignore Compose's ordering; `applier` starts with `netbird`.
+Restarting or recreating `gluetun` creates a new namespace: recreate the
+others with it, with `python3 tools/molebridge.py recover` on Docker, which
+knows this file.
+
+gluetun runs its own DNS server in the namespace by default, which resolves
+over the tunnel, and points its own container's resolver at it. Whether the
+NetBird container resolves management's name through it, and so fails to
+reach management with the tunnel down, depends on the engine. Not yet tested.
+
 ## Relay catalogue
 
 The applier fetches the fixed HTTPS Mullvad relay API at startup and every six
@@ -186,8 +496,10 @@ and bounded location strings. The optional display attributes (Mullvad-owned,
 RAM-only, hosting provider) are kept only when they are strict booleans or
 bounded text; they never affect whether a relay may be selected.
 
-The PIA catalogue is PIA's region list, parsed and validated the same way; see
-[providers](providers.md).
+The PIA catalogue is PIA's region list, and the NordVPN catalogue NordVPN's
+server list, each parsed and validated the same way by its own module; see
+[providers](providers.md). Each provider's download limits are in its registry
+entry: 10 MiB and 20 seconds, except NordVPN's 32 MiB and 60 seconds.
 
 It atomically writes `state/applier/relays.json`. Failed or empty refreshes
 keep the last good catalogue and publish a sanitized error in
@@ -235,8 +547,43 @@ must be acknowledged by ID before their outcome is displayed. Failed browser
 polls immediately clear the connected indication. Last-check diagnostics are
 explicitly historical.
 
+A result counts as connected only with intact routing protection, NetBird in
+kernel mode, a fresh handshake, the live peer matching a fresh catalogue
+entry, and confirmed egress. Egress is confirmed at one of two tiers, recorded
+in `result.json` as `egress_tier`:
+
+- **`provider`**: the provider's own endpoint says the request arrived over
+  its VPN (Mullvad's `am.i.mullvad.net`, PIA's status call), for every address
+  family the tunnel carries. `exit_confirmed` is true exactly when this tier
+  is reached, as before tiers existed.
+- **`tunnel`**: for a provider without such an endpoint. Every family the
+  tunnel carries needs a fresh handshake; two independent IP echo services,
+  asked through the tunnel interface, answering with the same address; that
+  address differing from the host's own public address, measured off the
+  tunnel; and, where the catalogue
+  lists exit addresses for the selected server, the address being one of
+  them. A measurement that fails counts as unverified and fails the tier.
+  The one exception is IPv6 when the namespace shows independently that it
+  has no IPv6 of its own: no IPv6 route in any of its tables except the
+  tunnel's, the overlay's, refusing (unreachable and the like), link-local,
+  multicast and loopback ones, and no global IPv6 address on any interface
+  but the tunnel and the overlay, loopback included. Then
+  there is no host IPv6 address to confuse with the tunnel's. `exit_confirmed`
+  stays false. The panel shows the exit as connected
+  with a "tunnel checks only" label. The checks are in
+  `molebridge/egress.py`.
+
+The tier a provider can reach is fixed in its registry entry
+(`molebridge/providers.py`). A provider with its own check is never accepted
+at the `tunnel` tier, so a result claiming it does not count as connected.
+Every native provider has its own check. With the [gluetun
+backend](#gluetun-backend), Mullvad and NordVPN keep theirs, and FastestVPN,
+IVPN, Surfshark and Windscribe reach only the `tunnel` tier. The `tunnel`
+tier is covered by unit tests only. `egress_tier` is null while egress is
+unconfirmed.
+
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
-verified connected result; otherwise 503. Docker's applier healthcheck checks
+verified connected result, at either tier; otherwise 503. Docker's applier healthcheck checks
 freshness, a live WireGuard exit interface with exactly one peer, current
 routing protection, and NetBird on kernel WireGuard with its kernel firewall,
 after a completed inspection; startup
@@ -271,7 +618,11 @@ what its own request file asks.
 
 Latency probes remain unprivileged TCP connects to port 443, cached for 15
 minutes, with bounded concurrency. They run only for open pages and measure the
-host-to-relay path, not end-to-end client latency.
+host-to-relay path, not end-to-end client latency. One request names at most
+256 servers, a country at most 128 of them (a fixed sample when it has
+more). The panel runs one latency request per exit and four in all, answering
+429 beyond that before it loads anything; no lock is held while probing, and
+a server already being probed is waited for rather than probed again.
 
 ### Sign-in
 

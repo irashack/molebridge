@@ -16,11 +16,14 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from molebridge.relays import CATALOG_URL, REFRESH_INTERVAL_S, RelayCatalog, valid_key
+from molebridge import providers
+from molebridge.egress import (ECHO_MAX_BYTES, ECHO_URLS, HOST_LACKS_FAMILY, exit_addresses, host_lacks_ipv6,
+                               parse_echo, tunnel_verdict)
+from molebridge.relays import REFRESH_INTERVAL_S, RelayCatalog, valid_key
 from molebridge.routing import (RETURN_PATH_SYSCTL, RoutingConfig, family_status, netbird_firewall_present,
                                 overlay_is_kernel_wireguard, return_path_enabled)
-from molebridge.state import (MAX_CATALOG_BYTES, PROVIDER_LABEL, decode_json, desired_request, now_iso,
-                              provider_from_env, read_json, recent, request_token, write_json_atomic)
+from molebridge.state import (decode_json, desired_request, now_iso, read_json, recent, request_token,
+                              write_json_atomic)
 
 HANDSHAKE_FRESH_SEC = 180
 SWITCH_TIMEOUT_SEC = 60
@@ -48,12 +51,21 @@ def command(args, *, timeout=5, limit=1024 * 1024):
 
 
 class Applier:
-    """The Mullvad applier; `applier.pia.PiaApplier` overrides the provider seam:
-    catalogue options, `apply_relay`, `server_for`, `egress` and `tick`."""
+    """The Mullvad applier, and the base for every provider's applier. A
+    subclass sets `provider` (its registry id) and overrides the provider seam:
+    catalogue options, `apply_relay`, `server_for`, `egress` and `tick`. The
+    registry entry (molebridge/providers.py) supplies everything else."""
     provider = 'mullvad'
-    # Mullvad gives one tunnel address valid on every relay, so the interface
-    # must already carry it before a switch.
-    address_before_switch = True
+
+    @property
+    def spec(self):
+        return providers.get(self.provider)
+
+    @property
+    def address_before_switch(self):
+        """True when one tunnel address is valid on every server, so the
+        interface must already carry it before a switch (Mullvad)."""
+        return self.spec.address_before_switch
 
     def __init__(self, state_dir: Path, config: RoutingConfig, *, run=command, clock=time.monotonic, sleep=time.sleep):
         self.directory = state_dir / 'applier'
@@ -67,17 +79,25 @@ class Applier:
         self.next_health = 0
         self.rejection = None
         self.pending = None
+        # While a switch is being verified, the time it gives up.
+        self.switch_deadline = None
+
+    @classmethod
+    def from_env(cls, state_dir, config, env, **kwargs):
+        """The applier for this provider's settings; subclasses read their own."""
+        return cls(state_dir, config, **kwargs)
 
     def make_catalog(self):
         return RelayCatalog(self.directory, self.provider)
 
     def fetch_catalog(self):
+        spec = self.spec
         response = self.run(['curl', '--noproxy', '*', '--proto', '=https', '-fsS',
-                             '--connect-timeout', '10', '--max-time', '20',
-                             '--max-filesize', str(MAX_CATALOG_BYTES),
+                             '--connect-timeout', '10', '--max-time', str(spec.catalog_timeout_s),
+                             '--max-filesize', str(spec.catalog_max_bytes),
                              '--user-agent', 'molebridge-applier/0.2',
-                             '--write-out', '\n%{http_code}', CATALOG_URL[self.provider]],
-                            timeout=22, limit=MAX_CATALOG_BYTES + 4)
+                             '--write-out', '\n%{http_code}', spec.catalog_url],
+                            timeout=spec.catalog_timeout_s + 2, limit=spec.catalog_max_bytes + 4)
         body, code = response.rsplit('\n', 1)
         if code != '200':
             raise ValueError('unexpected catalogue HTTP status; redirects refused')
@@ -194,6 +214,65 @@ class Applier:
         return {**probes[4], 'mullvad_exit_ip': confirmed, 'exit_confirmed': confirmed,
                 'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
 
+    def egress_for(self, server, handshake_age):
+        """Egress fields for the current server. A provider with its own typed
+        check confirms through `egress`; one without gets the tunnel checks."""
+        if self.spec.egress_tier == 'tunnel':
+            return self.tunnel_egress(server, handshake_age)
+        return self.egress()
+
+    def echo(self, url, family, *, tunnel):
+        """The caller's address from an IP echo service, through the tunnel
+        interface or, with tunnel=False, over the host's own route."""
+        bind = ['--interface', self.config.exit_if] if tunnel else []
+        raw = self.run(['curl', f'-{family}', *bind, '--noproxy', '*', '--proto', '=https',
+                        '--max-filesize', str(ECHO_MAX_BYTES), '-fsS', '--max-time', '10', url],
+                       timeout=12, limit=ECHO_MAX_BYTES)
+        return parse_echo(raw, family)
+
+    def host_address(self, family):
+        """The host's own public address, measured off the tunnel. When that
+        fails: HOST_LACKS_FAMILY for IPv6 only if the namespace provably has
+        no IPv6 of its own, otherwise None, which fails the tunnel checks."""
+        try:
+            return self.echo(ECHO_URLS[family][0], family, tunnel=False)
+        except (RuntimeError, ValueError, UnicodeError):
+            if family == 6 and self.host_lacks_ipv6():
+                return HOST_LACKS_FAMILY
+            return None
+
+    def host_lacks_ipv6(self):
+        try:
+            routes = decode_json(self.run(['ip', '-j', '-6', 'route', 'show', 'table', 'all']))
+            links = decode_json(self.run(['ip', '-j', '-6', 'address', 'show', 'scope', 'global']))
+        except (RuntimeError, ValueError, UnicodeError):
+            return False
+        return host_lacks_ipv6(routes, links, {self.config.exit_if, self.config.overlay_if})
+
+    def tunnel_egress(self, server, handshake_age):
+        """The "tunnel" tier (molebridge/egress.py), for every family the
+        tunnel carries. `exit_confirmed` stays false: that field means the
+        provider itself confirmed the egress."""
+        relay = self.catalog.relays.get(server) if server else None
+        verified, addresses = relay is not None, {}
+        for family in sorted(self.tunnel_addresses()):
+            echoes = [self.echo(url, family, tunnel=True) for url in ECHO_URLS[family]]
+            verified = tunnel_verdict(echoes, self.host_address(family), exit_addresses(relay, family),
+                                      handshake_age, max_handshake_age=HANDSHAKE_FRESH_SEC) and verified
+            addresses[str(family)] = echoes[0]
+        return {'egress_ip': addresses.get('4'), 'egress_city': None, 'egress_country': None,
+                'exit_confirmed': False, 'egress_tier': 'tunnel' if verified else None,
+                'egress_ips': addresses}
+
+    def egress_tier(self, fields):
+        """'provider' when the provider confirmed egress; 'tunnel' when the
+        tunnel checks passed for a provider without its own check; else None."""
+        if fields.get('exit_confirmed') is True:
+            return 'provider'
+        if self.spec.egress_tier == 'tunnel' and fields.get('egress_tier') == 'tunnel':
+            return 'tunnel'
+        return None
+
     def result_defaults(self):
         return {'mullvad_exit_ip': False}
 
@@ -202,7 +281,8 @@ class Applier:
                   'request_id': request_token(self.request) if self.request else None,
                   'requested_server': self.request['server'] if self.request else None,
                   'provider': self.provider, 'routing_ok': False, 'unreachable_fallback': False,
-                  'netbird_native': False, 'exit_confirmed': False, **self.result_defaults(),
+                  'netbird_native': False, 'exit_confirmed': False, 'egress_tier': None,
+                  **self.result_defaults(),
                   'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
                   'egress_ips': {}}
         result.update(fields)
@@ -233,13 +313,16 @@ class Applier:
                 return emit('failed', 'Routing protection is incomplete; run the recovery helper.')
             if not native:
                 return emit('failed', NETBIRD_MODE_FAILED)
-            fields.update(self.egress())
+            fields.update(self.egress_for(server, age))
+            fields['egress_tier'] = self.egress_tier(fields)
             if self.rejection:
                 return emit('failed', self.rejection)
             if age is None or age >= HANDSHAKE_FRESH_SEC:
                 return emit('failed', 'Tunnel handshake is missing or stale; check the account and connectivity.')
-            if fields['exit_confirmed'] is not True:
-                return emit('failed', f'Tunnel egress is not confirmed as {PROVIDER_LABEL[self.provider]}.')
+            if fields['egress_tier'] is None:
+                if self.spec.egress_tier == 'tunnel':
+                    return emit('failed', 'Tunnel egress did not pass the tunnel checks.')
+                return emit('failed', f'Tunnel egress is not confirmed as {self.spec.label}.')
             if not self.catalog.usable() or server is None:
                 return emit('failed', 'Current peer cannot be verified against a fresh relay catalogue.')
             return emit('ok', 'Healthy.')
@@ -278,7 +361,7 @@ class Applier:
             self.publish('applying', 'Applying the requested server.', server=self.server_for(keys),
                          routing_ok=True, unreachable_fallback=fallback, netbird_native=True)
             self.apply_relay(relay, keys)
-            deadline = self.clock() + SWITCH_TIMEOUT_SEC
+            deadline = self.switch_deadline = self.clock() + SWITCH_TIMEOUT_SEC
             while self.clock() < deadline:
                 result = self.inspect(applying=True)
                 if result['status'] == 'ok' and result['server'] == request['server']:
@@ -292,6 +375,8 @@ class Applier:
         except (RuntimeError, ValueError, UnicodeError):
             self.rejection = 'Peer update failed; choose a server again to retry.'
             return self.inspect()
+        finally:
+            self.switch_deadline = None
 
     def push_gatus(self, result):
         base, token = os.environ.get('GATUS_URL', ''), os.environ.get('GATUS_TOKEN', '')
@@ -311,6 +396,16 @@ class Applier:
                           '-X', 'POST', '-H', '@' + str(header), base.rstrip('/') + '/api/v1/endpoints/' + endpoint + '/external?' + query], timeout=12)
             except (RuntimeError, ValueError, UnicodeError):
                 print('applier: monitoring push failed', flush=True)
+
+    def doctor_checks(self):
+        """Fixed labels and results for `--doctor`; no addresses or names."""
+        result = read_json(self.result_path, 16384)
+        result = result if isinstance(result, dict) else {}
+        return {'recent applier check': recent(result.get('checked_at')),
+                'routing protection': self.routing_status()[0],
+                'NetBird kernel WireGuard and kernel firewall': self.netbird_native(),
+                'fresh relay catalogue': self.catalog.usable(),
+                f'verified {self.spec.label} egress': recent(result.get('checked_at')) and result.get('status') == 'ok'}
 
     def tick(self):
         if self.clock() >= self.next_catalog:
@@ -366,12 +461,12 @@ def main():
     args = parser.parse_args()
     directory = Path(os.environ.get('STATE_DIR', '/state'))
     try:
-        provider = provider_from_env(os.environ)
-        if provider == 'pia':
-            from applier.pia import PiaApplier
-            applier = PiaApplier.from_env(directory, RoutingConfig.from_env(os.environ), os.environ)
+        spec = providers.from_env(os.environ)
+        config = RoutingConfig.from_env(os.environ)
+        if spec.applier == 'applier.apply:Applier':
+            applier = Applier(directory, config)
         else:
-            applier = Applier(directory, RoutingConfig.from_env(os.environ))
+            applier = spec.applier_class().from_env(directory, config, os.environ)
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
@@ -379,14 +474,7 @@ def main():
                          and len(applier.peers()) == 1 and applier.routing_status()[0]
                          and applier.netbird_native()) else 1
         if args.doctor:
-            result = read_json(applier.result_path, 16384)
-            result = result if isinstance(result, dict) else {}
-            checks = {'recent applier check': recent(result.get('checked_at')),
-                      'routing protection': applier.routing_status()[0],
-                      'NetBird kernel WireGuard and kernel firewall': applier.netbird_native(),
-                      'fresh relay catalogue': applier.catalog.usable(),
-                      f'verified {PROVIDER_LABEL[applier.provider]} egress':
-                          recent(result.get('checked_at')) and result.get('status') == 'ok'}
+            checks = applier.doctor_checks()
             for label, passed in checks.items():
                 print(('PASS ' if passed else 'FAIL ') + label)
             return 0 if all(checks.values()) else 1

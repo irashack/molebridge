@@ -13,7 +13,7 @@ switcher revisions were replaced by a rebase merge, also with identical trees:
 ## macOS / OrbStack pass
 
 Apple silicon, self-hosted NetBird 0.78, simulated client routing plus one real
-phone. Steady-state fail-closed behaviour held in every drill for both
+phone. Steady-state fail-closed behavior held in every drill for both
 families. The pass found six defects, all fixed in `1390860` through
 `336d904`: a single-family tunnel-route loss reported healthy; the applier
 stayed healthy in an orphaned namespace; `OVERLAY_IF` was not passed to
@@ -291,6 +291,95 @@ NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
   enrolled default profile and refused it when `NB_INTERFACE_NAME` named a
   different interface than its stored one.
 
+## NordVPN pass at `036e1cc`
+
+2026-10-08, a test exit built from `036e1cc`: macOS, OrbStack, Docker, a
+self-hosted NetBird 0.79.0 client, `PROVIDER=nordvpn` with a NordVPN
+account.
+
+- `tools/nordvpn-key.py` exchanged a real access token for the account's
+  NordLynx key and wrote the tunnel config with mode 0600.
+- The applier's catalogue held 5,291 servers; `relays.json` was about
+  1.48 MB.
+- A selected server in one US city came up `ok` with `egress_tier`
+  `provider`: NordVPN's insights check answered `protected: true` and named
+  the city.
+- A NetBird client routed through the exit egressed from that server.
+- A switch to another server in the same city, which shares the location's
+  key, was identified correctly by its endpoint.
+- A switch to a server in Germany worked and was confirmed by NordVPN.
+- Forwarded IPv6 had no egress: the exit table's IPv6 side held only the
+  unreachable default.
+- A TCP connection from the client to the exit's own overlay address was
+  refused.
+
+Not tested live: the insights cache-retry path, the `tunnel` egress tier, the
+panel with the NordVPN catalogue, rootless Podman, and the fail-closed drills
+in [verification](verification.md) on this provider. The later fixes on this
+branch (the unverified IPv6 measurement in the tunnel tier, the snapshot size
+limit and the bounded latency probing) are covered by unit tests, not by this
+pass.
+
+## gluetun backend pass at `a3bb14f`
+
+2026-10-08, a test exit: Docker on OrbStack (a Linux 7.0 kernel VM on a
+macOS host), gluetun v3.41.3 with NordVPN, a self-hosted NetBird server and
+the NetBird 0.79.0 client, `compose.gluetun.yaml`. The final pass ran at
+`a3bb14f`; earlier revisions of the same pass found these, each fixed
+before it:
+
+- the routing image's rule directory was not searchable without
+  `DAC_OVERRIDE`, so the guard couldn't start;
+- gluetun's built-in server list was stale, and the catalogue offered
+  NordVPN's dedicated-IP servers, which an ordinary account can't use;
+- a post-rule with a mark match broke gluetun's own iptables parser, so
+  its old accepts piled up on every reconnect;
+- gluetun's own established DNS-over-TLS connections left by the host
+  interface when its tunnel went down (now rules 102–104);
+- the kill switch blocked the kernel's check of the gateway route gluetun
+  adds at start (now rule 103, added before 104).
+
+Verified at `a3bb14f`:
+
+- A NetBird client on a direct (P2P) connection routed through the exit,
+  with provider-confirmed egress (NordVPN's insights check).
+- A server switch through the panel's API.
+- Traffic from the overlay to the exit's own addresses was not delivered.
+- With the tunnel interface down, the client had no egress, and the host
+  interface carried no client traffic and none of gluetun's own flows;
+  only the kernel's ICMP port-unreachable replies to inbound UDP.
+- NetBird's control traffic appeared only on the host interface.
+- `tools/molebridge.py recover` recreated the stack, the applier put the
+  last verified server back by itself, and `doctor` passed.
+
+Not tested live: other providers through gluetun, rootless Podman, IPv6
+through gluetun, gluetun restarting into a new namespace outside a drill,
+and long-running stability. The fixes after `a3bb14f` (gluetun's role-file
+check before it starts, and identifying the server by any of its addresses)
+are covered by unit tests and drills, not by this pass.
+
+## gluetun backend at `4933360`, and the standalone form
+
+2026-10-08, the same test exit, rebuilt at `4933360`:
+
+- gluetun started through the role-file check, every container became
+  healthy, and `recover` and `doctor` passed. With `apikey` misspelled in the
+  role file, gluetun refused to start with the check's fixed message, and the
+  key appeared nowhere in gluetun's log; with the file restored, `recover`
+  brought the exit back.
+- With the applier and the panel stopped, as in
+  [gluetun as a NetBird exit](gluetun-netbird-exit.md): the guide's checks 1 to
+  4; deleting the exit-table route and deleting lookup rule 95 (guard stopped),
+  restarting NetBird, and recreating gluetun, guard and NetBird, each with the
+  client's probe failing during the break and nothing to or from the probe
+  addresses on the host interface; local delivery refused; a server switch
+  through gluetun's control server with the guide's `curl` commands.
+- Observed: gluetun did not bring back a tunnel interface set down by hand
+  within several minutes; recreating the containers did. NetBird in the
+  namespace resolves names through gluetun's DNS, through the tunnel.
+
+Not tested: rootless Podman, other providers, IPv6 through gluetun.
+
 ## Not yet tested
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
@@ -298,6 +387,17 @@ NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
   tests and `tools/check-routing.sh` cover them; the NetBird settings were
   checked against the 0.79.0 source. A Mullvad exit and rootless Podman with
   these checks are untested.
+- The [gluetun backend](architecture.md#gluetun-backend) beyond the
+  [pass above](#gluetun-backend-pass-at-a3bb14f): other providers than
+  NordVPN, rootless Podman, IPv6 through gluetun, and gluetun restarting
+  into a new namespace outside a drill. `tools/check-routing.sh`
+  exercises the guard and gate in isolated namespaces with gluetun's rules
+  98–101 and NetBird's 105/110 simulated; unit tests cover the scripts
+  against a stand-in for iproute2 and the applier against fakes of the
+  kernel and gluetun. The applier's request to gluetun clearing every other
+  server filter was checked against gluetun's source, not a running gluetun.
+  gluetun v3.41.3 and NetBird 0.79.0 behaviors the passes above did not
+  exercise were read in their source.
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
   fragmentation-needed error on a live flow. The isolated CI drill covers both
   return paths; the live pass above shows the IPv6 error leaving through the
@@ -306,6 +406,11 @@ NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
   client; a phone's NetBird client may fall back to its own connection
   differently while the exit peer is offline.
 - Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
+- NordVPN beyond the [pass above](#nordvpn-pass-at-036e1cc): the insights
+  cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with
+  NordVPN's catalogue, rootless Podman, and the fail-closed drills.
+- The `tunnel` egress tier, on any provider: no current provider uses it, and
+  `tools/test_egress.py` covers it with a made-up provider entry.
 - The panel's [OpenID Connect sign-in](access.md#sign-in-with-openid-connect)
   for someone granted only some exits (`PANEL_ACCESS`), live; any provider but
   Pocket ID; a confidential client; the userinfo fallback against a real

@@ -1,0 +1,56 @@
+#!/usr/bin/env sh
+# gluetun's entrypoint in compose.gluetun.yaml: check gluetun's control-server
+# role file, then hand over to gluetun's own entrypoint with its arguments.
+#
+# gluetun v3.41.3 logs a role file it can't decode with an excerpt of the
+# offending line (internal/server/middlewares/auth/configfile.go:28-31, logged
+# by cmd/gluetun/main.go:115), so a misspelled field next to the API key would
+# print the key. Without the file it would apply a public default role that
+# includes PUT /v1/vpn/status. This check runs on every start, including
+# restart-policy restarts, and accepts only the exact structure
+# `tools/molebridge.py gluetun-auth` writes (applier/gluetun.py,
+# gluetun_auth_file). Its messages are fixed and print nothing from the file.
+#
+# Runs under busybox sh and awk in gluetun's Alpine image.
+set -eu
+auth_file=${HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH:-/gluetun/auth/config.toml}
+refuse() {
+    echo "molebridge: not starting gluetun: $1 (python3 tools/molebridge.py gluetun-auth --rotate writes a valid one)" >&2
+    exit 1
+}
+# A default role would answer routes the file leaves out. gluetun's own image
+# sets this to "{}" (Dockerfile:206 at v3.41.3), which decodes to a role
+# without an auth method, that is no default role
+# (internal/configuration/settings/server.go:53-65, 94-101). Only that, with
+# surrounding spaces or tabs, or nothing at all is accepted.
+default_role=$(printf '%s' "${HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE:-}" | sed 's/^[[:blank:]]*//; s/[[:blank:]]*$//')
+case "$default_role" in
+    ''|'{}') : ;;
+    *) refuse 'HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE sets a default role; the role file alone decides' ;;
+esac
+[ -n "$auth_file" ] && [ ! -L "$auth_file" ] && [ -f "$auth_file" ] && [ -r "$auth_file" ] ||
+    refuse "the control-server role file $auth_file is missing or not a regular file"
+size=$(wc -c < "$auth_file" | tr -d ' ')
+case "$size" in ''|*[!0-9]*) refuse 'the control-server role file cannot be read' ;; esac
+[ "$size" -le 4096 ] || refuse 'the control-server role file is too large'
+[ "$(tr -d '\000\r' < "$auth_file" | wc -c | tr -d ' ')" = "$size" ] ||
+    refuse 'the control-server role file has NUL or carriage-return bytes'
+verdict=$(LC_ALL=C awk '
+    BEGIN {
+        expect[1] = "^\\[\\[roles\\]\\]$"
+        expect[2] = "^name = \"[a-zA-Z0-9][a-zA-Z0-9_-]*\"$"
+        expect[3] = "^auth = \"apikey\"$"
+        expect[4] = "^apikey = \"[A-Za-z0-9_-]+\"$"
+        expect[5] = "^routes = \\[\"PUT /v1/vpn/settings\", \"GET /v1/vpn/status\", \"GET /v1/publicip/ip\", \"GET /v1/updater/status\", \"PUT /v1/updater/status\"\\]$"
+    }
+    {
+        n++
+        if (n > 5 || $0 !~ expect[n]) bad = 1
+        if (n == 2 && length($0) > 9 + 64) bad = 1
+        if (n == 4 && (length($0) < 11 + 32 || length($0) > 11 + 128)) bad = 1
+    }
+    END { print (bad || n != 5) ? "bad" : "ok" }
+' "$auth_file") || verdict=bad
+[ "$verdict" = ok ] ||
+    refuse 'the control-server role file is not the one Molebridge generates (one role, apikey, the five routes)'
+exec "$@"

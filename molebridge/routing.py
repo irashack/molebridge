@@ -30,6 +30,40 @@ TABLE_NAMES = {254: 'main', 255: 'local'}
 NETBIRD_NFT_TABLE = 'netbird'
 NETBIRD_IPTABLES_PREFIX = 'NETBIRD-'
 
+# gluetun backend. Tables gluetun v3.41.3 and NetBird 0.79.0 use in the shared
+# namespace: gluetun's WireGuard table and mark 51820
+# (internal/wireguard/settings.go:60-67), its inbound table 200
+# (internal/routing/inbound.go:11-12), NetBird's table 0x1BD0 = 7120
+# (client/internal/routemanager/systemops/systemops_linux.go:47). NetBird's
+# default mark base is 0x1BD00 with the low byte left for its offsets
+# (client/net/fwmark.go:17-26).
+BACKENDS = ('wireguard', 'gluetun')
+RESERVED_TABLES = {'51820', '7120'}
+DEFAULT_CONTROL_MARK = '0x1bd00'
+# gluetun's WireGuard fwmark, fixed in v3.41.3 (internal/wireguard/settings.go:64-66).
+GLUETUN_MARK = 51820
+# gluetun's interface-name rule (internal/configuration/settings/wireguard.go).
+GLUETUN_INTERFACE = re.compile(r'[a-zA-Z0-9_]{1,15}')
+INTERFACE = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,14}')
+
+
+def _table_number(value, name):
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]{0,9}', value) or not 256 <= int(value) <= 2147483647:
+        raise ValueError(f'{name} must be an unreserved table number (256..2147483647)')
+    return value
+
+
+def control_mark_value(mark):
+    """The integer of a canonical control mark ("0x1bd00": lowercase hex, no
+    leading zero, at most 32 bits, low byte zero, as NetBird requires of
+    NB_FWMARK_BASE and as iproute2 prints it), or ValueError."""
+    if not isinstance(mark, str) or not re.fullmatch(r'0x[1-9a-f][0-9a-f]{0,7}', mark):
+        raise ValueError('CONTROL_MARK must be lowercase hexadecimal like 0x1bd00')
+    value = int(mark, 16)
+    if value & 0xFF:
+        raise ValueError('CONTROL_MARK must leave the low byte zero')
+    return value
+
 
 @dataclass(frozen=True)
 class RoutingConfig:
@@ -38,6 +72,11 @@ class RoutingConfig:
     overlay_if: str = 'wt0'
     exit_if: str = 'mullvad'
     table: str = '51821'
+    # gluetun backend only; see routing/10-exit-routing.
+    backend: str = 'wireguard'
+    host_if: str = 'eth0'
+    host_table: str = '51822'
+    control_mark: str = DEFAULT_CONTROL_MARK
 
     @classmethod
     def from_env(cls, env):
@@ -58,7 +97,28 @@ class RoutingConfig:
         table = env.get('EXIT_TABLE', '51821')
         if not re.fullmatch(r'[1-9][0-9]{0,9}', table) or not 256 <= int(table) <= 2147483647:
             raise ValueError('EXIT_TABLE must be an unreserved table number (256..2147483647)')
-        return cls(str(overlay), overlay6, *interfaces, table)
+        backend = env.get('TUNNEL_BACKEND', 'wireguard')
+        if backend not in BACKENDS:
+            raise ValueError('TUNNEL_BACKEND must be wireguard or gluetun')
+        if backend == 'wireguard':
+            return cls(str(overlay), overlay6, *interfaces, table)
+        if not GLUETUN_INTERFACE.fullmatch(interfaces[1]):
+            raise ValueError('with gluetun, EXIT_IF may hold only letters, digits and underscores')
+        host_if = env.get('HOST_IF', 'eth0')
+        if not INTERFACE.fullmatch(host_if) or host_if == 'lo' or host_if in interfaces:
+            raise ValueError("HOST_IF must name the namespace's host interface")
+        host_table = _table_number(env.get('HOST_TABLE', '51822'), 'HOST_TABLE')
+        if host_table == table:
+            raise ValueError('HOST_TABLE and EXIT_TABLE must differ')
+        if {table, host_table} & RESERVED_TABLES:
+            raise ValueError('tables 51820 (gluetun) and 7120 (NetBird) are taken')
+        mark = env.get('CONTROL_MARK', DEFAULT_CONTROL_MARK)
+        control_mark_value(mark)
+        return cls(str(overlay), overlay6, *interfaces, table, backend, host_if, host_table, mark)
+
+    @property
+    def gluetun(self):
+        return self.backend == 'gluetun'
 
 
 def _normalize_prefix(rule, key, family):
@@ -101,13 +161,26 @@ def local_rule_admits_overlay(rule, overlay_if):
     return not isinstance(iif, str) or iif == overlay_if
 
 
-def family_status(rules, routes, config, family, *, tunnel_address=None):
+def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_route=True):
     """Check exact selectors, rule ordering, terminal guard and safe table routes.
 
     `tunnel_address` is the family's global address on the exit interface, or
     None when the tunnel does not carry this family. With an address, the
     family must also have its tunnel default route and the priority-94
-    return-path rule, for exactly that address and ICMP alone."""
+    return-path rule, for exactly that address and ICMP alone. With
+    tunnel_route=False the tunnel default may be missing (gluetun's interface
+    exists with its address but is down; the guard removes the route then),
+    though never replaced by another route.
+
+    With the gluetun backend, rules 88 and 89 send locally generated packets
+    carrying exactly NetBird's control mark to the host table, or nowhere,
+    and rules 91 and 92 send locally generated packets for the overlay to
+    the main table's overlay route, or nowhere.
+    Rules 102-104 send the exit's own traffic carrying gluetun's WireGuard
+    mark to the main table, let it reach HOST_IF's own subnets through the
+    host table, and stop all other locally generated traffic that gluetun's
+    rule 101 didn't take. gluetun's rules (98-101) and
+    NetBird's (105, 110) are not judged here; check the host table with `host_table_status`."""
     if not isinstance(rules, list) or not isinstance(routes, list):
         return False, False
     overlay = config.overlay if family == 4 else config.overlay6
@@ -119,6 +192,24 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
                 97: {'iif': config.overlay_if, 'action': 'unreachable'}}
     if overlay:
         expected[90] = {'iif': config.exit_if, 'dst': overlay, 'table': 'main'}
+    if config.gluetun:
+        mark = control_mark_value(config.control_mark)
+        expected[88] = {'iif': 'lo', 'fwmark': mark, 'table': config.host_table}
+        expected[89] = {'iif': 'lo', 'fwmark': mark, 'action': 'unreachable'}
+        if overlay:
+            # What the exit itself sends to the overlay (ICMP errors to
+            # clients) uses only NetBird's overlay route, never main's
+            # default route or gluetun's rule 101, and fails without it.
+            expected[91] = {'iif': 'lo', 'dst': overlay, 'table': 'main', 'suppress_prefixlen': 0}
+            expected[92] = {'iif': 'lo', 'dst': overlay, 'action': 'unreachable'}
+        # The exit's own unmarked traffic leaves only by gluetun's rule 101
+        # (its tunnel) or not at all; gluetun's WireGuard socket, which 101
+        # skips, uses the main table.
+        expected[102] = {'iif': 'lo', 'fwmark': GLUETUN_MARK, 'table': 'main'}
+        # HOST_IF's own subnets, from the host table without its default.
+        expected[103] = {'iif': 'lo', 'table': config.host_table, 'suppress_prefixlen': 0}
+        expected[104] = {'iif': 'lo', 'action': 'unreachable'}
+    owned_after_97 = (102, 103, 104) if config.gluetun else ()
     if tunnel_address is not None:
         try:
             address = ipaddress.ip_network(tunnel_address, strict=True)
@@ -136,7 +227,7 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
         if local_rule_admits_overlay(rule, config.overlay_if):
             rules_ok = False
         priority = rule['priority']
-        if priority > 97:
+        if priority > 97 and priority not in owned_after_97:
             continue
         spec = expected.get(priority)
         if spec is None or priority in found:
@@ -155,6 +246,25 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
                 rules_ok = False
                 continue
             normalized['not'] = True
+        if 'fwmark' in normalized or 'fwmask' in normalized:
+            # iproute2 prints both as hex strings and hides an all-ones mask.
+            try:
+                for key in ('fwmark', 'fwmask'):
+                    value = normalized.get(key, 0xFFFFFFFF)
+                    if type(value) is str:
+                        value = int(value, 16 if value.lower().startswith('0x') else 10)
+                    elif type(value) is not int:
+                        raise ValueError
+                    normalized[key] = value
+            except ValueError:
+                rules_ok = False
+                continue
+            if normalized.pop('fwmask') != 0xFFFFFFFF:
+                rules_ok = False
+                continue
+        if 'suppress_prefixlen' in normalized and type(normalized['suppress_prefixlen']) is not int:
+            rules_ok = False
+            continue
         if 'ipproto' in normalized:
             if type(normalized['ipproto']) not in (int, str):
                 rules_ok = False
@@ -196,7 +306,142 @@ def family_status(rules, routes, config, family, *, tunnel_address=None):
                 tunnel_default = True
         else:
             routes_ok = False
-    return rules_ok and routes_ok and fallback and (tunnel_default or tunnel_address is None), fallback
+    tunnel_ok = tunnel_default or tunnel_address is None or not tunnel_route
+    return rules_ok and routes_ok and fallback and tunnel_ok, fallback
+
+
+def _host_routes(routes, config):
+    """Destinations of the default and on-link unicast routes through the host
+    interface, or None if any route is something else."""
+    found = set()
+    for route in routes:
+        if not isinstance(route, dict) or route.get('type', 'unicast') != 'unicast':
+            return None
+        if route.get('dev') != config.host_if or any(k in route for k in ('nexthops', 'encap', 'nhid')):
+            return None
+        if 'gateway' in route and route.get('dst') != 'default':
+            return None
+        found.add(route.get('dst'))
+    return found
+
+
+def host_table_status(routes, config, family, *, main=None):
+    """`ip -j route show table <host table>` for the gluetun backend: only
+    default and on-link routes through the host interface, never the tunnel
+    or the overlay, and for IPv4 a default route. NetBird's control traffic
+    depends on it; the IPv6 table may be empty when the host has no IPv6
+    route. With `main` (the main table's routes), the host table must hold
+    the same destinations as main's default and on-link host routes."""
+    if not isinstance(routes, list) or (main is not None and not isinstance(main, list)):
+        return False
+    found = _host_routes(routes, config)
+    if found is None:
+        return False
+    if main is not None:
+        wanted = {r.get('dst') for r in main if isinstance(r, dict) and r.get('type', 'unicast') == 'unicast'
+                  and r.get('dev') == config.host_if and not any(k in r for k in ('nexthops', 'encap', 'nhid'))
+                  and ('gateway' not in r or r.get('dst') == 'default')}
+        if found != wanted:
+            return False
+    return 'default' in found or family == 6
+
+
+# What gluetun v3.41.3's chain parser accepts in a rule line (internal/
+# firewall/list.go): targets at :314-321, protocols at :324-340, and after
+# the in/out/source/destination columns only the optional fields at
+# :243-279, which iptables prints for `-m tcp/udp --dport N` and `-m
+# conntrack --ctstate S`.
+GLUETUN_TARGETS = frozenset({'ACCEPT', 'DROP', 'REJECT', 'REDIRECT'})
+GLUETUN_PROTOCOLS = frozenset({'all', 'icmp', 'tcp', 'udp'})
+
+
+def post_rule_parseable(rule):
+    """True when an `-A <chain> ...` rule, once listed by iptables, is a line
+    gluetun's chain parser accepts."""
+    tokens = rule.split()
+    if len(tokens) < 4 or tokens[0] != '-A' or tokens[-2] != '-j' or tokens[-1] not in GLUETUN_TARGETS:
+        return False
+    i, protocol, module, given = 2, None, None, set()
+    body = tokens[2:-2]
+    while i - 2 < len(body):
+        option = tokens[i]
+        value = tokens[i + 1] if i + 1 < len(tokens) - 2 else None
+        if value is None:
+            return False
+        if option in ('-i', '-o', '-s', '-d'):
+            pass
+        elif option == '-p' and value in GLUETUN_PROTOCOLS and protocol is None:
+            protocol = value
+        elif option == '-m' and value in ('tcp', 'udp', 'conntrack') and module is None:
+            module = value
+        elif option == '--dport' and module in ('tcp', 'udp') and module == protocol and value.isdigit():
+            pass
+        elif option == '--ctstate' and module == 'conntrack':
+            pass
+        else:
+            return False
+        given.add(option)
+        i += 2
+    # A match module with nothing to print would leave a lone `udp` or
+    # `tcp`, which gluetun's parser reads past the end of the line.
+    return module is None or ('--dport' if module in ('tcp', 'udp') else '--ctstate') in given
+
+
+def render_post_rules(config, wireguard_port, *, ipv6=True):
+    """gluetun's /iptables/post-rules.txt for the gluetun backend.
+
+    gluetun v3.41.3 runs each line that starts with `iptables ` or `ip6tables `
+    (or their -nft/-legacy names) once, after enabling its firewall, split on
+    whitespace without a shell (internal/firewall/iptables.go:260-330); any
+    other line is ignored. A failing line disables the firewall and stops
+    gluetun, and an ip6tables line fails when gluetun found no working
+    ip6tables, so `ipv6=False` leaves those out for such a host.
+
+    These accepts let the exit work under gluetun's DROP policies. They are
+    not the guard: NetBird rewrites FORWARD, and policy routing holds the
+    tunnel-only property.
+
+    Every rule must also survive gluetun's own parser. To remove one of its
+    rules (the old VPN endpoint and tunnel accepts on every reconnect,
+    allowed ports), gluetun lists the whole chain with `iptables -L <chain>
+    --line-numbers -n -v` and parses every line, ours included
+    (internal/firewall/delete.go:71-99, list.go:37-94). A line it can't parse
+    stops the removal, and its old accepts pile up. It accepts only the
+    targets ACCEPT, DROP, REJECT and REDIRECT (list.go:314-321), so not a
+    jump to a chain of our own, and after the address columns only `tcp
+    dpt:N`, `udp dpt:N`, `redir ports N` and `ctstate S` (list.go:243-279),
+    so no `-m mark`. POST_RULE_PARSEABLE checks that. The control mark
+    therefore can't narrow the OUTPUT accept: it accepts everything leaving
+    by HOST_IF, as gluetun's own `-o <tunnel> -j ACCEPT` does for the
+    tunnel. Policy routing decides what leaves that way: NetBird's marked
+    control traffic by rules 88/89, gluetun's WireGuard socket by rule 102,
+    HOST_IF's subnets by 103; rule 104 stops the namespace's other unmarked
+    traffic that gluetun's
+    rule 101 didn't take; forwarded traffic never reaches OUTPUT."""
+    if not config.gluetun:
+        raise ValueError('post-rules are for the gluetun backend')
+    if type(wireguard_port) is not int or not 1 <= wireguard_port <= 65535:
+        raise ValueError('the NetBird WireGuard port must be 1..65535')
+    control_mark_value(config.control_mark)
+    overlay, tunnel, host = config.overlay_if, config.exit_if, config.host_if
+    for name in (overlay, tunnel, host):
+        if not INTERFACE.fullmatch(name):
+            raise ValueError('invalid interface name')
+    rules = [
+        f'-A FORWARD -i {overlay} -o {tunnel} -j ACCEPT',
+        f'-A FORWARD -i {tunnel} -o {overlay} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT',
+        f'-A OUTPUT -o {host} -j ACCEPT',
+        f'-A INPUT -i {host} -p udp -m udp --dport {wireguard_port} -j ACCEPT',
+    ]
+    if not all(post_rule_parseable(rule) for rule in rules):
+        raise ValueError("a post-rule gluetun's chain parser would reject")
+    lines = ['# Generated by tools/molebridge.py gluetun-post-rules; regenerate instead of editing.',
+             "# gluetun runs these after enabling its firewall. They are not Molebridge's guard,",
+             '# which is policy routing (docs/architecture.md#gluetun-backend).']
+    lines += [f'iptables {rule}' for rule in rules]
+    if ipv6:
+        lines += [f'ip6tables {rule}' for rule in rules]
+    return '\n'.join(lines) + '\n'
 
 
 def overlay_is_kernel_wireguard(links, overlay_if):

@@ -10,6 +10,11 @@
 # matches ICMP only, so other traffic a co-located process sources from that
 # address keeps the namespace's ordinary route.
 # Priority 97 is a permanent terminal guard if lookup 95 or its routes vanish.
+#
+# TUNNEL_BACKEND=gluetun runs the same contract as a sidecar in gluetun's
+# namespace, adds NetBird's control-plane rules (88/89) and a host table, and
+# keeps everything in place in a loop; see the gluetun section below and
+# docs/architecture.md#gluetun-backend. The default, wireguard, is unchanged.
 set -eu
 set -f
 
@@ -20,7 +25,12 @@ EXIT_IF="${EXIT_IF:-mullvad}"
 EXIT_TABLE="${EXIT_TABLE:-51821}"
 PROVIDER="${PROVIDER:-mullvad}"
 READY_FILE="${ROUTING_READY_FILE:-/run/molebridge-routing-ready}"
-rm -f "$READY_FILE"
+TUNNEL_BACKEND="${TUNNEL_BACKEND:-wireguard}"
+# A single gluetun reconcile pass leaves the marker for the pass to decide.
+case "$TUNNEL_BACKEND:${1:-}" in
+    gluetun:--reconcile) : ;;
+    *) rm -f "$READY_FILE" ;;
+esac
 
 fail() { echo "10-exit-routing: $1" >&2; exit 1; }
 is_uint() {
@@ -79,6 +89,308 @@ if [ -n "$OVERLAY6_CIDR" ]; then
     [ "${#prefix6}" -le 3 ] && [ "$prefix6" -ge 1 ] && [ "$prefix6" -le 128 ] || fail "invalid IPv6 prefix"
 fi
 
+# Local delivery first: the new rule goes in before the kernel's rule 0 comes
+# out, so loopback and the host interface never lose it. The local table and
+# its routes stay. A rerun finds rule 1 in place and rule 0 already gone.
+install_local_guard() {
+    for family in -4 -6; do
+        if ! local_guard_present "$family"; then
+            ip "$family" rule add not iif "$OVERLAY_IF" lookup local priority 1
+        fi
+        while ip "$family" rule del priority 0 2>/dev/null; do :; done
+    done
+}
+
+# ---------------------------------------------------------------------------
+# gluetun backend. gluetun owns the namespace and creates the tunnel interface
+# (EXIT_IF) itself, again on every reconnect, so this runs as a supervised
+# sidecar in its namespace: it installs the rules once, then reconciles every
+# ROUTING_RECONCILE_INTERVAL seconds. gluetun's own rules (98 local subnets,
+# 99 outbound subnets, 100 inbound, 101 `not fwmark 51820 lookup 51820`) and
+# NetBird's (105, 110) are left alone. Priorities 0-97 and 102-104 belong
+# to Molebridge here: anything else at those priorities is removed. 102-104
+# sit between gluetun's 101 and NetBird's 105 so that the exit's own
+# unmarked traffic leaves only through gluetun's tunnel, or not at all. The
+# expected rules, exit table and host table are defined in routing/gluetun-rules,
+# which NetBird's gate reads too, so both judge the namespace the same way.
+# The mark is exact (mask 0xffffffff) and `iif lo` limits 88/89 to locally
+# generated packets, so forwarded packets carrying NetBird's data-plane marks
+# never match.
+# ---------------------------------------------------------------------------
+CONTROL_MARK="${CONTROL_MARK:-0x1bd00}"
+HOST_IF="${HOST_IF:-eth0}"
+HOST_TABLE="${HOST_TABLE:-51822}"
+STATUS_FILE="${GUARD_STATUS_FILE:-}"
+INTERVAL="${ROUTING_RECONCILE_INTERVAL:-2}"
+# How often the fwmark record is rewritten, whatever INTERVAL is. NetBird's
+# gate allows at least FWMARK_GRACE >= 5 seconds between good records.
+STATUS_INTERVAL=2
+# The rule set, its checks and the clock, shared with NetBird's gate.
+GLUETUN_RULES="${GLUETUN_RULES:-/usr/local/lib/molebridge/gluetun-rules}"
+
+gluetun_validate() {
+    [ -f "$GLUETUN_RULES" ] || fail "the shared rule definitions are missing ($GLUETUN_RULES)"
+    # shellcheck source=routing/gluetun-rules
+    . "$GLUETUN_RULES"
+    gr_validate
+    gr_is_uint "$INTERVAL" && [ "${#INTERVAL}" -le 2 ] && [ "$INTERVAL" -ge 1 ] && [ "$INTERVAL" -le 60 ] ||
+        fail "ROUTING_RECONCILE_INTERVAL must be 1..60 seconds"
+}
+
+# gluetun_rule add|del <family> <priority> [<at priority>]: the expected rule
+# for <priority>, placed at <at priority> (default the same).
+gluetun_rule() {
+    rule_verb=$1
+    rule_family=$2
+    rule_at=${4:-$3}
+    case "$3" in
+        1) set -- not iif "$OVERLAY_IF" lookup local ;;
+        80) set -- iif "$OVERLAY_IF" unreachable ;;
+        88) set -- iif lo fwmark "$CONTROL_MARK/0xffffffff" lookup "$HOST_TABLE" ;;
+        89) set -- iif lo fwmark "$CONTROL_MARK/0xffffffff" unreachable ;;
+        90)
+            cidr=$OVERLAY_CIDR
+            [ "$rule_family" = -4 ] || cidr=$OVERLAY6_CIDR
+            set -- iif "$EXIT_IF" to "$cidr" lookup main ;;
+        91|92)
+            cidr=$OVERLAY_CIDR
+            [ "$rule_family" = -4 ] || cidr=$OVERLAY6_CIDR
+            if [ "$3" = 91 ]; then
+                set -- iif lo to "$cidr" lookup main suppress_prefixlength 0
+            else
+                set -- iif lo to "$cidr" unreachable
+            fi ;;
+        94)
+            icmp=icmp
+            [ "$rule_family" = -4 ] || icmp=ipv6-icmp
+            set -- from "$gl_address" ipproto "$icmp" lookup "$EXIT_TABLE" ;;
+        95) set -- iif "$OVERLAY_IF" lookup "$EXIT_TABLE" ;;
+        96) set -- oif "$EXIT_IF" lookup "$EXIT_TABLE" ;;
+        97) set -- iif "$OVERLAY_IF" unreachable ;;
+        102) set -- iif lo fwmark "$GLUETUN_MARK/0xffffffff" lookup main ;;
+        103) set -- iif lo lookup "$HOST_TABLE" suppress_prefixlength 0 ;;
+        104) set -- iif lo unreachable ;;
+        *) return 1 ;;
+    esac
+    ip "$rule_family" rule "$rule_verb" "$@" priority "$rule_at"
+}
+
+# Replaces everything at a priority with its expected rule without a gap: a
+# copy goes in one priority earlier, the priority is cleared and refilled,
+# then the copy goes. Each copy's selectors or action differ from the
+# expected rule at that earlier priority, so removing it cannot take that one.
+repair_priority() {
+    previous=$(($2 - 1))
+    gluetun_rule add "$1" "$2" "$previous" 2>/dev/null || :
+    cleared=0
+    while [ "$cleared" -lt 32 ] && ip "$1" rule del priority "$2" 2>/dev/null; do cleared=$((cleared + 1)); done
+    gluetun_rule add "$1" "$2" || echo "10-exit-routing: could not restore IPv${1#-} rule $2" >&2
+    gluetun_rule del "$1" "$2" "$previous" 2>/dev/null || :
+    [ "$gl_quiet" = 1 ] || echo "10-exit-routing: rebuilt IPv${1#-} rule $2"
+}
+
+# Missing rules go in before anything is removed, and rule 1 exists before
+# the kernel's rule 0 goes. A correct rule is removed only inside
+# repair_priority, behind its copy.
+apply_rule_actions() {
+    actions=$(rule_actions "$1" "$2")
+    printf '%s\n' "$actions" | while read -r verb priority _; do
+        [ "$verb" = add ] || continue
+        # The kill switch waits for its exceptions' table ($3 = hold).
+        [ "$priority:${3:-}" != 104:hold ] || continue
+        if gluetun_rule add "$1" "$priority"; then
+            [ "$gl_quiet" = 1 ] || echo "10-exit-routing: added IPv${1#-} rule $priority"
+        fi
+    done
+    repaired=' '
+    printf '%s\n' "$actions" | while read -r verb priority selectors; do
+        case "$verb" in
+            sub)
+                case "$repaired" in *" $priority "*) continue ;; esac
+                repaired="$repaired$priority "
+                repair_priority "$1" "$priority" ;;
+            del)
+                # iproute2's own printout of the rule; splitting is deliberate
+                # and globbing is off.
+                # shellcheck disable=SC2086
+                if ip "$1" rule del priority "$priority" $selectors 2>/dev/null; then
+                    [ "$gl_quiet" = 1 ] || echo "10-exit-routing: removed IPv${1#-} rule $priority: $selectors"
+                else
+                    echo "10-exit-routing: could not remove IPv${1#-} rule $priority: $selectors" >&2
+                fi ;;
+        esac
+    done
+}
+
+apply_exit_table() {
+    actions=$(exit_table_actions "$1" "$2")
+    case "$actions" in
+        *fallback*) ip "$1" route replace unreachable default metric 4096 table "$EXIT_TABLE" ;;
+    esac
+    case "$actions" in
+        *tunnel*)
+            if ip "$1" route replace default dev "$EXIT_IF" table "$EXIT_TABLE"; then
+                [ "$gl_quiet" = 1 ] || echo "10-exit-routing: IPv${1#-} tunnel route through $EXIT_IF restored"
+            fi ;;
+    esac
+    printf '%s\n' "$actions" | while read -r verb selectors; do
+        [ "$verb" = del ] || continue
+        # shellcheck disable=SC2086
+        ip "$1" route del $selectors table "$EXIT_TABLE" 2>/dev/null ||
+            echo "10-exit-routing: could not remove an IPv${1#-} route from table $EXIT_TABLE" >&2
+    done
+}
+
+# Makes the host table equal to the main table's host routes. A difference
+# flushes and refills it; meanwhile control traffic hits rule 89 and fails.
+refresh_host_table() {
+    want=$(host_routes "$1" main main)
+    [ "$want" != "$(host_routes "$1" "$HOST_TABLE" check)" ] || return 0
+    ip "$1" route flush table "$HOST_TABLE" 2>/dev/null || :
+    printf '%s\n' "$want" | while read -r _ dst via src metric onlink; do
+        [ -n "$dst" ] || continue
+        set -- "$1" route replace "$dst"
+        [ "$via" = - ] || set -- "$@" via "$via"
+        set -- "$@" dev "$HOST_IF"
+        [ "$src" = - ] || set -- "$@" src "$src"
+        [ "$metric" = - ] || set -- "$@" metric "$metric"
+        [ "$onlink" = - ] || set -- "$@" onlink
+        ip "$@" table "$HOST_TABLE" ||
+            echo "10-exit-routing: could not copy a host route into table $HOST_TABLE" >&2
+    done
+    [ "$gl_quiet" = 1 ] || echo "10-exit-routing: IPv${1#-} host table $HOST_TABLE refreshed from $HOST_IF"
+}
+
+# NetBird's gate reads this to check the overlay interface's fwmark; its
+# image has no `wg`. One line, "<boot id> <boot-clock seconds> <fwmark>",
+# with "absent" when there is no WireGuard interface. The gate trusts a
+# record only from this boot and not from its future, and only for its own
+# time since the record was written.
+write_status() {
+    [ -n "$STATUS_FILE" ] || return 0
+    value=$(wg show "$OVERLAY_IF" fwmark 2>/dev/null) || value=absent
+    case "$value" in off|0x[0-9a-f]*) : ;; *) value=absent ;; esac
+    case "$value" in 0x*[!0-9a-f]*) value=absent ;; esac
+    if ! gr_clock; then
+        echo "10-exit-routing: cannot read the boot clock; no fwmark record written" >&2
+        return 0
+    fi
+    if ! { printf '%s %s %s\n' "$gr_boot" "$gr_now" "$value" > "$STATUS_FILE.tmp" && mv -f "$STATUS_FILE.tmp" "$STATUS_FILE"; }; then
+        echo "10-exit-routing: cannot write $STATUS_FILE" >&2
+    fi
+}
+
+# One pass over both families. Never relies on errexit: every failure only
+# withholds readiness. $1 is an extra expected rule (the temporary 80 while
+# installing); gl_mark sets whether the readiness marker follows the result.
+# Readiness is judged by gr_problems, the same check NetBird's gate makes.
+gluetun_pass() {
+    gl_rules_ok=1
+    gl_ready=1
+    gl_report=''
+    for gl_family in -4 -6; do
+        gl_address=$(tunnel_address "$gl_family")
+        gl_tunnel=0
+        if [ -n "$gl_address" ] && tunnel_up; then gl_tunnel=1; fi
+        gl_name="IPv${gl_family#-}"
+        # The host table first: rule 103 needs it before rule 104 may go in.
+        refresh_host_table "$gl_family"
+        gl_hold=''
+        if [ "$(host_routes "$gl_family" "$HOST_TABLE" check)" != "$(host_routes "$gl_family" main main)" ]; then
+            gl_hold=hold
+        fi
+        gl_spec=$(gluetun_expected "$gl_family" "$gl_address" "$1")
+        apply_rule_actions "$gl_family" "$gl_spec" "$gl_hold"
+        apply_exit_table "$gl_family" "$gl_tunnel"
+        for gl_problem in $(gr_problems "$gl_family" "$1"); do
+            gl_ready=0
+            case "$gl_problem" in
+                rules)
+                    if [ -n "$gl_hold" ] && [ -z "$(rule_actions "$gl_family" "$gl_spec" | grep -v '^[a-z]* 104\( \|$\)')" ]; then
+                        gl_report="$gl_report $gl_name kill switch (rule 104) held until host table $HOST_TABLE has $HOST_IF's routes;"
+                    else
+                        gl_rules_ok=0
+                        gl_report="$gl_report $gl_name rules;"
+                    fi ;;
+                exit) gl_rules_ok=0; gl_report="$gl_report $gl_name exit table $EXIT_TABLE;" ;;
+                host) gl_report="$gl_report $gl_name host table $HOST_TABLE;" ;;
+                nodefault) gl_report="$gl_report no IPv4 default route through $HOST_IF in the main table (if $HOST_IF lost it, or gluetun was restarted into a new namespace, recreate the stack: tools/molebridge.py recover);" ;;
+            esac
+        done
+    done
+    if ! ip link show dev "$HOST_IF" >/dev/null 2>&1; then
+        gl_ready=0
+        gl_report="$gl_report $HOST_IF is not in this namespace (gluetun restarted into a new one? recreate the stack: tools/molebridge.py recover);"
+    fi
+    write_status
+    if [ "$gl_mark" = 1 ]; then
+        if [ "$gl_ready" = 1 ]; then touch "$READY_FILE"; else rm -f "$READY_FILE"; fi
+    fi
+    if [ "$gl_quiet" != 1 ] && [ "$gl_report" != "${gl_last_report-unset}" ]; then
+        if [ -z "$gl_report" ]; then
+            echo "10-exit-routing: every rule and route in place (1/88/89/90/91/92/94/95/96/97/102/103/104, exit table $EXIT_TABLE, host table $HOST_TABLE)"
+        else
+            echo "10-exit-routing: not ready:$gl_report" >&2
+        fi
+        gl_last_report=$gl_report
+    fi
+}
+
+gluetun_main() {
+    gluetun_validate
+    case "${1:-}" in ''|--once|--reconcile) : ;; *) fail "unknown argument (use --once or --reconcile)" ;; esac
+    if [ "$(cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr 2>/dev/null)" != 1 ]; then
+        echo "10-exit-routing: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the gluetun service or IPv4 path MTU discovery through the exit will fail" >&2
+    fi
+    trap 'exit 0' INT TERM
+    gl_mark=1
+    gl_quiet=0
+    if [ "${1:-}" != --reconcile ]; then
+        install_local_guard
+        # Never remove the temporary guard if anything below fails.
+        for family in -4 -6; do
+            while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
+            ip "$family" rule add iif "$OVERLAY_IF" unreachable priority 80
+            ip "$family" route replace unreachable default metric 4096 table "$EXIT_TABLE"
+        done
+        gl_mark=0
+        gl_quiet=1
+        gluetun_pass "80:from all|iif $OVERLAY_IF|unreachable" || :
+        [ "$gl_rules_ok" = 1 ] || fail "rules could not be installed:$gl_report the temporary guard (priority 80) stays"
+        for family in -4 -6; do
+            while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
+        done
+        gl_mark=1
+        gl_quiet=0
+        unset gl_last_report
+    fi
+    gluetun_pass '' || :
+    case "${1:-}" in --once|--reconcile) [ "$gl_ready" = 1 ]; return ;; esac
+    # The fwmark record every STATUS_INTERVAL seconds, so NetBird's gate
+    # always has a fresh one; a full pass every INTERVAL seconds. Both on the
+    # boot clock.
+    gr_clock || gr_now=0
+    gl_next=$((gr_now + INTERVAL))
+    while :; do
+        sleep "$STATUS_INTERVAL" &
+        wait "$!" || :
+        if gr_clock && [ "$gr_now" -lt "$gl_next" ]; then
+            write_status
+            continue
+        fi
+        gluetun_pass '' || :
+        gr_clock || gr_now=0
+        gl_next=$((gr_now + INTERVAL))
+    done
+}
+
+if [ "$TUNNEL_BACKEND" = gluetun ]; then
+    gluetun_main "$@"
+    exit 0
+elif [ "$TUNNEL_BACKEND" != wireguard ]; then
+    fail "TUNNEL_BACKEND must be wireguard or gluetun"
+fi
+
 # The tunnel addresses come from the same file wg-quick will use, so the
 # return-path rules can exist before the interface does. Only the Address
 # line is read; the file also holds the private key and is never echoed.
@@ -105,21 +417,17 @@ case "$PROVIDER" in
     # PIA assigns the tunnel address per server; the applier sets it and its
     # return-path rule when it registers the key. The guards below still apply.
     pia) [ -z "$tunnel6" ] || fail "PIA tunnels carry no IPv6; remove the IPv6 Address" ;;
-    *) fail "PROVIDER must be mullvad or pia" ;;
+    # NordLynx: one IPv4 address on every server, and no IPv6.
+    nordvpn)
+        [ -n "$tunnel4" ] || fail "tunnel configuration needs an IPv4 Address"
+        [ -z "$tunnel6" ] || fail "NordVPN tunnels carry no IPv6; remove the IPv6 Address" ;;
+    *) fail "PROVIDER must be mullvad, pia or nordvpn" ;;
 esac
 if [ "$(cat /proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr 2>/dev/null)" != 1 ]; then
     echo "10-exit-routing: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail" >&2
 fi
 
-# Local delivery first: the new rule goes in before the kernel's rule 0 comes
-# out, so loopback and the host interface never lose it. The local table and
-# its routes stay. A rerun finds rule 1 in place and rule 0 already gone.
-for family in -4 -6; do
-    if ! local_guard_present "$family"; then
-        ip "$family" rule add not iif "$OVERLAY_IF" lookup local priority 1
-    fi
-    while ip "$family" rule del priority 0 2>/dev/null; do :; done
-done
+install_local_guard
 # These priorities are owned by Molebridge in this dedicated namespace.
 # Never remove the temporary guard if any later command fails.
 for family in -4 -6; do

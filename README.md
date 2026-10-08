@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>A self-hosted NetBird exit node that sends traffic through Mullvad or PIA.</strong>
+  <strong>A self-hosted NetBird exit node that sends traffic through Mullvad, PIA or NordVPN.</strong>
 </p>
 
 <p align="center">
@@ -16,14 +16,14 @@
 
 ---
 
-Phones can usually run only one VPN at a time, so turning on Mullvad or PIA
-means turning off NetBird. Molebridge moves the commercial VPN tunnel onto a
+Phones can usually run only one VPN at a time, so turning on Mullvad, PIA or
+NordVPN means turning off NetBird. Molebridge moves the commercial VPN tunnel onto a
 machine you keep running. That machine joins your NetBird network as an exit
 node. Your devices stay on NetBird, select the exit, and their Internet
 traffic leaves through the VPN provider.
 
-You choose the server (Mullvad) or region (PIA) in a small web panel called
-Switchyard. Every device using the exit follows the switch without any client
+You choose the server (Mullvad, NordVPN) or region (PIA) in a small web panel
+called Switchyard. Every device using the exit follows the switch without any client
 changes. Connections open through the exit drop when it switches.
 
 <p align="center">
@@ -35,7 +35,7 @@ changes. Connections open through the exit drop when it switches.
 ```mermaid
 flowchart LR
     device("Your devices<br/>on NetBird")
-    provider("Mullvad or PIA<br/>server")
+    provider("Mullvad, PIA or<br/>NordVPN server")
 
     subgraph host["Exit host · one shared network namespace"]
         peer("NetBird<br/>exit peer")
@@ -86,7 +86,9 @@ Details: [architecture](docs/architecture.md).
   access to create groups, a policy, a setup key and an exit-node route.
 - **A VPN account:**
   - Mullvad, which uses one free device slot;
-  - or PIA, which needs your username and password on the host.
+  - or PIA, which needs your username and password on the host;
+  - or NordVPN (experimental), whose access token is needed
+    only once, at setup.
 - **A way to reach the panel with authentication.** Unless you set up
   OpenID Connect sign-in, the panel has no login of its own; see
   [panel access](docs/access.md).
@@ -106,15 +108,20 @@ Podman details, is in [requirements](docs/prerequisites.md).
 - **This is not a kill switch on your devices.** The exit fails closed for
   traffic it receives. If a device deselects the exit or NetBird disconnects,
   that device uses its own connection.
-- **DNS is untouched.** Devices keep their own resolvers, so a DNS leak test
-  may show your usual resolver.
-- **Mullvad and PIA only.** Other providers aren't supported. Some could be
-  added if there's interest; [other providers](docs/other-providers.md) says
-  which, and what that support would realistically look like.
-- **One provider per exit.** To offer both Mullvad and PIA, run two exits on
-  the same host and serve both from one [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
-- **PIA is IPv4 only.** Its port forwarding is experimental and opens a port
-  to the Internet.
+- **Molebridge configures no DNS.** Devices keep their own resolvers. With
+  Mullvad, plain DNS that passes through the exit ends up at the Mullvad
+  server, so a DNS leak test shows Mullvad; this is observed, not documented
+  by Mullvad. PIA and NordVPN are untested. See [DNS](docs/operations.md#dns).
+- **Mullvad, PIA and NordVPN only.** NordVPN is experimental: it has had one
+  live pass, on macOS with OrbStack, and no fail-closed drills yet. Other
+  providers aren't supported. Some could be added if there's interest;
+  [other providers](docs/other-providers.md) says which, and what that
+  support would realistically look like.
+- **One provider per exit.** To offer more than one, run one exit per
+  provider on the same host and serve them from one
+  [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
+- **PIA and NordVPN are IPv4 only.** PIA's port forwarding is experimental
+  and opens a port to the Internet.
 - **No automatic failover.** Molebridge never moves the exit to a different
   server or region by itself. (PIA re-registers within the same region when
   its server stops answering.)
@@ -137,7 +144,8 @@ it supports; see the [changelog](CHANGELOG.md).
 | The same host: Switchyard sign-in | Pocket ID v2.16.0: an admin sign-in and a verified switch through it, and the signed-out behavior through a proxy. Sign-in by someone granted only some exits is covered by tests, not yet live. |
 | macOS, OrbStack, Apple silicon, self-hosted NetBird 0.78: Mullvad | An earlier live pass; the six defects it found are fixed. |
 | CI on every push | Unit tests, shell lint, Compose validation, image builds, and IPv4/IPv6 routing failure drills in isolated namespaces. |
-| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, and PIA port forwarding against PIA itself. |
+| macOS, OrbStack, Docker, self-hosted NetBird 0.79: NordVPN | Key setup, the server list, switches within a location and to another country, NordVPN-confirmed egress from a client, and IPv6 blocked. |
+| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, and NordVPN on rootless Podman or through the fail-closed drills. |
 
 The dated record of each pass is in [testing](docs/testing.md). Report
 vulnerabilities privately; see [SECURITY.md](SECURITY.md).
@@ -157,8 +165,9 @@ vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 **Reference**
 - [Configuration](docs/configuration.md): every setting, file and endpoint.
-- [Providers](docs/providers.md): how PIA differs from Mullvad, port forwarding, adding a provider.
+- [Providers](docs/providers.md): how PIA and NordVPN differ from Mullvad, port forwarding, adding a provider.
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
+- [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): gluetun and NetBird with only Molebridge's routing guard, no panel or applier; that form is untested.
 - [Architecture](docs/architecture.md): routing, trust boundaries and the switching sequence.
 - [Testing](docs/testing.md): what has been tested, where and at which revision.
 
@@ -166,8 +175,8 @@ Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-Molebridge isn't affiliated with Mullvad VPN AB, Private Internet Access or
-NetBird. Their names are used only to say what Molebridge works with. The
+Molebridge isn't affiliated with Mullvad VPN AB, Private Internet Access,
+NordVPN or NetBird. Their names are used only to say what Molebridge works with. The
 panel's provider styling uses colors only, with no logos or copied assets.
 Molebridge is released under the [MIT License](LICENSE). The bundled
 JetBrains Mono font is under the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt),

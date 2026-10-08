@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "mullvad": {
+    "version": 1,
+    "timestamp": 1001,
+    "servers": [
+      {
+        "vpn": "wireguard",
+        "country": "Example Country",
+        "city": "Example City",
+        "hostname": "mullvad-one.example.test",
+        "wgpubkey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "ips": [
+          "invalid-ip",
+          "2001:db8::1",
+          "198.51.100.5",
+          "198.51.100.50",
+          "2001:db8::2",
+          "2001:db8::1%zone"
+        ],
+        "region": "Example Region",
+        "categories": [
+          "Standard",
+          "Example Category"
+        ]
+      }
+    ]
+  }
+}

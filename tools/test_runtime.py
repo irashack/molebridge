@@ -783,7 +783,7 @@ def test_symlink_and_fifo_requests_never_followed_or_block(tmp_path):
     assert read_json(fifo) is None
 
 
-@pytest.mark.parametrize('when', [timestamp(151), timestamp(-60), 'broken', None])
+@pytest.mark.parametrize('when', [timestamp(151), timestamp(-3600), 'broken', None])
 def test_status_never_trusts_old_invalid_or_future_checks(when):
     result = {'status': 'ok', 'checked_at': when, 'routing_ok': True, 'mullvad_exit_ip': True}
     assert status_view(None, result)[0] == 'unknown'

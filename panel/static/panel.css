@@ -204,6 +204,10 @@ h1 {
 .pill-applying { color: var(--color-upcoming); animation: pulse 1.6s ease-in-out infinite; }
 .pill-failed { color: var(--color-negative); }
 .pill-unknown { color: var(--color-text-subdue); }
+/* The backend behind a provider, e.g. "via gluetun". */
+.provider-note { font-size: var(--font-size-h6); font-weight: 400; letter-spacing: normal; color: var(--color-text-subdue); }
+/* A connected exit confirmed only by the tunnel checks, not by the provider. */
+.tier-note { font-size: var(--font-size-h6); color: var(--color-text-subdue); white-space: nowrap; }
 
 @keyframes pulse { 50% { opacity: 0.45; } }
 
@@ -428,10 +432,10 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 }
 
 /* Shared structure: dashboard retains the original compact, mono widgets. */
-:root { --color-text-subdue: #a5adc6; --exit-mullvad: #ffd524; --exit-pia: #78df70; }
-:root[data-theme="light"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; }
+:root { --color-text-subdue: #a5adc6; --exit-mullvad: #ffd524; --exit-pia: #78df70; --exit-nordvpn: #8ab8ff; }
+:root[data-theme="light"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; }
 @media (prefers-color-scheme: light) {
-  :root[data-theme="auto"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; }
+  :root[data-theme="auto"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; }
 }
 .switchboard, .overview { display: flex; flex-direction: column; gap: var(--widget-gap); min-width: 0; }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -453,6 +457,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   transition: border-color .2s, background-color .2s, transform .2s;
 }
 .exit-tab[data-provider="pia"] { --exit-accent: var(--exit-pia); }
+.exit-tab[data-provider="nordvpn"] { --exit-accent: var(--exit-nordvpn); }
 .exit-tab:hover { color: inherit; border-color: var(--exit-accent); }
 .exit-tab.is-selected { border-color: var(--exit-accent); }
 /* One line each, never broken mid-word: a long label or place is cut with an
@@ -559,6 +564,33 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --brand-accent: #5ddf5a;
   --signal-positive: #4bb543;
   --border-radius: 18px;
+}
+/* NordVPN: a neutral blue, colours only. Text tokens keep at least 4.5:1 on
+   every surface they sit on, in both themes. */
+:root[data-style="provider"][data-provider="nordvpn"] {
+  --p-bg-dark: #161b26;
+  --p-card-dark: #1f2633;
+  --p-row-dark: #283142;
+  --p-border-dark: #3e4a60;
+  --p-ink-dark: #f5f7fb;
+  --p-text-dark: #dfe5ef;
+  --p-muted-dark: #aab5c8;
+  --p-accent-dark: #7fb0ff;
+  --p-positive-dark: #7fd88a;
+  --p-glow-dark: #4f8cff1c;
+  --p-bg-light: #eef2f8;
+  --p-card-light: #ffffff;
+  --p-row-light: #e3e9f3;
+  --p-border-light: #bcc7d9;
+  --p-ink-light: #18213a;
+  --p-text-light: #2d3a55;
+  --p-muted-light: #4e5d78;
+  --p-accent-light: #2155c0;
+  --p-positive-light: #23702b;
+  --p-glow-light: #4f8cff1f;
+  --brand-accent: #7fb0ff;
+  --signal-positive: #44ad4d;
+  --border-radius: 12px;
 }
 :root[data-style="provider"][data-theme="light"] {
   --color-background: var(--p-bg-light);

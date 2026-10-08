@@ -23,12 +23,18 @@ The page has three parts:
   | failed | The last switch failed |
   | unknown | Status is stale or unavailable |
 
+  A connected exit whose egress was verified only by Molebridge's own tunnel
+  checks, because its provider has no check of its own, also shows "tunnel
+  checks only"; Diagnostics says which check passed
+  ([status reporting](architecture.md#status-reporting)).
+
 - **Fastest from …** lists the lowest-latency places, each with a Switch
   button.
 - **Locations** lists everything the provider offers. Press `/` to search it.
-  Mullvad locations are grouped by country, then city, then server. PIA shows
-  one flat list of regions, marked PF for port forwarding and "virtual" for
-  PIA's virtual locations.
+  Mullvad and NordVPN locations are grouped by country, then city, then
+  server; NordVPN servers in its virtual locations are marked "virtual". PIA
+  shows one flat list of regions, marked PF for port forwarding and "virtual"
+  for PIA's virtual locations.
 
 A switch takes two taps: the first arms the button, and the second confirms
 it within eight seconds. Escape, or moving focus away, cancels. Without
@@ -53,7 +59,7 @@ Some parts appear only once they're useful:
 - **Saved**, once you pin a server with the star, or once this browser has
   used more than one. It is stored in the browser, not on the exit.
 - **Fastest: …**, at the top of an opened country, once every server in it
-  has been measured.
+  has been measured, or in a large country every server in its sample.
 - **Filters**, next to Locations. For Mullvad the filters are Mullvad-owned
   and RAM-only servers; for PIA, port forwarding. A filter shows only when it
   would narrow the list.
@@ -65,11 +71,16 @@ The numbers are TCP connection times from the exit host to each server's port
 the tunnel. Nothing is measured unless someone has the page open:
 
 - on load, one server per city, plus the current and saved servers;
-- when you open a country, every server in it;
+- when you open a country, every server in it, up to 128. A larger country
+  (NordVPN has some) is timed on a sample of 128: the lowest-load servers,
+  one city at a time in turn, the same sample every time. The country's
+  summary then says how many were timed;
 - when a search narrows to 64 servers or fewer, those servers;
 - when you press Retest, the per-city check again, bypassing the cache.
 
-Results are cached for 15 minutes.
+Results are cached for 15 minutes. One page sends one latency request at a
+time. The panel runs one per exit and four in all; a request beyond that is
+answered 429 and the page tries again a few seconds later.
 
 ## The server list
 
@@ -156,7 +167,7 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
 - `id` is 1–32 characters of `a-z`, `0-9` and `-`, starting with a letter or
   digit. It appears in URLs (`/?exit=pia`) and names the exit's state
   directory, `$STATE_DIR/<id>`.
-- `provider` is `mullvad` or `pia`.
+- `provider` is `mullvad`, `pia` or `nordvpn`.
 - `label` is optional (40 characters at most). It defaults to the provider's
   name.
 

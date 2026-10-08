@@ -4,6 +4,7 @@ secrets/
 state/
 tunnel/wg_confs/*
 !tunnel/wg_confs/.gitkeep
+tunnel/gluetun/
 *.conf
 __pycache__/
 .pytest_cache/

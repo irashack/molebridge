@@ -1,0 +1,382 @@
+{
+ "servers": [
+  {
+   "id": 990001,
+   "created_at": "2020-01-01 00:00:00",
+   "updated_at": "2026-10-08 01:00:00",
+   "name": "United States #9001",
+   "station": "198.51.100.11",
+   "ipv6_station": "",
+   "hostname": "us9001.nordvpn.com",
+   "status": "online",
+   "load": 12,
+   "ips": [
+    {
+     "id": 900001,
+     "created_at": "2020-01-01 00:00:00",
+     "updated_at": "2020-01-01 00:00:00",
+     "server_id": 990001,
+     "ip_id": 900001,
+     "type": "entry",
+     "ip": {
+      "id": 900001,
+      "ip": "198.51.100.11",
+      "version": 4
+     }
+    }
+   ],
+   "specifications": [
+    {
+     "id": 8,
+     "title": "Version",
+     "identifier": "version",
+     "values": [
+      {
+       "id": 257,
+       "value": "2.1.0"
+      }
+     ]
+    }
+   ],
+   "technologies": [
+    {
+     "id": 3,
+     "status": "online"
+    },
+    {
+     "id": 5,
+     "status": "online"
+    },
+    {
+     "id": 35,
+     "metadata": [
+      {
+       "name": "public_key",
+       "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+      }
+     ],
+     "status": "online"
+    },
+    {
+     "id": 21,
+     "metadata": [
+      {
+       "name": "proxy_hostname",
+       "value": "us9001.proxy.nordvpn.com"
+      }
+     ],
+     "status": "online"
+    }
+   ],
+   "group_ids": [
+    11,
+    15,
+    21
+   ],
+   "service_ids": [
+    1,
+    5
+   ],
+   "location_ids": [
+    79
+   ]
+  },
+  {
+   "id": 990002,
+   "created_at": "2020-01-01 00:00:00",
+   "updated_at": "2026-10-08 01:00:00",
+   "name": "Germany #9002",
+   "station": "198.51.100.22",
+   "ipv6_station": "",
+   "hostname": "de9002.nordvpn.com",
+   "status": "online",
+   "load": 3,
+   "ips": [
+    {
+     "id": 900002,
+     "created_at": "2020-01-01 00:00:00",
+     "updated_at": "2020-01-01 00:00:00",
+     "server_id": 990002,
+     "ip_id": 900002,
+     "type": "entry",
+     "ip": {
+      "id": 900002,
+      "ip": "198.51.100.22",
+      "version": 4
+     }
+    }
+   ],
+   "specifications": [
+    {
+     "id": 8,
+     "title": "Version",
+     "identifier": "version",
+     "values": [
+      {
+       "id": 257,
+       "value": "2.1.0"
+      }
+     ]
+    }
+   ],
+   "technologies": [
+    {
+     "id": 3,
+     "status": "online"
+    },
+    {
+     "id": 5,
+     "status": "online"
+    },
+    {
+     "id": 35,
+     "metadata": [
+      {
+       "name": "public_key",
+       "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE="
+      }
+     ],
+     "status": "online"
+    },
+    {
+     "id": 21,
+     "metadata": [
+      {
+       "name": "proxy_hostname",
+       "value": "de9002.proxy.nordvpn.com"
+      }
+     ],
+     "status": "online"
+    }
+   ],
+   "group_ids": [
+    11,
+    15,
+    19
+   ],
+   "service_ids": [
+    1,
+    5
+   ],
+   "location_ids": [
+    101
+   ]
+  },
+  {
+   "id": 990003,
+   "created_at": "2020-01-01 00:00:00",
+   "updated_at": "2026-10-08 01:00:00",
+   "name": "United Kingdom #9003",
+   "station": "198.51.100.33",
+   "ipv6_station": "",
+   "hostname": "uk9003.nordvpn.com",
+   "status": "online",
+   "load": 7,
+   "ips": [
+    {
+     "id": 900003,
+     "created_at": "2020-01-01 00:00:00",
+     "updated_at": "2020-01-01 00:00:00",
+     "server_id": 990003,
+     "ip_id": 900003,
+     "type": "entry",
+     "ip": {
+      "id": 900003,
+      "ip": "198.51.100.33",
+      "version": 4
+     }
+    }
+   ],
+   "specifications": [
+    {
+     "id": 8,
+     "title": "Version",
+     "identifier": "version",
+     "values": [
+      {
+       "id": 257,
+       "value": "2.1.0"
+      }
+     ]
+    }
+   ],
+   "technologies": [
+    {
+     "id": 3,
+     "status": "online"
+    },
+    {
+     "id": 5,
+     "status": "online"
+    },
+    {
+     "id": 35,
+     "metadata": [
+      {
+       "name": "public_key",
+       "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI="
+      }
+     ],
+     "status": "online"
+    },
+    {
+     "id": 21,
+     "metadata": [
+      {
+       "name": "proxy_hostname",
+       "value": "uk9003.proxy.nordvpn.com"
+      }
+     ],
+     "status": "online"
+    }
+   ],
+   "group_ids": [
+    9,
+    19
+   ],
+   "service_ids": [
+    1,
+    5
+   ],
+   "location_ids": [
+    45
+   ]
+  }
+ ],
+ "groups": [
+  {
+   "id": 11,
+   "title": "Standard VPN servers",
+   "identifier": "legacy_standard",
+   "type": {
+    "id": 3,
+    "identifier": "legacy_group_category",
+    "title": "Legacy category"
+   }
+  },
+  {
+   "id": 15,
+   "title": "P2P",
+   "identifier": "legacy_p2p",
+   "type": {
+    "id": 3,
+    "identifier": "legacy_group_category",
+    "title": "Legacy category"
+   }
+  },
+  {
+   "id": 9,
+   "title": "Dedicated IP",
+   "identifier": "legacy_dedicated_ip",
+   "type": {
+    "id": 3,
+    "identifier": "legacy_group_category",
+    "title": "Legacy category"
+   }
+  },
+  {
+   "id": 21,
+   "title": "The Americas",
+   "identifier": "the_americas",
+   "type": {
+    "id": 5,
+    "identifier": "regions",
+    "title": "Regions"
+   }
+  },
+  {
+   "id": 19,
+   "title": "Europe",
+   "identifier": "europe",
+   "type": {
+    "id": 5,
+    "identifier": "regions",
+    "title": "Regions"
+   }
+  }
+ ],
+ "services": [
+  {
+   "id": 1,
+   "name": "VPN",
+   "identifier": "vpn"
+  },
+  {
+   "id": 5,
+   "name": "Proxy",
+   "identifier": "proxy"
+  }
+ ],
+ "locations": [
+  {
+   "id": 79,
+   "latitude": 32.78,
+   "longitude": -96.8,
+   "country": {
+    "id": 228,
+    "name": "United States",
+    "code": "US",
+    "city": {
+     "id": 9080300,
+     "identifier": "us_dallas",
+     "name": "Dallas",
+     "dns_name": "dallas"
+    }
+   }
+  },
+  {
+   "id": 101,
+   "latitude": 52.52,
+   "longitude": 13.4,
+   "country": {
+    "id": 81,
+    "name": "Germany",
+    "code": "DE",
+    "city": {
+     "id": 2000001,
+     "identifier": "de_berlin",
+     "name": "Berlin",
+     "dns_name": "berlin"
+    }
+   }
+  },
+  {
+   "id": 45,
+   "latitude": 51.51,
+   "longitude": -0.09,
+   "country": {
+    "id": 227,
+    "name": "United Kingdom",
+    "code": "GB",
+    "city": {
+     "id": 2989907,
+     "identifier": "gb_london",
+     "name": "London",
+     "dns_name": "london"
+    }
+   }
+  }
+ ],
+ "technologies": [
+  {
+   "id": 3,
+   "name": "OpenVPN UDP",
+   "identifier": "openvpn_udp"
+  },
+  {
+   "id": 5,
+   "name": "OpenVPN TCP",
+   "identifier": "openvpn_tcp"
+  },
+  {
+   "id": 35,
+   "name": "Wireguard",
+   "identifier": "wireguard_udp"
+  },
+  {
+   "id": 21,
+   "name": "HTTP Proxy (SSL)",
+   "identifier": "proxy_ssl"
+  }
+ ]
+}

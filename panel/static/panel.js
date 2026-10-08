@@ -31,8 +31,9 @@
   // receives a switch request. Stored values are untrusted: anything not
   // shaped like a relay name is dropped, and only catalogued relays are shown.
 
-  // Mullvad relay hostnames, or PIA region ids.
-  const HOST_RE = page.dataset.provider === 'pia' ? /^[a-z0-9][a-z0-9_-]{0,47}$/ : /^[a-z0-9-]{1,40}-wg-[0-9]{3}$/;
+  // The provider's server names (Mullvad relay hostnames, PIA region ids),
+  // from the registry's pattern; without one nothing stored is trusted.
+  const HOST_RE = new RegExp(`^(?:${page.dataset.serverPattern || '(?!)'})$`);
   // Each exit keeps its own saved servers; a single-exit panel keeps the
   // original keys so nothing saved before is lost.
   const KEY_PREFIX = exitId ? `molebridge.${exitId}.` : 'molebridge.';
@@ -136,12 +137,29 @@
     renderCountryFastest();
   }
 
-  async function measure(params) {
-    const res = await fetch(`/api/latency?${withExit(params)}`, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`latency ${res.status}`);
-    const data = await res.json();
-    for (const [host, ms] of Object.entries(data.latency || {})) latency.set(host, ms);
-    paint();
+  // One latency request at a time from this page, in order: the panel runs
+  // one per exit and answers 429 while it is busy, so a request that still
+  // meets 429 (another tab) waits and tries again a few times.
+  let latencyQueue = Promise.resolve();
+  function measure(params) {
+    const run = latencyQueue.then(() => measureNow(params));
+    latencyQueue = run.catch(() => {});
+    return run;
+  }
+
+  async function measureNow(params) {
+    for (let attempt = 0; ; attempt += 1) {
+      const res = await fetch(`/api/latency?${withExit(params)}`, { cache: 'no-store' });
+      if (res.status === 429 && attempt < 4) {
+        await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+        continue;
+      }
+      if (!res.ok) throw new Error(`latency ${res.status}`);
+      const data = await res.json();
+      for (const [host, ms] of Object.entries(data.latency || {})) latency.set(host, ms);
+      paint();
+      return data;
+    }
   }
 
   // -- list rows -------------------------------------------------------------
@@ -336,7 +354,25 @@
         el.className = 'ms ms-pending';
       }
     }
-    measure({ country: details.dataset.country }).catch(() => countryMeasured.delete(details));
+    measure({ country: details.dataset.country }).then((data) => {
+      // Servers left out of a sample are not pending any more.
+      for (const chip of details.querySelectorAll('.relay')) {
+        const el = chip.querySelector('[data-ms]');
+        if (el && !latency.has(chip.dataset.host) && el.classList.contains('ms-pending')) {
+          el.textContent = '';
+          el.className = 'ms';
+        }
+      }
+      // A large country is timed on a sample; say so beside its size.
+      const sample = data && data.country;
+      const meta = details.querySelector('.country-meta');
+      if (!meta || !sample || !(sample.probed < sample.total) || meta.dataset.sampled) return;
+      meta.dataset.sampled = '1';
+      details.dataset.sampled = '1';
+      meta.textContent += ` · ${sample.probed} timed`;
+      meta.title = `Latency measured for ${sample.probed} of ${sample.total} servers`;
+      renderCountryFastest();
+    }).catch(() => countryMeasured.delete(details));
   }
 
   // Only a person opening a country probes it; the filter opening every
@@ -360,7 +396,9 @@
         const ms = latency.get(h);
         if (ms != null && (best === null || ms < latency.get(best))) best = h;
       }
-      if (!details.open || shown.length < 2 || measured.length < shown.length || best === null) {
+      // A sampled country ranks the servers it timed.
+      const complete = measured.length === shown.length || details.dataset.sampled === '1';
+      if (!details.open || shown.length < 2 || !complete || best === null) {
         list?.remove();
         continue;
       }
@@ -582,6 +620,14 @@
     paintPin();
   }
 
+  // How the egress was confirmed, worded as the server renders it. The
+  // server decides which tiers count for this provider (view.tier).
+  const TIER_TEXT = { provider: 'provider-confirmed', tunnel: 'tunnel checks only', none: 'not confirmed' };
+  function egressTier(result) {
+    if ((result.exit_confirmed ?? result.mullvad_exit_ip) === true) return 'provider';
+    return result.egress_tier === 'tunnel' ? 'tunnel' : 'none';
+  }
+
   let polling = false;
   async function pollStatus() {
     if (polling) return 30000;
@@ -624,11 +670,14 @@
       if (key === 'egress') el.textContent = `${result.egress_city ?? '(unknown)'}, ${result.egress_country ?? '(unknown)'}`;
       else if (key === 'handshake_age_s') el.textContent = `${result.handshake_age_s ?? '(unknown)'}s at last check`;
       else if (key === 'exit_confirmed') el.textContent = String((result.exit_confirmed ?? result.mullvad_exit_ip) === true);
+      else if (key === 'egress_tier') el.textContent = TIER_TEXT[egressTier(result)];
       else if (key === 'forwarded_port') el.textContent = result.forwarded_port ?? 'none';
       else el.textContent = result[key] ?? '';
     }
     const ip = page.querySelector('[data-current-ip]');
     if (ip) ip.textContent = state === 'ok' ? (result.egress_ip || '—') : '—';
+    const tierNote = page.querySelector('[data-tier-note]');
+    if (tierNote) tierNote.hidden = !(state === 'ok' && data.view.tier === 'tunnel');
     const message = state === 'unknown' ? 'Status is stale or unavailable. Details are from the last check.' :
       state === 'failed' ? (result.message || 'Tunnel verification failed.') : '';
     const previousState = page.dataset.state;

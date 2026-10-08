@@ -8,6 +8,13 @@
 # the terminal guard (priority 97) and the local-delivery guard (priority 1),
 # with no other `lookup local` rule that could match the overlay interface.
 # NetBird source references are to the pinned release, 0.79.0.
+#
+# With TUNNEL_BACKEND=gluetun the gate also refuses settings that switch off
+# NetBird's control-plane mark, waits for the control-plane rules (88/89) and
+# the host table, and then stays in front of NetBird instead of handing over:
+# it stops NetBird, and exits non-zero, when NetBird logs that it runs without
+# advanced routing, when the overlay interface has not carried the control
+# mark for 30 seconds, or when the guards stay missing for 30 seconds.
 set -eu
 set -f
 overlay_if=${NB_INTERFACE_NAME:-wt0}
@@ -15,6 +22,11 @@ case "$overlay_if" in
     ''|[!a-zA-Z0-9_]*|*[!a-zA-Z0-9_.-]*) echo 'NetBird gate: invalid interface name' >&2; exit 1 ;;
 esac
 [ "${#overlay_if}" -le 15 ] && [ "$#" -gt 0 ] || exit 1
+backend=${TUNNEL_BACKEND:-wireguard}
+case "$backend" in
+    wireguard|gluetun) : ;;
+    *) echo 'NetBird gate: TUNNEL_BACKEND must be wireguard or gluetun' >&2; exit 1 ;;
+esac
 
 refuse() {
     echo "NetBird gate: refusing to start NetBird: $1 (see docs/troubleshooting.md)" >&2
@@ -296,11 +308,6 @@ for file in "$state_dir/default.json" /etc/netbird/config.json /etc/wiretrustee/
     esac
 done
 
-if [ "$1" = --check-config ]; then
-    echo 'NetBird gate: configuration accepted'
-    exit 0
-fi
-
 guard_present() {
     # iproute2 marks a selector detached until NetBird creates the interface.
     # Require the whole terminal rule, not a substring or a narrowed selector,
@@ -334,7 +341,191 @@ guard_present() {
     '
 }
 
+if [ "$backend" = gluetun ]; then
+    # Rules 88 and 89 send NetBird's control traffic to the host table by its
+    # socket mark; an unmarked socket falls through to gluetun's rule 101 and
+    # into the provider tunnel. NetBird marks its sockets only with advanced
+    # routing, which these switch off (client/net/env_linux.go:34-73,
+    # client/net/env.go:12-35; netstack mode is refused above).
+    unmarked='the gluetun backend needs NetBird to mark its control traffic'
+    must_be_off NB_USE_LEGACY_ROUTING "${NB_USE_LEGACY_ROUTING:-}" "$unmarked"
+    must_be_off NB_SKIP_SOCKET_MARK "${NB_SKIP_SOCKET_MARK:-}" "$unmarked"
+    must_be_off NB_DISABLE_CUSTOM_ROUTING "${NB_DISABLE_CUSTOM_ROUTING:-}" "$unmarked"
+    control_mark=${CONTROL_MARK:-0x1bd00}
+    case "$control_mark" in
+        0x*[!0-9a-f]*) refuse 'CONTROL_MARK must be lowercase hexadecimal like 0x1bd00' ;;
+        0x[1-9a-f]*00) [ "${#control_mark}" -le 10 ] || refuse 'CONTROL_MARK must fit in 32 bits' ;;
+        *) refuse 'CONTROL_MARK must be lowercase hexadecimal like 0x1bd00, low byte zero' ;;
+    esac
+    # NetBird moves its whole mark range with NB_FWMARK_BASE and treats an
+    # empty value as unset (client/net/fwmark.go:17-21,75-110). Require the
+    # exact text, so no parsing difference can separate the two.
+    [ "${NB_FWMARK_BASE:-0x1bd00}" = "$control_mark" ] ||
+        refuse "NB_FWMARK_BASE must equal CONTROL_MARK ($control_mark)"
+    # The whole guard is checked with the definitions the guard sidecar uses
+    # (routing/gluetun-rules, mounted next to this script), with the same
+    # settings: every rule at priorities 0-97, the exit table and the host
+    # table, in both families.
+    OVERLAY_IF=$overlay_if
+    OVERLAY_CIDR=${OVERLAY_CIDR:-}
+    OVERLAY6_CIDR=${OVERLAY6_CIDR:-}
+    EXIT_IF=${EXIT_IF:-wg0}
+    EXIT_TABLE=${EXIT_TABLE:-51821}
+    HOST_IF=${HOST_IF:-eth0}
+    HOST_TABLE=${HOST_TABLE:-51822}
+    CONTROL_MARK=$control_mark
+    host_table=$HOST_TABLE
+    GLUETUN_RULES=${GLUETUN_RULES:-/usr/local/bin/molebridge-gluetun-rules}
+    [ -f "$GLUETUN_RULES" ] || refuse "the guard's rule definitions are missing ($GLUETUN_RULES)"
+    fail() { refuse "$1"; }
+    # shellcheck source=routing/gluetun-rules
+    . "$GLUETUN_RULES"
+    gr_validate
+    # NetBird writes its log to the files in NB_LOG_FILE as well as the console
+    # (the image's entrypoint sets this default).
+    watch_log=''
+    old_ifs=$IFS
+    IFS=,
+    for entry in ${NB_LOG_FILE:-console,/var/log/netbird/client.log}; do
+        case "$entry" in /*) [ -n "$watch_log" ] || watch_log=$entry ;; esac
+    done
+    IFS=$old_ifs
+    [ -n "$watch_log" ] || refuse 'NB_LOG_FILE must name a log file; the gate reads it'
+    # The routing sidecar writes "<boot id> <boot-clock seconds> <wg show
+    # fwmark>" here. Every deadline below runs on the kernel's boot clock,
+    # which wall-clock changes don't move (gr_clock in routing/gluetun-rules).
+    status_file=${GUARD_STATUS_FILE:-/run/molebridge/overlay-fwmark}
+    gr_clock || refuse 'cannot read the boot clock (/proc/uptime and the boot id)'
+
+    # The guard rewrites the record every 2 seconds and this loop reads it
+    # every 2, in whole seconds: 5 is the shortest grace that a healthy exit
+    # always meets.
+    grace=${FWMARK_GRACE:-30}
+    case "$grace" in ''|0*|*[!0-9]*) refuse 'FWMARK_GRACE must be 5..30 seconds' ;; esac
+    [ "${#grace}" -le 2 ] && [ "$grace" -ge 5 ] && [ "$grace" -le 30 ] || refuse 'FWMARK_GRACE must be 5..30 seconds'
+fi
+
+if [ "$1" = --check-config ]; then
+    echo 'NetBird gate: configuration accepted'
+    exit 0
+fi
+
+guards_ready() {
+    guard_present -4 && guard_present -6 || return 1
+    [ "$backend" = gluetun ] || return 0
+    [ -z "$(gr_problems -4 '')" ] && [ -z "$(gr_problems -6 '')" ]
+}
+# What is still missing, for the log while the gate waits.
+guard_problems() {
+    found=''
+    for family in -4 -6; do
+        guard_present "$family" || found="$found IPv${family#-}: rule 1 or 97;"
+        [ "$backend" = gluetun ] || continue
+        for problem in $(gr_problems "$family" ''); do
+            case "$problem" in
+                rules) found="$found IPv${family#-}: rules;" ;;
+                exit) found="$found IPv${family#-}: exit table $EXIT_TABLE;" ;;
+                host) found="$found IPv${family#-}: host table $host_table;" ;;
+                nodefault) found="$found IPv4: no default route through $HOST_IF in the main table;" ;;
+            esac
+        done
+    done
+    if [ "$backend" = gluetun ] && ! ip link show dev "$HOST_IF" >/dev/null 2>&1; then
+        found="$found $HOST_IF is not in this namespace (gluetun restarted into a new one? recreate the stack);"
+    fi
+    printf '%s' "${found:- nothing now}"
+}
+
 trap 'exit 0' INT TERM
 echo 'NetBird gate: waiting for IPv4 and IPv6 routing guards'
-until guard_present -4 && guard_present -6; do sleep 1; done
-exec "$@"
+[ "$backend" = wireguard ] ||
+    echo "NetBird gate: gluetun backend: waiting for the whole guard (rules 1-97 with control mark $control_mark, exit table $EXIT_TABLE, host table $host_table)"
+waited=0
+until guards_ready; do
+    waited=$((waited + 1))
+    # Say why every 30 seconds instead of waiting silently; the guard's own
+    # log has the details.
+    if [ $((waited % 30)) -eq 0 ]; then
+        echo "NetBird gate: still waiting after ${waited} s:$(guard_problems)" >&2
+    fi
+    sleep 1
+done
+[ "$backend" = gluetun ] || exec "$@"
+
+# gluetun: supervise NetBird instead of handing over.
+log_size() {
+    size=$({ wc -c < "$watch_log"; } 2>/dev/null) || size=0
+    size=$(printf '%s' "$size" | tr -d ' ')
+    case "$size" in ''|*[!0-9]*) size=0 ;; esac
+    printf '%s' "$size"
+}
+now() {
+    gr_clock || stop 'cannot read the boot clock'
+}
+launch_offset=$(log_size)
+offset=$launch_offset
+gr_clock || refuse 'cannot read the boot clock'
+launched=$gr_now
+boot=$gr_boot
+last_good=$launched
+guards_lost=''
+"$@" &
+child=$!
+trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 0' INT TERM
+stop() {
+    echo "NetBird gate: stopping NetBird: $1 (see docs/troubleshooting.md)" >&2
+    kill -TERM "$child" 2>/dev/null || :
+    waited=0
+    while kill -0 "$child" 2>/dev/null && [ "$waited" -lt 20 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    kill -KILL "$child" 2>/dev/null || :
+    wait "$child" 2>/dev/null || :
+    exit 1
+}
+echo "NetBird gate: NetBird started; watching its log and $overlay_if's fwmark"
+while :; do
+    if ! kill -0 "$child" 2>/dev/null; then
+        status=0
+        wait "$child" || status=$?
+        echo "NetBird gate: NetBird exited with status $status" >&2
+        exit "$status"
+    fi
+    # NetBird logs one of these when it will not mark its sockets
+    # (client/net/env_linux.go:61,66). Read only what this launch wrote; keep
+    # an overlap so a line written across two reads is still seen whole.
+    size=$(log_size)
+    [ "$size" -ge "$offset" ] || { offset=0; launch_offset=0; }
+    if tail -c +"$((offset + 1))" "$watch_log" 2>/dev/null |
+            grep -Fq -e 'falling back to legacy routing' -e 'advanced routing has been requested to be disabled'; then
+        stop 'NetBird logged that it runs without advanced routing, so its control traffic would be unmarked'
+    fi
+    offset=$((size > launch_offset + 512 ? size - 512 : launch_offset))
+    now
+    [ "$gr_boot" = "$boot" ] || stop 'the boot clock changed identity'
+    # A good record counts from when it was written, so reading the same
+    # record again never extends it. Records from another boot, from before
+    # this launch or from the future count for nothing.
+    record_boot=''
+    stamp=''
+    value=''
+    { read -r record_boot stamp value < "$status_file"; } 2>/dev/null || :
+    case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
+    [ "${#stamp}" -le 12 ] || stamp=0
+    if [ "$record_boot" = "$boot" ] && [ "$stamp" -ge "$last_good" ] && [ "$stamp" -le "$gr_now" ] &&
+            [ "$value" = "$control_mark" ]; then
+        last_good=$stamp
+    fi
+    [ $((gr_now - last_good)) -le "$grace" ] ||
+        stop "$overlay_if has not carried the control mark $control_mark for $grace seconds (last reported: ${value:-nothing})"
+    if guards_ready; then
+        guards_lost=''
+    else
+        guards_lost=${guards_lost:-$gr_now}
+        [ $((gr_now - guards_lost)) -le "$grace" ] ||
+            stop "routing guards missing for $grace seconds:$(guard_problems)"
+    fi
+    sleep 2 &
+    wait "$!" || :
+done

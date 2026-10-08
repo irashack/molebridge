@@ -1,3 +1,4 @@
+import html
 import http.client
 import http.server
 import io
@@ -8,6 +9,7 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 import urllib.parse
 from unittest.mock import patch
@@ -696,7 +698,7 @@ class MultiExitTests(unittest.TestCase):
                          [('home', 'mullvad', 'Mullvad'), ('away', 'pia', 'PIA Chicago')])
         self.assertEqual(self.away.desired_path, self.tmpdir / 'away' / 'panel' / 'desired.json')
         self.assertEqual(app.parse_exits('', self.tmpdir), [])
-        for bad in ('home', 'Home=mullvad', '../x=pia', 'a=nordvpn', 'a=pia,a=mullvad', 'a=pia:' + 'x' * 41,
+        for bad in ('home', 'Home=mullvad', '../x=pia', 'a=examplevpn', 'a=pia,a=mullvad', 'a=pia:' + 'x' * 41,
                     'a=pia:bad\x07label'):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 app.parse_exits(bad, self.tmpdir)
@@ -765,3 +767,306 @@ class MultiExitTests(unittest.TestCase):
             app.measure_latency({'x': {'ipv4_addr_in': '198.51.100.1'}}, ['x'], scope='home')
             app.measure_latency({'x': {'ipv4_addr_in': '198.51.100.2'}}, ['x'], scope='away')
         self.assertEqual(probe.call_count, 2)
+
+
+class RegistryPanelTests(unittest.TestCase):
+    """The panel takes provider names, patterns and presentation from the registry."""
+
+    def test_server_pattern_reaches_the_browser_for_every_provider(self):
+        for provider in app.providers.PROVIDERS:
+            with self.subTest(provider=provider), patch.multiple(app, PROVIDER=provider):
+                page = app.render_index_html(None, None, None, None, None, 'tok')
+                pattern = re.search(r'data-server-pattern="([^"]*)"', page).group(1)
+                self.assertEqual(html.unescape(pattern), app.providers.get(provider).server_name_re.pattern)
+                self.assertIn(f'data-layout="{app.providers.get(provider).layout}"', page)
+
+    def test_panel_exits_accept_only_registered_providers(self):
+        exits = app.parse_exits(','.join(f'{p}={p}' for p in app.providers.PROVIDERS), Path('/state'))
+        self.assertEqual([(e.provider, e.label) for e in exits],
+                         [(p.id, p.label) for p in app.providers.REGISTRY.values()])
+        with self.assertRaisesRegex(ValueError, 'provider must be one of'):
+            app.parse_exits('a=examplevpn', Path('/state'))
+
+
+class EgressTierPanelTests(ServerIntegrationTests):
+    """A connected exit shows how its egress was confirmed; /readyz passes for
+    both tiers, and the tunnel tier only for a provider without its own check."""
+
+    def _get(self, path):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        conn.request('GET', path)
+        resp = conn.getresponse()
+        body = resp.read().decode()
+        conn.close()
+        return resp, body
+
+    def _result(self, **changes):
+        app.write_json_atomic(app.APPLIER_RESULT_PATH, {
+            'server': 'se-sto-wg-001', 'status': 'ok', 'checked_at': app.now_iso(), 'routing_ok': True,
+            'netbird_native': True, **changes})
+
+    def _tunnel_provider(self):
+        import dataclasses
+        spec = dataclasses.replace(app.providers.get('mullvad'), id='tunnelvpn', label='Tunnel Example',
+                                   egress_tier='tunnel')
+        for patcher in (patch.dict(app.providers.REGISTRY, {'tunnelvpn': spec}),
+                        patch.multiple(app, PROVIDER='tunnelvpn')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_provider_confirmed_exit_has_no_tunnel_label(self):
+        self._result(exit_confirmed=True, egress_tier='provider')
+        _, body = self._get('/api/status')
+        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'provider'})
+        _, page = self._get('/')
+        self.assertIn('data-tier-note title="No check by the provider itself; see Diagnostics" hidden>', page)
+        self.assertIn('<dd data-f="egress_tier">provider-confirmed</dd>', page)
+        self.assertEqual(self._get('/readyz')[0].status, 200)
+
+    def test_tunnel_verified_exit_is_connected_with_a_label(self):
+        self._tunnel_provider()
+        self._result(exit_confirmed=False, egress_tier='tunnel')
+        _, body = self._get('/api/status')
+        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'tunnel'})
+        _, page = self._get('/')
+        self.assertIn('data-tier-note title="No check by the provider itself; see Diagnostics">tunnel checks only<',
+                      page)
+        self.assertIn('<dd data-f="egress_tier">tunnel checks only</dd>', page)
+        self.assertEqual(self._get('/readyz')[0].status, 200)
+
+    def test_tunnel_tier_is_refused_for_a_provider_with_its_own_check(self):
+        self._result(exit_confirmed=False, egress_tier='tunnel')
+        _, body = self._get('/api/status')
+        self.assertEqual(json.loads(body)['view'], {'state': 'failed', 'label': 'verification failed', 'tier': None})
+        _, page = self._get('/')
+        self.assertIn('<dd data-f="egress_tier">not confirmed</dd>', page)
+        self.assertIn('Diagnostics" hidden>', page)
+        self.assertEqual(self._get('/readyz')[0].status, 503)
+
+    def test_unconfirmed_tunnel_tier_is_not_ready(self):
+        self._tunnel_provider()
+        self._result(exit_confirmed=False, egress_tier=None)
+        self.assertEqual(self._get('/readyz')[0].status, 503)
+
+
+class NordPanelTests(unittest.TestCase):
+    """The panel in NordVPN mode: hostnames, country and city tree, labels."""
+
+    KEY = VALID_PUBKEY
+    US = {'hostname': 'us9001.nordvpn.com', 'public_key': KEY, 'ipv4_addr_in': '198.51.100.11',
+          'city': 'Dallas', 'country': 'United States', 'country_code': 'US', 'location_code': 'us-dallas',
+          'load': 12, 'virtual': False}
+    US2 = {**US, 'hostname': 'us9004.nordvpn.com', 'ipv4_addr_in': '198.51.100.14'}
+    VIRTUAL = {**US, 'hostname': 'bs9005.nordvpn.com', 'ipv4_addr_in': '198.51.100.15', 'city': 'Nassau',
+               'country': 'Bahamas', 'country_code': 'BS', 'location_code': 'bs-nassau', 'virtual': True}
+
+    def setUp(self):
+        patcher = patch.multiple(app, PROVIDER='nordvpn')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def catalogue(self, provider='nordvpn'):
+        return {'fetched_at': app.now_iso(), 'provider': provider,
+                'relays': {r['hostname']: r for r in (self.US, self.US2, self.VIRTUAL)}}
+
+    def test_hostnames_are_selectable_only_when_listed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desired = Path(tmp) / 'desired.json'
+            listed = {'us9001.nordvpn.com'}
+            self.assertEqual(app.process_select(server='us9001.nordvpn.com', allowlist=listed,
+                                                desired_path=desired)[0], 303)
+            self.assertEqual(app.process_select(server='us9002.nordvpn.com', allowlist=listed,
+                                                desired_path=desired)[0], 400)
+            # Not a NordVPN name, even if a catalogue somehow listed it.
+            for bad in ('se-sto-wg-001', 'ex_example', 'US9001.nordvpn.com', 'us9001.nordvpn.com.example.net', '../x'):
+                self.assertEqual(app.process_select(server=bad, allowlist=listed | {bad}, desired_path=desired)[0], 400)
+
+    def test_allowlist_reads_only_a_fresh_nordvpn_catalogue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ex = app.Exit.under('', 'nordvpn', 'NordVPN', Path(tmp))
+            app.write_json_atomic(ex.relays_path, self.catalogue())
+            self.assertEqual(app.load_allowlist(ex), {'us9001.nordvpn.com', 'us9004.nordvpn.com', 'bs9005.nordvpn.com'})
+            app.write_json_atomic(ex.relays_path, self.catalogue('mullvad'))
+            self.assertEqual(app.load_allowlist(ex), set())
+
+    def test_page_groups_servers_by_country_and_city_and_labels_virtual_locations(self):
+        result = {'checked_at': app.now_iso(), 'status': 'ok', 'server': 'us9001.nordvpn.com', 'routing_ok': True,
+                  'netbird_native': True, 'exit_confirmed': True, 'egress_tier': 'provider', 'provider': 'nordvpn',
+                  'egress_ip': '198.51.100.11', 'egress_city': 'Dallas', 'egress_country': 'United States'}
+        page = app.render_index_html(None, result, self.catalogue(), None, None, 'tok')
+        self.assertIn('data-provider="nordvpn" data-layout="tree"', page)
+        self.assertIn('<dt>NordVPN IP</dt><dd data-f="exit_confirmed">True</dd>', page)
+        self.assertIn('<span class="country-name">United States</span>', page)
+        self.assertIn('2 countries', page)
+        self.assertIn('<div class="city-name">Dallas', page)
+        self.assertIn('<span class="relay-name" data-arm-text>us9001</span><span class="ms"', page)
+        self.assertIn('<span class="relay-name" data-arm-text>bs9005</span>'
+                      '<span class="badge" title="Virtual location">virtual</span>', page)
+        self.assertIn('title="bs9005.nordvpn.com · virtual location · load 12%"', page)
+        self.assertIn('title="us9001.nordvpn.com · load 12%"', page)
+        self.assertIn('Filter country, city or relay', page)
+        self.assertNotIn('data-attr-filter', page)
+        self.assertNotIn('Mullvad', page)
+        self.assertNotIn('Forwarded port', page)
+        self.assertIn('<dd data-f="egress_tier">provider-confirmed</dd>', page)
+
+    def test_catalogue_of_another_provider_is_not_offered(self):
+        page = app.render_index_html(None, None, self.catalogue('mullvad'), None, None, 'tok')
+        self.assertNotIn('us9001', page)
+        self.assertIn('No relays available.', page)
+
+    def test_provider_style_colours(self):
+        with patch.multiple(app, PANEL_STYLE='provider', PANEL_THEME='auto'):
+            meta = app.theme_color_meta('nordvpn')
+        self.assertIn('content="#161b26" media="(prefers-color-scheme: dark)"', meta)
+        self.assertIn('content="#eef2f8" media="(prefers-color-scheme: light)"', meta)
+        css = (app.STATIC_DIR / 'panel.css').read_text()
+        self.assertIn(':root[data-style="provider"][data-provider="nordvpn"] {', css)
+        self.assertIn('.exit-tab[data-provider="nordvpn"] { --exit-accent: var(--exit-nordvpn); }', css)
+
+    def test_status_view_and_readiness_use_nordvpn_names(self):
+        desired = {'server': 'us9001.nordvpn.com', 'requested_at': app.now_iso(), 'request_id': 'a' * 32}
+        result = {'checked_at': app.now_iso(), 'status': 'ok', 'server': 'us9001.nordvpn.com', 'routing_ok': True,
+                  'netbird_native': True, 'exit_confirmed': True, 'request_id': 'a' * 32}
+        self.assertEqual(app.status_view(desired, result, 'nordvpn'), ('ok', 'connected'))
+        self.assertEqual(app.status_view(desired, result, 'mullvad'), ('ok', 'connected'))
+        self.assertEqual(app.status_view(desired, {**result, 'exit_confirmed': False}, 'nordvpn'),
+                         ('failed', 'verification failed'))
+
+
+def _country(n, cities=3, country='Bigland'):
+    """n servers spread over `cities` cities, with loads that repeat."""
+    relays = {}
+    for i in range(n):
+        host = f'bg{i:04d}.nordvpn.com'
+        relays[host] = {'hostname': host, 'country': country, 'city': f'City {i % cities}',
+                        'ipv4_addr_in': f'198.51.100.{i % 250}', 'load': (i * 7) % 100 if i % 5 else None}
+    return relays
+
+
+class LatencyBoundsTests(unittest.TestCase):
+    """Latency probing stays bounded for large providers and never lets one
+    exit's request hold up another's."""
+
+    def setUp(self):
+        app._latency_cache.clear()
+        self.addCleanup(app._latency_cache.clear)
+
+    def test_normal_size_country_is_timed_whole_as_before(self):
+        relays = _country(app.MAX_COUNTRY_PROBES)
+        probed, total = app.country_sample(relays, 'Bigland')
+        self.assertEqual((probed, total), (sorted(relays), app.MAX_COUNTRY_PROBES))
+        self.assertEqual(app.country_sample(relays, 'Elsewhere'), ([], 0))
+
+    def test_large_country_is_sampled_the_same_way_every_time(self):
+        relays = _country(1900)
+        probed, total = app.country_sample(relays, 'Bigland')
+        self.assertEqual((len(probed), total), (app.MAX_COUNTRY_PROBES, 1900))
+        self.assertEqual(len(set(probed)), len(probed))
+        self.assertEqual(probed, app.country_sample(dict(reversed(list(relays.items()))), 'Bigland')[0])
+        # Each city in turn, lowest load first; servers with no load last.
+        self.assertEqual([relays[h]['city'] for h in probed[:3]], ['City 0', 'City 1', 'City 2'])
+        for city in ('City 0', 'City 1', 'City 2'):
+            loads = [relays[h]['load'] for h in probed if relays[h]['city'] == city]
+            known = [x for x in loads if x is not None]
+            self.assertEqual(known, sorted(known))
+            self.assertEqual(loads[:len(known)], known)
+
+    def test_targets_are_capped_deduplicated_and_keep_named_hosts(self):
+        relays = _country(1900, cities=400)
+        named = ['bg1899.nordvpn.com', 'bg1898.nordvpn.com']
+        targets = app.latency_targets({'hosts': [','.join(named + named)], 'scope': ['cities'],
+                                       'country': ['Bigland']}, relays)
+        self.assertEqual(len(targets), app.MAX_PROBE_TARGETS)
+        self.assertEqual(len(set(targets)), len(targets))
+        self.assertEqual(targets[:2], named)
+
+    def test_one_exits_slow_probes_do_not_block_another_exit(self):
+        started, release = threading.Event(), threading.Event()
+
+        def probe(ip, *_a, **_kw):
+            if ip == '198.51.100.1':
+                started.set()
+                release.wait(5)
+            return 10.0
+        with patch.object(app, 'probe_tcp_rtt_ms', side_effect=probe):
+            slow = threading.Thread(target=app.measure_latency,
+                                    args=({'a': {'ipv4_addr_in': '198.51.100.1'}}, ['a']), kwargs={'scope': 'home'})
+            slow.start()
+            self.assertTrue(started.wait(5))
+            began = time.monotonic()
+            result = app.measure_latency({'b': {'ipv4_addr_in': '198.51.100.2'}}, ['b'], scope='away')
+            self.assertEqual(result, {'b': 10.0})
+            self.assertLess(time.monotonic() - began, 2)
+            release.set()
+            slow.join(5)
+
+    def test_a_host_already_being_probed_is_waited_for_not_probed_again(self):
+        started, release = threading.Event(), threading.Event()
+        calls = []
+
+        def probe(ip, *_a, **_kw):
+            calls.append(ip)
+            started.set()
+            release.wait(5)
+            return 12.0
+        relays = {'a': {'ipv4_addr_in': '198.51.100.1'}}
+        with patch.object(app, 'probe_tcp_rtt_ms', side_effect=probe):
+            first = threading.Thread(target=app.measure_latency, args=(relays, ['a']), kwargs={'scope': 'home'})
+            first.start()
+            self.assertTrue(started.wait(5))
+            results = []
+            second = threading.Thread(target=lambda: results.append(
+                app.measure_latency(relays, ['a'], fresh=True, scope='home')))
+            second.start()
+            time.sleep(0.1)
+            release.set()
+            first.join(5)
+            second.join(5)
+        self.assertEqual(calls, ['198.51.100.1'])
+        self.assertEqual(results, [{'a': 12.0}])
+        self.assertEqual(app._probes_in_flight, {})
+
+    def test_admission_is_one_request_per_exit_and_bounded_panel_wide(self):
+        self.assertTrue(app.latency_admit('home'))
+        self.assertFalse(app.latency_admit('home'))
+        others = [f'x{i}' for i in range(app.LATENCY_SLOTS - 1)]
+        self.assertTrue(all(app.latency_admit(e) for e in others))
+        self.assertFalse(app.latency_admit('away'))
+        app.latency_release('home')
+        self.assertTrue(app.latency_admit('away'))
+        for exit_id in others + ['away']:
+            app.latency_release(exit_id)
+        self.assertTrue(app.latency_admit('home'))
+        app.latency_release('home')
+
+
+class LatencyEndpointTests(ServerIntegrationTests):
+    def _get(self, path):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        conn.request('GET', path)
+        resp = conn.getresponse()
+        body = resp.read().decode()
+        conn.close()
+        return resp, body
+
+    def test_busy_exit_gets_429_before_anything_is_loaded(self):
+        self.assertTrue(app.latency_admit(''))
+        self.addCleanup(app.latency_release, '')
+        with patch.object(app, 'load_relays', side_effect=AssertionError('loaded while busy')):
+            resp, body = self._get('/api/latency?scope=cities')
+        self.assertEqual((resp.status, resp.getheader('Retry-After')), (429, '3'))
+        self.assertEqual(json.loads(body), {'error': 'latency busy'})
+
+    def test_country_answer_says_how_many_were_timed(self):
+        relays = _country(300)
+        with patch.object(app, 'load_relays', return_value=relays), \
+                patch.object(app, 'probe_tcp_rtt_ms', return_value=5.0):
+            resp, body = self._get('/api/latency?country=Bigland')
+        data = json.loads(body)
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(data['country'], {'probed': app.MAX_COUNTRY_PROBES, 'total': 300})
+        self.assertEqual(len(data['latency']), app.MAX_COUNTRY_PROBES)
+        # The slot was given back.
+        self.assertTrue(app.latency_admit(''))
+        app.latency_release('')

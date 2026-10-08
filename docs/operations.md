@@ -11,7 +11,9 @@ counts as healthy only when all of these hold:
 
 - a recent handshake;
 - egress confirmed by the provider (Mullvad's `am.i.mullvad.net` for each
-  address family the tunnel has; PIA's `connected: true`);
+  address family the tunnel has; PIA's `connected: true`; NordVPN's
+  `protected: true`), or, for a provider without such a check, by the
+  [tunnel checks](architecture.md#status-reporting);
 - a server list less than 24 hours old that includes the current server;
 - the NetBird interface present, as a kernel WireGuard link, with NetBird's
   kernel firewall in place;
@@ -52,9 +54,14 @@ python3 tools/molebridge.py recover
 It checks the deployment and identity volume first, and builds both local
 images before touching the running exit, so a failed build changes nothing.
 It then stops the namespace users, recreates all four containers, waits for
-health and runs doctor. It never deletes a volume or enrolls a new peer. If
-it fails after recreating, the exit stays down until you fix the reported
-problem and run it again. Keep a way into the host that doesn't depend on this
+health, waits up to 180 seconds for the applier to verify the exit (with the
+gluetun backend it may first put your last server back), and runs doctor.
+A failure names the step, or the applier's checks that still fail, for
+example `The applier reports: verified Mullvad egress`. With the gluetun
+backend it recreates `gluetun`, `guard`, `netbird`, `applier` and the panel.
+It never deletes a volume or enrolls a new peer. If it fails after
+recreating, the exit stays down until you fix the reported problem and run
+it again. Keep a way into the host that doesn't depend on this
 exit.
 
 NetBird won't start until the routing guards exist, on every start, including
@@ -93,7 +100,7 @@ The state worth keeping is small:
 | What | Why | If lost |
 |---|---|---|
 | `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
-| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the applier registers it again on its own |
+| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the applier registers it again on its own. NordVPN: run `tools/nordvpn-key.py` again with a new access token |
 | `secrets/` | Setup key, PIA login, Gatus token | Re-create them |
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
@@ -130,16 +137,62 @@ rather than as a new peer.
 
 ## DNS
 
-Molebridge leaves DNS alone. Devices keep resolving through whatever resolver
-they already use, while their traffic leaves through the provider. A DNS leak
-test may therefore show your usual resolver. On a tested iPhone using local
-DNS, mullvad.net/check reported no DNS or WebRTC leak, but that depends on
-the device and its network.
+Molebridge configures no DNS. Devices keep the resolver they already use, and
+their traffic leaves through the provider.
+
+With Mullvad, plain DNS (port 53) from a device appears not to reach that
+resolver. This is observed, not documented by Mullvad, from one device check
+and the exit's connection table: an iPhone set to Quad9 sent its lookups through a
+Mullvad exit, the exit's connection table showed them addressed to 9.9.9.9
+port 53, and mullvad.net/check reported no DNS leak and named the Mullvad
+server itself as the resolver. The Mullvad server answers plain DNS that
+passes through it with its own resolver, whichever server the device asked.
+A leak test therefore shows Mullvad, not your usual resolver. PIA has not been
+tested; don't assume its servers behave the same way.
+
+### When a leak test flags DNS
+
+The check is reporting lookups that the provider's server did not answer.
+There are two ways that happens:
+
+- **A resolver on the local network**, such as a home router or a hotel
+  gateway, reached outside the exit. This is a real leak.
+- **Encrypted DNS**, such as DNS over HTTPS or TLS from a browser's secure-DNS
+  setting, iCloud Private Relay or a configuration profile. It goes through the
+  exit, but the server can't redirect it, so the check names the outside
+  resolver.
+
+The DNS list in the check's result tells which: a resolver run by your local
+network or ISP is the first case, and the service you configured for
+encrypted DNS is the second. To see where a device's plain DNS goes, run this
+on the exit, inside the namespace
+([how to get a shell there](verification.md#inside-the-namespace)), with the
+device's overlay address in place of `<device overlay IP>`:
+
+```sh
+grep <device overlay IP> /proc/net/nf_conntrack | grep 'dport=53 '
+```
+
+Each line is one lookup flow from that device. The `dst=` address is the
+resolver the device asked. If you use encrypted DNS and want a clean check,
+use Mullvad's own encrypted DNS service.
+
+### Why there is no DNS option
 
 Molebridge has no option to send DNS through the provider. One way to build
 it would be a resolver in the exit's namespace forwarding over the tunnel,
 plus a NetBird nameserver group. That would apply even when the exit isn't
-selected, and DNS would fail whenever the tunnel is down.
+selected, and DNS would fail whenever the tunnel is down. A resolver that only
+works inside the tunnel, pushed through NetBird, also gives slow, flaky DNS
+off the exit rather than none, because NetBird eventually gives up on it and
+falls back.
+
+That design can't work on this exit now in any case. The exit no longer
+answers anything addressed to itself that arrives over NetBird: a packet
+that arrives on the overlay interface never reaches a process on the exit
+([architecture](architecture.md#netbird-requirements)). A NetBird nameserver
+group served by the exit therefore gets no answers. Point NetBird's
+nameservers at a resolver somewhere else.
 
 ## Direct connections
 
@@ -168,11 +221,14 @@ candidate depends on the engine's NAT. On the tested rootless host it found
 none. Devices then fall back to a relay silently: the exit works, just more
 slowly, and nothing reports a fault.
 
-The fix is to publish a UDP port and tell NetBird to use and advertise it.
-Add the port to the `wireguard` service, for example in a
-`compose.override.yaml`. Compose reads that file automatically unless
-`COMPOSE_FILE` is set, as it is for PIA; then add it to the list
+The fix is to get a UDP port to the peer and tell NetBird to use and advertise
+it. How you get the port there depends on the engine. Put the change for
+`wireguard` in a `compose.override.yaml`. Compose reads that file
+automatically unless `COMPOSE_FILE` is set, as it is for PIA and NordVPN; then
+add it to the list
 (`COMPOSE_FILE=compose.yaml:compose.pia.yaml:compose.override.yaml`).
+
+**Docker:** publish the port on the `wireguard` service.
 
 ```yaml
 services:
@@ -181,9 +237,36 @@ services:
       - "51825:51825/udp"
 ```
 
-Recreate the stack so the port is published (`recover`, or the Podman
-commands below), then set NetBird's side, using your `EXIT_IF` in place of
-`mullvad`:
+**Rootless Podman with pasta:** don't publish the port. Publishing it holds
+the host port, so pasta can't bind it for NetBird's outgoing STUN; remote
+devices stay relayed and only devices on the same LAN connect directly. Give
+`wireguard` its own pasta network that forwards the port instead, with
+`network_mode` and no `ports:` entry for that port. Use your host's LAN
+address in place of `198.51.100.10`:
+
+```yaml
+services:
+  wireguard:
+    network_mode: "pasta:-4,-a,10.0.2.100,-n,24,-g,10.0.2.2,-I,eth0,-u,198.51.100.10/51825:51825"
+```
+
+The pasta options are:
+
+- `-4` uses IPv4 only on the host side.
+- `-a 10.0.2.100 -n 24 -g 10.0.2.2` gives the namespace a fixed private
+  address and gateway.
+- `-I eth0` keeps the interface name `eth0`, which `--external-ip-map` refers
+  to below.
+- `-u 198.51.100.10/51825:51825` forwards that UDP port, bound to that one LAN
+  address only.
+
+The namespace gets no `--map-host-loopback`, so it can't reach the host's
+loopback. Nothing else may share `wireguard`'s network for this to work.
+`netbird` and `applier` join its namespace, and `control-panel` is already on
+its own network.
+
+Recreate the stack so the change applies (`recover`, or the Podman commands
+below), then set NetBird's side, using your `EXIT_IF` in place of `mullvad`:
 
 ```sh
 docker compose exec netbird netbird down
@@ -193,21 +276,36 @@ docker compose exec netbird netbird up \
   --external-ip-map 198.51.100.10/eth0
 ```
 
-- The published port and `--wireguard-port` must match. Pick a free one; a
+- The published or forwarded port and `--wireguard-port` must match. Pick a free one; a
   NetBird client on the host itself already uses 51820.
 - `--external-ip-map` is the address the peer advertises instead of the
   container's: the host's LAN address for devices on the same LAN, or your
   public address, with the port forwarded, for devices on the Internet.
-- A published port is new exposure. Prefer the LAN address unless remote
+- A published or forwarded port is new exposure. Prefer the LAN address unless remote
   devices really need the direct path.
 - The remote candidate may show as `prflx`. Rootless port forwarding rewrites
   the source address, and ICE handles that; it isn't a fault.
+
+What was tested: on Debian with passt 0.0~git20261002 and Podman 5.8.6, with
+the `wireguard` container as a Quadlet unit using the `Network=pasta:` form of
+the options above. One pasta process then owns
+the port. NetBird's outgoing STUN leaves from a socket bound to the LAN
+address and port, the STUN server reported the public mapping on that same
+port, and a LAN datagram arrived with its real source address. `ss -ulnp` on
+the host showed the port held by pasta, not by `rootlessport`; the pasta log
+had no `Dropping datagram`; NetBird no longer logged `wait for gathering timed
+out`; and NetBird showed a P2P pair. A LAN client connected directly. A remote
+client off Wi-Fi getting a direct path has not been checked yet. The
+podman-compose form shown above, Docker with this method, and rootless Docker
+are untested.
 
 ## Rootless Podman
 
 Tested on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64. The
 helpers in `tools/molebridge.py` need `docker compose`'s JSON output, which
-podman-compose doesn't have, so use these commands instead. Replace
+podman-compose doesn't have, so use these commands instead. The gluetun
+backend's `gluetun-post-rules` is the exception: it reads `.env` directly
+and works the same under Podman. Replace
 `molebridge` with your `COMPOSE_PROJECT_NAME` if you changed it.
 
 Before the first start, load the kernel module and set `PANEL_USER=0:0`
@@ -313,6 +411,12 @@ remove the old device on mullvad.net.
 `tools/prepare-tunnel-config.py --pia`, then `recover`. The applier registers
 the new key in the saved region on its own. To change the PIA password, rewrite
 `secrets/pia/password` and restart the applier.
+
+**NordVPN.** NordVPN's API returns the account's one NordLynx key; how to make
+it issue a new one hasn't been checked. To rebuild the config, move
+`tunnel/wg_confs/nordvpn.conf` aside, run `tools/nordvpn-key.py` with a new
+access token as in [setup](setup.md#2-create-the-tunnel-config), then
+`recover`. The applier applies the saved server again on its own.
 
 ## Removing
 

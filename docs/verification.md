@@ -10,7 +10,10 @@ information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
 
 Commands use the defaults: tunnel interface `mullvad`, exit table `51821`,
 and overlay interface `wt0`. For PIA, substitute `pia` for `mullvad` in
-interface names and config paths; the table stays `51821`. If you changed
+interface names and config paths, and `nordvpn` for NordVPN; the table stays
+`51821`. NordVPN is experimental: its one live pass covered the egress and
+IPv6 checks and the local-delivery refusal, not the fail-closed drills
+([testing](testing.md#nordvpn-pass-at-036e1cc)). If you changed
 `EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use your values. For rootless Podman,
 use the [Podman commands](operations.md#rootless-podman).
 
@@ -27,6 +30,10 @@ supplies the tunnel address, peer and IPv4 rule 94. Select a region before
 the fail-closed drills and client or port-forwarding checks too. IPv6 stays
 blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
 
+On NordVPN, select a server before checks 3 and 8 and the drills: the config
+has no peer until you do. Its IPv4 address (`10.5.0.2`) and rule 94 come from
+the config, as with Mullvad; IPv6 stays blocked as on PIA.
+
 1. Check the rules. `ip rule` shows priority 1 (`not from all iif wt0 lookup
    local`) and no priority-0 `from all lookup local` rule, then priority 90
    (`iif mullvad`, overlay destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
@@ -40,12 +47,12 @@ blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
 2. Check the exit table. `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
-   IPv4-only config still has the IPv6 unreachable fallback. PIA must have
-   only that fallback for IPv6, with no tunnel default.
+   IPv4-only config still has the IPv6 unreachable fallback. PIA and NordVPN
+   must have only that fallback for IPv6, with no tunnel default.
 3. Check provider egress with the commands below. For a dual-stack Mullvad
    tunnel, both families must succeed. On PIA, IPv4 must report
-   `"connected": true`; IPv6 through the exit must fail on the unreachable
-   fallback.
+   `"connected": true`, and on NordVPN `protected` must be `true`; on both, IPv6
+   through the exit must fail on the unreachable fallback.
 4. Check unbound traffic with the IPv4 probe for your provider, omitting
    `--interface`. It should report your host's normal public IP. This is the
    path for the provider handshake and NetBird control connections.
@@ -62,7 +69,7 @@ blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
    `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` shows
    `dev mullvad`; with an IPv6 tunnel address,
    `ip -6 route get 2001:db8::1 from <tunnel IPv6 address> ipproto ipv6-icmp`
-   does too. On PIA, run only the IPv4 return-path check. With an IPv6 tunnel,
+   does too. On PIA and NordVPN, run only the IPv4 return-path check. With an IPv6 tunnel,
    replies larger than the overlay MTU should increase `Icmp6OutPktTooBigs`
    in `/proc/net/snmp6`. Capture on both the tunnel and host-side interfaces
    (`icmp6 and ip6[40] == 2`): the errors should leave through the tunnel and
@@ -87,8 +94,10 @@ Run these egress probes inside the namespace:
 | Mullvad, IPv6 tunnel | `curl -6 -fsS --interface mullvad https://ipv6.am.i.mullvad.net/json` | `"mullvad_exit_ip": true` |
 | PIA, IPv4 | `curl -4 -fsS --interface pia https://www.privateinternetaccess.com/api/client/status` | `"connected": true` |
 | PIA, IPv6 | `curl -6 -fsS --max-time 10 --interface pia https://ipv6.am.i.mullvad.net/json` | Connection fails; IPv6 is blocked |
+| NordVPN, IPv4 | `curl -4 -fsS --interface nordvpn https://api.nordvpn.com/v1/helpers/ips/insights` | `protected` is `true` |
+| NordVPN, IPv6 | `curl -6 -fsS --max-time 10 --interface nordvpn https://ipv6.am.i.mullvad.net/json` | Connection fails; IPv6 is blocked |
 
-The PIA IPv6 probe checks blocking. Use the explicit IPv6 hostname above;
+The PIA and NordVPN IPv6 probes check blocking. Use the explicit IPv6 hostname above;
 `am.i.mullvad.net` itself has no AAAA record. A DNS failure alone does not
 prove routing blocked the request.
 
@@ -97,8 +106,8 @@ prove routing blocked the request.
 For each drill, keep a client on the selected exit probing the provider's
 status endpoint above or pinging a public IP. During the drill, the affected
 path must fail without using your host's own public IP. Test IPv4 and IPv6
-explicitly; a browser check may exercise only one family. With PIA, IPv6 must
-remain blocked before, during and after each drill.
+explicitly; a browser check may exercise only one family. With PIA and
+NordVPN, IPv6 must remain blocked before, during and after each drill.
 
 Also record any client fallback to its own connection: server routing cannot
 enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
@@ -203,7 +212,9 @@ With the exit selected on a device in `exit-users`:
   reports the new location and the client's egress follows without reselecting
   the exit.
 - Molebridge does not change DNS; see [operations](operations.md#dns). Run a
-  DNS leak check and confirm the resolvers shown are acceptable to you.
+  DNS leak check and confirm the resolvers shown are acceptable to you. If it
+  flags a resolver, see
+  [when a leak test flags DNS](operations.md#when-a-leak-test-flags-dns).
 
 ## Optional PIA port forwarding
 

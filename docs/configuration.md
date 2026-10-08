@@ -7,9 +7,9 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `PROVIDER` | `mullvad` | `mullvad` or `pia`; see [providers](providers.md). Keep it unchanged after installation. |
-| `EXIT_IF` | `mullvad` | Tunnel interface name, and the tunnel config's file name under `tunnel/wg_confs/`. Use `pia` with PIA. A custom name needs an explicit output path when you run the [config helper](#tunnel-config-helper). |
-| `COMPOSE_FILE` | `compose.yaml` | Set to `compose.yaml:compose.pia.yaml` for PIA, which mounts the PIA login into the applier. |
+| `PROVIDER` | `mullvad` | `mullvad`, `pia` or `nordvpn` (experimental); see [providers](providers.md). Keep it unchanged after installation. |
+| `EXIT_IF` | `mullvad` | Tunnel interface name, and the tunnel config's file name under `tunnel/wg_confs/`. Use `pia` with PIA and `nordvpn` with NordVPN. A custom name needs an explicit output path when you run the [config helper](#tunnel-config-helper). |
+| `COMPOSE_FILE` | `compose.yaml` | Set to `compose.yaml:compose.pia.yaml` for PIA, which mounts the PIA login into the applier, or to `compose.yaml:compose.nordvpn.yaml` for NordVPN, which gives the applier 512 MB of memory for NordVPN's server list. |
 | `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). |
 | `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port. Required when forwarding is on; refused otherwise. |
 | `COMPOSE_PROJECT_NAME` | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation: changing it creates a fresh identity volume and enrolls a new peer. |
@@ -89,6 +89,69 @@ container, where you set them in its own environment.
 With the issuer set, at least one of `PANEL_ADMIN_GROUPS` and `PANEL_ACCESS`
 must name a group.
 
+## gluetun backend
+
+Experimental, with one live pass, NordVPN on Docker
+([testing](testing.md#gluetun-backend-pass-at-a3bb14f)); the design is in
+[architecture](architecture.md#gluetun-backend) and what differs for you in
+[providers](providers.md#the-gluetun-backend). Set
+`COMPOSE_FILE=compose.gluetun.yaml` in `.env`; this file replaces
+`compose.yaml`. `OVERLAY_CIDR`, `OVERLAY6_CIDR`, `OVERLAY_IF`, `EXIT_TABLE`,
+`NB_HOSTNAME`, `NB_MANAGEMENT_URL` and the panel settings above keep their
+meaning. `PROVIDER` and the PIA settings don't apply.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The guard and NetBird's ICE blacklist use the same value. `.env.example` sets `mullvad` for the default backend; set `wg0` or keep it, as long as it fits. |
+| `GLUETUN_PROVIDER` | required | gluetun's `VPN_SERVICE_PROVIDER`. The panel can select servers for `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`, `surfshark` and `windscribe`; the applier refuses any other. `compose.gluetun.yaml` gives the applier and the panel `PROVIDER=gluetun-<this value>`. |
+| `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
+| `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). A selection in the panel replaces them while gluetun runs; after gluetun restarts, the applier puts your last verified selection back. |
+| `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the applier also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. |
+| `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256..2147483647). Must differ from `EXIT_TABLE`; 51820 (gluetun) and 7120 (NetBird) are taken. |
+| `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. |
+| `NB_WIREGUARD_PORT` | `51820` | NetBird's WireGuard port, opened in gluetun's firewall. |
+
+`compose.gluetun.yaml` also sets fixed values: gluetun with `VPN_TYPE=wireguard`,
+`WIREGUARD_IMPLEMENTATION=kernelspace`, its control server on
+`127.0.0.1:8000` inside the namespace and its server list at
+`/gluetun/servers/servers.json` (`STORAGE_FILEPATH`), in a volume of its
+own; `TUNNEL_BACKEND=gluetun` for the guard, NetBird's gate and the applier;
+and for the applier `GLUETUN_CONTROL_URL`, `GLUETUN_API_KEY_FILE` and
+`GLUETUN_SERVERS_FILE`, where it finds the control server, the API key and
+the read-only server list. The guard reads `ROUTING_RECONCILE_INTERVAL`
+(seconds between full passes, 1–60, default 2); it rewrites the fwmark
+record for the gate every 2 seconds whatever that interval is. The gate
+reads `FWMARK_GRACE` (seconds NetBird may run without a good fwmark record,
+5–30, default 30). With
+this backend the gate also refuses `NB_USE_LEGACY_ROUTING`,
+`NB_SKIP_SOCKET_MARK` and `NB_DISABLE_CUSTOM_ROUTING` set to a true value,
+and an `NB_FWMARK_BASE` other than `CONTROL_MARK`.
+
+Before the first start:
+
+1. Put the provider's WireGuard private key in
+   `secrets/gluetun/wireguard_private_key`, one line, mode 0600.
+2. Run `python3 tools/molebridge.py gluetun-auth`. It generates an API key
+   and writes it twice, both mode 0600: into `secrets/gluetun/auth.toml`,
+   gluetun's role file, with one role allowed exactly `PUT
+   /v1/vpn/settings`, `GET /v1/vpn/status`, `GET /v1/publicip/ip`, and
+   `GET` and `PUT /v1/updater/status` (to refresh the server list); and
+   into `secrets/gluetun/api_key`, which only the applier mounts. The key is
+   never printed. Run it again with `--rotate` to replace both, then
+   recreate `gluetun` and `applier`. Compose refuses to start without the
+   role file: without one, gluetun answers several routes with no
+   authentication, including one that stops the VPN.
+3. Run `python3 tools/molebridge.py gluetun-post-rules` to write
+   `tunnel/gluetun/post-rules.txt` from these settings; add `--ipv4-only` if
+   gluetun logs that it found no working ip6tables. The command reads
+   `.env` itself, and like Compose lets a setting exported in your shell
+   win over `.env`; it doesn't call the container engine, so it is the same
+   with Docker and with podman-compose. Write the values literally: it
+   refuses a `$` reference. Run it again after
+   changing `HOST_IF`, `EXIT_IF`, `OVERLAY_IF`, `CONTROL_MARK` or
+   `NB_WIREGUARD_PORT`, then recreate `gluetun`, `guard` and `netbird`.
+
 ## Tunnel config helper
 
 The helper accepts a Mullvad source file or `--pia`, followed by an optional
@@ -114,9 +177,23 @@ PostUp = ip route replace default dev %i table 51822
 PreDown = ip route del default dev %i table 51822
 ```
 
-Keep the file mode 0600. For Mullvad, change the table in both hooks too,
-including their `ip -6` commands if present. Apply the change with
+Keep the file mode 0600. For Mullvad and NordVPN, change the table in both
+hooks too, including their `ip -6` commands if present. Apply the change with
 [recovery](operations.md#recovery), then run [verification](verification.md).
+
+A NordVPN config comes from `tools/nordvpn-key.py` instead, which takes the
+access token from a mode-0600 file or, with `-`, from standard input, never
+from its arguments or the environment:
+
+```text
+python3 tools/nordvpn-key.py TOKEN_FILE OUTPUT
+python3 tools/nordvpn-key.py - OUTPUT
+```
+
+`OUTPUT` has no default; use `tunnel/wg_confs/nordvpn.conf` (or your
+`EXIT_IF`). It reads `EXIT_TABLE` from the environment like the helper above,
+and never overwrites an existing file. [Setup](setup.md#2-create-the-tunnel-config)
+shows both forms.
 
 ## Secret files
 
@@ -127,9 +204,17 @@ contents anywhere.
 |---|---|---|
 | `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | With Mullvad |
 | `tunnel/wg_confs/pia.conf` | PIA tunnel private key only; no address or peer | With PIA |
+| `tunnel/wg_confs/nordvpn.conf` | NordLynx private key and the address `10.5.0.2/32`; no peer | With NordVPN |
 | `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file | With PIA |
 | `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
 | `secrets/applier.env` | `GATUS_TOKEN` | Only with `GATUS_URL` |
+| `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
+| `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `tools/molebridge.py gluetun-auth` | With the gluetun backend |
+| `secrets/gluetun/api_key` | The same API key, for the applier. It is full gluetun administration | With the gluetun backend |
+
+The NordVPN access token is not one of these: it is needed only while
+`tools/nordvpn-key.py` runs. If you saved it to a file for that, delete it
+afterwards.
 
 ## State files
 
@@ -137,11 +222,12 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 
 | File | Writer | Reader | Contents |
 |---|---|---|---|
-| `applier/relays.json` | applier | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). A snapshot for another provider is ignored. |
+| `applier/relays.json` | applier | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. A snapshot for another provider is ignored. |
+| `applier/gluetun-selection.json` | gluetun applier | gluetun applier | `desired`, `last_put` and `last_successful`: server hostnames, used to put the last verified server back after gluetun restarts. No secret. |
 | `applier/tunnel.json` | PIA applier | PIA applier | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`. A result with `netbird_native` false never counts as connected. |
+| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `egress_tier` (`provider`, `tunnel` or null; see [status reporting](architecture.md#status-reporting)), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`, and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). A result with `netbird_native` false never counts as connected. |
 
 Routing initialization reads only the `Address` line of the tunnel config, for
 the return-path rule (a PIA config has none; the applier installs the rule per
@@ -153,7 +239,13 @@ The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 applier snapshots are mode 0644 so the non-root panel can read them; requests
 are mode 0600. The panel cannot write the applier directory. Catalogue refresh
 is every six hours (one-minute retry on failure), maximum catalogue age is 24
-hours, and maximum status age is 150 seconds. These are fixed safety defaults.
+hours, and maximum status age is 150 seconds. A server list download may take
+20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. The validated
+`relays.json` may be 10 MiB, NordVPN's 16 MiB; the applier refuses to write a
+larger one and keeps the last good catalogue, reporting it in
+`relay-error.json` like any failed refresh, and neither the applier nor the
+panel reads a larger one. These are fixed safety defaults, set per provider
+in `molebridge/providers.py`.
 
 ## Panel endpoints
 
@@ -172,7 +264,7 @@ granted.
 | `POST /select` | Choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode |
 | `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
 | `/api/status?exit=<id>` | Desired server and applier result; omit `exit` for a single-exit panel |
-| `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>`, or `hosts=<a,b>` (64 at most); `fresh=1` ignores the cache |
+| `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>` (up to 128 servers, a fixed sample beyond that; the answer's `country` gives `probed` and `total`), or `hosts=<a,b>` (64 at most); 256 servers per request in all; `fresh=1` ignores the cache. 429 with `Retry-After` while that exit already has a request running or four are running panel-wide |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |
 | `/readyz`, `/readyz?exit=<id>` | 200 only when all exits, or the named exit, have a fresh verified connected state; 503 otherwise. An unknown ID in multi-exit mode returns 404 |

@@ -1,8 +1,10 @@
 # Other VPN providers
 
-Molebridge supports Mullvad and PIA. Nothing else works today, and there's
-no generic "bring your own WireGuard config" mode, because each provider
-handles keys, server lists and switching differently.
+Molebridge supports Mullvad and PIA, and NordVPN as an experiment with one
+live pass so far ([providers](providers.md#how-nordvpn-differs)).
+Nothing else works today, and there's no generic "bring your own WireGuard
+config" mode, because each provider handles keys, server lists and switching
+differently.
 
 Some other providers could be added if people want them. If you'd use one,
 open an issue saying which, and whether you could help test it. Interest is
@@ -11,7 +13,7 @@ what decides whether a provider gets attempted.
 ## What support would look like
 
 - **Someone has to test against a real account.** The maintainer has
-  accounts with Mullvad and PIA only. A new provider needs either a paid
+  accounts with Mullvad, PIA and NordVPN only. A new provider needs either a paid
   account for development or a volunteer who runs the live checks on their
   own exit and reports back. Nobody should ever send their credentials.
 - **A new provider starts as experimental**, as PIA did. That means unit tests
@@ -26,16 +28,19 @@ what decides whether a provider gets attempted.
   still can't fall back to the host's connection, but the exit may be
   unusable in the meantime.
 - **Features vary.** Port forwarding, IPv6 and a way to confirm egress
-  through the tunnel differ from one provider to the next. Molebridge's status
-  model needs the provider to confirm egress; a provider that can't do that
-  needs extra work before it can show as connected.
+  through the tunnel differ from one provider to the next. A provider that
+  can't confirm egress itself can still show as connected, through
+  Molebridge's own tunnel checks, but the panel labels it "tunnel checks
+  only" ([status reporting](architecture.md#status-reporting)).
 - **Each provider is more code to maintain.** A provider that nobody tests
   can be dropped again.
 
 ## The candidates
 
-Findings from a survey in September 2026. Nothing below has been built or
-tested in Molebridge; the endpoints come from the providers' own
+Findings from a survey in September 2026. NordVPN, the closest fit, has since
+been built ([providers](providers.md#how-nordvpn-differs)); it fetches the
+key once at setup, so the exit stores no NordVPN token. Nothing below has
+been built or tested in Molebridge; the endpoints come from the providers' own
 documentation, their open-source clients, and
 [gluetun](https://github.com/qdm12/gluetun), which integrates many of them.
 
@@ -46,7 +51,6 @@ and a server list that can be fetched without a browser.
 
 | Provider | How keys work | Server list | Egress check | Port forwarding | What adding it would involve |
 |---|---|---|---|---|---|
-| **NordVPN** (NordLynx) | An access token made in the dashboard fetches the account's WireGuard private key from `api.nordvpn.com/v1/users/services/credentials` | Public, with keys | `api.nordvpn.com/v1/helpers/ips/insights` | No | The closest fit. The exit would store a long-lived API token, and the private key comes from NordVPN, not from Molebridge. |
 | **Surfshark** | A key made or uploaded in the dashboard. Automating registration takes the account password through an unofficial API, and keys expire | Public, with keys (`api.surfshark.com/v4/server/clusters`) | `surfshark.com/api/v1/server/user` | No | Likely a dashboard-made key, with Molebridge warning before it expires. Automatic renewal would mean storing the account password. |
 | **IVPN** | Your own public key, added in the client area | Public (`api.ivpn.net/v5/servers.json`) | `api.ivpn.net/v4/geo-lookup` | Removed in 2023 | Technically close to Mullvad. |
 | **AirVPN** | A per-device config from the client area's generator; there is an official API keyed per user | Public status list; all servers share one public key | `airvpn.org/api/whatismyip/` | Yes: static ports reserved in the client area | Needs preshared-key support (the config converter drops it today), a way to identify the server other than its shared public key, and live testing of the config and forwarding. It would suit people who want port forwarding. |

@@ -4,6 +4,124 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.5.0 (2026-10-08)
+
+- **Provider registry.** Everything Molebridge knows per VPN provider is now
+  one entry in `molebridge/providers.py`, which the applier, the panel and
+  the doctor read. Nothing changes for Mullvad or PIA exits.
+- **Egress tiers.** `result.json` gains `egress_tier`: `provider` when the
+  provider's own endpoint confirmed the egress (`exit_confirmed`, unchanged),
+  `tunnel` when only Molebridge's tunnel checks did, for a provider without
+  its own check, or null. The panel labels a tunnel-verified exit "tunnel
+  checks only", and `/readyz` passes for both. No current provider uses the
+  `tunnel` tier; it is covered by unit tests only. See
+  [status reporting](docs/architecture.md#status-reporting).
+- **NordVPN, experimental.** `PROVIDER=nordvpn` with
+  `EXIT_IF=nordvpn` and `COMPOSE_FILE=compose.yaml:compose.nordvpn.yaml`.
+  `tools/nordvpn-key.py` fetches the account's NordLynx key once, from an
+  access token read from a mode-0600 file or standard input, and writes the
+  tunnel config; the exit stores no token. One key and the address
+  `10.5.0.2/32` work on every server; IPv4 only, so forwarded IPv6 hits the
+  unreachable fallback, as with PIA. The panel lists servers by country and
+  city, and labels NordVPN's virtual locations. The applier identifies the
+  current server by the live peer's endpoint, because NordVPN shares server
+  keys within a location, and confirms egress with NordVPN's insights check,
+  asking again for up to a minute when a cached answer looks stale. See
+  [providers](docs/providers.md#how-nordvpn-differs).
+- The applier's `/tmp` grows from 16 MB to 48 MB, room for NordVPN's server
+  list download (up to 32 MiB). It uses memory only while a download is
+  there.
+- **Bounded latency probing in the panel.** Opening a country times every
+  server in it up to 128, and a larger country (NordVPN has some) on a fixed
+  sample of 128; one request names at most 256 servers. The panel runs one
+  latency request per exit and four in all, answering 429 with `Retry-After`
+  beyond that, and a page sends one request at a time. See
+  [Switchyard](docs/switchyard.md). Covered by unit tests; not run live.
+
+Tested: unit tests for the registry, both tiers and NordVPN, including the
+NordVPN parsers against fixtures with documentation addresses, and one live
+NordVPN pass at `036e1cc` on macOS with OrbStack: key setup, the server list,
+switches, NordVPN-confirmed egress from a client, IPv6 blocked
+([testing](docs/testing.md#nordvpn-pass-at-036e1cc)). Not run live: the
+insights cache retry, the `tunnel` tier, the panel with NordVPN's list,
+rootless Podman, and the fail-closed drills.
+
+- **Experimental gluetun backend.** With `compose.gluetun.yaml`, gluetun
+  owns the tunnel and brings its WireGuard providers; the panel can select
+  servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and Windscribe
+  through gluetun, shown with the provider's name and "via gluetun". Live
+  passes with NordVPN on Docker; other providers and rootless Podman are
+  untested. What it consists of:
+  - Molebridge's routing image runs beside gluetun as a guard sidecar. It
+    installs the same fail-closed rules plus rules 88/89 and a host table for
+    NetBird's control traffic, and rules 91/92 so that what the exit itself
+    sends to the overlay, such as the ICMP errors path MTU discovery needs,
+    uses NetBird's overlay route and never gluetun's tunnel, and rules
+    102-104 so that what the exit itself sends leaves only through gluetun's
+    tunnel (gluetun's WireGuard socket excepted), even while gluetun
+    reconnects. It puts
+    everything back every few seconds as gluetun recreates its interface.
+  - NetBird's gate refuses settings that turn off NetBird's control mark,
+    waits for the whole guard (checked with the guard's own definitions),
+    and stops NetBird, exiting non-zero, if it runs without the mark or the
+    guard stays broken. Its deadlines run on the kernel's boot clock.
+  - The applier reads gluetun's own server list (read-only, never
+    downloaded), selects servers through gluetun's control server, and
+    verifies the peer, the handshake, the guard and egress: Mullvad's and
+    NordVPN's own checks, the tunnel checks for the others. It puts the last
+    verified server back after gluetun restarts, and asks gluetun to
+    refresh its server list once at start when that list is old.
+  - `python3 tools/molebridge.py gluetun-auth` writes gluetun's role file
+    and the applier's API key, which is full gluetun administration;
+    `gluetun-post-rules` writes gluetun's firewall post-rules, in forms
+    gluetun's own rule parser accepts. Both read
+    `.env` and work with Docker and podman-compose. `doctor` and `recover`
+    support the gluetun file.
+
+  See [providers](docs/providers.md#the-gluetun-backend),
+  [architecture](docs/architecture.md#gluetun-backend) and
+  [configuration](docs/configuration.md#gluetun-backend). The default
+  backend is unchanged.
+- **A standalone guide** to [gluetun as a NetBird exit
+  node](docs/gluetun-netbird-exit.md), with only Molebridge's routing guard
+  and NetBird gate beside gluetun, no panel or applier: the rules, the gate,
+  gluetun's settings and post-rules, choosing servers through gluetun's
+  control server, and drills that need no applier.
+- `recover` waits up to 180 seconds for the applier to verify the exit
+  before it runs the doctor, and names the step that failed.
+
+Tested, for the gluetun backend: unit tests for the guard and gate against a
+stand-in for iproute2, the validator, the post-rules and the applier against
+fakes of the kernel and gluetun's control server, and namespace drills with
+gluetun's and NetBird's rules simulated, forwarded packets carrying marks 0,
+0x1bd00, 0x1bd21 and 51820, and the exit's ICMP errors to clients; gluetun's
+behavior was read in the v3.41.3 source. Live passes with NordVPN on Docker at
+`a3bb14f` ([testing](docs/testing.md#gluetun-backend-pass-at-a3bb14f)), and at
+`4933360` for the standalone form
+([testing](docs/testing.md#gluetun-backend-at-4933360-and-the-standalone-form)).
+
+Documentation fixes:
+
+- **Rootless Podman direct path.** Publishing NetBird's WireGuard port keeps
+  remote devices relayed under rootless Podman with pasta;
+  [operations](docs/operations.md#exits-on-a-private-container-network) now
+  gives `wireguard` its own pasta network that forwards the port. Tested as
+  a Quadlet unit on one Debian host with a LAN client; a remote client, the
+  podman-compose form and Docker are untested.
+- **Restrictive Wi-Fi.** [Troubleshooting](docs/troubleshooting.md#clients)
+  covers a healthy exit with a device that loads nothing on a network that
+  breaks NetBird's QUIC relay connection, and how to make the NetBird
+  client prefer WebSocket. Confirmed on macOS only.
+- **DNS.** [Operations](docs/operations.md#dns) corrects what a DNS leak
+  test shows through a Mullvad exit, from one observation (PIA untested),
+  and says that a NetBird nameserver group served by the exit gets no
+  answers.
+
+Upgrading from 0.4.1: pull, then recover. Existing Mullvad and PIA exits
+need no `.env` changes. NordVPN and the gluetun backend are new opt-in
+paths: see [providers](docs/providers.md#how-nordvpn-differs) and
+[the gluetun backend](docs/providers.md#the-gluetun-backend).
+
 ## 0.4.1 (2026-10-08)
 
 A security release: overlay traffic is never delivered to the exit itself,

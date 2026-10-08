@@ -9,14 +9,19 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-HOSTNAME_RE = re.compile(r'[a-z0-9-]{1,40}-wg-[0-9]{3}')
-# A selectable name per provider: a Mullvad relay hostname or a PIA region id.
-PROVIDERS = ('mullvad', 'pia')
-SERVER_NAME_RE = {'mullvad': HOSTNAME_RE, 'pia': re.compile(r'[a-z0-9][a-z0-9_-]{0,47}')}
-PROVIDER_LABEL = {'mullvad': 'Mullvad', 'pia': 'PIA'}
+from molebridge import providers
+from molebridge.validate import _unique_object, decode_json  # noqa: F401 - re-exported
+
+# Compatibility names; the registry (molebridge/providers.py) is the source.
+PROVIDERS = providers.PROVIDERS
+HOSTNAME_RE = providers.get('mullvad').server_name_re
+SERVER_NAME_RE = {p.id: p.server_name_re for p in providers.REGISTRY.values()}
+PROVIDER_LABEL = {p.id: p.label for p in providers.REGISTRY.values()}
 STATUS_MAX_AGE = 150
 CATALOG_MAX_AGE = 24 * 60 * 60
-MAX_CATALOG_BYTES = 10 * 1024 * 1024
+# The default download cap and the bound on reading a validated snapshot back.
+# A provider's download cap is its registry entry's catalog_max_bytes.
+MAX_CATALOG_BYTES = providers.DEFAULT_CATALOG_BYTES
 
 
 def now_iso() -> str:
@@ -38,21 +43,6 @@ def recent(value, max_age=STATUS_MAX_AGE, now=None):
     return age is not None and 0 <= age <= max_age
 
 
-def _unique_object(pairs):
-    obj = {}
-    for key, value in pairs:
-        if key in obj:
-            raise ValueError('duplicate JSON field')
-        obj[key] = value
-    return obj
-
-
-def decode_json(raw):
-    def invalid_constant(_value):
-        raise ValueError('non-finite JSON number')
-    return json.loads(raw, object_pairs_hook=_unique_object, parse_constant=invalid_constant)
-
-
 def read_json(path: Path, limit=MAX_CATALOG_BYTES):
     """Reject special files, symlinks, oversized/duplicate-key JSON and bad UTF-8."""
     try:
@@ -72,7 +62,11 @@ def read_json(path: Path, limit=MAX_CATALOG_BYTES):
         return None
 
 
-def write_json_atomic(path: Path, obj, *, public=False):
+def write_json_atomic(path: Path, obj, *, public=False, max_bytes=None):
+    """Replace `path` atomically, encoding incrementally into a temporary file.
+    With max_bytes, encoding stops with ValueError as soon as the output passes
+    the limit; the temporary file is removed and the old file stays in place.
+    Memory stays bounded by the encoder's chunks, whatever the document's size."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.tmp-', dir=path.parent)
     try:
@@ -80,7 +74,13 @@ def write_json_atomic(path: Path, obj, *, public=False):
             # The non-root panel must be able to read the applier's public state.
             if hasattr(os, 'fchmod'):
                 os.fchmod(stream.fileno(), 0o644 if public else 0o600)
-            json.dump(obj, stream, allow_nan=False)
+            written = 0
+            # The same output json.dump gives; iterencode yields small chunks.
+            for chunk in json.JSONEncoder(allow_nan=False).iterencode(obj):
+                written += len(chunk.encode('utf-8'))
+                if max_bytes is not None and written > max_bytes:
+                    raise ValueError('state file exceeds its size limit')
+                stream.write(chunk)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -90,14 +90,12 @@ def write_json_atomic(path: Path, obj, *, public=False):
 
 
 def provider_from_env(env):
-    provider = env.get('PROVIDER', '') or 'mullvad'
-    if provider not in PROVIDERS:
-        raise ValueError('PROVIDER must be one of: ' + ', '.join(PROVIDERS))
-    return provider
+    return providers.from_env(env).id
 
 
 def valid_server_name(value, provider='mullvad'):
-    return isinstance(value, str) and bool(SERVER_NAME_RE[provider].fullmatch(value))
+    spec = providers.REGISTRY.get(provider)
+    return spec is not None and spec.valid_server_name(value)
 
 
 def exit_confirmed(result):
@@ -105,6 +103,19 @@ def exit_confirmed(result):
     if 'exit_confirmed' in result:
         return result.get('exit_confirmed') is True
     return result.get('mullvad_exit_ip') is True
+
+
+def egress_tier(result, provider='mullvad'):
+    """How the result's egress was confirmed: 'provider' (the provider's own
+    endpoint said so), 'tunnel' (the tunnel checks in molebridge/egress.py,
+    accepted only for a provider whose registry entry has no stronger check),
+    or None. Results written before tiers existed have only exit_confirmed."""
+    if exit_confirmed(result):
+        return 'provider'
+    spec = providers.REGISTRY.get(provider)
+    if result.get('egress_tier') == 'tunnel' and spec is not None and spec.egress_tier == 'tunnel':
+        return 'tunnel'
+    return None
 
 
 def desired_request(value, provider='mullvad'):
@@ -140,7 +151,7 @@ def status_view(desired, result, provider='mullvad'):
     status = result.get('status')
     if status == 'ok':
         # Results written before the NetBird mode check have no such field.
-        if (result.get('routing_ok') is not True or not exit_confirmed(result)
+        if (result.get('routing_ok') is not True or egress_tier(result, provider) is None
                 or result.get('netbird_native', True) is not True):
             return 'failed', 'verification failed'
         return 'ok', 'connected'

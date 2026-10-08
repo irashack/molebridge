@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from molebridge.relays import CATALOG_URL, parse_catalog  # noqa: E402
+from molebridge import providers  # noqa: E402
 from molebridge.state import now_iso, read_json, write_json_atomic  # noqa: E402
 
 KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
@@ -66,8 +66,9 @@ def sample(provider):
 
 
 def live(provider):
-    with urllib.request.urlopen(CATALOG_URL[provider], timeout=20) as response:
-        return parse_catalog(response.read().decode(), provider)
+    spec = providers.get(provider)
+    with urllib.request.urlopen(spec.catalog_url, timeout=spec.catalog_timeout_s) as response:
+        return spec.parse_catalog(response.read(spec.catalog_max_bytes + 1).decode())
 
 
 def seed(state, exit_id, provider, relays, current):

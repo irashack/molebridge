@@ -8,4 +8,5 @@
 !applier/PIA-CA-LICENSE.txt
 !routing/
 !routing/10-exit-routing
+!routing/gluetun-rules
 !routing/Dockerfile
