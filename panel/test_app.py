@@ -924,6 +924,19 @@ class NordPanelTests(unittest.TestCase):
         self.assertIn(':root[data-style="provider"][data-provider="nordvpn"] {', css)
         self.assertIn('.exit-tab[data-provider="nordvpn"] { --exit-accent: var(--exit-nordvpn); }', css)
 
+    def test_gluetun_style_takes_the_provider_as_its_accent(self):
+        css = (app.STATIC_DIR / 'panel.css').read_text()
+        self.assertIn(':root[data-style="provider"][data-provider="gluetun"] {', css)
+        for spec in app.providers.REGISTRY.values():
+            if spec.backend != 'gluetun':
+                continue
+            self.assertEqual((spec.css_id, spec.accent), ('gluetun', spec.gluetun_provider))
+            self.assertIn(f':root[data-style="provider"][data-provider="gluetun"][data-accent="{spec.accent}"] {{', css)
+            self.assertIn(f'.exit-tab[data-accent="{spec.accent}"] {{ --exit-accent: var(--exit-{spec.accent}); }}', css)
+        with patch.multiple(app, PANEL_STYLE='provider', PANEL_THEME='auto'):
+            meta = app.theme_color_meta('gluetun-mullvad')
+        self.assertIn('content="#11181c" media="(prefers-color-scheme: dark)"', meta)
+
     def test_status_view_and_readiness_use_nordvpn_names(self):
         desired = {'server': 'us9001.nordvpn.com', 'requested_at': app.now_iso(), 'request_id': 'a' * 32}
         result = {'checked_at': app.now_iso(), 'status': 'ok', 'server': 'us9001.nordvpn.com', 'routing_ok': True,

@@ -4,6 +4,18 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- **gluetun exits look like gluetun.** In the provider style, an exit on the
+  gluetun backend takes gluetun's dark slate, with the provider behind it as
+  the accent: Mullvad's yellow, NordVPN's blue, Surfshark's teal, and a
+  colour each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
+  NordVPN exit through gluetun looked like the native one, and the other four
+  providers had no colours at all, so their pages lost their card
+  backgrounds. Checked in the local preview only.
+- `tools/preview-panel.py --exits` adds a NordVPN exit and two gluetun exits
+  (Mullvad and Surfshark) to the preview.
+
 ## 0.5.0 (2026-10-08)
 
 - **Provider registry.** Everything Molebridge knows per VPN provider is now

@@ -769,10 +769,17 @@ def country_tree(relays: Dict[str, Dict[str, Any]], desired_server: str, provide
 
 
 def provider_css(provider: str) -> str:
-    """The provider style a page or tab takes: gluetun's entries look like the
-    same provider's native one."""
+    """The provider style a page or tab takes: every gluetun entry takes
+    gluetun's."""
     spec = providers.REGISTRY.get(provider)
     return spec.css_id if spec else provider
+
+
+def provider_accent(provider: str) -> str:
+    """A data-accent attribute naming the provider whose colour accents that
+    style, as for a gluetun entry ('mullvad' through gluetun), or nothing."""
+    spec = providers.REGISTRY.get(provider)
+    return f' data-accent="{html.escape(spec.accent)}"' if spec and spec.accent else ''
 
 
 def provider_note(provider: str) -> str:
@@ -808,7 +815,7 @@ def exit_tabs(summaries: Sequence[Dict[str, Any]], current_id: str, embed: bool)
         place = f'<span class="exit-place" data-exit-place>{esc(summary["place"])}</span>'
         links.append(
             f'<a class="exit-tab{" is-selected" if selected else ""}" href="{base}?exit={esc(summary["id"])}" '
-            f'data-exit="{esc(summary["id"])}" data-provider="{esc(provider_css(summary["provider"]))}" '
+            f'data-exit="{esc(summary["id"])}" data-provider="{esc(provider_css(summary["provider"]))}"{provider_accent(summary["provider"])} '
             f'title="{esc(summary["label"])}"{current}>'
             f'<span class="exit-track" aria-hidden="true">{esc(f"{index:02d}")}</span>'
             '<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">'
@@ -959,7 +966,7 @@ def render_index_html(
                         'failed': 'Connection needs attention', 'unknown': 'Connection unverified'}[state]
 
     return f"""<!DOCTYPE html>
-<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{esc(spec.css_id)}">
+<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{esc(spec.css_id)}"{provider_accent(provider)}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -978,7 +985,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page" data-provider="{esc(spec.css_id)}" data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page" data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 {tabs}
 <form method="post" action="/select" id="select-form">

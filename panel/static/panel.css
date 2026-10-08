@@ -432,10 +432,10 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 }
 
 /* Shared structure: dashboard retains the original compact, mono widgets. */
-:root { --color-text-subdue: #a5adc6; --exit-mullvad: #ffd524; --exit-pia: #78df70; --exit-nordvpn: #8ab8ff; }
-:root[data-theme="light"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; }
+:root { --color-text-subdue: #a5adc6; --exit-mullvad: #ffd524; --exit-pia: #78df70; --exit-nordvpn: #8ab8ff; --exit-gluetun: #6fcfe0; --exit-surfshark: #3fd8c6; --exit-ivpn: #ff8a80; --exit-windscribe: #7dcfff; --exit-fastestvpn: #ffab66; }
+:root[data-theme="light"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; --exit-gluetun: #11697a; --exit-surfshark: #0a6b62; --exit-ivpn: #b0241c; --exit-windscribe: #0a628e; --exit-fastestvpn: #954600; }
 @media (prefers-color-scheme: light) {
-  :root[data-theme="auto"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; }
+  :root[data-theme="auto"] { --color-text-subdue: #606477; --exit-mullvad: #785e00; --exit-pia: #276e2c; --exit-nordvpn: #2155c0; --exit-gluetun: #11697a; --exit-surfshark: #0a6b62; --exit-ivpn: #b0241c; --exit-windscribe: #0a628e; --exit-fastestvpn: #954600; }
 }
 .switchboard, .overview { display: flex; flex-direction: column; gap: var(--widget-gap); min-width: 0; }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -458,6 +458,13 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 }
 .exit-tab[data-provider="pia"] { --exit-accent: var(--exit-pia); }
 .exit-tab[data-provider="nordvpn"] { --exit-accent: var(--exit-nordvpn); }
+.exit-tab[data-provider="gluetun"] { --exit-accent: var(--exit-gluetun); }
+.exit-tab[data-accent="mullvad"] { --exit-accent: var(--exit-mullvad); }
+.exit-tab[data-accent="nordvpn"] { --exit-accent: var(--exit-nordvpn); }
+.exit-tab[data-accent="surfshark"] { --exit-accent: var(--exit-surfshark); }
+.exit-tab[data-accent="ivpn"] { --exit-accent: var(--exit-ivpn); }
+.exit-tab[data-accent="windscribe"] { --exit-accent: var(--exit-windscribe); }
+.exit-tab[data-accent="fastestvpn"] { --exit-accent: var(--exit-fastestvpn); }
 .exit-tab:hover { color: inherit; border-color: var(--exit-accent); }
 .exit-tab.is-selected { border-color: var(--exit-accent); }
 /* One line each, never broken mid-word: a long label or place is cut with an
@@ -592,6 +599,41 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --signal-positive: #44ad4d;
   --border-radius: 12px;
 }
+/* gluetun: every exit gluetun runs takes gluetun's surfaces, a dark slate
+   with a cyan accent, and the provider behind it (data-accent) supplies the
+   accent instead: Mullvad's yellow through gluetun on gluetun's slate. Colours
+   only. Every accent keeps at least 4.5:1 on each surface, in both themes. */
+:root[data-style="provider"][data-provider="gluetun"] {
+  --p-bg-dark: #11181c;
+  --p-card-dark: #192227;
+  --p-row-dark: #222e35;
+  --p-border-dark: #384a54;
+  --p-ink-dark: #f2f7f9;
+  --p-text-dark: #d8e3e8;
+  --p-muted-dark: #a0b3bd;
+  --p-accent-dark: #6fcfe0;
+  --p-positive-dark: #7fd88a;
+  --p-glow-dark: #6fcfe01c;
+  --p-bg-light: #edf2f4;
+  --p-card-light: #ffffff;
+  --p-row-light: #e0e8ec;
+  --p-border-light: #b4c5cd;
+  --p-ink-light: #11202a;
+  --p-text-light: #263a45;
+  --p-muted-light: #4a5e69;
+  --p-accent-light: #11697a;
+  --p-positive-light: #23702b;
+  --p-glow-light: #11697a1f;
+  --brand-accent: #6fcfe0;
+  --signal-positive: #44ad4d;
+  --border-radius: 10px;
+}
+:root[data-style="provider"][data-provider="gluetun"][data-accent="mullvad"] { --p-accent-dark: #ffd524; --p-accent-light: #735900; --brand-accent: #ffd524; --p-glow-dark: #ffd5241c; --p-glow-light: #7359001f; }
+:root[data-style="provider"][data-provider="gluetun"][data-accent="nordvpn"] { --p-accent-dark: #7fb0ff; --p-accent-light: #2155c0; --brand-accent: #7fb0ff; --p-glow-dark: #7fb0ff1c; --p-glow-light: #2155c01f; }
+:root[data-style="provider"][data-provider="gluetun"][data-accent="surfshark"] { --p-accent-dark: #3fd8c6; --p-accent-light: #0a6b62; --brand-accent: #3fd8c6; --p-glow-dark: #3fd8c61c; --p-glow-light: #0a6b621f; }
+:root[data-style="provider"][data-provider="gluetun"][data-accent="ivpn"] { --p-accent-dark: #ff8a80; --p-accent-light: #b0241c; --brand-accent: #ff8a80; --p-glow-dark: #ff8a801c; --p-glow-light: #b0241c1f; }
+:root[data-style="provider"][data-provider="gluetun"][data-accent="windscribe"] { --p-accent-dark: #7dcfff; --p-accent-light: #0a628e; --brand-accent: #7dcfff; --p-glow-dark: #7dcfff1c; --p-glow-light: #0a628e1f; }
+:root[data-style="provider"][data-provider="gluetun"][data-accent="fastestvpn"] { --p-accent-dark: #ffab66; --p-accent-light: #954600; --brand-accent: #ffab66; --p-glow-dark: #ffab661c; --p-glow-light: #9546001f; }
 :root[data-style="provider"][data-theme="light"] {
   --color-background: var(--p-bg-light);
   --color-widget-background: var(--p-card-light);

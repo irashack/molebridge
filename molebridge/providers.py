@@ -81,6 +81,9 @@ class Provider:
     # The panel styles an entry as this provider (its CSS data-provider);
     # empty means its own id.
     style: str = ''
+    # A provider whose colour the panel uses as the accent on that style
+    # (its CSS data-accent), as gluetun's entries do; empty for none.
+    accent: str = ''
 
     @property
     def css_id(self):
@@ -122,7 +125,9 @@ REGISTRY: Dict[str, Provider] = {p.id: p for p in (
         badges=(('virtual', 'virtual', 'Virtual location'),),
         theme_colors=('#161b26', '#eef2f8'), chip_label=nordvpn.chip_label, details=nordvpn.details),
 )}
-# Native styling and checks carry over to the same provider through gluetun.
+# Native egress checks carry over to the same provider through gluetun. The
+# panel styles every gluetun entry as gluetun, with the provider's colour as
+# the accent.
 _NATIVE = dict(REGISTRY)
 for _name in gluetun_catalog.SUPPORTED_PROVIDERS:
     _native = _NATIVE.get(_name)
@@ -138,11 +143,11 @@ for _name in gluetun_catalog.SUPPORTED_PROVIDERS:
         ipv6=_native.ipv6 if _native else False,
         catalog_max_bytes=gluetun_catalog.MAX_CATALOG_BYTES, snapshot_max_bytes=16 * 1024 * 1024,
         secret_files=('secrets/gluetun/api_key',),
-        badges=(), theme_colors=_native.theme_colors if _native else ('#232638', '#eff1f5'),
+        badges=(), theme_colors=('#11181c', '#edf2f4'),
         chip_label=gluetun_catalog.chip_label, details=gluetun_catalog.details,
         backend='gluetun', gluetun_provider=_name, note='via gluetun',
         egress_check=_name if _name in ('mullvad', 'nordvpn') else '',
-        style=_name if _native else 'gluetun')
+        style='gluetun', accent=_name)
 del _NATIVE, _name, _native
 PROVIDERS = tuple(REGISTRY)
 

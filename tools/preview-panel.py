@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Run the panel locally against made-up exits, for working on its look.
 
-    python3 tools/preview-panel.py [--port 8099] [--live]
+    python3 tools/preview-panel.py [--port 8099] [--live] [--exits mullvad,pia]
 
 Serves a Switchyard with a Mullvad exit and a PIA exit on 127.0.0.1. Their
 state is fabricated in a temporary directory: nothing is switched, and a
 selection only rewrites the fake exit's desired.json, which the preview then
-"applies" a few seconds later so the switching states can be seen. --live
-fills the catalogues from the providers' public server lists instead of the
-small built-in sample. --fail <id> makes that exit's switches fail, to see
-the failed state.
+"applies" a few seconds later so the switching states can be seen. --exits
+picks the exits from mullvad, pia, nordvpn, and two on the gluetun backend:
+mullvad-gluetun and surfshark (which has only the tunnel checks). --live fills the
+native catalogues from the providers' public server lists instead of the
+small built-in sample; gluetun's is always the sample. --fail <id> makes that
+exit's switches fail, to see the failed state.
 """
 from __future__ import annotations
 
@@ -42,6 +44,21 @@ SAMPLE_PIA = [
     ('japan', 'JP', 'Japan', 'Tokyo', True), ('de-frankfurt', 'DE', 'Germany', 'Frankfurt', True),
     ('uk', 'GB', 'United Kingdom', 'London', True), ('morocco', 'MA', 'Morocco', 'Morocco', True),
 ]
+SAMPLE_NORDVPN = [
+    ('us', 'US', 'United States', 'Chicago', 'us-chi', 4), ('us', 'US', 'United States', 'New York', 'us-ny', 3),
+    ('ca', 'CA', 'Canada', 'Toronto', 'ca-tor', 2), ('de', 'DE', 'Germany', 'Frankfurt', 'de-fra', 3),
+    ('nl', 'NL', 'Netherlands', 'Amsterdam', 'nl-ams', 3), ('jp', 'JP', 'Japan', 'Tokyo', 'jp-tyo', 2),
+    ('ar', 'AR', 'Argentina', 'Buenos Aires', 'ar-bue', 1),
+]
+SAMPLE_SURFSHARK = [
+    ('us-chi', 'United States', 'Chicago'), ('us-nyc', 'United States', 'New York'),
+    ('ca-tor', 'Canada', 'Toronto'), ('de-fra', 'Germany', 'Frankfurt'),
+    ('nl-ams', 'Netherlands', 'Amsterdam'), ('jp-tok', 'Japan', 'Tokyo'),
+]
+# Exit id -> (provider, the server it starts on).
+EXITS = {'mullvad': ('mullvad', 'us-chi-wg-001'), 'pia': ('pia', 'us_chicago'),
+         'nordvpn': ('nordvpn', 'us9001.nordvpn.com'), 'mullvad-gluetun': ('gluetun-mullvad', 'se-sto-wg-001'),
+         'surfshark': ('gluetun-surfshark', 'us-chi.prod.surfshark.com')}
 
 
 def sample(provider):
@@ -56,6 +73,24 @@ def sample(provider):
                                 'location_code': f'{cc}-{city_code}', 'public_key': KEY,
                                 'ipv4_addr_in': f'127.0.0.{n}', 'owned': i % 2 == 1, 'stboot': True,
                                 'provider': 'Example Hosting'}
+    elif provider == 'nordvpn':
+        n, number = 140, 9000
+        for cc, code, country, city, location, count in SAMPLE_NORDVPN:
+            for i in range(count):
+                n, number = n + 1, number + 1
+                host = f'{cc}{number}.nordvpn.com'
+                relays[host] = {'hostname': host, 'public_key': KEY, 'ipv4_addr_in': f'127.0.0.{n}',
+                                'city': city, 'country': country, 'country_code': code,
+                                'location_code': location, 'load': (number * 7) % 60 + 4,
+                                'virtual': cc == 'ar'}
+    elif provider.startswith('gluetun-'):
+        names = ([(f'{name}.prod.surfshark.com', country, city) for name, country, city in SAMPLE_SURFSHARK]
+                 if provider == 'gluetun-surfshark' else
+                 [(f'{cc}-{code}-wg-{i:03d}', country, city) for cc, code, country, city, count in SAMPLE_MULLVAD
+                  for i in range(1, count + 1)])
+        for n, (host, country, city) in enumerate(names, start=200):
+            relays[host] = {'id': host, 'hostname': host, 'public_key': KEY, 'ipv4_addr_in': f'127.0.0.{n}',
+                            'ipv6_addrs': [], 'city': city, 'country': country, 'selection_filter': 'hostnames'}
     else:
         for n, (rid, cc, country, city, pf) in enumerate(SAMPLE_PIA, start=100):
             relays[rid] = {'hostname': rid, 'country': country, 'city': city,
@@ -73,8 +108,10 @@ def live(provider):
 
 def seed(state, exit_id, provider, relays, current):
     applier = state / exit_id / 'applier'
-    write_json_atomic(applier / 'relays.json', {'fetched_at': now_iso(), 'provider': provider, 'relays': relays},
-                      public=True)
+    snapshot = {'fetched_at': now_iso(), 'provider': provider, 'relays': relays}
+    if providers.get(provider).backend == 'gluetun':
+        snapshot.update(source='gluetun', data_timestamp=now_iso())
+    write_json_atomic(applier / 'relays.json', snapshot, public=True)
     write_json_atomic(state / exit_id / 'panel' / 'desired.json',
                       {'server': current, 'requested_at': now_iso(), 'request_id': secrets.token_hex(16)})
     apply(state, exit_id, provider, relays)
@@ -89,9 +126,13 @@ def apply(state, exit_id, provider, relays, fail=False):
         'server': desired.get('server'), 'request_id': desired.get('request_id'), 'status': 'ok',
         'checked_at': now_iso(), 'routing_ok': True, 'exit_confirmed': True, 'provider': provider,
         'egress_ip': '203.0.113.7', 'egress_city': info.get('city'), 'egress_country': info.get('country'),
-        'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.'}
+        'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.',
+        'egress_tier': providers.get(provider).egress_tier}
+    if result['egress_tier'] == 'tunnel':
+        result['exit_confirmed'] = False
     if fail:
         result.update(server=previous.get('server'), status='failed', exit_confirmed=False, egress_ip=None,
+                      egress_tier=None,
                       message='No handshake with the new server; the exit stays closed.')
     write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
 
@@ -126,18 +167,24 @@ def main():
     parser.add_argument('--theme', default='auto')
     parser.add_argument('--style', default='provider')
     parser.add_argument('--fail', default='', metavar='ID', help="make this exit's switches fail")
+    parser.add_argument('--exits', default='mullvad,pia', help='comma-separated, from ' + ', '.join(EXITS))
     args = parser.parse_args()
+    chosen = [name.strip() for name in args.exits.split(',') if name.strip()]
+    if not chosen or any(name not in EXITS for name in chosen):
+        parser.error('--exits takes ' + ', '.join(EXITS))
     with tempfile.TemporaryDirectory(prefix='switchyard-preview-') as tmp:
         state = Path(tmp)
         exits = {}
-        for exit_id, provider, current in (('mullvad', 'mullvad', 'us-chi-wg-001'), ('pia', 'pia', 'us_chicago')):
-            relays = live(provider) if args.live else sample(provider)
+        for exit_id in chosen:
+            provider, current = EXITS[exit_id]
+            native = providers.get(provider).backend == 'native'
+            relays = live(provider) if args.live and native else sample(provider)
             if current not in relays:
                 current = sorted(relays)[0]
             seed(state, exit_id, provider, relays, current)
             exits[exit_id] = (provider, relays)
         threading.Thread(target=fake_appliers, args=(state, exits, args.fail), daemon=True).start()
-        env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS='mullvad=mullvad,pia=pia',
+        env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS=','.join(f'{e}={EXITS[e][0]}' for e in chosen),
                    PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='home')
         # The sample relays' addresses answer nothing, so their latency is made
         # up: steady per address, a spread from fast to slow, one timeout.

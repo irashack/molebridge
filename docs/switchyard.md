@@ -95,7 +95,12 @@ By default each exit is drawn in its provider's colors, using system fonts:
 
 - Mullvad: navy and yellow;
 - PIA: charcoal and green, with a ring around the current flag that shows the
-  state.
+  state;
+- NordVPN: dark blue and a lighter blue;
+- an exit on the [gluetun backend](providers.md#the-gluetun-backend): gluetun's
+  dark slate, with the provider behind it as the accent, such as Mullvad's
+  yellow or Surfshark's teal, so a gluetun exit and a native exit of the same
+  provider look different.
 
 `PANEL_STYLE=dashboard` switches to a neutral monospace look that matches
 Glance-style dashboards. `PANEL_THEME` picks light, dark, or `auto` (follow the

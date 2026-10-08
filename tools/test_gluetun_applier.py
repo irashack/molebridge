@@ -525,7 +525,10 @@ def test_panel_shows_the_backend_and_the_datas_date():
     import app as panel_app
     assert panel_app.provider_note('gluetun-nordvpn') == ' <span class="provider-note">via gluetun</span>'
     assert panel_app.provider_note('nordvpn') == ''
-    assert panel_app.provider_css('gluetun-nordvpn') == 'nordvpn' and panel_app.provider_css('gluetun-ivpn') == 'gluetun'
+    # Every gluetun exit takes gluetun's style, accented in its provider's colour.
+    assert panel_app.provider_css('gluetun-nordvpn') == 'gluetun' and panel_app.provider_css('gluetun-ivpn') == 'gluetun'
+    assert panel_app.provider_accent('gluetun-nordvpn') == ' data-accent="nordvpn"'
+    assert panel_app.provider_css('nordvpn') == 'nordvpn' and panel_app.provider_accent('nordvpn') == ''
     fresh = {'source': 'gluetun', 'data_timestamp': gluetun_applier.iso(time.time() - 86400)}
     old = {'source': 'gluetun', 'data_timestamp': gluetun_applier.iso(time.time() - 40 * 86400)}
     assert panel_app.catalogue_age_text(fresh, 'now') == f'read now; gluetun data from {fresh["data_timestamp"]}'
@@ -535,7 +538,8 @@ def test_panel_shows_the_backend_and_the_datas_date():
         page = panel_app.render_index_html(None, None, {'source': 'gluetun', 'provider': 'gluetun-nordvpn',
                                                          'data_timestamp': fresh['data_timestamp'],
                                                          'fetched_at': now_iso(), 'relays': {}}, None, None, 'tok')
-    assert 'data-provider="nordvpn"' in page and 'via gluetun' in page and 'gluetun data from' in page
+    assert '<html lang="en" data-theme="auto" data-style="provider" data-provider="gluetun" data-accent="nordvpn">' in page
+    assert 'via gluetun' in page and 'gluetun data from' in page
 
 
 # Refreshing gluetun's server list --------------------------------------------
