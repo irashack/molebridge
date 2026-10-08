@@ -125,9 +125,9 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
-release is [v0.4.0](https://github.com/irashack/molebridge/releases/tag/v0.4.0),
-which adds optional OpenID Connect sign-in for the panel; see the
-[changelog](CHANGELOG.md).
+release is [v0.4.1](https://github.com/irashack/molebridge/releases/tag/v0.4.1),
+a security release that tightens the exit's routing and the NetBird settings
+it supports; see the [changelog](CHANGELOG.md).
 
 | Setup | Tested |
 | :--- | :--- |

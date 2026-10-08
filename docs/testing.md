@@ -271,14 +271,33 @@ change as in 0.4.0), it retried the requested region, and the exit registered
 and connected by itself after PIA's API recovered. The retry without an
 address is covered by `tools/test_pia.py`.
 
+## Routing and NetBird checks at `0f9511a`
+
+2026-10-08, a PIA test exit on macOS with OrbStack (a Linux 7.0 kernel VM)
+and Docker, a self-hosted NetBird server and the 0.79.0 client, with a Linux
+NetBird client routed through it. First at `d00b52d`, then again at `0f9511a`.
+0.4.1 changes only wording on top of `0f9511a`.
+
+- Initialization installed rules 1 and 90 to 97 in both families and no rule
+  0; `recover` reinstalled them after recreating the containers, and
+  `doctor` passed, including the NetBird settings, stored profile and kernel
+  mode checks.
+- The client's traffic left through PIA. TCP, UDP and ping from the client to
+  the exit's own overlay address got no answer, while the same TCP connection
+  made from inside the exit's namespace reached the listener.
+- With the tunnel interface down, the client had no egress and a capture on
+  the host interface showed no client packets.
+- In the NetBird container itself (busybox), the startup checks accepted the
+  enrolled default profile and refused it when `NB_INTERFACE_NAME` named a
+  different interface than its stored one.
+
 ## Not yet tested
 
-- The local-delivery guard (rule 1), the NetBird gate's refusals and the
-  NetBird kernel-mode health check, on any live exit. Unit tests cover the
-  validator, the gate and the health check; `tools/check-routing.sh`
-  exercises the guard in isolated namespaces, including traffic to the
-  exit's own addresses after a DNAT to a local port. The NetBird settings
-  were checked against the 0.79.0 source, not on a running peer.
+- The NetBird gate's other refusals (forced userspace modes, Rosenpass,
+  foreground mode, other profiles and config paths) on a running peer. Unit
+  tests and `tools/check-routing.sh` cover them; the NetBird settings were
+  checked against the 0.79.0 source. A Mullvad exit and rootless Podman with
+  these checks are untested.
 - A live UDP flow whose datagrams exceed the overlay MTU, and an IPv4
   fragmentation-needed error on a live flow. The isolated CI drill covers both
   return paths; the live pass above shows the IPv6 error leaving through the

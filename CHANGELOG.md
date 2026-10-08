@@ -4,7 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.4.1 (2026-10-08)
+
+A security release: overlay traffic is never delivered to the exit itself,
+and NetBird must run in the configuration Molebridge supports. See the
+security advisory for this release.
 
 - **Overlay traffic is never delivered to the exit itself.** Routing
   initialization replaces the kernel's priority-0 `lookup local` rule with
@@ -32,16 +36,36 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 - The exit no longer answers pings to its own overlay address. NetBird 0.79.0
   doesn't use them.
 
-Upgrading from 0.4.0: pull, then recover, which rebuilds the routing image. If
-you ever brought the peer up with `--enable-rosenpass`, or changed
-`OVERLAY_IF` after the peer enrolled, fix the stored profile first
-([troubleshooting](docs/troubleshooting.md#startup)).
+Upgrading from 0.4.0: NetBird refuses to start after the upgrade if your
+setup uses a setting 0.4.1 no longer supports, so check these first. The
+fixes are in [troubleshooting](docs/troubleshooting.md#startup).
+
+- Your Compose override and `secrets/netbird.env` set none of the NetBird
+  variables the gate refuses ([configuration](docs/configuration.md#env)),
+  such as `NB_FORCE_USERSPACE_FIREWALL`, `NB_USE_NETSTACK_MODE`,
+  `NB_CONFIG`, `NB_PROFILE` or `NB_FOREGROUND_MODE`.
+- Rosenpass is off. If you ever brought the peer up with
+  `--enable-rosenpass`, turn it off in the stored profile.
+- The peer uses NetBird's default profile, and that profile names the same
+  interface as `OVERLAY_IF`. If you changed `OVERLAY_IF` after the peer
+  enrolled, change one of them back.
+- NetBird SSH, DNS nameservers, domain routes and Rosenpass are off for the
+  exit peer in your NetBird dashboard
+  ([requirements](docs/prerequisites.md#netbird)).
+
+Then pull and recover, which rebuilds the routing image and recreates
+NetBird with `NB_DISABLE_USERSPACE_ROUTING=true`, which `compose.yaml` now
+sets. No `.env` changes are needed. The doctor checks the NetBird settings
+and the stored profile afterwards.
 
 Tested: unit tests for the routing validator, the gate and the health check,
 and the isolated namespace drills in `tools/check-routing.sh`, which cover
-local delivery from the overlay in both address families. The NetBird
-settings were checked against the 0.79.0 source. Not yet run on a live exit;
-see [testing](docs/testing.md#not-yet-tested).
+local delivery from the overlay in both address families. A live PIA test
+exit with Docker ran the routing and NetBird checks at `0f9511a`; see
+[testing](docs/testing.md#routing-and-netbird-checks-at-0f9511a). The gate's
+other refusals on a running peer, a Mullvad exit and rootless Podman with
+these checks are untested; the NetBird settings were checked against the
+0.79.0 source.
 
 ## 0.4.0 (2026-10-07)
 
