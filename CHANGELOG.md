@@ -126,7 +126,8 @@ paths: see [providers](docs/providers.md#how-nordvpn-differs) and
 
 A security release: overlay traffic is never delivered to the exit itself,
 and NetBird must run in the configuration Molebridge supports. See the
-security advisory for this release.
+[security advisory](https://github.com/irashack/molebridge/security/advisories/GHSA-7642-v6p6-wjfj)
+for this release.
 
 - **Overlay traffic is never delivered to the exit itself.** Routing
   initialization replaces the kernel's priority-0 `lookup local` rule with

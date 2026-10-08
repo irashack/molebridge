@@ -112,9 +112,13 @@ Podman details, is in [requirements](docs/prerequisites.md).
   Mullvad, plain DNS that passes through the exit ends up at the Mullvad
   server, so a DNS leak test shows Mullvad; this is observed, not documented
   by Mullvad. PIA and NordVPN are untested. See [DNS](docs/operations.md#dns).
-- **Mullvad, PIA and NordVPN only.** NordVPN is experimental: it has had one
-  live pass, on macOS with OrbStack, and no fail-closed drills yet. Other
-  providers aren't supported. Some could be added if there's interest;
+- **Mullvad, PIA and NordVPN only, plus the gluetun backend.** NordVPN is
+  experimental: it has had one live pass, on macOS with OrbStack, and no
+  fail-closed drills yet. The experimental
+  [gluetun backend](docs/providers.md#the-gluetun-backend) selects servers
+  for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and Windscribe through
+  gluetun; only NordVPN on Docker has been tried live. Other providers aren't
+  supported. Some could be added if there's interest;
   [other providers](docs/other-providers.md) says which, and what that
   support would realistically look like.
 - **One provider per exit.** To offer more than one, run one exit per
@@ -132,9 +136,9 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
-release is [v0.4.1](https://github.com/irashack/molebridge/releases/tag/v0.4.1),
-a security release that tightens the exit's routing and the NetBird settings
-it supports; see the [changelog](CHANGELOG.md).
+release is [v0.5.0](https://github.com/irashack/molebridge/releases/tag/v0.5.0),
+which adds experimental NordVPN support and an experimental gluetun backend;
+see the [changelog](CHANGELOG.md).
 
 | Setup | Tested |
 | :--- | :--- |
@@ -145,7 +149,8 @@ it supports; see the [changelog](CHANGELOG.md).
 | macOS, OrbStack, Apple silicon, self-hosted NetBird 0.78: Mullvad | An earlier live pass; the six defects it found are fixed. |
 | CI on every push | Unit tests, shell lint, Compose validation, image builds, and IPv4/IPv6 routing failure drills in isolated namespaces. |
 | macOS, OrbStack, Docker, self-hosted NetBird 0.79: NordVPN | Key setup, the server list, switches within a location and to another country, NordVPN-confirmed egress from a client, and IPv6 blocked. |
-| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, and NordVPN on rootless Podman or through the fail-closed drills. |
+| macOS, OrbStack, Docker, self-hosted NetBird 0.79: gluetun v3.41.3 with NordVPN | Forwarding from a client with NordVPN-confirmed egress, a server switch, local delivery refused, tunnel down with no client traffic on the host interface, recreation and recovery; also the standalone form without the applier. |
+| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, NordVPN on rootless Podman or through the fail-closed drills, and the gluetun backend with other providers or on rootless Podman. |
 
 The dated record of each pass is in [testing](docs/testing.md). Report
 vulnerabilities privately; see [SECURITY.md](SECURITY.md).
@@ -167,7 +172,7 @@ vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 - [Configuration](docs/configuration.md): every setting, file and endpoint.
 - [Providers](docs/providers.md): how PIA and NordVPN differ from Mullvad, port forwarding, adding a provider.
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
-- [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): gluetun and NetBird with only Molebridge's routing guard, no panel or applier; that form is untested.
+- [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): gluetun and NetBird with only Molebridge's routing guard, no panel or applier; that form has had one live pass, with NordVPN on Docker.
 - [Architecture](docs/architecture.md): routing, trust boundaries and the switching sequence.
 - [Testing](docs/testing.md): what has been tested, where and at which revision.
 

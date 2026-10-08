@@ -559,7 +559,8 @@ change routing, the gluetun settings or the compose file. The checks in
 namespace), and `wg0` where it says `mullvad`. In particular the [client and
 LAN isolation checks](verification.md#from-a-client) and a host reboot with
 unattended recovery apply as written. The commands below are the checks that
-need no applier. None of them has been run in the applier-less form.
+need no applier; [What was tested](#what-was-tested) says which of them have
+run in this form.
 
 Keep an independent way into the host. Do not paste raw addresses from these
 outputs into a report. Never run `wg showconf` or print a key.
