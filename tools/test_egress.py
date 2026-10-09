@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from test_runtime import CONFIG, ENTRY, HOST, KEY, Kernel, request
-from applier.apply import Applier
+from test_runtime import CONFIG, ENTRY, HOST, KEY, Kernel, delayed, request, unanswered
+from applier.apply import EGRESS_RETRY_BUDGET_SEC, EGRESS_RETRY_SEC, EGRESS_RETRY_WITHIN_SEC, Applier
 from molebridge import egress, providers
 from molebridge.egress import (ECHO_URLS, HOST_LACKS_FAMILY, exit_addresses, host_lacks_ipv6, parse_echo,
                                tunnel_verdict)
@@ -279,8 +279,65 @@ def test_a_failed_ipv6_measurement_is_unverified_without_evidence(tunnel_runtime
         kernel.host_routes6 = 'not a list'
     result = app.inspect()
     assert result['status'] == 'failed' and result['egress_tier'] is None
-    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.'
+    # No usable measurement is no answer: asked once more, then the check fails.
+    assert result['message'] == 'Tunnel inspection or egress check failed.'
+    assert kernel.now == EGRESS_RETRY_SEC
     assert status_view(None, json.loads(app.result_path.read_text()), 'tunnelvpn')[0] == 'failed'
+
+
+def test_a_host_measurement_that_fails_once_is_asked_once_more(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    off_tunnel = lambda args: args[0] == 'curl' and args[-1] in ALL_ECHO_URLS and '--interface' not in args
+    calls = unanswered(app, kernel, off_tunnel)
+    result = app.inspect()
+    assert result['status'] == 'ok' and result['egress_tier'] == 'tunnel'
+    assert kernel.now == 10 + EGRESS_RETRY_SEC and len(calls) == 3  # IPv4 twice, then IPv6
+
+
+def test_echoes_that_disagree_fail_before_the_host_measurement(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    kernel.echo[(4, True)] = [TUNNEL_IP, '203.0.113.11']
+    kernel.echo_down.add((4, False))
+    result = app.inspect()
+    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.' and kernel.now == 0
+    assert not any(c[0] == 'curl' and c[-1] in ALL_ECHO_URLS and '--interface' not in c for c in kernel.calls)
+
+
+def test_a_failed_family_ends_the_tunnel_checks_before_the_next_one(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    kernel.echo[(4, False)] = TUNNEL_IP  # the "tunnel" answer is the host's own
+    kernel.echo_down.add((6, True))
+    result = app.inspect()
+    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.' and kernel.now == 0
+    assert not any(c[0] == 'curl' and '-6' in c for c in kernel.calls)
+
+
+def test_an_address_the_catalogue_does_not_list_fails_before_the_host_measurement(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    app.catalog.relays[HOST] = {**ENTRY, 'exit_ips': ['203.0.113.11']}
+    kernel.echo_down.add((4, False))
+    result = app.inspect()
+    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.' and kernel.now == 0
+    assert not any(c[0] == 'curl' and c[-1] in ALL_ECHO_URLS and '--interface' not in c for c in kernel.calls)
+
+
+def test_a_second_tunnel_attempt_stays_within_its_budget(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    echo = lambda args: args[0] == 'curl' and args[-1] in ALL_ECHO_URLS
+    # First attempt: the first echo unanswered. Second: every request takes
+    # 11 seconds, so the IPv6 echoes are never started.
+    calls = delayed(app, kernel, echo, [(10, False)] + [(11, True)] * 6)
+    result = app.inspect()
+    assert result['message'] == 'Tunnel inspection or egress check failed.'
+    assert kernel.now == 10 + EGRESS_RETRY_SEC + 33 and len(calls) == 4
+    assert kernel.now <= EGRESS_RETRY_WITHIN_SEC + EGRESS_RETRY_SEC + EGRESS_RETRY_BUDGET_SEC + 12
+
+
+def test_echo_services_that_disagree_are_never_asked_again(tunnel_runtime):
+    app, kernel = tunnel_runtime
+    kernel.echo[(4, True)] = [TUNNEL_IP, '203.0.113.11']
+    result = app.inspect()
+    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.' and kernel.now == 0
 
 
 def test_a_failed_ipv4_measurement_is_unverified_even_without_ipv6(tunnel_runtime):

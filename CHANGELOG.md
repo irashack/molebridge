@@ -4,6 +4,49 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.5.2 (2026-10-09)
+
+Applier only: the panel, routing, NetBird gate and Compose files are
+unchanged from 0.5.1 apart from the panel's version string. Update every
+exit; a Switchyard panel on 0.5.1 works with 0.5.2 exits.
+
+- **One unanswered egress check no longer fails an exit.** Each health check
+  asks the provider's egress check (Mullvad's `am.i.mullvad.net`, PIA's
+  status call, NordVPN's insights, or the IP echo services at the `tunnel`
+  tier) through the tunnel, with a 10-second limit and, until now, no second
+  try. One connection that timed out made a healthy exit report `failed`
+  until the next check a minute later, and turned Switchyard's `/readyz`,
+  which needs every exit verified, red with it. Live exits saw this up to a
+  few times an hour, each time one connection that timed out while the next,
+  seconds later, succeeded. Now a check that gets no usable answer asks once
+  more after 10 seconds. An answer that does not confirm the egress still
+  fails at once, and now ends the check before any further request, so a
+  later timeout can't turn it into a retry. Routing protection, NetBird's
+  mode, the peer count and a missing or stale handshake fail without a second
+  try, as before. A switch still verifies through its own loop and never
+  reports `ok` before a check passes. No retry follows a first attempt that
+  took over 15 seconds, and the second attempt starts no request after 30
+  seconds, so a check stays well inside the 150 seconds after which a result
+  counts as unknown. The applier logs each retry. See
+  [status reporting](docs/architecture.md#status-reporting).
+- Mullvad's check stops at the first family Mullvad says is not its exit,
+  and the `tunnel` tier at the first family that fails, with echo answers
+  that disagree, or that the catalogue doesn't list as the server's exit,
+  failing before the host's own address is measured.
+- With the gluetun backend, measuring the host's own address now ends within
+  its 10 seconds in all: before, each of up to four addresses, the TLS
+  handshake and each read had 10 seconds of their own.
+- At the `tunnel` tier, a failed measurement of the host's own address is no
+  answer: it is asked once more and then reports "Tunnel inspection or egress
+  check failed." instead of "Tunnel egress did not pass the tunnel checks.",
+  which now means the answers failed the checks.
+
+Tested: unit tests for the retry, for each case that must not retry
+(including a negative answer followed by a request that times out), and for
+the time bounds (including NordVPN's cache retry inside a second attempt),
+with Mullvad, PIA, NordVPN, the `tunnel` tier and each egress check through
+gluetun. Not run on a live exit before release.
+
 ## 0.5.1 (2026-10-08)
 
 Switchyard and documentation only: the applier, routing, NetBird gate and

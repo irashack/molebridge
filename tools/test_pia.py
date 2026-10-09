@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from test_runtime import unanswered
 from applier import pia as pia_module
+from applier.apply import EGRESS_RETRY_SEC
 from applier.pia import PiaApplier, read_secret, scratch
 from molebridge import relays
 from molebridge.routing import RoutingConfig
@@ -690,3 +692,38 @@ def test_compose_passes_the_provider_everywhere():
         assert compose['services'][service]['environment']['PROVIDER'] == '${PROVIDER:-mullvad}'
     override = yaml.safe_load((ROOT / 'compose.pia.yaml').read_text())
     assert override['services'] == {'applier': {'volumes': ['./secrets/pia:/run/secrets/pia:ro']}}
+
+
+# -- egress check retry --------------------------------------------------------
+
+def pia_status(args):
+    return args[0] == 'curl' and args[-1] == pia_module.PIA_STATUS_URL
+
+
+def test_an_unanswered_pia_status_call_is_asked_once_more(runtime):
+    applier, kernel = runtime
+    assert applier.switch(request())['status'] == 'ok'
+    calls = unanswered(applier, kernel, pia_status)
+    start = kernel.now
+    result = applier.inspect()
+    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert len(calls) == 2 and kernel.now - start == 10 + EGRESS_RETRY_SEC
+
+
+def test_a_pia_status_call_unanswered_twice_fails(runtime):
+    applier, kernel = runtime
+    assert applier.switch(request())['status'] == 'ok'
+    calls = unanswered(applier, kernel, pia_status, times=2)
+    result = applier.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
+    assert len(calls) == 2
+
+
+def test_pia_saying_not_connected_is_never_asked_again(runtime):
+    applier, kernel = runtime
+    assert applier.switch(request())['status'] == 'ok'
+    kernel.connected = False
+    calls = unanswered(applier, kernel, pia_status, times=0)
+    start = kernel.now
+    assert applier.inspect()['message'] == 'Tunnel egress is not confirmed as PIA.'
+    assert len(calls) == 1 and kernel.now == start

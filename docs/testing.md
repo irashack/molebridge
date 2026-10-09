@@ -449,6 +449,9 @@ from the panel, the fail-closed drills, and podman-compose.
   [on rootless Podman](#nordvpn-on-rootless-podman-at-v050): the insights
   cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with
   NordVPN's catalogue, and the client-held fail-closed drills.
+- The egress check's one retry (0.5.2) on a live exit before its release.
+  `tools/test_runtime.py`, `tools/test_egress.py` and the PIA, NordVPN and
+  gluetun applier tests cover it.
 - The `tunnel` egress tier, live: FastestVPN, IVPN, Surfshark and Windscribe
   through gluetun use it, and none of them has had a live pass.
   `tools/test_egress.py` and the gluetun tests cover it.

@@ -82,7 +82,11 @@ class NordApplier(Applier):
         if self.switch_deadline is not None:
             # During a switch, never wait past the switch's own timeout.
             deadline = min(deadline, self.switch_deadline)
+        if self.retry_deadline is not None:
+            # Nor, when asked a second time, past that attempt's budget.
+            deadline = min(deadline, self.retry_deadline)
         while True:
+            self.within_retry_budget()
             fields = self.insights()
             # Any of the server's entry addresses (the gluetun backend lists
             # them all; the native catalogue has one).

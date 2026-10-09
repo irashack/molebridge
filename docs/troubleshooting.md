@@ -364,6 +364,18 @@ the applier asks again for up to a minute before reporting this. Try again
 later, or pick another server. See
 [providers](providers.md#how-nordvpn-differs).
 
+**"Tunnel inspection or egress check failed."** The applier couldn't read
+the tunnel's state, or the egress check got no usable answer: a timeout, a
+refused connection, an HTTP error or a malformed reply. Usually that answer
+was missing twice, 10 seconds apart, and the log shows `egress check got no
+answer twice`; a first attempt that took over 15 seconds, or one during a
+switch, is not asked again (see [status
+reporting](architecture.md#status-reporting) for when the applier asks once
+more). An occasional one usually means the provider's check service, or the
+path to it through the tunnel, dropped a connection; the next check a minute
+later normally passes. If it persists, compare the handshake age in
+Diagnostics.
+
 **"Tunnel egress did not pass the tunnel checks."** Only for a provider
 without its own egress check, which today means FastestVPN, IVPN, Surfshark
 and Windscribe through the gluetun backend: the IP echo services

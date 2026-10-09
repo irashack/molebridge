@@ -10,8 +10,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from test_runtime import delayed, unanswered
 from applier import nordvpn as nord_applier
-from applier.apply import SWITCH_TIMEOUT_SEC
+from applier.apply import EGRESS_RETRY_BUDGET_SEC, EGRESS_RETRY_SEC, EGRESS_RETRY_WITHIN_SEC, SWITCH_TIMEOUT_SEC
 from applier.nordvpn import INSIGHTS_RETRY_SEC, NordApplier
 from molebridge import providers, relays
 from molebridge.nordvpn import NORD_ADDRESS, NORD_INSIGHTS_URL, parse_nord_catalog, validate_entry
@@ -456,3 +457,66 @@ def test_compose_override_only_raises_the_appliers_memory():
     tmpfs = compose['services']['applier']['tmpfs']
     assert len(tmpfs) == 1 and tmpfs[0].startswith('/tmp:size=48m,')
     assert 48 * 1024 * 1024 > providers.get('nordvpn').catalog_max_bytes + 4
+
+
+# -- egress check retry --------------------------------------------------------
+
+def insights_call(args):
+    return args[0] == 'curl' and args[-1] == NORD_INSIGHTS_URL
+
+
+def test_an_unanswered_insights_check_is_asked_once_more(nord):
+    app, kernel = nord
+    assert app.switch(request(US))['status'] == 'ok'
+    calls = unanswered(app, kernel, insights_call)
+    start = kernel.now
+    result = app.inspect()
+    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert len(calls) == 2 and kernel.now - start == 10 + EGRESS_RETRY_SEC
+
+
+def test_an_insights_check_unanswered_twice_fails(nord):
+    app, kernel = nord
+    assert app.switch(request(US))['status'] == 'ok'
+    calls = unanswered(app, kernel, insights_call, times=2)
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
+    assert len(calls) == 2
+
+
+def test_unprotected_from_another_address_is_never_asked_again(nord):
+    app, kernel = nord
+    assert app.switch(request(US))['status'] == 'ok'
+    kernel.insights = [{'ip': '203.0.113.99', 'country': 'United States', 'city': 'Dallas',
+                        'country_code': 'US', 'protected': False}]
+    calls = unanswered(app, kernel, insights_call, times=0)
+    start = kernel.now
+    assert app.inspect()['message'] == 'Tunnel egress is not confirmed as NordVPN.'
+    assert len(calls) == 1 and kernel.now == start
+
+
+def test_a_second_attempt_waits_for_the_cache_only_within_its_budget(nord):
+    app, kernel = nord
+    assert app.switch(request(US))['status'] == 'ok'
+    # The server's own address, unprotected: the cache answer NordVPN can serve.
+    kernel.insights = [{'ip': '198.51.100.11', 'country': 'United States', 'city': 'Dallas',
+                        'country_code': 'US', 'protected': False}]
+    unanswered(app, kernel, insights_call)
+    start = kernel.now
+    result = app.inspect()
+    assert result['message'] == 'Tunnel egress is not confirmed as NordVPN.'
+    assert kernel.now - start == 10 + EGRESS_RETRY_SEC + EGRESS_RETRY_BUDGET_SEC
+
+
+def test_a_cache_wait_then_no_answer_is_not_asked_again(nord):
+    app, kernel = nord
+    assert app.switch(request(US))['status'] == 'ok'
+    kernel.insights = [{'ip': '198.51.100.11', 'country': 'United States', 'city': 'Dallas',
+                        'country_code': 'US', 'protected': False}]
+    # One cached answer, the 10-second wait, then no answer: over the limit
+    # for a second attempt.
+    calls = delayed(app, kernel, insights_call, [(0, True), (10, False)])
+    start = kernel.now
+    result = app.inspect()
+    assert result['message'] == 'Tunnel inspection or egress check failed.'
+    assert kernel.now - start == INSIGHTS_RETRY_SEC + 10 > EGRESS_RETRY_WITHIN_SEC and len(calls) == 2

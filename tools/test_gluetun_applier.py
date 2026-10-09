@@ -1,9 +1,13 @@
 """The gluetun backend's applier against a fake kernel, a fake gluetun control
 server and a gluetun server list in a temporary directory. Nothing here
 contacts gluetun, a provider or a tunnel."""
+import functools
+import http.client
 import json
 import os
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -11,7 +15,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from test_runtime import unanswered
 from applier import gluetun_applier
+from applier.apply import EGRESS_RETRY_SEC
+from molebridge.egress import ECHO_URLS
 from applier.gluetun_applier import (CATALOG_REREAD_SEC, GLUETUN_SWITCH_TIMEOUT_SEC, GluetunApplier, GluetunCatalog,
                                      marked_echo)
 from molebridge import gluetun_catalog, providers, relays
@@ -497,6 +504,106 @@ def test_marked_echo_takes_only_plain_https_urls(url):
         marked_echo(url, 4, 0x1bd00)
 
 
+class SlowSocket:
+    """A socket whose connect waits out its whole timeout on a fake clock,
+    or is refused at once."""
+
+    def __init__(self, clock, refused, *args):
+        self.clock, self.refused, self.timeout = clock, refused, None
+
+    def setsockopt(self, *args):
+        pass
+
+    def settimeout(self, value):
+        self.timeout = value
+
+    def connect(self, address):
+        if address in self.refused:
+            raise ConnectionRefusedError()
+        self.clock[0] += self.timeout
+        raise TimeoutError()
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize('refused', [set(), {('192.0.2.1', 443)}])
+def test_marked_echo_ends_within_its_timeout_however_many_addresses(monkeypatch, refused):
+    clock, made = [0.0], []
+    addresses = [(socket.AF_INET, socket.SOCK_STREAM, 0, '', (f'192.0.2.{n}', 443)) for n in range(1, 5)]
+    monkeypatch.setattr(gluetun_applier.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(gluetun_applier.socket, 'getaddrinfo', lambda *args: addresses)
+    monkeypatch.setattr(gluetun_applier.socket, 'socket',
+                        lambda *args: made.append(SlowSocket(clock, refused)) or made[-1])
+    with pytest.raises(RuntimeError):
+        marked_echo('https://echo.test/', 4, 0x1bd00, timeout=10)
+    assert clock[0] == 10 and len(made) == len(refused) + 1
+
+
+@pytest.mark.parametrize('head, body', [
+    (b'HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 12\r\n\r\n', b'203.0.113.9\n'),
+    (b'HTTP/1.0 200 OK\r\n\r\n', b'203.0.113.9\n'),
+    (b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\n', b'203.0.113.9\n'),
+    (b'HTTP/1.1 200 OK\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n',
+     b'c\r\n203.0.113.9\n\r\n0\r\n\r\n'),
+])
+def test_a_deadline_response_reads_a_body_sent_after_the_headers(head, body):
+    """Real http.client over a local socket: the headers, a pause, then the
+    body, including responses that close the connection."""
+    server = socket.create_server(('127.0.0.1', 0))
+
+    def serve():
+        conn, _ = server.accept()
+        with conn:
+            conn.recv(4096)
+            conn.sendall(head)
+            time.sleep(0.2)
+            conn.sendall(body)
+    threading.Thread(target=serve, daemon=True).start()
+    connection = http.client.HTTPConnection('127.0.0.1', server.getsockname()[1], timeout=5)
+    connection.response_class = functools.partial(gluetun_applier._DeadlineResponse,
+                                                  deadline=time.monotonic() + 5)
+    try:
+        connection.request('GET', '/')
+        response = connection.getresponse()
+        assert response.status == 200 and response.read(4096) == b'203.0.113.9\n'
+    finally:
+        connection.close()
+        server.close()
+
+
+def test_marked_echo_bounds_a_slow_name_lookup(monkeypatch):
+    monkeypatch.setattr(gluetun_applier.socket, 'getaddrinfo', lambda *args: time.sleep(3) or [])
+    started = time.monotonic()
+    with pytest.raises(RuntimeError):
+        marked_echo('https://echo.test/', 4, 0x1bd00, timeout=0.3)
+    assert time.monotonic() - started < 1.5
+
+
+def test_marked_echo_reads_get_only_the_time_left(monkeypatch):
+    clock, timeouts = [0.0], []
+
+    class Dribble:
+        def settimeout(self, value):
+            timeouts.append(value)
+
+        def readinto(self, buffer):
+            clock[0] += 4
+            buffer[:1] = b'x'
+            return 1
+
+        def close(self):
+            pass
+    monkeypatch.setattr(gluetun_applier.time, 'monotonic', lambda: clock[0])
+    dribble = Dribble()
+    reader = gluetun_applier._DeadlineReader(dribble, dribble, 10)
+    buffer = bytearray(1)
+    assert [reader.readinto(buffer) for _ in range(3)] == [1, 1, 1]
+    with pytest.raises(TimeoutError):
+        reader.readinto(buffer)
+    assert timeouts == [10, 6, 2]
+
+
 def test_every_gluetun_entry_has_its_own_applier_class():
     for spec in providers.REGISTRY.values():
         if spec.backend == 'gluetun':
@@ -684,3 +791,29 @@ def test_the_live_server_is_found_by_any_of_its_addresses(tmp_path, endpoint):
     assert applier.server_for(applier.peers()) == HOST_B
     result = applier.inspect()
     assert result['status'] == 'ok' and result['server'] == HOST_B
+
+
+# Egress check retry ------------------------------------------------------------
+
+@pytest.mark.parametrize('provider, check', [
+    ('mullvad', lambda url: 'am.i.mullvad.net' in url),
+    ('nordvpn', lambda url: url.endswith('/ips/insights')),
+    ('ivpn', lambda url: url in ECHO_URLS[4]),
+])
+def test_every_check_through_gluetun_is_asked_once_more_when_unanswered(tmp_path, provider, check):
+    applier, kernel, _ = make(tmp_path, provider)
+    calls = unanswered(applier, kernel, lambda args: args[0] == 'curl' and check(args[-1]))
+    start = kernel.now
+    result = applier.inspect()
+    assert result['status'] == 'ok' and result['egress_tier'] in ('provider', 'tunnel')
+    assert kernel.now - start == 10 + EGRESS_RETRY_SEC
+    # The tunnel tier stops at the first unanswered echo, then asks both services.
+    assert len(calls) == (3 if provider == 'ivpn' else 2)
+
+
+def test_a_tunnel_tier_answer_that_fails_is_never_asked_again_through_gluetun(tmp_path):
+    applier, kernel, _ = make(tmp_path)
+    kernel.egress = HOST4
+    start = kernel.now
+    result = applier.inspect()
+    assert result['message'] == 'Tunnel egress did not pass the tunnel checks.' and kernel.now == start

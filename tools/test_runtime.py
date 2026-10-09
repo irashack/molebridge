@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from applier.apply import NETBIRD_MODE_FAILED, Applier, command
+from applier.apply import (EGRESS_RETRY_BUDGET_SEC, EGRESS_RETRY_SEC, EGRESS_RETRY_WITHIN_SEC, NETBIRD_MODE_FAILED,
+                           Applier, command)
 from applier import apply as applier_module
 from molebridge import relays
 from molebridge.routing import (RoutingConfig, family_status, local_rule_admits_overlay,
@@ -637,6 +638,172 @@ def test_unsupported_tunnel_addresses_are_unhealthy(runtime, addresses):
     assert app.inspect()['status'] == 'failed'
     assert app.switch(request())['status'] == 'failed'
     assert not kernel.mutations
+
+
+def delayed(app, kernel, match, steps):
+    """Commands that `match` take, in order, `seconds` each and then answer
+    (True) or time out as a curl that gets no answer does (False); later
+    ones answer at once. Returns the matching commands, answered or not."""
+    real, left, seen = app.run, list(steps), []
+
+    def run(args, **kwargs):
+        if match(args):
+            seen.append(args)
+            if left:
+                seconds, answered = left.pop(0)
+                kernel.now += seconds
+                if not answered:
+                    raise RuntimeError('command unavailable or timed out')
+        return real(args, **kwargs)
+    app.run = run
+    return seen
+
+
+def unanswered(app, kernel, match, times=1, seconds=10):
+    """The next `times` commands that `match` time out after `seconds`."""
+    return delayed(app, kernel, match, [(seconds, False)] * times)
+
+
+def published(app):
+    """Record the status of every result the applier writes."""
+    statuses, publish = [], app.publish
+
+    def record(status, message, **fields):
+        result = publish(status, message, **fields)
+        statuses.append(result['status'])
+        return result
+    app.publish = record
+    return statuses
+
+
+def mullvad_probe(family=None):
+    return lambda args: (args[0] == 'curl' and 'am.i.mullvad.net' in args[-1]
+                         and (family is None or f'-{family}' in args))
+
+
+def test_an_unanswered_egress_check_is_asked_once_more(runtime, capsys):
+    app, kernel = runtime
+    probes = unanswered(app, kernel, mullvad_probe(6))
+    statuses = published(app)
+    result = app.inspect()
+    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert len(probes) == 2 and statuses == ['ok']
+    assert kernel.now == 10 + EGRESS_RETRY_SEC
+    assert 'asking once more' in capsys.readouterr().out
+
+
+def test_an_egress_check_unanswered_twice_fails_after_one_pause(runtime, capsys):
+    app, kernel = runtime
+    probes = unanswered(app, kernel, mullvad_probe(6), times=2)
+    statuses = published(app)
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
+    assert result['exit_confirmed'] is False and result['egress_tier'] is None
+    assert len(probes) == 2 and statuses == ['failed']
+    assert kernel.now == 10 + EGRESS_RETRY_SEC + 10
+    assert 'no answer twice' in capsys.readouterr().out
+
+
+def test_an_answer_that_is_not_mullvad_is_never_asked_again(runtime):
+    app, kernel = runtime
+    kernel.probe6 = {**kernel.probe6, 'mullvad_exit_ip': False}
+    probes = unanswered(app, kernel, mullvad_probe(), times=0)
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel egress is not confirmed as Mullvad.'
+    assert len(probes) == 2 and kernel.now == 0  # one per family, no pause
+
+
+@pytest.mark.parametrize('change', [
+    lambda k: setattr(k, 'return_path', '0\n'),
+    lambda k: k.rules.update({4: [r for r in rules(4) if r['priority'] != 97]}),
+    lambda k: setattr(k, 'overlay_kind', None),
+    lambda k: setattr(k, 'keys', []),
+    lambda k: setattr(k, 'keys', [KEY, 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=']),
+])
+def test_routing_netbird_and_peer_faults_fail_before_any_egress_check(runtime, change):
+    app, kernel = runtime
+    change(kernel)
+    probes = unanswered(app, kernel, mullvad_probe(), times=0)
+    assert app.inspect()['status'] == 'failed'
+    assert probes == [] and kernel.now == 0
+
+
+@pytest.mark.parametrize('age', [500, None])
+def test_a_stale_or_missing_handshake_is_not_asked_again(runtime, age):
+    app, kernel = runtime
+    app.handshake_age = lambda key: age
+    probes = unanswered(app, kernel, mullvad_probe(6))
+    result = app.inspect()
+    assert result['status'] == 'failed' and len(probes) == 1 and kernel.now == 10
+
+
+@pytest.mark.parametrize('change', [
+    lambda app: setattr(app, 'rejection', 'Invalid desired-state file; no change applied.'),
+    lambda app: setattr(app, 'pending', 'Waiting for a fresh trusted relay catalogue; request will retry automatically.'),
+    lambda app: app.catalog.relays.clear(),
+])
+def test_a_check_that_fails_anyway_is_not_asked_again(runtime, change):
+    app, kernel = runtime
+    change(app)
+    probes = unanswered(app, kernel, mullvad_probe(6))
+    assert app.inspect()['status'] == 'failed' and len(probes) == 1 and kernel.now == 10
+
+
+@pytest.mark.parametrize('negative', [4, 6])
+def test_a_negative_answer_is_kept_when_a_later_request_would_go_unanswered(runtime, negative):
+    app, kernel = runtime
+    if negative == 4:
+        kernel.probe = {**kernel.probe, 'mullvad_exit_ip': False}
+    else:
+        kernel.probe6 = {**kernel.probe6, 'mullvad_exit_ip': False}
+    # IPv6 would time out: after an IPv4 "no" it is never asked.
+    probes = unanswered(app, kernel, mullvad_probe(6) if negative == 4 else mullvad_probe(4), times=0)
+    unanswered(app, kernel, mullvad_probe(6), times=1 if negative == 4 else 0)
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel egress is not confirmed as Mullvad.'
+    assert result['mullvad_exit_ip'] is False and result['egress_tier'] is None
+    assert kernel.now == 0 and len(probes) == (0 if negative == 4 else 1)
+
+
+def test_the_second_attempt_starts_no_request_after_its_budget(runtime):
+    app, kernel = runtime
+    # First attempt: IPv6 unanswered. Second: IPv4 answers only after the
+    # whole budget, so IPv6 is not asked again and the check fails.
+    unanswered(app, kernel, mullvad_probe(6))
+    delayed(app, kernel, mullvad_probe(4), [(0, True), (EGRESS_RETRY_BUDGET_SEC + 1, True)])
+    result = app.inspect()
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
+    assert kernel.now == 10 + EGRESS_RETRY_SEC + EGRESS_RETRY_BUDGET_SEC + 1
+    assert app.retry_deadline is None
+
+
+def test_a_slow_first_attempt_is_not_asked_again(runtime):
+    app, kernel = runtime
+    probes = unanswered(app, kernel, mullvad_probe(6), seconds=EGRESS_RETRY_WITHIN_SEC + 1)
+    assert app.inspect()['status'] == 'failed' and len(probes) == 1
+    assert kernel.now == EGRESS_RETRY_WITHIN_SEC + 1
+
+
+def test_a_switch_verifies_through_its_own_loop_not_the_retry(runtime, capsys):
+    app, kernel = runtime
+    probes = unanswered(app, kernel, mullvad_probe(6))
+    statuses = published(app)
+    result = app.switch(request())
+    assert result['status'] == 'ok' and len(kernel.mutations) == 1
+    # Never ok before a check that passed: applying, the failed check shown as
+    # applying, then the next pass of the switch's own loop.
+    assert statuses == ['applying', 'applying', 'ok'] and len(probes) == 2
+    assert kernel.now == 10 + 3
+    assert 'asking once more' not in capsys.readouterr().out
+
+
+def test_a_health_tick_publishes_and_pushes_once_after_a_retry(runtime, monkeypatch):
+    app, kernel = runtime
+    unanswered(app, kernel, mullvad_probe(4))
+    statuses, pushed = published(app), []
+    monkeypatch.setattr(app, 'push_gatus', pushed.append)
+    assert app.tick()['status'] == 'ok'
+    assert statuses == ['ok'] and [r['status'] for r in pushed] == ['ok']
 
 
 def test_switch_timeout_does_not_repeat_or_failover(runtime):

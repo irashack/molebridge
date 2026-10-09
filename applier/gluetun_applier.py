@@ -30,11 +30,14 @@ listens on the namespace's loopback.
 """
 from __future__ import annotations
 
+import functools
 import http.client
+import io
 import os
 import re
 import socket
 import ssl
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -138,26 +141,95 @@ class GluetunCatalog(RelayCatalog):
             return False
 
 
-class _MarkedHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS from a socket carrying `mark`, one address family only."""
+def _remaining(deadline):
+    """Seconds left before `deadline` (time.monotonic), or TimeoutError."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError('echo deadline passed')
+    return left
 
-    def __init__(self, host, family, mark, timeout):
-        super().__init__(host, 443, timeout=timeout, context=ssl.create_default_context())
-        self._family, self._mark = family, mark
+
+class _DeadlineReader(io.RawIOBase):
+    """A socket's raw input stream where every read gets only the time left.
+    It owns the stream, which keeps the socket open after the connection
+    object closes its own reference, as http.client does for a response
+    that ends the connection."""
+
+    def __init__(self, sock, raw, deadline):
+        super().__init__()
+        self._sock, self._raw, self._deadline = sock, raw, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        self._sock.settimeout(_remaining(self._deadline))
+        return self._raw.readinto(buffer)
+
+    def close(self):
+        if not self.closed:
+            self._raw.close()
+        super().close()
+
+
+class _DeadlineResponse(http.client.HTTPResponse):
+    def __init__(self, sock, *args, deadline, **kwargs):
+        super().__init__(sock, *args, **kwargs)
+        # Keep http.client's stream underneath; only its reads change.
+        self.fp = io.BufferedReader(_DeadlineReader(sock, self.fp.detach(), deadline))
+
+
+def _resolve(host, port, family, deadline):
+    """getaddrinfo within the time left: a lookup still running at the
+    deadline is left to finish on its own thread and the caller fails."""
+    found = {}
+
+    def lookup():
+        try:
+            found['addresses'] = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+        except OSError as exc:
+            found['error'] = exc
+    worker = threading.Thread(target=lookup, daemon=True)
+    worker.start()
+    worker.join(_remaining(deadline))
+    if worker.is_alive():
+        raise TimeoutError('echo deadline passed')
+    if 'error' in found:
+        raise found['error']
+    return found['addresses']
+
+
+class _MarkedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS from a socket carrying `mark`, one address family only. The
+    name lookup, every address tried, the TLS handshake, the request and each
+    read get only the time left before `deadline`, so the whole exchange ends
+    by then."""
+
+    def __init__(self, host, family, mark, deadline):
+        super().__init__(host, 443, timeout=_remaining(deadline), context=ssl.create_default_context())
+        self._family, self._mark, self._deadline = family, mark, deadline
+        self.response_class = functools.partial(_DeadlineResponse, deadline=deadline)
 
     def connect(self):
         family = socket.AF_INET if self._family == 4 else socket.AF_INET6
-        for af, kind, proto, _name, address in socket.getaddrinfo(self.host, self.port, family,
-                                                                   socket.SOCK_STREAM)[:4]:
+        for af, kind, proto, _name, address in _resolve(self.host, self.port, family, self._deadline)[:4]:
             sock = socket.socket(af, kind, proto)
             try:
                 sock.setsockopt(socket.SOL_SOCKET, SO_MARK, self._mark)
-                sock.settimeout(self.timeout)
+                sock.settimeout(_remaining(self._deadline))
                 sock.connect(address)
+                sock.settimeout(_remaining(self._deadline))
+                self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+            except TimeoutError:
+                sock.close()
+                raise
+            except ssl.SSLError:
+                sock.close()
+                raise
             except OSError:
                 sock.close()
                 continue
-            self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+            self.sock.settimeout(_remaining(self._deadline))
             return
         raise OSError('no address answered')
 
@@ -168,12 +240,14 @@ def marked_echo(url, family, mark, *, timeout=10):
     socket goes into the tunnel (gluetun's rule 101), so this is the one way
     to measure the host's own address there: rule 88 sends the mark to the
     host table, and the post-rules accept output on HOST_IF. Needs NET_ADMIN,
-    which the applier holds. Errors are RuntimeError, with no detail."""
+    which the applier holds. The whole exchange ends within `timeout`
+    seconds. Errors are RuntimeError, with no detail."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != 'https' or not parts.hostname or parts.port or parts.username or parts.query:
         raise RuntimeError('invalid echo URL')
-    connection = _MarkedHTTPSConnection(parts.hostname, family, mark, timeout)
+    connection = None
     try:
+        connection = _MarkedHTTPSConnection(parts.hostname, family, mark, time.monotonic() + timeout)
         connection.request('GET', parts.path or '/', headers={'User-Agent': 'molebridge-applier',
                                                                'Accept': 'text/plain'})
         response = connection.getresponse()
@@ -184,7 +258,8 @@ def marked_echo(url, family, mark, *, timeout=10):
     except (OSError, http.client.HTTPException, ssl.SSLError, UnicodeError):
         raise RuntimeError('echo failed') from None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
 class GluetunApplier(Applier):

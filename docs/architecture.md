@@ -725,7 +725,8 @@ in `result.json` as `egress_tier`:
   address differing from the host's own public address, measured off the
   tunnel; and, where the catalogue
   lists exit addresses for the selected server, the address being one of
-  them. A measurement that fails counts as unverified and fails the tier.
+  them. A measurement that fails, after the one retry described below,
+  fails the tier.
   The one exception is IPv6 when the namespace shows independently that it
   has no IPv6 of its own: no IPv6 route in any of its tables except the
   tunnel's, the overlay's, refusing (unreachable and the like), link-local,
@@ -744,6 +745,31 @@ backend](#gluetun-backend), Mullvad and NordVPN keep theirs, and FastestVPN,
 IVPN, Surfshark and Windscribe reach only the `tunnel` tier. The `tunnel`
 tier is covered by unit tests only. `egress_tier` is null while egress is
 unconfirmed.
+
+Each egress request goes through the tunnel with a 10-second limit. When a
+health check's egress check gets no usable answer (a timeout, a refused or
+reset connection, an HTTP error, a malformed reply or, at the `tunnel` tier,
+a failed measurement of the host's own address), the applier waits 10
+seconds and asks once more before it reports a failure. An answer that does
+not confirm the egress (`mullvad_exit_ip: false` for any family, PIA's
+`connected: false`, NordVPN's `protected: false` beyond its cache retry, or
+echo answers that fail the `tunnel` checks) counts at once and ends the
+check before any further request, so a later timeout can't turn it into a
+retry: asking again would only delay reporting traffic that may be leaving
+the wrong way. There is no second attempt while a switch is verified, because
+the switch keeps asking until its own timeout; when the check fails whatever
+the answer (no fresh handshake, a rejected or pending request, a peer not in
+a fresh catalogue); or when the first attempt took longer than 15 seconds.
+The second attempt starts no request more than 30 seconds after it began,
+and NordVPN's cache retry stops waiting then too, so a check that retries
+ends within about 70 seconds. Routing protection, NetBird's mode and the peer
+count are checked before any egress request and fail at once; a missing or
+stale handshake fails the check after the first attempt, without a second.
+Until the check finishes, the previous result stays in `result.json`, and
+readers still treat one older than 150 seconds as unknown; only a check that
+passed writes `ok`. The applier logs `applier: egress check got no answer;
+asking once more`, and `applier: egress check got no answer twice` when the
+second attempt fails too.
 
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
 verified connected result, at either tier; otherwise 503. Docker's applier healthcheck checks

@@ -26,6 +26,16 @@ from molebridge.state import (decode_json, desired_request, now_iso, read_json, 
                               write_json_atomic)
 
 HANDSHAKE_FRESH_SEC = 180
+# A health check whose egress check gets no usable answer (a timeout, a
+# refused or reset connection, an HTTP error, a malformed reply) asks once
+# more after EGRESS_RETRY_SEC before it publishes a failure, unless the first
+# attempt took longer than EGRESS_RETRY_WITHIN_SEC. The second attempt starts
+# no request after EGRESS_RETRY_BUDGET_SEC, so with one request's own limit
+# a check stays well inside the 150 seconds after which readers call a
+# result unknown.
+EGRESS_RETRY_SEC = 10
+EGRESS_RETRY_WITHIN_SEC = 15
+EGRESS_RETRY_BUDGET_SEC = 30
 SWITCH_TIMEOUT_SEC = 60
 REFRESH_SEC = 60
 POLL_SEC = 5
@@ -81,6 +91,9 @@ class Applier:
         self.pending = None
         # While a switch is being verified, the time it gives up.
         self.switch_deadline = None
+        # While an egress check is asked a second time, the time after which
+        # it starts no further request.
+        self.retry_deadline = None
 
     @classmethod
     def from_env(cls, state_dir, config, env, **kwargs):
@@ -209,9 +222,18 @@ class Applier:
                 'mullvad_exit_ip': data['mullvad_exit_ip']}
 
     def egress(self):
-        probes = {family: self.egress_family(family) for family in sorted(self.tunnel_addresses())}
+        """Mullvad's check for every family the tunnel carries. The first
+        family that Mullvad says is not its exit ends the check, so no later
+        request can turn that answer into a retryable failure."""
+        probes = {}
+        for family in sorted(self.tunnel_addresses()):
+            self.within_retry_budget()
+            probes[family] = self.egress_family(family)
+            if not probes[family]['mullvad_exit_ip']:
+                break
         confirmed = all(p['mullvad_exit_ip'] for p in probes.values())
-        return {**probes[4], 'mullvad_exit_ip': confirmed, 'exit_confirmed': confirmed,
+        first = probes.get(4) or next(iter(probes.values()))
+        return {**first, 'mullvad_exit_ip': confirmed, 'exit_confirmed': confirmed,
                 'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
 
     def egress_for(self, server, handshake_age):
@@ -220,6 +242,44 @@ class Applier:
         if self.spec.egress_tier == 'tunnel':
             return self.tunnel_egress(server, handshake_age)
         return self.egress()
+
+    def within_retry_budget(self):
+        """Raise when a second egress attempt has used its time. Called
+        before each request of a check that makes more than one."""
+        if self.retry_deadline is not None and self.clock() > self.retry_deadline:
+            raise RuntimeError('egress retry ran out of time')
+
+    def checked_egress(self, server, handshake_age, *, applying):
+        """`egress_for`, asked once more after EGRESS_RETRY_SEC when it gets
+        no usable answer. An answer that does not confirm the provider is
+        never asked again: each check returns it as soon as it has one,
+        before any further request. There is no second attempt while a switch
+        is verified (its own loop asks again until its timeout), when the
+        check fails whatever the answer (a missing or stale handshake, a
+        rejected or pending request, a peer not in a fresh catalogue), or when
+        the first attempt took longer than EGRESS_RETRY_WITHIN_SEC; the second
+        starts no request after EGRESS_RETRY_BUDGET_SEC. The previous result
+        stays published until this check's own result replaces it."""
+        started = self.clock()
+        try:
+            return self.egress_for(server, handshake_age)
+        except (RuntimeError, ValueError, UnicodeError):
+            fresh = type(handshake_age) is int and 0 <= handshake_age < HANDSHAKE_FRESH_SEC
+            doomed = (not fresh or self.rejection or self.pending or server is None
+                      or not self.catalog.usable())
+            slow = self.clock() - started > EGRESS_RETRY_WITHIN_SEC
+            if applying or self.switch_deadline is not None or doomed or slow:
+                raise
+        print('applier: egress check got no answer; asking once more', flush=True)
+        self.sleep(EGRESS_RETRY_SEC)
+        self.retry_deadline = self.clock() + EGRESS_RETRY_BUDGET_SEC
+        try:
+            return self.egress_for(server, handshake_age)
+        except (RuntimeError, ValueError, UnicodeError):
+            print('applier: egress check got no answer twice', flush=True)
+            raise
+        finally:
+            self.retry_deadline = None
 
     def echo(self, url, family, *, tunnel):
         """The caller's address from an IP echo service, through the tunnel
@@ -233,7 +293,8 @@ class Applier:
     def host_address(self, family):
         """The host's own public address, measured off the tunnel. When that
         fails: HOST_LACKS_FAMILY for IPv6 only if the namespace provably has
-        no IPv6 of its own, otherwise None, which fails the tunnel checks."""
+        no IPv6 of its own, otherwise None: no usable answer, which
+        `tunnel_egress` raises."""
         try:
             return self.echo(ECHO_URLS[family][0], family, tunnel=False)
         except (RuntimeError, ValueError, UnicodeError):
@@ -252,14 +313,31 @@ class Applier:
     def tunnel_egress(self, server, handshake_age):
         """The "tunnel" tier (molebridge/egress.py), for every family the
         tunnel carries. `exit_confirmed` stays false: that field means the
-        provider itself confirmed the egress."""
+        provider itself confirmed the egress. The first family that fails the
+        checks ends them, and echo answers that disagree, or that the
+        catalogue does not list as the server's exit, fail before the host's
+        own address is measured, so no later request can turn a failed check
+        into a retryable one."""
         relay = self.catalog.relays.get(server) if server else None
         verified, addresses = relay is not None, {}
         for family in sorted(self.tunnel_addresses()):
-            echoes = [self.echo(url, family, tunnel=True) for url in ECHO_URLS[family]]
-            verified = tunnel_verdict(echoes, self.host_address(family), exit_addresses(relay, family),
-                                      handshake_age, max_handshake_age=HANDSHAKE_FRESH_SEC) and verified
+            echoes = []
+            for url in ECHO_URLS[family]:
+                self.within_retry_budget()
+                echoes.append(self.echo(url, family, tunnel=True))
             addresses[str(family)] = echoes[0]
+            expected = exit_addresses(relay, family)
+            if len(set(echoes)) != 1 or (expected is not None and echoes[0] not in expected):
+                verified = False
+                break
+            self.within_retry_budget()
+            host = self.host_address(family)
+            if host is None:
+                raise RuntimeError('host address measurement failed')
+            verified = tunnel_verdict(echoes, host, expected,
+                                      handshake_age, max_handshake_age=HANDSHAKE_FRESH_SEC) and verified
+            if not verified:
+                break
         return {'egress_ip': addresses.get('4'), 'egress_city': None, 'egress_country': None,
                 'exit_confirmed': False, 'egress_tier': 'tunnel' if verified else None,
                 'egress_ips': addresses}
@@ -313,7 +391,7 @@ class Applier:
                 return emit('failed', 'Routing protection is incomplete; run the recovery helper.')
             if not native:
                 return emit('failed', NETBIRD_MODE_FAILED)
-            fields.update(self.egress_for(server, age))
+            fields.update(self.checked_egress(server, age, applying=applying))
             fields['egress_tier'] = self.egress_tier(fields)
             if self.rejection:
                 return emit('failed', self.rejection)
