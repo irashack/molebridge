@@ -282,7 +282,8 @@ def test_unlisted_request_requires_explicit_retry_even_after_catalogue_change(ru
     write_json_atomic(app.desired_path, request(server=unlisted))
     assert app.tick()['status'] == 'failed'
     assert app.rejection and not app.pending
-    assert app.catalog.refresh(lambda: json.dumps(payload(hostname=unlisted)))
+    # Listed now, under another key than the live peer's.
+    assert app.catalog.refresh(lambda: json.dumps(payload(hostname=unlisted, public_key='AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=')))
     kernel.now += 60
     assert app.tick()['status'] == 'failed'
     assert not kernel.mutations
@@ -806,6 +807,57 @@ def test_a_health_tick_publishes_and_pushes_once_after_a_retry(runtime, monkeypa
     assert statuses == ['ok'] and [r['status'] for r in pushed] == ['ok']
 
 
+OTHER_HOST, OTHER_KEY = 'se-sto-wg-002', 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE='
+PEER_UPDATE_FAILED = 'Peer update failed; choose a server again to retry.'
+
+
+def test_a_met_rejection_clears_on_a_later_check_that_passes(runtime, capsys):
+    app, kernel = runtime
+    kernel.egress_ok = False
+    write_json_atomic(app.desired_path, request())
+    result = app.tick()
+    assert result['message'] == 'Switch verification timed out; choose a server again to retry.'
+    assert result['server'] == HOST and len(kernel.mutations) == 1
+    kernel.egress_ok = True  # the tunnel comes good on the requested server
+    kernel.now += 60
+    result = app.tick()
+    assert result['status'] == 'ok' and result['server'] == HOST and app.rejection is None
+    assert len(kernel.mutations) == 1  # nothing applied again
+    assert 'clearing the earlier failure' in capsys.readouterr().out
+
+
+def test_a_rejection_is_published_before_any_check_may_clear_it(runtime):
+    app, kernel = runtime
+    app.request, app.rejection = request(), PEER_UPDATE_FAILED
+    assert app.inspect()['message'] == PEER_UPDATE_FAILED
+    assert app.inspect()['status'] == 'ok' and app.rejection is None
+
+
+def test_a_rejection_stands_while_another_server_is_live(runtime):
+    app, kernel = runtime
+    app.catalog.relays[OTHER_HOST] = {**ENTRY, 'hostname': OTHER_HOST, 'public_key': OTHER_KEY}
+    kernel.keys = [OTHER_KEY]
+    app.request, app.rejection = request(), PEER_UPDATE_FAILED
+    for _ in range(3):
+        result = app.inspect()
+        assert result['status'] == 'failed' and result['message'] == PEER_UPDATE_FAILED
+        assert result['server'] == OTHER_HOST
+
+
+@pytest.mark.parametrize('change', [
+    lambda app, k: setattr(k, 'egress_ok', False),
+    lambda app, k: setattr(k, 'age', 500),
+    lambda app, k: setattr(app, 'pending', 'Waiting for the WireGuard interface; request will retry automatically.'),
+    lambda app, k: setattr(app, 'request', None),
+])
+def test_a_rejection_stays_while_a_check_fails_or_nothing_was_requested(runtime, change):
+    app, kernel = runtime
+    app.request, app.rejection = request(), PEER_UPDATE_FAILED
+    app.inspect()
+    change(app, kernel)
+    assert app.inspect()['status'] == 'failed' and app.rejection == PEER_UPDATE_FAILED
+
+
 def test_switch_timeout_does_not_repeat_or_failover(runtime):
     app, kernel = runtime
     kernel.egress_ok = False
@@ -844,8 +896,15 @@ def test_routing_failure_after_peer_update_requires_explicit_retry(runtime):
     app.run = run
     kernel.routes[6] = routes()
     kernel.now += 60
-    assert app.tick()['status'] == 'failed'
+    # Never applied again on its own. The switch's own result showed the
+    # routing fault, so the next check publishes the rejection; the peer it
+    # set is the requested one, so once routing is back the check after that
+    # finds the request met.
+    assert app.tick()['message'] == 'Routing changed during the switch; choose a server again after recovery.'
+    kernel.now += 60
+    result = app.tick()
     assert len(kernel.mutations) == 1
+    assert result['status'] == 'ok' and result['server'] == HOST and app.rejection is None
     write_json_atomic(app.desired_path, request(request_id='1' * 32))
     assert app.tick()['status'] == 'ok'
 

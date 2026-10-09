@@ -349,6 +349,17 @@ changed, but the handshake, the routing checks or the egress check didn't all
 pass in time: 60 seconds with the default backend, 90 with gluetun. Try
 again, or try another server.
 
+These two messages, and "Routing changed during the switch; choose a server
+again after recovery." and gluetun's "gluetun did not accept the server
+selection; choose a server again to retry.", clear by themselves when a
+later check finds the requested server live and passing every check; the
+applier logs
+`applier: the requested server passed every check; clearing the earlier
+failure`. With PIA that happens when an automatic re-registration was
+refused but the tunnel came back on the existing registration. While
+another server is live, or a check fails, the message stays until you
+choose again.
+
 **"No PIA region is registered yet; choose one in the panel."** It's a fresh
 PIA install. Pick a region.
 

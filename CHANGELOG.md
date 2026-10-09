@@ -4,6 +4,34 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.5.3 (2026-10-09)
+
+Applier only, like 0.5.2. Update every exit; a Switchyard panel on 0.5.1 or
+0.5.2 works with 0.5.3 exits.
+
+- **A failed switch no longer outlives a request that has been met.** A
+  failed switch kept its message ("Peer update failed; choose a server again
+  to retry.", "Switch verification timed out; …", "Routing changed during the
+  switch; …") until someone chose a server again, even when the requested
+  server was live and passing every check. With PIA this left an exit
+  `failed` indefinitely: when a tunnel's handshake went stale, the applier
+  re-registered the region on its own; if PIA's API refused that while the
+  tunnel recovered on its existing registration, the handshake stayed fresh,
+  so no later re-registration ran and the message stayed. Now, once a check
+  has published the failure, the first later check that finds the requested
+  server live and passing every check reports `ok` and logs that it cleared
+  the failure. A failure while another server is live, or while any check
+  fails, stays until a new request, as before; nothing is applied again
+  automatically. See [architecture](docs/architecture.md) and
+  [troubleshooting](docs/troubleshooting.md).
+
+Tested: unit tests for clearing a met failure, publishing it first, and
+keeping it while another server is live, a check fails, a request is
+pending or none is set, including PIA's refused re-registration followed by
+a recovered tunnel. The PIA case was seen live and cleared there by
+selecting the same region again; the fix itself was not run on a live exit
+before release.
+
 ## 0.5.2 (2026-10-09)
 
 Applier only: the panel, routing, NetBird gate and Compose files are

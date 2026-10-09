@@ -148,10 +148,12 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
-release is [v0.5.2](https://github.com/irashack/molebridge/releases/tag/v0.5.2),
-which asks an unanswered egress check once more before an exit reports a
-failure, on top of v0.5.1's Switchyard rework and v0.5.0's NordVPN support
-and gluetun backend; see the [changelog](CHANGELOG.md).
+release is
+[v0.5.3](https://github.com/irashack/molebridge/releases/tag/v0.5.3), which
+clears a failed switch once its server is live and verified, on top of
+v0.5.2's second try for an unanswered egress check, v0.5.1's Switchyard rework
+and v0.5.0's NordVPN support and gluetun backend; see the
+[changelog](CHANGELOG.md).
 
 | Setup | Tested |
 | :--- | :--- |

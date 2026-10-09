@@ -727,3 +727,24 @@ def test_pia_saying_not_connected_is_never_asked_again(runtime):
     start = kernel.now
     assert applier.inspect()['message'] == 'Tunnel egress is not confirmed as PIA.'
     assert len(calls) == 1 and kernel.now == start
+
+
+def test_a_failed_reregistration_clears_once_the_tunnel_recovers_by_itself(runtime):
+    """The tunnel stalls, the automatic re-registration is refused, then the
+    old registration's tunnel comes back: the exit reports healthy again
+    without anyone choosing the region again."""
+    applier, kernel = runtime
+    desire(applier)
+    assert applier.tick()['status'] == 'ok'
+    kernel.age, kernel.addkey_fail = 10_000, True
+    kernel.now += pia_module.REREGISTER_SEC
+    applier.next_health = 0
+    result = applier.tick()
+    assert result['status'] == 'failed' and result['message'].startswith('Peer update failed')
+    registrations = sum(1 for c in kernel.calls if c[-1].endswith('/addKey'))
+    kernel.age = 1
+    kernel.now += 60
+    applier.next_health = 0
+    result = applier.tick()
+    assert result['status'] == 'ok' and result['server'] == REGION and applier.rejection is None
+    assert sum(1 for c in kernel.calls if c[-1].endswith('/addKey')) == registrations

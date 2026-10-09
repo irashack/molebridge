@@ -452,6 +452,9 @@ from the panel, the fail-closed drills, and podman-compose.
 - The egress check's one retry (0.5.2) on a live exit before its release.
   `tools/test_runtime.py`, `tools/test_egress.py` and the PIA, NordVPN and
   gluetun applier tests cover it.
+- Clearing a failed switch whose server is live and verified (0.5.3) on a
+  live exit before its release. `tools/test_runtime.py` and
+  `tools/test_pia.py` cover it.
 - The `tunnel` egress tier, live: FastestVPN, IVPN, Surfshark and Windscribe
   through gluetun use it, and none of them has had a live pass.
   `tools/test_egress.py` and the gluetun tests cover it.

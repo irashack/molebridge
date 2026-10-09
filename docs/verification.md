@@ -134,7 +134,8 @@ enforce a device-wide kill switch after NetBird disconnects or deselects the exi
 After each restore, confirm provider egress returns on the supported families.
 After the tunnel-down drill, the applier reapplies the saved server or region
 when the interface returns. If a request was rejected or failed, select again
-to retry.
+to retry; a failed request whose server is live and verified clears at a
+later check by itself.
 
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked.

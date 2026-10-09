@@ -692,12 +692,19 @@ sequenceDiagram
    prerequisite and retries the same request when prerequisites recover.
    A malformed or unlisted request, or a switch that fails, is acknowledged
    as failed and not retried. Selecting the same server again creates a new
-   request. No other server is selected automatically. After normal
+   request. A failed switch whose requested server is nonetheless the live
+   one (PIA's automatic re-registration refused while the tunnel it meant to
+   repair recovers by itself, or a switch whose verification timed out
+   before the tunnel came up) is reported as failed by at least one check,
+   then cleared by the first later check that finds that server live and
+   passing every check. No other server is selected automatically. After normal
    tunnel recreation, a previously successful desired selection is reapplied.
 
 A failed health probe does not necessarily mean traffic is blocked: a working
 approved tunnel can carry traffic while the verification endpoint is unavailable.
-A failed switch remains visibly failed until a new request or process restart.
+A failed switch remains visibly failed until a new request or process
+restart, unless a later check finds the requested server live and verified,
+as above.
 Routing protects against a missing tunnel; probe failure does not install an
 alternate route.
 
@@ -758,8 +765,8 @@ check before any further request, so a later timeout can't turn it into a
 retry: asking again would only delay reporting traffic that may be leaving
 the wrong way. There is no second attempt while a switch is verified, because
 the switch keeps asking until its own timeout; when the check fails whatever
-the answer (no fresh handshake, a rejected or pending request, a peer not in
-a fresh catalogue); or when the first attempt took longer than 15 seconds.
+the answer (no fresh handshake, a pending request or a failed one that the
+check can't clear, a peer not in a fresh catalogue); or when the first attempt took longer than 15 seconds.
 The second attempt starts no request more than 30 seconds after it began,
 and NordVPN's cache retry stops waiting then too, so a check that retries
 ends within about 70 seconds. Routing protection, NetBird's mode and the peer

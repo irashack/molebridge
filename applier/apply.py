@@ -72,6 +72,19 @@ class Applier:
         return providers.get(self.provider)
 
     @property
+    def rejection(self):
+        """Why the current request failed, shown until a new request, or
+        until a later check finds that request met (`rejection_stands`)."""
+        return self._rejection
+
+    @rejection.setter
+    def rejection(self, value):
+        self._rejection = value
+        # Every rejection is published by at least one check before any
+        # check may clear it.
+        self.rejection_reported = False
+
+    @property
     def address_before_switch(self):
         """True when one tunnel address is valid on every server, so the
         interface must already carry it before a switch (Mullvad)."""
@@ -265,7 +278,7 @@ class Applier:
             return self.egress_for(server, handshake_age)
         except (RuntimeError, ValueError, UnicodeError):
             fresh = type(handshake_age) is int and 0 <= handshake_age < HANDSHAKE_FRESH_SEC
-            doomed = (not fresh or self.rejection or self.pending or server is None
+            doomed = (not fresh or self.rejection_stands(server) or self.pending or server is None
                       or not self.catalog.usable())
             slow = self.clock() - started > EGRESS_RETRY_WITHIN_SEC
             if applying or self.switch_deadline is not None or doomed or slow:
@@ -367,6 +380,15 @@ class Applier:
         write_json_atomic(self.result_path, result, public=True)
         return result
 
+    def rejection_stands(self, server):
+        """True when a rejection outlasts this check whatever it finds. Once
+        it has been published, a check that finds the requested server live
+        and passes every other check clears it: the request is met. That is
+        the case after an automatic re-registration failed while the tunnel
+        it meant to repair came back by itself."""
+        return bool(self.rejection) and (not self.rejection_reported or bool(self.pending)
+                                         or not self.request or server != self.request['server'])
+
     def inspect(self, *, applying=False):
         routing_ok, fallback = self.routing_status()
         native = self.netbird_native()
@@ -378,7 +400,10 @@ class Applier:
                 status, message = 'failed', self.pending
             if applying and routing_ok and native and status == 'failed' and not self.rejection:
                 status, message = 'applying', 'Waiting for tunnel verification.'
-            return self.publish(status, message, server=server, **fields)
+            result = self.publish(status, message, server=server, **fields)
+            if self.rejection and result['message'] == self.rejection:
+                self.rejection_reported = True
+            return result
 
         try:
             keys = self.peers()
@@ -393,16 +418,21 @@ class Applier:
                 return emit('failed', NETBIRD_MODE_FAILED)
             fields.update(self.checked_egress(server, age, applying=applying))
             fields['egress_tier'] = self.egress_tier(fields)
-            if self.rejection:
-                return emit('failed', self.rejection)
+            failure = None
             if age is None or age >= HANDSHAKE_FRESH_SEC:
-                return emit('failed', 'Tunnel handshake is missing or stale; check the account and connectivity.')
-            if fields['egress_tier'] is None:
-                if self.spec.egress_tier == 'tunnel':
-                    return emit('failed', 'Tunnel egress did not pass the tunnel checks.')
-                return emit('failed', f'Tunnel egress is not confirmed as {self.spec.label}.')
-            if not self.catalog.usable() or server is None:
-                return emit('failed', 'Current peer cannot be verified against a fresh relay catalogue.')
+                failure = 'Tunnel handshake is missing or stale; check the account and connectivity.'
+            elif fields['egress_tier'] is None:
+                failure = ('Tunnel egress did not pass the tunnel checks.' if self.spec.egress_tier == 'tunnel'
+                           else f'Tunnel egress is not confirmed as {self.spec.label}.')
+            elif not self.catalog.usable() or server is None:
+                failure = 'Current peer cannot be verified against a fresh relay catalogue.'
+            if self.rejection and (failure or self.rejection_stands(server)):
+                return emit('failed', self.rejection)
+            if failure:
+                return emit('failed', failure)
+            if self.rejection:
+                print('applier: the requested server passed every check; clearing the earlier failure', flush=True)
+                self.rejection = None
             return emit('ok', 'Healthy.')
         except (RuntimeError, ValueError, UnicodeError):
             return emit('failed', self.rejection or 'Tunnel inspection or egress check failed.')
