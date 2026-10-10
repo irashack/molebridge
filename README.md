@@ -173,10 +173,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
 release is
-[v0.5.3](https://github.com/irashack/molebridge/releases/tag/v0.5.3), which
-clears a failed switch once its server is live and verified, on top of
-v0.5.2's second try for an unanswered egress check, v0.5.1's Switchyard rework
-and v0.5.0's NordVPN support and gluetun backend; see the
+[v0.6.0](https://github.com/irashack/molebridge/releases/tag/v0.6.0), which
+replaces LinuxServer's WireGuard image with Molebridge's own routing image
+(a supervised tunnel, a 2-second repair loop, an owner record and NetBird's
+gate kept in front of NetBird) and adds the optional `SERVER` setting; see the
 [changelog](CHANGELOG.md).
 
 | Setup | Tested |
@@ -191,7 +191,8 @@ and v0.5.0's NordVPN support and gluetun backend; see the
 | macOS, OrbStack, Docker, self-hosted NetBird 0.79: gluetun v3.41.3 with NordVPN | Forwarding from a client with NordVPN-confirmed egress, a server switch, local delivery refused, tunnel down with no client traffic on the host interface, recreation and recovery; also the standalone form without the applier. |
 | Debian, rootless Podman 5.8 as Quadlet units: NordVPN | Healthy start with NordVPN-confirmed egress, the namespace checks with a deleted tunnel route, and a phone using the exit on cellular over a direct path. |
 | The same host: gluetun v3.41.3 with NordVPN | Healthy start with NordVPN-confirmed egress. No client traffic or switch from the panel yet. |
-| Not yet tested | Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, the client-held fail-closed drills for NordVPN, and the gluetun backend with other providers, with client traffic on rootless Podman, or through podman-compose. |
+| The same host at v0.6.0's code: the routing image | In-place upgrade of four Mullvad, one PIA and one NordVPN exit and a gluetun exit, all healthy with only `NET_ADMIN`. On the NordVPN exit: rule deletions repaired in 1–2 s, a deleted tunnel interface back in about 2 s, a stale owner record stopping NetBird, and `SERVER` overriding the panel. No client traffic during these drills. Docker: CI only. |
+| Not yet tested | The routing image on a live Docker host, the v0.6.0 drills on Mullvad, PIA or gluetun exits, a PIA region switch with the applier's rules 94/98, Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, the client-held fail-closed drills for NordVPN, and the gluetun backend with other providers, with client traffic on rootless Podman, or through podman-compose. |
 
 The dated record of each pass is in [testing](docs/testing.md). Report
 vulnerabilities privately; see [SECURITY.md](SECURITY.md).

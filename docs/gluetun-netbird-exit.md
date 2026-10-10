@@ -266,8 +266,8 @@ read it before you start.
    ```sh
    git clone https://github.com/irashack/molebridge.git
    cd molebridge
-   git checkout v0.5.3
-   ls compose.gluetun.yaml routing/gluetun-rules
+   git checkout v0.6.0
+   ls compose.gluetun.yaml routing/contract-rules
    cp .env.example .env
    mkdir -p secrets/gluetun
    chmod 700 secrets secrets/gluetun
