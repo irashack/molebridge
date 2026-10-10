@@ -417,6 +417,18 @@ def test_unsupported_tunnel_addresses_stop_routing_init(tmp_path, conf_text):
     assert not ready.exists() and not any('rule add' in call for call in calls)
 
 
+@pytest.mark.parametrize('provider', ['mullvad', 'nordvpn', 'pia'])
+@pytest.mark.parametrize('spelling', ['address', 'ADDRESS', 'AddRess'])
+def test_routing_init_refuses_an_address_in_another_case(tmp_path, provider, spelling):
+    # wg-quick would assign it; read as absent, PIA would take it as addressless.
+    text = TUNNEL_CONF.replace('Address = 203.0.113.1/32, 2001:db8:3::1/128', f'{spelling} = 203.0.113.1/32')
+    result, calls, ready = routing_run(tmp_path, conf_text=text, PROVIDER=provider)
+    assert result.returncode != 0
+    assert '10-exit-routing: tunnel configuration spells Address another way; write it as Address' in result.stderr
+    assert 'AAAAAAAA' not in result.stdout + result.stderr and '203.0.113.1' not in result.stdout + result.stderr
+    assert not ready.exists() and not calls
+
+
 def test_missing_tunnel_config_stops_routing_init(tmp_path):
     result, calls, ready = routing_run(tmp_path, TUNNEL_CONF=posix_path(tmp_path / 'absent.conf'))
     assert result.returncode != 0
@@ -798,6 +810,8 @@ def test_netbird_gate_check_mode_runs_only_the_configuration_checks(tmp_path):
     ('', False, 'secrets/pia/username'),
     ('Address = 10.0.0.2/32\n', True, 'no Address or Peer'),
     ('[Peer]\nPublicKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n', True, 'no Address or Peer'),
+    ('address = 203.0.113.8/32\n', True, 'no Address or Peer'),
+    ('[peer]\npublickey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n', True, 'no Address or Peer'),
 ])
 def test_doctor_accepts_an_addressless_pia_config_with_its_login(tmp_path, extra, secrets, message):
     spec = importlib.util.spec_from_file_location('prepare', ROOT / 'tools' / 'prepare-tunnel-config.py')

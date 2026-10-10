@@ -509,8 +509,14 @@ esac
 # The tunnel addresses come from the same file wg-quick will use, so the
 # return-path rules can exist before the interface does. Only the Address
 # line is read; the file also holds the private key and is never echoed.
+# wg-quick reads field names in any case, so an Address spelled any other way
+# would get the address assigned while these rules miss it: it is refused, as
+# molebridge-exit's validator refuses it.
 TUNNEL_CONF="${TUNNEL_CONF:-/config/wg_confs/$EXIT_IF.conf}"
 [ -f "$TUNNEL_CONF" ] || fail "tunnel configuration is missing (expected $EXIT_IF.conf under wg_confs)"
+if grep -i '^[[:space:]]*address[[:space:]]*=' "$TUNNEL_CONF" | grep -qv '^[[:space:]]*Address[[:space:]]*='; then
+    fail "tunnel configuration spells Address another way; write it as Address"
+fi
 tunnel4=''
 tunnel6=''
 for entry in $(sed -n 's/^[[:space:]]*Address[[:space:]]*=[[:space:]]*//p' "$TUNNEL_CONF" \

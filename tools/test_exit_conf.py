@@ -116,6 +116,44 @@ def test_unsupported_configs_are_refused_with_fixed_messages(tmp_path, provider,
     assert 'regenerate it with' in output
 
 
+@pytest.mark.parametrize('provider,canonical,spelling', [
+    ('mullvad', 'Address', 'address'),
+    ('mullvad', 'PrivateKey', 'privatekey'),
+    ('mullvad', 'AllowedIPs', 'allowedIPs'),
+    ('mullvad', 'PersistentKeepalive', 'persistentkeepalive'),
+    ('mullvad', 'MTU', 'mtu'),
+    ('nordvpn', 'Address', 'ADDRESS'),
+    ('pia', 'PostUp', 'Postup'),
+])
+def test_field_names_in_another_case_are_refused(tmp_path, provider, canonical, spelling):
+    # wg-quick reads field names in any case, but 10-exit-routing reads the
+    # Address as the generators spell it, so only that spelling is accepted.
+    text = {'mullvad': MULLVAD, 'pia': PIA, 'nordvpn': NORDVPN}[provider]
+    code, output = check(tmp_path, text, provider)
+    assert code == 0 and 'configuration accepted' in output, output
+    lines = text.splitlines()
+    number = next(n for n, line in enumerate(lines, 1) if line.startswith(canonical + ' ='))
+    lines[number - 1] = spelling + lines[number - 1][len(canonical):]
+    code, output = check(tmp_path, '\n'.join(lines) + '\n', provider)
+    assert code == 1 and f': unsupported field on line {number};' in output, output
+    assert KEY not in output
+
+
+@pytest.mark.parametrize('header,spelling,number', [('[Interface]', '[interface]', 2), ('[Peer]', '[peer]', 10),
+                                                    ('[Peer]', '[PEER]', 10)])
+def test_section_headers_in_another_case_are_refused(tmp_path, header, spelling, number):
+    assert MULLVAD.splitlines()[number - 1] == header
+    code, output = check(tmp_path, MULLVAD.replace(header, spelling))
+    assert code == 1 and f': unsupported field on line {number};' in output, output
+
+
+def test_a_lowercase_address_is_refused_for_pia(tmp_path):
+    # The spelling is refused before the PIA rule against any Address.
+    text = PIA.replace('MTU = 1420', 'MTU = 1420\naddress = 203.0.113.8/32')
+    code, output = check(tmp_path, text, 'pia')
+    assert code == 1 and ': unsupported field on line 6;' in output, output
+
+
 def sentinel_variants():
     # The sentinel as a field name, a bare line, every field's value, a
     # section header, inside a hook, and as a key that looks right.
