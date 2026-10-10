@@ -33,8 +33,9 @@ PIA has no account-wide WireGuard key. To connect to a server, the applier:
 3. receives that server's key and port, and a tunnel address that is valid
    only on that server.
 
-So with PIA the applier also sets the interface's IPv4 address and the
-return-path rule (priority 94) on every switch, and it holds the PIA login.
+So with PIA the applier also sets the interface's IPv4 address, the
+return-path rule (priority 94) and its backstop (priority 98) on every
+switch, and it holds the PIA login.
 The private key still never leaves the `wireguard` container, because
 registration needs only the public key.
 
@@ -42,18 +43,30 @@ registration needs only the public key.
 |---|---|---|
 | Account credential in the applier | none | username and password, from mode-0600 files |
 | The applier changes the tunnel address | never | on every switch |
-| Rule 94 is installed by | routing initialization, from the config's `Address` | the applier, after each registration |
+| Rules 94 and 98 are installed and repaired by | the `wireguard` container, from the config's `Address` | the applier, with each registration and on every pass |
 | Egress is confirmed by | `am.i.mullvad.net`, for each address family | PIA's `api/client/status` (`connected: true`), IPv4 |
 
 The login and token reach `curl` only through mode-0600 files on the
 applier's tmpfs. They never appear in its arguments, logs or state files.
 
-During a switch, the applier adds the new address and its return-path rule
-before it removes the old ones. When an interface loses its last IPv4
-address, the kernel deletes every route through it, including the exit
-table's tunnel route, so the order matters. The applier then puts that route
-back. Forwarded traffic stays on the exit table throughout, and while the
-route is missing it hits the unreachable fallback.
+During a switch, the applier adds rules 94 and 98 for the new address and
+confirms both are there before it changes the address; if that fails, the
+switch stops with the old address and its rules in place. It adds the new
+address before it removes the old one, and removes the old address's rule 94
+and then its rule 98 last. When an interface loses its last IPv4 address,
+the kernel deletes every route through it, including the exit table's tunnel
+route, so the order matters. The applier then puts that route back.
+Forwarded traffic stays on the exit table throughout, and while the route is
+missing it hits the unreachable fallback.
+
+The `wireguard` container's repair loop leaves priorities 94 and 98 to the
+applier when the config has no address. On every pass, about every 5
+seconds, the applier keeps exactly one pair there, for the tunnel's current
+address: it adds a missing half first, then removes rules for any other
+address and any rule not in the exact form, so the current address never
+loses both. When the `wireguard` container recreates a lost tunnel
+interface, which then has no address, the applier removes the old pair, and
+applies the saved region again as after any tunnel recreation.
 
 ## PIA details
 
@@ -101,7 +114,7 @@ only the peer. The applier holds no NordVPN credential. What differs:
   server is selected yet; choose one in the panel." until you choose one.
 - **IPv4 only.** NordLynx carries no IPv6. Forwarded IPv6 hits the exit
   table's unreachable fallback, as with PIA. If your NetBird account has IPv6,
-  still create the `::/0` exit route for this peer. Routing initialization
+  still create the `::/0` exit route for this peer. The `wireguard` container
   and the doctor refuse a NordVPN config with an IPv6 `Address`.
 - **Server keys belong to a location.** Every server in a city can share one
   public key, so the key alone doesn't say which server the tunnel uses. The
@@ -270,7 +283,13 @@ the applier, the panel and the doctor read it from there. The provider needs:
   that agree, an address different from the host's own, a match against any
   exit addresses the catalogue lists as `exit_ips`, and a fresh handshake),
   and the panel shows a connected exit with a "tunnel checks only" label.
-  [Architecture](architecture.md#status-reporting) describes both.
+  [Architecture](architecture.md#status-reporting) describes both;
+- a generator for its tunnel config, and its case in the routing image's
+  check of that config (`routing/molebridge-exit` and
+  `routing/10-exit-routing` decide per `PROVIDER` whether a config carries
+  an address, an IPv6 address and a peer;
+  [the tunnel config](configuration.md#the-tunnel-config)). The image
+  itself stays free of provider protocols, server lists and credentials.
 
 A provider counts as supported only once the full
 [verification](verification.md) has run on a real host with a real client,

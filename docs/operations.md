@@ -18,7 +18,10 @@ counts as healthy only when all of these hold:
 - the NetBird interface present, as a kernel WireGuard link, with NetBird's
   kernel firewall in place;
 - every routing rule and fallback route in place, including the
-  local-delivery rule that replaces the kernel's priority-0 rule.
+  local-delivery rule that replaces the kernel's priority-0 rule;
+- with the default backend, a live [owner
+  record](architecture.md#the-owner-record) from the `wireguard` container,
+  in the applier's own namespace.
 
 A result older than 150 seconds, malformed or dated in the future counts as
 unknown, whatever it says.
@@ -70,8 +73,16 @@ and run it again. Keep a way into the host that doesn't depend on this
 exit.
 
 NetBird won't start until the routing guards exist, on every start, including
-after a host reboot. An applier stranded in an old namespace reports
-unhealthy, so the problem is visible, but only recovery fixes it.
+after a host reboot, and with the default backend its gate stops NetBird when
+the exit's owner record or the guards go
+([architecture](architecture.md#netbirds-gate)). An applier stranded in an
+old namespace reports unhealthy, so the problem is visible, but only
+recovery fixes it.
+
+Stopping or recreating `wireguard` takes up to about 7 seconds: its
+entrypoint brings the tunnel down and leaves the routing rules in place.
+`compose.yaml` gives `wireguard` and `netbird` 15 seconds each before the
+engine kills them.
 
 ## Upgrades
 
@@ -94,6 +105,49 @@ overrides, check them against the new `compose.yaml`. After any change to
 routing, images or the applier, run the [verification](verification.md)
 drills again.
 
+### From 0.5.x to the routing image
+
+The `wireguard` container no longer uses LinuxServer's WireGuard image:
+Molebridge builds its own from Alpine, with its own entrypoint
+([architecture](architecture.md#start-supervision-and-stop)). Before you
+recover, build it and check your tunnel config with it, while the old exit
+keeps running:
+
+```sh
+docker compose build wireguard
+docker compose run --rm --no-deps wireguard --check-config
+```
+
+The config is now checked against what the generators write
+([the tunnel config](configuration.md#the-tunnel-config)); a hand-edited one
+may be refused, and the message names the line. Then recover as above. What
+changes:
+
+- **`PUID` and `PGID`** are no longer read. Leave them in `.env` or delete
+  them.
+- **`compose.yaml`**: `wireguard` drops every capability except `NET_ADMIN`
+  and `DAC_READ_SEARCH`, runs read-only with a tmpfs on `/run`, and gets 15
+  seconds to stop. A new named volume, `exit-run`, carries the owner record;
+  Compose creates it. `netbird` now gets `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
+  `EXIT_IF` and `EXIT_TABLE`, mounts `routing/contract-rules` and `exit-run`
+  read-only, runs with `init: true` and gets 15 seconds to stop. `applier`
+  mounts `exit-run` read-only. NetBird is pinned at 0.80.0.
+- **Your own units or overrides.** If you run the containers from your own
+  Compose file or Quadlet units, make the same changes. A `netbird` without
+  the routing settings refuses to start with `OVERLAY_CIDR is not set for
+  NetBird; compose.yaml passes the routing settings to it
+  (docs/operations.md#upgrades)`. An override that relies on LinuxServer's
+  init, `/custom-cont-init.d` or `/config` files other than `wg_confs` no
+  longer applies.
+- **The gluetun backend**: `guard` runs the image's own entrypoint, and
+  `netbird` mounts `routing/contract-rules`, the new name of
+  `routing/gluetun-rules`. The old name and `/custom-cont-init.d/10-exit-routing`
+  in the image stay as links until 0.7.0, so an older `compose.gluetun.yaml`
+  of your own keeps working until then.
+
+The routing image hasn't been run on a live exit yet, on any engine;
+[testing](testing.md) records what has.
+
 To roll back, check out the previous release and run `recover` the same way.
 State files have stayed readable across releases so far, but take the
 [backup](#backups) first in case one changes.
@@ -110,6 +164,8 @@ The state worth keeping is small:
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
+The `exit-run` volume holds only the owner record, which the `wireguard`
+container rewrites every 2 seconds; there's nothing in it to back up.
 `state/applier/` rebuilds itself, except one file with the gluetun backend:
 `gluetun-selection.json` remembers the last server the applier put and the
 last one it verified, which it puts back after gluetun restarts when the
@@ -336,7 +392,7 @@ compose`:
 ```sh
 podman-compose build wireguard applier
 podman-compose up -d wireguard netbird applier
-podman logs molebridge-wireguard 2>&1 | grep 10-exit-routing
+podman logs molebridge-wireguard 2>&1 | grep -e 10-exit-routing -e molebridge-exit
 ```
 
 **Upgrade or recover.** Build first, so a failed build leaves the exit

@@ -68,7 +68,10 @@ flowchart LR
 
 Three containers share one network namespace: the WireGuard tunnel, a NetBird
 peer, and an "applier" that controls the tunnel. The fourth, the panel, runs
-outside it. With the gluetun backend, gluetun owns the namespace and the
+outside it. The tunnel container is a small Alpine image you build locally:
+it checks the tunnel config, installs the routing rules before the tunnel
+exists, and keeps both in place while it runs. It holds no provider logic or
+credentials. With the gluetun backend, gluetun owns the namespace and the
 tunnel, and a Molebridge "guard" container keeps the same routing rules in
 place beside it ([architecture](docs/architecture.md#gluetun-backend)). Traffic forwarded from your devices can only go into the tunnel.
 If the tunnel or its routes disappear, that traffic is dropped; it never falls
@@ -103,7 +106,7 @@ Details: [architecture](docs/architecture.md).
   hasn't been tested end to end. Windows hosts are not supported.
 - **Resources:** on the tested host, a Mullvad exit's four containers use
   about 100 MB of RAM between them, and the images take about 500 MB of
-  disk; NordVPN and the gluetun backend haven't been measured. Every byte your
+  disk, measured before the routing image moved to Alpine; NordVPN and the gluetun backend haven't been measured. Every byte your
   devices send crosses the host twice, so the host's upload speed caps
   throughput.
 - **A NetBird network**, either NetBird Cloud or self-hosted, with admin
