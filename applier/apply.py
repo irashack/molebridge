@@ -65,14 +65,14 @@ def command(args, *, timeout=5, limit=1024 * 1024):
 
 
 class Applier:
-    # The native exit's owner record (routing/molebridge-exit). main() sets
-    # the path for the native backend; with None the check is skipped.
-    owner_path = None
-    owner_seen = None
     """The Mullvad applier, and the base for every provider's applier. A
     subclass sets `provider` (its registry id) and overrides the provider seam:
     catalogue options, `apply_relay`, `server_for`, `egress` and `tick`. The
     registry entry (molebridge/providers.py) supplies everything else."""
+    # The native exit's owner record (routing/molebridge-exit). main() sets
+    # the path for the native backend; with None the check is skipped.
+    owner_path = None
+    owner_seen = None
     provider = 'mullvad'
 
     @property

@@ -200,7 +200,14 @@ END {
 }'
 
 validate_conf() {
-    [ -e "$CONF" ] || [ -L "$CONF" ] || fail "the tunnel config $CONF is missing; $regenerate"
+    if [ ! -e "$CONF" ] && [ ! -L "$CONF" ]; then
+        # A directory this process may not search hides the file: on rootful
+        # Docker that is a missing DAC_READ_SEARCH, not a missing config.
+        if [ -d "$CONF_DIR" ] && [ ! -x "$CONF_DIR" ]; then
+            fail "the tunnel config directory $CONF_DIR can't be searched (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)"
+        fi
+        fail "the tunnel config $CONF is missing; $regenerate"
+    fi
     if [ -L "$CONF" ] || [ ! -f "$CONF" ]; then fail "the tunnel config $CONF is not a regular file"; fi
     [ -r "$CONF" ] || fail "the tunnel config $CONF can't be read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)"
     size=$(wc -c < "$CONF" 2>/dev/null | tr -d ' ') || size=''

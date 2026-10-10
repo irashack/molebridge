@@ -26,8 +26,8 @@ KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 SENTINEL = 'SENTINELq7Zk'
 DOWNLOADED = f"""[Interface]
 PrivateKey = {KEY}
-Address = 10.64.0.2/32,fc00:bbbb:bbbb:bb01::1:2/128
-DNS = 10.64.0.1
+Address = 203.0.113.2/32,2001:db8:3::2/128
+DNS = 203.0.113.9
 
 [Peer]
 PublicKey = {KEY}
@@ -35,7 +35,7 @@ AllowedIPs = 0.0.0.0/0,::0/0
 Endpoint = 198.51.100.10:51820
 """
 MULLVAD = prepare.build_tunnel_conf(DOWNLOADED)
-MULLVAD4 = prepare.build_tunnel_conf(DOWNLOADED.replace(',fc00:bbbb:bbbb:bb01::1:2/128', ''))
+MULLVAD4 = prepare.build_tunnel_conf(DOWNLOADED.replace(',2001:db8:3::2/128', ''))
 PIA = prepare.build_pia_conf(KEY)
 NORDVPN = nordkey.build_nord_conf(KEY)
 
@@ -62,13 +62,13 @@ def test_generated_configs_are_accepted(tmp_path, provider, text):
 def test_check_config_names_families_not_addresses(tmp_path):
     code, output = check(tmp_path, MULLVAD)
     assert 'an IPv4 address and an IPv6 address' in output
-    assert '10.64.0.2' not in output and 'fc00' not in output
+    assert '203.0.113.2' not in output and '2001:db8:3' not in output
 
 
-@pytest.mark.parametrize('spelling', ['fc00:bbbb:bbbb:bb01:0:0:1:2', 'FC00:BBBB:BBBB:BB01::1:2',
-                                      'fc00:bbbb:bbbb:bb01:0000:0000:0001:0002'])
+@pytest.mark.parametrize('spelling', ['2001:db8:3:0:0:0:0:2', '2001:DB8:3::2',
+                                      '2001:0db8:0003:0000:0000:0000:0000:0002'])
 def test_valid_ipv6_spellings_are_accepted(tmp_path, spelling):
-    code, output = check(tmp_path, MULLVAD.replace('fc00:bbbb:bbbb:bb01::1:2', spelling))
+    code, output = check(tmp_path, MULLVAD.replace('2001:db8:3::2', spelling))
     assert code == 0, output
 
 
@@ -77,7 +77,7 @@ def test_valid_ipv6_spellings_are_accepted(tmp_path, spelling):
     ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 9000'), 'MTU on line'),
     ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 01420'), 'MTU on line'),
     ('mullvad', MULLVAD.replace('MTU = 1420\n', ''), 'MTU is missing'),
-    ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 1420\nDNS = 10.64.0.1'), 'unsupported field on line'),
+    ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 1420\nDNS = 203.0.113.9'), 'unsupported field on line'),
     ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 1420\nSaveConfig = true'), 'unsupported field on line'),
     ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 1420\nPreUp = true'), 'unsupported field on line'),
     ('mullvad', MULLVAD.replace('MTU = 1420', 'MTU = 1420\nPostDown = true'), 'unsupported field on line'),
@@ -88,14 +88,14 @@ def test_valid_ipv6_spellings_are_accepted(tmp_path, spelling):
     ('mullvad', MULLVAD.replace('table 51821', 'table 51822'), 'PostUp on line'),
     ('mullvad', MULLVAD.replace('; ip -6 route replace default dev %i table 51821', ''), 'PostUp on line'),
     ('mullvad', MULLVAD4.replace('route del default', 'route flush'), 'PreDown on line'),
-    ('mullvad', MULLVAD.replace('10.64.0.2/32', '10.64.0.2/24'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('10.64.0.2/32', '10.64.0.2/32, 10.64.0.3/32'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('10.64.0.2/32', '10.64.00.2/32'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('10.64.0.2/32', '10.64.0.256/32'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('fc00:bbbb:bbbb:bb01::1:2', 'fc00::bbbb::2'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('fc00:bbbb:bbbb:bb01::1:2', 'fc00:bbbb:bbbb:bb01::1:2:3:4:5:6'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('fc00:bbbb:bbbb:bb01::1:2', '::ffff:10.64.0.9'), 'Address on line'),
-    ('mullvad', MULLVAD.replace('Address = 10.64.0.2/32, ', 'Address = '), 'Address on line'),
+    ('mullvad', MULLVAD.replace('203.0.113.2/32', '203.0.113.2/24'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('203.0.113.2/32', '203.0.113.2/32, 203.0.113.3/32'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('203.0.113.2/32', '203.0.113.02/32'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('203.0.113.2/32', '203.0.113.256/32'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('2001:db8:3::2', '2001:db8::3::2'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('2001:db8:3::2', '2001:db8:3::2:3:4:5:6:7'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('2001:db8:3::2', '::ffff:203.0.113.9'), 'Address on line'),
+    ('mullvad', MULLVAD.replace('Address = 203.0.113.2/32, ', 'Address = '), 'Address on line'),
     ('mullvad', MULLVAD.replace('198.51.100.10:51820', 'se-sto-wg-001.example.net:51820'), 'Endpoint on line'),
     ('mullvad', MULLVAD.replace('198.51.100.10:51820', '198.51.100.10:0'), 'Endpoint on line'),
     ('mullvad', MULLVAD.replace('198.51.100.10:51820', '198.51.100.10'), 'Endpoint on line'),
@@ -105,9 +105,9 @@ def test_valid_ipv6_spellings_are_accepted(tmp_path, spelling):
     ('mullvad', MULLVAD.replace(f'PrivateKey = {KEY}', 'PrivateKey = AAAA='), 'PrivateKey on line'),
     ('mullvad', MULLVAD.replace(f'PrivateKey = {KEY}', f'PrivateKey = {KEY[:42]}B='), 'PrivateKey on line'),
     ('mullvad', MULLVAD.split('[Peer]')[0], '[Peer] is missing'),
-    ('pia', PIA.replace('MTU = 1420', 'MTU = 1420\nAddress = 10.9.0.2/32'), 'not supported for PIA'),
+    ('pia', PIA.replace('MTU = 1420', 'MTU = 1420\nAddress = 203.0.113.8/32'), 'not supported for PIA'),
     ('pia', PIA + '\n[Peer]\n', '[Peer]'),
-    ('nordvpn', NORDVPN.replace('Address = 10.5.0.2/32', 'Address = 10.5.0.2/32, fc00::2/128'), 'Address on line'),
+    ('nordvpn', NORDVPN.replace('Address = 10.5.0.2/32', 'Address = 10.5.0.2/32, 2001:db8:3::6/128'), 'Address on line'),
     ('nordvpn', NORDVPN.replace('Address = 10.5.0.2/32\n', ''), 'Address is missing'),
 ])
 def test_unsupported_configs_are_refused_with_fixed_messages(tmp_path, provider, text, message):
@@ -166,16 +166,16 @@ def test_bad_settings_are_refused(tmp_path, name, value):
     assert code == 1 and 'molebridge-exit' in output or '10-exit-routing' in output
 
 
-@pytest.mark.parametrize('address', ['10.64.0.2/24', '10.64.0.2/32,10.64.0.3/32', '10.64.0.2/32,fc00::1/64',
-                                     '10.64.0.2/32,fc00::1/128,fc00::2/128'])
+@pytest.mark.parametrize('address', ['203.0.113.2/24', '203.0.113.2/32,203.0.113.3/32', '203.0.113.2/32,2001:db8:3::5/64',
+                                     '203.0.113.2/32,2001:db8:3::5/128,2001:db8:3::6/128'])
 def test_the_generator_refuses_what_the_image_would(address):
     # D26: a regenerated config always passes the image's grammar.
     with pytest.raises(prepare.ConfigError):
-        prepare.build_tunnel_conf(DOWNLOADED.replace('10.64.0.2/32,fc00:bbbb:bbbb:bb01::1:2/128', address))
+        prepare.build_tunnel_conf(DOWNLOADED.replace('203.0.113.2/32,2001:db8:3::2/128', address))
 
 
-@pytest.mark.parametrize('address', ['10.64.0.2', '10.64.0.2/32', '10.64.0.2/32,fc00::1', 'fc00::1/128,10.64.0.2/32'])
+@pytest.mark.parametrize('address', ['203.0.113.2', '203.0.113.2/32', '203.0.113.2/32,2001:db8:3::5', '2001:db8:3::5/128,203.0.113.2/32'])
 def test_whatever_the_generator_accepts_the_image_accepts(tmp_path, address):
-    text = prepare.build_tunnel_conf(DOWNLOADED.replace('10.64.0.2/32,fc00:bbbb:bbbb:bb01::1:2/128', address))
+    text = prepare.build_tunnel_conf(DOWNLOADED.replace('203.0.113.2/32,2001:db8:3::2/128', address))
     code, output = check(tmp_path, text)
     assert code == 0, output

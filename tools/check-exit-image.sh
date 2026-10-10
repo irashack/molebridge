@@ -64,7 +64,7 @@ make_conf() {
             printf '%s\n' '[Interface]' "PrivateKey = $private" 'MTU = 1420' 'Table = off' \
                 'PostUp = ip route replace default dev %i table 51821' 'PreDown = ip route del default dev %i table 51821' > "$work/conf" ;;
         *)
-            printf '%s\n' '[Interface]' "PrivateKey = $private" 'Address = 10.64.0.2/32, fc00:bbbb:bbbb:bb01::1:2/128' \
+            printf '%s\n' '[Interface]' "PrivateKey = $private" 'Address = 203.0.113.2/32, 2001:db8:3::2/128' \
                 'MTU = 1420' 'Table = off' \
                 'PostUp = ip route replace default dev %i table 51821; ip -6 route replace default dev %i table 51821' \
                 'PreDown = ip route del default dev %i table 51821; ip -6 route del default dev %i table 51821' '' \
@@ -142,11 +142,11 @@ pass "a host user's mode-0600 config: refused without DAC_READ_SEARCH, read with
 
 # --- The running exit: owner record, rules, readiness.
 in_exit 'test -f /run/molebridge/exit-owner' || fail 'no owner record' "$name"
-in_exit 'read -r a b c d e f g h i j k < /run/molebridge/exit-owner; [ "$a $b $g $h $i" = "molebridge-exit 1 10.64.0.2 fc00:bbbb:bbbb:bb01::1:2 conf" ]' ||
+in_exit 'read -r a b c d e f g h i j k < /run/molebridge/exit-owner; [ "$a $b $g $h $i" = "molebridge-exit 1 203.0.113.2 2001:db8:3::2 conf" ]' ||
     fail 'the owner record is not the expected shape' "$name"
 for family in -4 -6; do
-    address=10.64.0.2
-    [ "$family" = -4 ] || address=fc00:bbbb:bbbb:bb01::1:2
+    address=203.0.113.2
+    [ "$family" = -4 ] || address=2001:db8:3::2
     [ "$(actual_rules "$family")" = "$(expected_rules "$family" "$address")" ] || {
         actual_rules "$family" >&2
         fail "IPv${family#-} rules differ from the native contract" "$name"
@@ -168,8 +168,8 @@ for change in 'ip rule del priority 97' 'ip -6 rule del priority 94' 'ip rule de
         fail "not repaired within 6 s: $change" "$name"
 done
 for family in -4 -6; do
-    address=10.64.0.2
-    [ "$family" = -4 ] || address=fc00:bbbb:bbbb:bb01::1:2
+    address=203.0.113.2
+    [ "$family" = -4 ] || address=2001:db8:3::2
     [ "$(actual_rules "$family")" = "$(expected_rules "$family" "$address")" ] || fail "IPv${family#-} rules after repair" "$name"
 done
 docker logs "$name" 2>&1 | grep -q '10-exit-routing: added IPv4 rule 97' || fail 'the repair of rule 97 is not logged' "$name"
@@ -219,7 +219,7 @@ EXIT_IF=mullvad
 PROVIDER=mullvad
 ready || fail 'PIA: not ready before registration' "$name"
 in_exit 'ip rule show | grep -Eq "^9[48]:"' && fail 'PIA: the loop installed 94 or 98' "$name"
-in_exit 'ip rule add from 10.9.8.7 ipproto icmp lookup 51821 priority 94 && ip rule add from 10.9.8.7 ipproto icmp unreachable priority 98 && ip addr add 10.9.8.7/32 dev pia'
+in_exit 'ip rule add from 203.0.113.7 ipproto icmp lookup 51821 priority 94 && ip rule add from 203.0.113.7 ipproto icmp unreachable priority 98 && ip addr add 203.0.113.7/32 dev pia'
 sleep 5
 [ "$(in_exit 'ip rule show | grep -cE "^9[48]:"')" = 2 ] || fail "PIA: the loop changed the applier's rules" "$name"
 in_exit 'test -f /run/molebridge-routing-ready' || fail 'PIA: not ready with the applier-owned rules' "$name"
