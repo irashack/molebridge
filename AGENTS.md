@@ -8,8 +8,8 @@ route in `SECURITY.md`, never in a public issue or commit message.
 ## Write for someone else's machine
 
 - Design for a person installing on an ordinary supported host: Docker with
-  Compose or rootless Podman with podman-compose, a NetBird account, a Mullvad
-  or PIA account. Never require the author's
+  Compose or rootless Podman with podman-compose, a NetBird account, and a
+  Mullvad, PIA or NordVPN account or a provider gluetun supports. Never require the author's
   infrastructure, hostnames, directory layout, identity provider, secret store,
   monitoring or deployment tooling.
 - Site-specific deployment records and policies belong with that deployment,
@@ -30,8 +30,9 @@ route in `SECURITY.md`, never in a public issue or commit message.
   subprocesses, and only writes the desired server name. The applier validates
   everything it reads and never mounts the tunnel config.
 - **Untrusted input:** Mullvad's relay list, PIA's region list and API
-  responses, desired-state files and form posts
-  are untrusted. Validate before use; escape before rendering.
+  responses, NordVPN's server list, gluetun's `servers.json` and control
+  server answers, the tunnel config the routing image reads, desired-state
+  files and form posts are untrusted. Validate before use; escape before rendering.
 - **Exits only:** Molebridge never ships its own tunnel for other containers'
   traffic; that is gluetun's job. The routing image carries no provider
   protocols, server catalogues or credentials.
@@ -45,7 +46,8 @@ route in `SECURITY.md`, never in a public issue or commit message.
   dependency-free.
 - Validate in proportion to impact: `pytest -q panel tools`, `sh -n` and
   `shellcheck` on shell scripts, and `docker compose config` against
-  `.env.example`, with and without `compose.pia.yaml`. Update the docs a
+  `.env.example`, alone and with `compose.pia.yaml`, `compose.nordvpn.yaml`
+  and `compose.gluetun.yaml`. Update the docs a
   change affects in the same commit.
 
 ## Writing docs

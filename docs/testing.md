@@ -429,7 +429,7 @@ Every exit was upgraded in place from v0.5.3:
 - a gluetun v3.41.3 exit with NordVPN;
 - the Switchyard panel serving all of them.
 
-On each host:
+On each exit:
 - The container's root is remapped to another host ID.
 - The tunnel config is the host user's, mode `0640`, readable through an ACL.
 - The `wireguard` container ran with only `NET_ADMIN`. The `DAC_READ_SEARCH`
@@ -493,8 +493,9 @@ Not done:
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
   foreground mode, other profiles and config paths) on a running peer. Unit
   tests and `tools/check-routing.sh` cover them; the NetBird settings were
-  checked against the 0.79.0 source. A Mullvad exit and rootless Podman with
-  these checks are untested.
+  checked against the 0.79.0 source and re-checked unchanged in 0.80.0. On
+  rootless Podman the gate accepted the live configuration of Mullvad, PIA
+  and NordVPN exits at `0086fac`; its refusals have not run on a live peer.
 - The [gluetun backend](architecture.md#gluetun-backend) beyond the passes
   [on Docker](#gluetun-backend-pass-at-a3bb14f) and
   [on rootless Podman](#gluetun-backend-on-rootless-podman-at-v050): other

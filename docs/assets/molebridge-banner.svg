@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-labelledby="title description">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title description">
   <title id="title">Molebridge</title>
-  <desc id="description">Stay on NetBird. Exit through Mullvad, PIA, NordVPN or gluetun. A bridge connects two network nodes in the panel's blue and green palette.</desc>
+  <desc id="description">Your NetBird network, out through any VPN. NetBird devices on the left cross a bridge to one exit, which fans out to Mullvad, PIA, NordVPN, or a WireGuard provider through gluetun.</desc>
   <defs>
     <linearGradient id="background" x2="1" y2="1">
       <stop stop-color="#24273a"/>
@@ -14,23 +14,35 @@
       <path d="M32 0H0V32" fill="none" stroke="#8aadf4" stroke-opacity=".055"/>
     </pattern>
   </defs>
-  <rect width="1200" height="280" rx="20" fill="url(#background)"/>
-  <rect width="1200" height="280" rx="20" fill="url(#grid)"/>
-  <path d="M56 224H1144" stroke="#363a4f"/>
+  <rect width="1200" height="300" rx="20" fill="url(#background)"/>
+  <rect width="1200" height="300" rx="20" fill="url(#grid)"/>
+  <path d="M56 244H1144" stroke="#363a4f"/>
   <g font-family="Arial,Helvetica,sans-serif">
-    <text x="56" y="69" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">A NETBIRD EXIT NODE FOR YOUR VPN</text>
-    <text x="52" y="142" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
-    <text x="56" y="185" fill="#b8c0e0" font-size="24">Stay on NetBird. Exit through your VPN provider.</text>
-    <text x="56" y="252" fill="#a5adcb" font-size="13" letter-spacing="1.4">NETBIRD + MULLVAD · PIA · NORDVPN · GLUETUN</text>
-    <text x="1144" y="252" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">SELF-HOSTED · DOCKER OR PODMAN</text>
+    <text x="56" y="72" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">SELF-HOSTED NETBIRD EXIT NODE</text>
+    <text x="52" y="146" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
+    <text x="56" y="192" fill="#b8c0e0" font-size="26">Your NetBird network, out through any VPN.</text>
+    <text x="56" y="272" fill="#a5adcb" font-size="13" letter-spacing="1.4">MULLVAD · PIA · NORDVPN · ANY WIREGUARD PROVIDER VIA GLUETUN</text>
+    <text x="1144" y="272" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">FAILS CLOSED · DOCKER OR PODMAN</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M807 166H1126" stroke="#363a4f" stroke-width="2"/>
-    <path d="M832 166C852 166 856 164 868 134C903 46 1030 46 1065 134C1077 164 1081 166 1101 166" stroke="url(#bridge)" stroke-width="5"/>
-    <path d="M887 103V166M926 80V166M967 73V166M1008 80V166M1047 103V166" stroke="#8aadf4" stroke-opacity=".22" stroke-width="2"/>
-    <path d="M850 186H1083" stroke="#363a4f" stroke-dasharray="3 8"/>
-    <circle cx="827" cy="166" r="12" fill="#24273a" stroke="#8aadf4" stroke-width="4"/>
-    <circle cx="1106" cy="166" r="12" fill="#24273a" stroke="#a6da95" stroke-width="4"/>
-    <circle cx="967" cy="73" r="5" fill="#a6da95" stroke="#24273a" stroke-width="3"/>
+    <!-- NetBird devices joining the exit's overlay side -->
+    <path d="M790 120L838 166M778 166H838M790 212L838 166" stroke="#8aadf4" stroke-opacity=".45" stroke-width="2"/>
+    <circle cx="790" cy="120" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
+    <circle cx="778" cy="166" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
+    <circle cx="790" cy="212" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
+    <!-- The bridge: the exit node's namespace -->
+    <path d="M838 166H1032" stroke="#363a4f" stroke-width="2"/>
+    <path d="M850 166C866 166 870 164 880 138C910 62 960 62 990 138C1000 164 1004 166 1020 166" stroke="url(#bridge)" stroke-width="5"/>
+    <path d="M897 104V166M935 82V166M973 104V166" stroke="#8aadf4" stroke-opacity=".22" stroke-width="2"/>
+    <path d="M858 186H1012" stroke="#363a4f" stroke-dasharray="3 8"/>
+    <circle cx="935" cy="82" r="5" fill="#a6da95" stroke="#24273a" stroke-width="3"/>
+    <circle cx="845" cy="166" r="12" fill="#24273a" stroke="#8aadf4" stroke-width="4"/>
+    <circle cx="1025" cy="166" r="12" fill="#24273a" stroke="#a6da95" stroke-width="4"/>
+    <!-- Out through the provider: Mullvad, PIA, NordVPN, gluetun -->
+    <path d="M1037 166C1070 166 1080 108 1118 108M1037 166C1070 166 1084 147 1128 147M1037 166C1070 166 1084 185 1128 185M1037 166C1070 166 1080 224 1118 224" stroke="#a6da95" stroke-opacity=".5" stroke-width="2"/>
+    <circle cx="1122" cy="108" r="7" fill="#24273a" stroke="#eed49f" stroke-width="3"/>
+    <circle cx="1132" cy="147" r="7" fill="#24273a" stroke="#a6da95" stroke-width="3"/>
+    <circle cx="1132" cy="185" r="7" fill="#24273a" stroke="#7dc4e4" stroke-width="3"/>
+    <circle cx="1122" cy="224" r="7" fill="#24273a" stroke="#6fcfe0" stroke-width="3" stroke-dasharray="3 3"/>
   </g>
 </svg>

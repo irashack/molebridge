@@ -9,7 +9,7 @@ Compose gives the applier and the panel the registry id
 |---|---|---|---|
 | `mullvad` (default) | Tested on the hosts in [testing](testing.md) | a server | One device key and tunnel address, valid on every server |
 | `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | a region | A key registered on each server, with a different tunnel address on each |
-| `nordvpn` | Experimental: one live pass on macOS with OrbStack, see [testing](testing.md#nordvpn-pass-at-036e1cc) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
+| `nordvpn` | Experimental: live passes on macOS with OrbStack and on rootless Podman, see [testing](testing.md#nordvpn-pass-at-036e1cc) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
 | `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#gluetun-backend-pass-at-a3bb14f); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
 
 To offer more than one, run one exit per provider with different
@@ -60,8 +60,9 @@ Forwarded traffic stays on the exit table throughout, and while the route is
 missing it hits the unreachable fallback.
 
 The `wireguard` container's repair loop leaves priorities 94 and 98 to the
-applier when the config has no address. On every pass, about every 5
-seconds, the applier keeps exactly one pair there, for the tunnel's current
+applier when the config has no address. On every pass of its loop
+(normally every 5 seconds, longer while a switch or health check runs), the
+applier keeps exactly one pair there, for the tunnel's current
 address: it adds a missing half first, then removes rules for any other
 address and any rule not in the exact form, so the current address never
 loses both. When the `wireguard` container recreates a lost tunnel
@@ -151,12 +152,15 @@ only the peer. The applier holds no NordVPN credential. What differs:
 | The current server is found by | the peer's key | the peer's endpoint and key |
 | Egress is confirmed by | `am.i.mullvad.net`, for each address family | `ips/insights` (`protected: true`), IPv4 |
 
-What was tested: one live pass on macOS with OrbStack and Docker covered the
+What was tested: a live pass on macOS with OrbStack and Docker covered the
 key exchange, the server list, switches within a location and to another
 country, NordVPN's confirmation, a client's egress, and IPv6 staying blocked
-([testing](testing.md#nordvpn-pass-at-036e1cc)). The insights cache retry,
-the panel with NordVPN's list, rootless Podman and the fail-closed drills are
-covered by unit tests or not at all so far.
+([testing](testing.md#nordvpn-pass-at-036e1cc)). On rootless Podman, a
+NordVPN exit ran with a phone on it ([v0.5.0](testing.md#nordvpn-on-rootless-podman-at-v050))
+and ran v0.6.0's repair, tunnel-loss and owner-record drills without a client
+([0086fac](testing.md#the-routing-image-on-rootless-podman-at-0086fac)). The
+insights cache retry is covered by unit tests; the client-held fail-closed
+drills have not been run.
 
 ## Port forwarding
 

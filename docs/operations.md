@@ -95,8 +95,9 @@ python3 tools/molebridge.py recover
 ```
 
 Recovery rebuilds the routing and applier images. An uncached rebuild can pick
-up newer Debian packages; to refresh them on purpose, run `docker compose build
---no-cache applier` first. Keep `.env`, `state/`, `tunnel/`, `secrets/` and the
+up newer Alpine and Debian packages; to refresh them on purpose, run `docker
+compose build --no-cache wireguard applier` first (with the gluetun backend,
+`docker compose build --no-cache guard applier`). Keep `.env`, `state/`, `tunnel/`, `secrets/` and the
 `netbird-data` volume.
 
 Compare `.env.example` with the previous release's (`git diff <old>..<new> --
@@ -145,8 +146,9 @@ changes:
   in the image stay as links until 0.7.0, so an older `compose.gluetun.yaml`
   of your own keeps working until then.
 
-The routing image hasn't been run on a live exit yet, on any engine;
-[testing](testing.md) records what has.
+The routing image has had one live pass, on rootless Podman, and none on
+Docker; [testing](testing.md#the-routing-image-on-rootless-podman-at-0086fac)
+records what ran.
 
 To roll back, check out the previous release and run `recover` the same way.
 State files have stayed readable across releases so far, but take the
@@ -421,6 +423,10 @@ for c in wireguard netbird applier; do
 done
 podman exec molebridge-applier python -m applier.apply --doctor
 ```
+
+With the gluetun backend, check health for `gluetun guard netbird applier
+control-panel`, compare the namespace of `gluetun guard netbird applier` (all
+four must match), and expect seven PASS/FAIL lines from `--doctor`.
 
 `--doctor` doesn't check the ICE blacklist. Read that one field from the peer
 profile yourself. The same file holds the peer's private key, so print

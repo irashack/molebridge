@@ -17,6 +17,10 @@ or retry switching controls are shown, in the full page or the embed. Its
 connection state and Diagnostics remain available. Other exits in the same
 panel can still be switched.
 
+<p align="center">
+  <img src="assets/switchyard-configured.png" alt="Switchyard with a NordVPN exit set in configuration: the current server is shown with the note 'Set in configuration', and there is no location list" width="900">
+</p>
+
 The panel learns the setting from the applier's `result.json`, through its
 existing read-only mount. A stale status keeps the exit read-only and shows
 its connection as unknown. A `POST /select` for that exit is refused with

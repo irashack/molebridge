@@ -61,16 +61,22 @@ flowchart TB
     subgraph ns["Exit namespace"]
         direction LR
         applier("applier<br/>NET_ADMIN, wg and ip")
-        wireguard("wireguard<br/>routing rules, tunnel")
-        netbird("netbird<br/>exit peer on wt0")
+        wireguard("wireguard: routing image<br/>rules, 2 s repair loop, tunnel")
+        owner[("exit-run volume<br/>owner record, every 2 s")]
+        netbird("netbird behind its gate<br/>exit peer on wt0")
     end
     provider("Provider API<br/>server list, egress check")
+    server("SERVER, optional<br/>in the applier's settings")
 
     panel -- "writes one server name" --> desired
     result -- "read-only mount" --> panel
-    desired -- "validated every 5 s" --> applier
+    desired -- "read on the next applier pass" --> applier
+    server -. "wins over desired.json" .-> applier
     applier -- "catalogue, status" --> result
     applier -- "sets the peer" --> wireguard
+    wireguard -- "writes" --> owner
+    owner -- "live, or the gate stops NetBird" --> netbird
+    owner -- "live, or routing is unsafe" --> applier
     applier -. "checks" .-> netbird
     provider -- "downloaded, validated" --> applier
 
@@ -81,7 +87,7 @@ flowchart TB
     class provider,netbird endpoint
     class wireguard,applier routing
     class panel panel
-    class desired,result file
+    class desired,result,owner,server file
     style ns fill:#1e2030,stroke:#494d64,color:#cad3f5
     style statedir fill:#1e2030,stroke:#494d64,color:#cad3f5
     linkStyle default stroke:#8087a2,stroke-width:2px
@@ -243,6 +249,53 @@ The `wireguard` container's entrypoint, `routing/molebridge-exit`, runs under
    pass (`10-exit-routing --reconcile`; see [drift and
    repair](#drift-and-repair)).
 
+```mermaid
+stateDiagram-v2
+    [*] --> Checking
+    Checking --> Refused: a setting or config line is rejected
+    Checking --> Installing: owner record starts, every 2 s
+    Installing --> Refused: install fails, no tunnel
+    Installing --> BringingUp
+    BringingUp --> Waiting: fails, or ended (TERM at 20 s, KILL at 23 s)
+    Waiting --> BringingUp: after 2 s, doubling to 60
+    BringingUp --> Ready: tunnel up, repair pass verified
+    Ready --> Repairing: drift found
+    Repairing --> Ready: put back, logged
+    Repairing --> NotReady: the pass doesn't verify
+    NotReady --> BringingUp: interface gone or down
+    Ready --> NotReady: a pass doesn't verify, or the owner record can't be written
+    NotReady --> Ready: record written, tunnel up, a pass verifies
+    Ready --> BringingUp: interface gone or down
+    Ready --> Stopping: stop signal
+    NotReady --> Stopping: stop signal
+    BringingUp --> Stopping: stop signal
+    Waiting --> Stopping: stop signal
+    Stopping --> Stopped: within 7 s, rules stay
+    Stopping --> Incomplete: interface or a hook remains
+    Refused --> [*]
+    Stopped --> [*]
+    Incomplete --> [*]
+
+    Checking: Checking settings and config
+    Installing: Installing the routing contract
+    BringingUp: wg-quick up (not ready)
+    Waiting: Waiting to retry (not ready)
+    Ready: Ready (marker set)
+    Repairing: Repair pass
+    NotReady: Not ready (marker removed, loop continues)
+    Stopping: Stopping (marker removed)
+    Refused: Exit 1, no tunnel started
+    Stopped: Exit 0
+    Incomplete: Exit 1, cleanup incomplete
+
+    classDef ok fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
+    classDef wait fill:#24273a,stroke:#eed49f,color:#cad3f5,stroke-width:2px
+    classDef bad fill:#24273a,stroke:#ed8796,color:#f4dbd6,stroke-width:2px
+    class Ready,Repairing,Stopped ok
+    class Checking,Installing,BringingUp,Waiting,Stopping,NotReady wait
+    class Refused,Incomplete bad
+```
+
 The readiness marker that the health check reads is set only while the owner
 record is being written, the tunnel is up and the last repair pass ended with
 the contract verified, and is removed otherwise. It doesn't depend on a peer
@@ -272,8 +325,10 @@ route in each family the tunnel carries, nothing else. What it promises
 holds for one fault at a time.
 
 A **deleted protection** is contained by the ones that remain, and put back
-by the end of the first pass that starts after the deletion, so within one
-interval:
+by the first pass that starts after the deletion. The next pass starts one
+interval after the last one ended, so the repair normally lands within about
+one interval plus the pass itself (1–2 seconds at the default, in
+[testing](testing.md#the-routing-image-on-rootless-podman-at-0086fac)):
 
 | Deleted | Contained by |
 |---|---|
@@ -290,7 +345,8 @@ interval:
 
 An **inserted bypass**, any extra rule at priorities 0–98 (such as `lookup
 main` at 50, or the kernel's priority-0 `lookup local` put back) or a foreign
-route in the exit table, is removed and logged within one interval. Nothing
+route in the exit table, is removed and logged by the next repair pass that
+verifies (the interval is a delay between passes, not a deadline). Nothing
 is promised about traffic between the insertion and its removal: only root in
 the namespace can insert one, and root there can defeat any guard. Two
 faults at once are outside the guarantee.
@@ -304,12 +360,14 @@ does, so a repair never leaves rules 94 and 98 both missing. A pass that
 finds everything in place changes nothing. Each change is logged, for example
 `10-exit-routing: added IPv4 rule 97`, `10-exit-routing: removed IPv4 rule
 50: from all lookup main` or `10-exit-routing: IPv4 unreachable fallback in
-table 51821 restored`, and counted in the owner record.
+table 51821 restored`, and each pass that repaired something is counted in
+the owner record.
 
 With PIA's addressless config, the pass leaves priorities 94 and 98 alone
 entirely: it adds and removes nothing there, and neither its readiness nor
 NetBird's gate compares them. The applier keeps exactly one pair there, for
-the current address, and repairs it on every pass, every 5 seconds
+the current address, and repairs it on every pass of its loop, normally
+every 5 seconds and longer while a switch or health check runs
 ([providers](providers.md#how-pia-differs)); the same single-fault promise
 holds with the applier's pass in place of the interval.
 
@@ -527,7 +585,7 @@ flowchart LR
     provider("Provider server")
     subgraph ns["Exit namespace, owned by gluetun"]
         gluetun("gluetun<br/>firewall, tunnel wg0,<br/>control server :8000")
-        guard("guard<br/>rules 1, 88-97, 102-104,<br/>every 2 s")
+        guard("guard: routing image<br/>rules 1, 88-97, 102-104,<br/>every 2 s")
         gate("NetBird gate")
         netbird("netbird<br/>exit peer on wt0")
         applier("applier")
@@ -539,7 +597,7 @@ flowchart LR
     device --> netbird
     netbird -- "forwarded traffic, rule 95" --> gluetun
     gluetun --> provider
-    gate -- "launches only when the<br/>guard is whole" --> netbird
+    gate -- "launches when the guard is whole;<br/>stops NetBird if it breaks" --> netbird
     guard -. "rules and tables" .-> gate
     applier -- "API key: select server" --> gluetun
     servers --> applier
@@ -638,7 +696,7 @@ The guard therefore keeps running, as its own container, and every
   and rule 94 for its current address; until then forwarded traffic hits the
   fallback;
 - refreshes the host table when the main table's host routes change;
-- checks every rule in 0–97 in both families, adds a missing one and removes
+- checks every rule at 0–97 and 102–104 in both families, adds a missing one and removes
   any other. The expected rules and tables are defined once, in
   `routing/contract-rules`, which the gate reads too. A wrong rule whose selectors are a subset of the right one's
   could take the right one with it when deleted, so that priority is rebuilt
@@ -891,7 +949,7 @@ sequenceDiagram
     participant E as Provider's check
     P->>P: server is in the catalogue
     P->>D: server, requested_at, request_id
-    A->>D: read within 5 s, validate
+    A->>D: read on its next pass, validate
     A->>A: routing protection intact?
     A->>T: remove old peer, set new key and endpoint
     T-->>A: fresh handshake
@@ -903,7 +961,9 @@ sequenceDiagram
 
 1. The panel checks membership in the read-only catalogue and atomically writes
    `desired.json` with `server`, `requested_at` and a random `request_id`.
-2. Every five seconds the applier reads a bounded, regular, non-symlink file.
+2. On each pass the applier reads a bounded, regular, non-symlink file. It
+   waits five seconds between passes; catalogue refreshes, checks and
+   switches can delay the next read.
    It validates the entire schema and resolves the name only through its own
    fresh catalogue. The old two-field request schema remains readable.
 3. Before changing a peer it verifies routing protection. It removes old peers
@@ -1011,8 +1071,8 @@ second attempt fails too.
 verified connected result, at either tier; otherwise 503. Docker's applier healthcheck checks
 freshness, a live WireGuard exit interface with exactly one peer, current
 routing protection (with the default backend, including a live
-[owner record](#the-owner-record)), and NetBird on kernel WireGuard with its kernel firewall,
-after a completed inspection; startup
+[owner record](#the-owner-record)), NetBird on kernel WireGuard with its kernel firewall, and, with `SERVER`
+set, a last result of `ok` on that server, after a completed inspection; startup
 and an in-progress switch do not count as completed checks. It does not restart unhealthy
 containers. The host-side doctor additionally checks the shared namespace and
 recent verified egress.
