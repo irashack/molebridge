@@ -585,4 +585,8 @@ for family in -4 -6; do
     while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
 done
 [ "${1:-}" = --install ] || touch "$READY_FILE"
-echo "10-exit-routing: rules installed (1/90/94/95/96/97/98, protected table)"
+if [ -n "$tunnel4$tunnel6" ]; then
+    echo "10-exit-routing: rules installed (1/90/94/95/96/97/98, protected table)"
+else
+    echo "10-exit-routing: rules installed (1/90/95/96/97, protected table; 94 and 98 come with the address the applier sets)"
+fi

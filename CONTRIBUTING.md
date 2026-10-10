@@ -20,15 +20,25 @@ python3 -m venv .venv
 .venv/bin/pip install pytest==9.1.1 PyYAML==6.0.3
 .venv/bin/python -m pytest -q panel tools
 
-scripts="routing/10-exit-routing routing/wait-for-guards routing/gluetun-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh"
+scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh"
 for script in $scripts; do
   sh -n "$script"
 done
-shellcheck -S warning $scripts
+shellcheck -x -S warning $scripts
 docker compose --env-file .env.example config --quiet
 docker compose --env-file .env.example -f compose.yaml -f compose.pia.yaml config --quiet
 docker compose --env-file .env.example -f compose.yaml -f compose.nordvpn.yaml config --quiet
 docker compose --env-file .env.example -f compose.gluetun.yaml config --quiet
+```
+
+On Linux with Docker and kernel WireGuard, two more need root or a privileged
+container: the routing drills in throwaway namespaces, and the routing image's
+life cycle (start, repair, tunnel loss, every stop). CI runs both:
+
+```sh
+sudo env ROUTING_SH="busybox sh" sh tools/check-routing.sh
+docker build --tag molebridge-wireguard:dev --file routing/Dockerfile .
+sh tools/check-exit-image.sh molebridge-wireguard:dev
 ```
 
 The gluetun tests include two that check Molebridge's server selection
