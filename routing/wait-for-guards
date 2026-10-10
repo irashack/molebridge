@@ -1,20 +1,32 @@
 #!/usr/bin/env sh
 # Runtime restarts do not honor Compose depends_on. Check this namespace
-# before handing off to the pinned image's original NetBird entrypoint.
+# before starting the pinned image's original NetBird entrypoint, and keep
+# checking while NetBird runs.
 #
 # First refuse NetBird settings Molebridge does not support: it needs kernel
 # WireGuard, NetBird's kernel firewall, daemon mode and the default profile,
 # without Rosenpass. Then wait until both address families have
 # the terminal guard (priority 97) and the local-delivery guard (priority 1),
-# with no other `lookup local` rule that could match the overlay interface.
-# NetBird source references are to the pinned release, 0.79.0.
+# with no other `lookup local` rule that could match the overlay interface,
+# and the rest of the routing contract (routing/contract-rules). NetBird
+# source references are to the pinned release, 0.80.0.
 #
+# The gate stays in front of NetBird as its parent, with NetBird in its own
+# process group so a stop reaches the daemon and `netbird up` as well as the
+# entrypoint wrapper. It stops NetBird (TERM to the group, KILL 20 seconds
+# later) and exits non-zero:
+#   - native backend: as soon as the exit's owner record (written every 2
+#     seconds by routing/molebridge-exit) is missing, expired, from another
+#     boot or from another network namespace; or when the guards have not
+#     been seen intact for GUARD_GRACE seconds (default 30);
+#   - gluetun backend: when NetBird logs that it runs without advanced
+#     routing, when the overlay interface has not carried the control mark
+#     for FWMARK_GRACE seconds, or when the guards have not been seen intact
+#     for FWMARK_GRACE seconds (default 30).
 # With TUNNEL_BACKEND=gluetun the gate also refuses settings that switch off
-# NetBird's control-plane mark, waits for the control-plane rules (88/89) and
-# the host table, and then stays in front of NetBird instead of handing over:
-# it stops NetBird, and exits non-zero, when NetBird logs that it runs without
-# advanced routing, when the overlay interface has not carried the control
-# mark for 30 seconds, or when the guards stay missing for 30 seconds.
+# NetBird's control-plane mark, and waits for the control-plane rules (88/89)
+# and the host table. On TERM (the container stopping) it sends TERM to
+# NetBird's group at once, KILL 10 seconds later, and exits within 11.
 set -eu
 set -f
 overlay_if=${NB_INTERFACE_NAME:-wt0}
@@ -89,7 +101,7 @@ done
 # It validates the whole file as JSON (strings with every escape, numbers,
 # literals, nesting) and reports on the root object's own fields only,
 # matched as Go's encoding/json matches struct fields: by name, without
-# regard to ASCII case (client/util/file.go:196-209). It prints one verdict
+# regard to ASCII case (util/file.go:196-215). It prints one verdict
 # and nothing from the file:
 #   malformed  not a single valid JSON object
 #   badkey     a root field name with a byte or escape outside printable ASCII
@@ -363,7 +375,7 @@ if [ "$backend" = gluetun ]; then
     [ "${NB_FWMARK_BASE:-0x1bd00}" = "$control_mark" ] ||
         refuse "NB_FWMARK_BASE must equal CONTROL_MARK ($control_mark)"
     # The whole guard is checked with the definitions the guard sidecar uses
-    # (routing/gluetun-rules, mounted next to this script), with the same
+    # (routing/contract-rules, mounted next to this script), with the same
     # settings: every rule at priorities 0-97, the exit table and the host
     # table, in both families.
     OVERLAY_IF=$overlay_if
@@ -375,10 +387,14 @@ if [ "$backend" = gluetun ]; then
     HOST_TABLE=${HOST_TABLE:-51822}
     CONTROL_MARK=$control_mark
     host_table=$HOST_TABLE
-    GLUETUN_RULES=${GLUETUN_RULES:-/usr/local/bin/molebridge-gluetun-rules}
+    # Until 0.7.0 deployments may still mount the definitions by their old name.
+    GLUETUN_RULES=${CONTRACT_RULES:-${GLUETUN_RULES:-/usr/local/bin/molebridge-contract-rules}}
+    if [ ! -f "$GLUETUN_RULES" ] && [ -z "${CONTRACT_RULES:-}" ] && [ -f /usr/local/bin/molebridge-gluetun-rules ]; then
+        GLUETUN_RULES=/usr/local/bin/molebridge-gluetun-rules
+    fi
     [ -f "$GLUETUN_RULES" ] || refuse "the guard's rule definitions are missing ($GLUETUN_RULES)"
     fail() { refuse "$1"; }
-    # shellcheck source=routing/gluetun-rules
+    # shellcheck source=routing/contract-rules
     . "$GLUETUN_RULES"
     gr_validate
     # NetBird writes its log to the files in NB_LOG_FILE as well as the console
@@ -393,7 +409,7 @@ if [ "$backend" = gluetun ]; then
     [ -n "$watch_log" ] || refuse 'NB_LOG_FILE must name a log file; the gate reads it'
     # The routing sidecar writes "<boot id> <boot-clock seconds> <wg show
     # fwmark>" here. Every deadline below runs on the kernel's boot clock,
-    # which wall-clock changes don't move (gr_clock in routing/gluetun-rules).
+    # which wall-clock changes don't move (gr_clock in routing/contract-rules).
     status_file=${GUARD_STATUS_FILE:-/run/molebridge/overlay-fwmark}
     gr_clock || refuse 'cannot read the boot clock (/proc/uptime and the boot id)'
 
@@ -403,6 +419,29 @@ if [ "$backend" = gluetun ]; then
     grace=${FWMARK_GRACE:-30}
     case "$grace" in ''|0*|*[!0-9]*) refuse 'FWMARK_GRACE must be 5..30 seconds' ;; esac
     [ "${#grace}" -le 2 ] && [ "$grace" -ge 5 ] && [ "$grace" -le 30 ] || refuse 'FWMARK_GRACE must be 5..30 seconds'
+else
+    # Native: the routing contract with the exit's own settings, from the
+    # shared definitions mounted next to this script, and the tunnel config's
+    # addresses from the exit's owner record.
+    OVERLAY_IF=$overlay_if
+    OVERLAY_CIDR=${OVERLAY_CIDR:-}
+    OVERLAY6_CIDR=${OVERLAY6_CIDR:-}
+    EXIT_IF=${EXIT_IF:-mullvad}
+    EXIT_TABLE=${EXIT_TABLE:-51821}
+    [ -n "$OVERLAY_CIDR" ] ||
+        refuse 'OVERLAY_CIDR is not set for NetBird; compose.yaml passes the routing settings to it (docs/operations.md#upgrades)'
+    CONTRACT_RULES=${CONTRACT_RULES:-/usr/local/bin/molebridge-contract-rules}
+    [ -f "$CONTRACT_RULES" ] ||
+        refuse "the routing contract definitions are missing ($CONTRACT_RULES); compose.yaml mounts routing/contract-rules there"
+    fail() { refuse "$1"; }
+    # shellcheck source=routing/contract-rules
+    . "$CONTRACT_RULES"
+    gr_validate_common
+    owner_file=${OWNER_RECORD:-/run/molebridge/exit-owner}
+    grace=${GUARD_GRACE:-30}
+    case "$grace" in ''|0*|*[!0-9]*) refuse 'GUARD_GRACE must be 5..30 seconds' ;; esac
+    [ "${#grace}" -le 2 ] && [ "$grace" -ge 5 ] && [ "$grace" -le 30 ] || refuse 'GUARD_GRACE must be 5..30 seconds'
+    gr_clock || refuse 'cannot read the boot clock (/proc/uptime and the boot id)'
 fi
 
 if [ "$1" = --check-config ]; then
@@ -410,14 +449,32 @@ if [ "$1" = --check-config ]; then
     exit 0
 fi
 
+# Native: the contract for both families, with rules 94 and 98 for the
+# addresses in the owner record, and a tunnel route allowed but not required
+# (a missing one only drops traffic, at the unreachable fallback).
+native_intact() {
+    [ -z "$(native_problems -4 "$ow_addr4" "$ow_rule94" 2)" ] && [ -z "$(native_problems -6 "$ow_addr6" "$ow_rule94" 2)" ]
+}
 guards_ready() {
     guard_present -4 && guard_present -6 || return 1
-    [ "$backend" = gluetun ] || return 0
-    [ -z "$(gr_problems -4 '')" ] && [ -z "$(gr_problems -6 '')" ]
+    if [ "$backend" = gluetun ]; then
+        [ -z "$(gr_problems -4 '')" ] && [ -z "$(gr_problems -6 '')" ]
+    else
+        owner_valid "$owner_file" && native_intact
+    fi
 }
 # What is still missing, for the log while the gate waits.
 guard_problems() {
     found=''
+    if [ "$backend" = wireguard ]; then
+        if ! owner_valid "$owner_file"; then
+            found="$found $ow_why;"
+        else
+            for problem in $(native_problems -4 "$ow_addr4" "$ow_rule94" 2) $(native_problems -6 "$ow_addr6" "$ow_rule94" 2); do
+                found="$found $problem;"
+            done
+        fi
+    fi
     for family in -4 -6; do
         guard_present "$family" || found="$found IPv${family#-}: rule 1 or 97;"
         [ "$backend" = gluetun ] || continue
@@ -438,8 +495,11 @@ guard_problems() {
 
 trap 'exit 0' INT TERM
 echo 'NetBird gate: waiting for IPv4 and IPv6 routing guards'
-[ "$backend" = wireguard ] ||
+if [ "$backend" = wireguard ]; then
+    echo "NetBird gate: native backend: waiting for the exit's owner record ($owner_file) and the whole guard (rules 1-98, exit table $EXIT_TABLE)"
+else
     echo "NetBird gate: gluetun backend: waiting for the whole guard (rules 1-97 with control mark $control_mark, exit table $EXIT_TABLE, host table $host_table)"
+fi
 waited=0
 until guards_ready; do
     waited=$((waited + 1))
@@ -450,9 +510,10 @@ until guards_ready; do
     fi
     sleep 1
 done
-[ "$backend" = gluetun ] || exec "$@"
-
-# gluetun: supervise NetBird instead of handing over.
+# Supervise NetBird instead of handing over. It runs in its own process
+# group (setsid does not fork here: a background job is not a group leader),
+# so a stop reaches the daemon and `netbird up` directly; the image's bash
+# entrypoint forwards TERM only between its foreground commands.
 log_size() {
     size=$({ wc -c < "$watch_log"; } 2>/dev/null) || size=0
     size=$(printf '%s' "$size" | tr -d ' ')
@@ -462,69 +523,96 @@ log_size() {
 now() {
     gr_clock || stop 'cannot read the boot clock'
 }
-launch_offset=$(log_size)
-offset=$launch_offset
+if [ "$backend" = gluetun ]; then
+    launch_offset=$(log_size)
+    offset=$launch_offset
+fi
 gr_clock || refuse 'cannot read the boot clock'
 launched=$gr_now
 boot=$gr_boot
 last_good=$launched
-guards_lost=''
-"$@" &
+last_intact=$launched
+setsid "$@" &
 child=$!
-trap 'kill -TERM "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :; exit 0' INT TERM
+# NetBird's group, or NetBird itself where it could not get a group of its own.
+group_alive() { kill -0 "-$child" 2>/dev/null || kill -0 "$child" 2>/dev/null; }
+signal_netbird() { kill "-$1" "-$child" 2>/dev/null || :; kill "-$1" "$child" 2>/dev/null || :; }
+# TERM to NetBird's group, KILL after $1 seconds, then wait for the
+# entrypoint, at most one second more for the group to be gone.
+end_netbird() {
+    signal_netbird TERM
+    ticks=0
+    while group_alive && [ "$ticks" -lt $(($1 * 2)) ]; do
+        sleep 0.5
+        ticks=$((ticks + 1))
+    done
+    group_alive && signal_netbird KILL
+    ticks=0
+    while group_alive && [ "$ticks" -lt 4 ]; do
+        sleep 0.25
+        ticks=$((ticks + 1))
+    done
+    wait "$child" 2>/dev/null || :
+}
+trap 'end_netbird 10; exit 0' INT TERM
 stop() {
     echo "NetBird gate: stopping NetBird: $1 (see docs/troubleshooting.md)" >&2
-    kill -TERM "$child" 2>/dev/null || :
-    waited=0
-    while kill -0 "$child" 2>/dev/null && [ "$waited" -lt 20 ]; do
-        sleep 1
-        waited=$((waited + 1))
-    done
-    kill -KILL "$child" 2>/dev/null || :
-    wait "$child" 2>/dev/null || :
+    trap '' INT TERM
+    end_netbird 20
     exit 1
 }
-echo "NetBird gate: NetBird started; watching its log and $overlay_if's fwmark"
+if [ "$backend" = gluetun ]; then
+    echo "NetBird gate: NetBird started; watching its log and $overlay_if's fwmark"
+else
+    echo "NetBird gate: NetBird started; watching the routing guards and the exit's owner record"
+fi
 while :; do
     if ! kill -0 "$child" 2>/dev/null; then
         status=0
         wait "$child" || status=$?
         echo "NetBird gate: NetBird exited with status $status" >&2
+        # Whatever the entrypoint left behind in its group goes too.
+        kill -KILL "-$child" 2>/dev/null || :
         exit "$status"
     fi
-    # NetBird logs one of these when it will not mark its sockets
-    # (client/net/env_linux.go:61,66). Read only what this launch wrote; keep
-    # an overlap so a line written across two reads is still seen whole.
-    size=$(log_size)
-    [ "$size" -ge "$offset" ] || { offset=0; launch_offset=0; }
-    if tail -c +"$((offset + 1))" "$watch_log" 2>/dev/null |
-            grep -Fq -e 'falling back to legacy routing' -e 'advanced routing has been requested to be disabled'; then
-        stop 'NetBird logged that it runs without advanced routing, so its control traffic would be unmarked'
-    fi
-    offset=$((size > launch_offset + 512 ? size - 512 : launch_offset))
     now
     [ "$gr_boot" = "$boot" ] || stop 'the boot clock changed identity'
-    # A good record counts from when it was written, so reading the same
-    # record again never extends it. Records from another boot, from before
-    # this launch or from the future count for nothing.
-    record_boot=''
-    stamp=''
-    value=''
-    { read -r record_boot stamp value < "$status_file"; } 2>/dev/null || :
-    case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
-    [ "${#stamp}" -le 12 ] || stamp=0
-    if [ "$record_boot" = "$boot" ] && [ "$stamp" -ge "$last_good" ] && [ "$stamp" -le "$gr_now" ] &&
-            [ "$value" = "$control_mark" ]; then
-        last_good=$stamp
-    fi
-    [ $((gr_now - last_good)) -le "$grace" ] ||
-        stop "$overlay_if has not carried the control mark $control_mark for $grace seconds (last reported: ${value:-nothing})"
-    if guards_ready; then
-        guards_lost=''
+    if [ "$backend" = gluetun ]; then
+        # NetBird logs one of these when it will not mark its sockets
+        # (client/net/env_linux.go:61,66). Read only what this launch wrote; keep
+        # an overlap so a line written across two reads is still seen whole.
+        size=$(log_size)
+        [ "$size" -ge "$offset" ] || { offset=0; launch_offset=0; }
+        if tail -c +"$((offset + 1))" "$watch_log" 2>/dev/null |
+                grep -Fq -e 'falling back to legacy routing' -e 'advanced routing has been requested to be disabled'; then
+            stop 'NetBird logged that it runs without advanced routing, so its control traffic would be unmarked'
+        fi
+        offset=$((size > launch_offset + 512 ? size - 512 : launch_offset))
+        # A good record counts from when it was written, so reading the same
+        # record again never extends it. Records from another boot, from before
+        # this launch or from the future count for nothing.
+        record_boot=''
+        stamp=''
+        value=''
+        { read -r record_boot stamp value < "$status_file"; } 2>/dev/null || :
+        case "$stamp" in ''|*[!0-9]*) stamp=0 ;; esac
+        [ "${#stamp}" -le 12 ] || stamp=0
+        if [ "$record_boot" = "$boot" ] && [ "$stamp" -ge "$last_good" ] && [ "$stamp" -le "$gr_now" ] &&
+                [ "$value" = "$control_mark" ]; then
+            last_good=$stamp
+        fi
+        [ $((gr_now - last_good)) -le "$grace" ] ||
+            stop "$overlay_if has not carried the control mark $control_mark for $grace seconds (last reported: ${value:-nothing})"
     else
-        guards_lost=${guards_lost:-$gr_now}
-        [ $((gr_now - guards_lost)) -le "$grace" ] ||
-            stop "routing guards missing for $grace seconds:$(guard_problems)"
+        # No grace for the owner: an expired record already allows for the
+        # 2-second cadence it is written at.
+        owner_valid "$owner_file" || stop "$ow_why"
+    fi
+    # The guards' grace counts from the last check that found them intact.
+    if guards_ready; then
+        last_intact=$gr_now
+    elif [ $((gr_now - last_intact)) -gt "$grace" ]; then
+        stop "routing guards not intact for $grace seconds:$(guard_problems)"
     fi
     sleep 2 &
     wait "$!" || :

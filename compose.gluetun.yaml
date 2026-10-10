@@ -115,8 +115,8 @@ services:
           memory: 256m
 
   guard:
-    # The routing image from compose.yaml, run as a long-lived sidecar instead
-    # of its LinuxServer init: install the contract, then reconcile every few
+    # The routing image from compose.yaml, in its guard mode
+    # (TUNNEL_BACKEND=gluetun): install the contract, then reconcile every few
     # seconds. It never removes the unreachable fallback or rules 1 and 97.
     build:
       context: .
@@ -124,7 +124,6 @@ services:
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-guard"
     restart: unless-stopped
     network_mode: service:gluetun
-    entrypoint: ["/bin/sh", "/custom-cont-init.d/10-exit-routing"]
     cap_drop: [ALL]
     cap_add: [NET_ADMIN]
     security_opt: ["no-new-privileges:true"]
@@ -163,7 +162,7 @@ services:
           memory: 64m
 
   netbird:
-    image: docker.io/netbirdio/netbird:0.79.0@sha256:9d8480d87b7f7c10d67b820eecf332ecca5c2756792d4bdfa532182b4fc3005f
+    image: docker.io/netbirdio/netbird:0.80.0@sha256:4976692ea44bb93871743d0b742b4a8f97f6425bfc458ca2d78e28fdb8bdf4ad
     # In gluetun mode the gate stays in front of NetBird: it refuses settings
     # that unmark NetBird's control traffic, waits for the guard's rules, and
     # stops NetBird, exiting non-zero, if marking turns out to be off.
@@ -203,7 +202,7 @@ services:
         required: false
     volumes:
       - ./routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro
-      - ./routing/gluetun-rules:/usr/local/bin/molebridge-gluetun-rules:ro
+      - ./routing/contract-rules:/usr/local/bin/molebridge-contract-rules:ro
       - netbird-data:/var/lib/netbird
       - guard-run:/run/molebridge:ro
     depends_on:

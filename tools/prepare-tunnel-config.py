@@ -79,6 +79,12 @@ def build_tunnel_conf(text: str, table: str = EXIT_TABLE) -> str:
         raise ConfigError('Interface Address is not valid') from None
     if not any(a.version == 4 for a in parsed):
         raise ConfigError('Interface Address has no IPv4 tunnel address')
+    # What the routing image accepts (docs/configuration.md#the-tunnel-config):
+    # one host address per family.
+    if any(sum(a.version == v for a in parsed) > 1 for v in (4, 6)):
+        raise ConfigError('Interface Address has more than one address in a family')
+    if any(a.network.prefixlen != a.max_prefixlen for a in parsed):
+        raise ConfigError('Interface Address must be host addresses (/32 and /128)')
 
     endpoint = peer.get('Endpoint', '')
     host, _, port = endpoint.rpartition(':')

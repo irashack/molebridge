@@ -168,6 +168,8 @@ def test_configured_health_requires_success_on_server(tmp_path, monkeypatch, sta
     app, kernel = native(tmp_path, 'mullvad', HOST)
     write_json_atomic(app.result_path, app.publish(status, 'Example status.',
                       configured_server=reported, server=actual))
+    from test_runtime import live_owner
+    live_owner(tmp_path, monkeypatch)
     monkeypatch.setattr(module, 'Applier', lambda *args, **kwargs: app)
     monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
     monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)

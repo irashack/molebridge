@@ -53,6 +53,7 @@ def rules(family):
     if family == 4:
         # IPv4 only: routing initialization reads 10.5.0.2 from the config.
         table.insert(2, {'priority': 94, 'src': TUNNEL4, 'ipproto': 'icmp', 'table': 51821})
+        table.append({'priority': 98, 'src': TUNNEL4, 'ipproto': 'icmp', 'action': 'unreachable'})
     return table
 
 
