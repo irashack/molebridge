@@ -75,10 +75,24 @@ If the tunnel or its routes disappear, that traffic is dropped; it never falls
 back to the host's own connection. The exit's own NetBird and VPN control
 traffic uses the host's normal route.
 
-The panel holds no privileges. It writes one file naming the server you
-picked. The applier checks that name against the provider's server list,
+The panel holds no VPN credentials, no gluetun control-server key and no
+network capabilities, and runs no commands. With OpenID Connect sign-in it
+can hold that sign-in's client secret. It writes one file naming the server
+you picked. The applier checks that name against the provider's server list,
 which it downloads itself (or reads from gluetun), then changes the tunnel
 and reports back.
+
+The panel shows an exit as connected only after the applier has checked the
+live peer and the address your traffic leaves from. How far that check goes
+depends on the provider, and the panel says which one an exit got:
+
+- **provider-confirmed:** the provider itself says the address is theirs.
+  Mullvad, PIA and NordVPN, and Mullvad and NordVPN through gluetun.
+- **tunnel checks only:** a fresh handshake with the selected server, and the
+  address seen through the tunnel differs from the host's own and matches the
+  provider's server list where that list gives exit addresses. No provider
+  confirms it. FastestVPN, IVPN, Surfshark and Windscribe through gluetun.
+
 Details: [architecture](docs/architecture.md).
 
 ## What you need
@@ -145,6 +159,11 @@ Podman details, is in [requirements](docs/prerequisites.md).
   back after gluetun restarts on another server.
 - **NetBird only.** It relies on NetBird's exit-node routes and was never
   built or tested for Tailscale or other overlays.
+- **Exits only.** Molebridge carries traffic for NetBird devices, not for
+  other containers. To send a container's traffic through a VPN, use
+  [gluetun](https://github.com/qdm12/gluetun) directly. Using Switchyard to
+  pick the server for an ordinary gluetun container is a
+  [roadmap](ROADMAP.md) idea, not built.
 
 ## Status
 
