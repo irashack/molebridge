@@ -417,6 +417,77 @@ host ID, on their own pasta network as in
 Not done on this host: traffic from a client through the exit, a switch
 from the panel, the fail-closed drills, and podman-compose.
 
+## The routing image on rootless Podman at `0086fac`
+
+2026-10-10. The same long-running host: Debian testing, kernel 7.2, amd64,
+rootless Podman 5.8.6 running Quadlet units, a self-hosted NetBird server
+and NetBird 0.80.0 in the exits. The revision is `0086fac`, v0.6.0's code;
+the release commit adds only this record and the panel's version string.
+
+Every exit was upgraded in place from v0.5.3:
+- four Mullvad, one PIA and one NordVPN native exits;
+- a gluetun v3.41.3 exit with NordVPN;
+- the Switchyard panel serving all of them.
+
+On each host:
+- The container's root is remapped to another host ID.
+- The tunnel config is the host user's, mode `0640`, readable through an ACL.
+- The `wireguard` container ran with only `NET_ADMIN`. The `DAC_READ_SEARCH`
+  in `compose.yaml` was left out because the ACL already grants the read.
+
+The NordVPN exit was the canary and went first. The rest followed only after
+it passed.
+
+- Before the upgrade, `--check-config` with the new image accepted every
+  live tunnel config: Mullvad's with an IPv4 and an IPv6 address, PIA's with
+  none, and NordVPN's with an IPv4 address. Each was read through its ACL.
+- After the upgrade, every container was healthy and the applier's health
+  check passed on every exit. On each exit the `wireguard` process's
+  effective capabilities were `NET_ADMIN` alone.
+- Rules 1, 90 and 94–98 were in place for IPv4, and 1, 90 and 95–97 for
+  IPv6 on the IPv4-only NordVPN exit. On the PIA exit, rules 94 and 98 for
+  the registered address were installed by the applier, and the owner record
+  read `applier`.
+- The gluetun exit's `guard` ran the image's own entrypoint under tini and
+  reported every rule in place.
+
+The drills ran on the NordVPN exit, one at a time, with no client on the
+exit:
+
+- **Rule deletions.** IPv4 rules 97, 94, 98, 1 and 95 and IPv6 rules 97 and
+  1 were each deleted. Each was back within 1–2 seconds; the reconcile
+  interval is 2 seconds. The applier stayed healthy and NetBird kept
+  running.
+- **Tunnel loss.** The tunnel interface was deleted. Readiness was
+  withdrawn, and the interface came back in about 2 seconds. The applier
+  restored its peer, and its health check passed again with NordVPN-confirmed
+  egress 3 seconds later. NetBird was not restarted.
+- **Stale owner record.** The entrypoint was frozen with `SIGSTOP`, so the
+  owner record stopped updating. The gate stopped NetBird 10 seconds after
+  the freeze; it logged that the record was written 7 seconds ago. The
+  applier's health check failed while the record was stale. The entrypoint
+  was resumed after 12 seconds. All three containers were healthy again 90
+  seconds later, most of it the NetBird unit's 60-second restart delay.
+- **`SERVER`.** `SERVER` was set on the NordVPN exit to a server other than
+  the panel's choice. The applier switched to it with NordVPN-confirmed
+  egress. The panel then reported the exit with `selection_mode`
+  `configuration` and no panel choice. This was read by running the panel's
+  own status code in its container, not a signed-in browser. The panel's
+  refusal condition for selection posts held. Removing `SERVER` brought the
+  panel's choice back.
+
+Not done:
+- client traffic through any exit during these drills, or a phone on the
+  exit;
+- the drills on the Mullvad, PIA or gluetun exits;
+- a PIA region switch, which is where the applier moves rules 94 and 98 to
+  the new address; the namespace drill covers three address changes;
+- `SERVER` on any exit other than NordVPN, and the read-only panel in a
+  browser;
+- the routing image on Docker. Docker relies on CI's container drill
+  (`tools/check-exit-image.sh`: start, repair, tunnel loss, bring-up
+  failures and every stop case) and the namespace drills under busybox sh.
+
 ## Not yet tested
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
@@ -444,7 +515,11 @@ from the panel, the fail-closed drills, and podman-compose.
 - Fail-closed drills with a phone client. The drills above used a Linux
   client; a phone's NetBird client may fall back to its own connection
   differently while the exit peer is offline.
-- Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end.
+- Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end. The
+  routing image has no live Docker pass; see
+  [above](#the-routing-image-on-rootless-podman-at-0086fac) for what CI covers.
+- The v0.6.0 drills on Mullvad, PIA and gluetun exits, with a client on the
+  exit, and the applier moving PIA's rules 94 and 98 on a live region switch.
 - NordVPN beyond the passes [at `036e1cc`](#nordvpn-pass-at-036e1cc) and
   [on rootless Podman](#nordvpn-on-rootless-podman-at-v050): the insights
   cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with

@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.6.0 (2026-10-10)
 
 - Add optional `SERVER`: a server hostname, or a PIA region id. When set,
   configuration wins over `desired.json` for native Mullvad, PIA, NordVPN
@@ -67,11 +67,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 Upgrading from 0.5.3: build the routing image and check your tunnel config
 with it before you recover; see [operations](docs/operations.md#upgrades).
 
-Neither the `SERVER` behavior nor the routing image has been tested on a
-live exit. CI builds the image and runs its start, repair, bring-up failure
-and stop cases (`tools/check-exit-image.sh`) and the namespace drills,
-including the new drift and gate cases, under busybox sh. Earlier live
-results are recorded in [docs/testing.md](docs/testing.md).
+Tested live on rootless Podman only, at `0086fac` (this release's code):
+- six native exits (Mullvad, PIA, NordVPN) and a gluetun exit were upgraded
+  in place;
+- on the NordVPN exit: drift repair, tunnel loss, a stale owner record and
+  `SERVER`.
+No client traffic ran during the drills. Docker has no live pass with the
+routing image: CI builds it and runs its start, repair, bring-up failure
+and stop cases (`tools/check-exit-image.sh`) and the namespace drills under
+busybox sh. See [the routing image on rootless Podman](docs/testing.md#the-routing-image-on-rootless-podman-at-0086fac).
 
 ## 0.5.3 (2026-10-09)
 
