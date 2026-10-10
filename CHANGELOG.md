@@ -4,7 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.6.1 (2026-10-10)
+
+A tunnel config check fix in the routing image and `tools/molebridge.py
+check`. Update every native exit; the gluetun backend's guard doesn't read
+the tunnel config.
 
 - **The routing image now refuses field names in any spelling but the
   generators'.** `address`, `privatekey`, `allowedIPs` and every other
@@ -25,7 +29,10 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   generators wrote are unaffected.
 
 Tested with `pytest -q panel tools` on macOS and `tools/check-exit-image.sh`
-on OrbStack (Docker Engine 29.4.0); no live exit has run this change.
+on OrbStack (Docker Engine 29.4.0). On the rootless Podman host in
+[testing](docs/testing.md#the-routing-image-on-rootless-podman-at-0086fac),
+the new check accepted all six live native configs (four Mullvad, one PIA,
+one NordVPN); no live exit has run this release.
 
 ## 0.6.0 (2026-10-10)
 

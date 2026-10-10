@@ -183,10 +183,11 @@ Podman details, is in [requirements](docs/prerequisites.md).
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
 release is
-[v0.6.0](https://github.com/irashack/molebridge/releases/tag/v0.6.0), which
-replaces LinuxServer's WireGuard image with Molebridge's own routing image
-(a supervised tunnel, a 2-second repair loop, an owner record and NetBird's
-gate kept in front of NetBird) and adds the optional `SERVER` setting; see the
+[v0.6.1](https://github.com/irashack/molebridge/releases/tag/v0.6.1), which
+fixes the tunnel config check on top of v0.6.0. v0.6.0 replaced LinuxServer's
+WireGuard image with Molebridge's own routing image (a supervised tunnel, a
+2-second repair loop, an owner record and NetBird's gate kept in front of
+NetBird) and added the optional `SERVER` setting; see the
 [changelog](CHANGELOG.md).
 
 | Setup | Tested |
