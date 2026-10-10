@@ -298,6 +298,7 @@ class GluetunApplier(Applier):
         return cls(state_dir, config, client=client,
                    servers_file=env.get('GLUETUN_SERVERS_FILE') or DEFAULT_SERVERS_FILE,
                    updater_period_s=updater_period(env.get('GLUETUN_UPDATER_PERIOD') or DEFAULT_UPDATER_PERIOD),
+                   server=env.get('SERVER', ''),
                    **kwargs)
 
     def make_catalog(self):
@@ -463,10 +464,14 @@ class GluetunApplier(Applier):
         return super().publish(status, message, server=server, **fields)
 
     def switch(self, request):
-        request = desired_request(request, self.provider)
+        request = self.switch_request(request)
         self.request = request
         self.rejection = None
         self.pending = None
+        error = self.configuration_error()
+        if error:
+            self.rejection = error
+            return self.inspect()
         if request is None:
             self.rejection = 'Invalid desired-state file; no change applied.'
             return self.inspect()
@@ -521,18 +526,22 @@ class GluetunApplier(Applier):
         return result
 
     def restore(self):
-        """Put the last verified server again when gluetun runs another one
+        """With SERVER, restore configuration without consulting panel state.
+        Otherwise put the last verified server again when gluetun runs another one
         than Molebridge last put, as after gluetun restarts with its
         environment's selection. Only when the panel's request is absent or
         was refused: otherwise the request path applies the request again
         itself. Nothing happens until gluetun's peer can be identified, nor
         within a switch timeout of the last PUT."""
-        target, last_put = self.selection.get('last_successful'), self.selection.get('last_put')
+        target = self.configured_server or self.selection.get('last_successful')
+        last_put = self.selection.get('last_put')
+        if self.configuration_error():
+            return None
         if not target or target not in self.catalog.relays or not self.catalog.usable():
             return None
         if self.last_put_at is not None and self.clock() - self.last_put_at < GLUETUN_SWITCH_TIMEOUT_SEC:
             return None
-        request = desired_request(read_json(self.desired_path, 4096), self.provider)
+        request = None if self.configured_server else desired_request(read_json(self.desired_path, 4096), self.provider)
         # A request not yet handled, or handled and not refused, is the
         # request path's: it applies (or re-applies) the request itself.
         if request is not None and (request_token(request) != self.last_request or not self.rejection):
@@ -541,14 +550,16 @@ class GluetunApplier(Applier):
             live = self.server_for(self.peers())
         except (RuntimeError, ValueError, UnicodeError):
             return None
-        if live is None or live == last_put:
+        if live is None or live == (target if self.configured_server else last_put):
             return None
         try:
             self.put(self.catalog.relays[target])
         except (RuntimeError, ValueError, UnicodeError):
-            print('applier: gluetun did not accept the last verified server again', flush=True)
+            print('applier: gluetun did not accept '
+                  + ('SERVER' if self.configured_server else 'the last verified server') + ' again', flush=True)
             return None
-        print('applier: gluetun was not running the selected server; put the last verified one again', flush=True)
+        print('applier: gluetun was not running the selected server; put '
+              + ('SERVER' if self.configured_server else 'the last verified one') + ' again', flush=True)
         self.next_health = 0
         return target
 

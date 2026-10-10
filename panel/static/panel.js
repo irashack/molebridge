@@ -5,7 +5,8 @@
 
   const page = document.querySelector('.page');
   const form = document.getElementById('select-form');
-  if (!page || !form) return;
+  if (!page) return;
+  const configured = page.dataset.configured || '';
 
   const embed = document.body.classList.contains('embed');
   // Set when this panel serves several exits: every request names the exit.
@@ -809,12 +810,24 @@
       clearTimeout(timeout);
       polling = false;
     }
-    const want = data.desired?.server || '';
+    if ((data.view.configured_server || '') !== configured) {
+      location.reload();
+      return 0;
+    }
+    const want = configured || data.desired?.server || '';
     const request = data.desired?.request_id || '';
     const result = data.result || {};
     const state = data.view.state;
     const actual = result.server || '';
     const previousState = page.dataset.state;
+    // Read-only pages have no relay chips to paint location details from.
+    // Reload on a server/presentation change to get the applier's catalogue;
+    // ordinary health and egress updates still happen in place.
+    if (configured && (actual !== page.dataset.actual ||
+        (state === 'applying') !== (previousState === 'applying'))) {
+      location.reload();
+      return 0;
+    }
     // Who the exit is, as of this answer. A change (a switch finishing, one
     // started elsewhere, gluetun putting a server back) is painted in place.
     const moved = want !== desired || actual !== page.dataset.actual ||
@@ -848,7 +861,7 @@
       page.dataset.requested = data.desired?.requested_at || '';
       page.dataset.actual = actual;
       paintStatus(state, data.view.label, message);
-      paintCurrent();
+      if (!configured) paintCurrent();
       if (previousState === 'applying' && state !== 'applying') {
         // The success moment, only for the request this tab saw applying.
         rememberSwitch(state);

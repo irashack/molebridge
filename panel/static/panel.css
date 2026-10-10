@@ -721,6 +721,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .widget-header h2 { font-size: 1.1rem; letter-spacing: .13em; font-weight: 750; }
 :root[data-style="provider"] .widget-content { box-shadow: none; }
 :root[data-style="provider"] .full .switchboard { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 30px; align-items: start; }
+.page[data-configured] .overview { grid-column: 1 / -1; }
 
 /* Current exit. Colour and motion derive from verified state, never the
    desired relay alone. The PIA ring is decorative, not a disconnect control. */

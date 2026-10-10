@@ -141,6 +141,8 @@ def status_view(desired, result, provider='mullvad'):
     """One interpretation for HTML, API, monitoring and browser polling."""
     desired = desired if isinstance(desired, dict) else {}
     result = result if isinstance(result, dict) else {}
+    if configured_server(result) is not None:
+        desired = {}
     if not recent(result.get('checked_at')):
         return 'unknown', 'status stale' if result else 'awaiting status'
     request = desired_request(desired, provider)
@@ -152,7 +154,9 @@ def status_view(desired, result, provider='mullvad'):
     if status == 'ok':
         # Results written before the NetBird mode check have no such field.
         if (result.get('routing_ok') is not True or egress_tier(result, provider) is None
-                or result.get('netbird_native', True) is not True):
+                or result.get('netbird_native', True) is not True
+                or (configured_server(result) is not None
+                    and result.get('server') != configured_server(result))):
             return 'failed', 'verification failed'
         return 'ok', 'connected'
     if status == 'applying':
@@ -160,3 +164,13 @@ def status_view(desired, result, provider='mullvad'):
     if status == 'failed':
         return 'failed', 'failed'
     return 'unknown', 'unknown'
+
+
+def configured_server(result):
+    """Configuration authority survives stale status; freshness only governs health.
+    Invalid SERVER names still lock the exit. Older snapshots have no setting."""
+    if isinstance(result, dict):
+        value = result.get('configured_server')
+        if isinstance(value, str) and value:
+            return value
+    return None

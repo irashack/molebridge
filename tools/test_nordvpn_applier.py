@@ -448,11 +448,12 @@ def test_doctor_accepts_the_generated_config_without_account_files(tmp_path, ext
         host_tools.Host(tmp_path, run=lambda *a, **kw: '').check_files(config)
 
 
-def test_compose_override_only_raises_the_appliers_memory():
+def test_compose_override_passes_server_and_raises_the_appliers_memory():
     yaml = pytest.importorskip('yaml')
     compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
     nord = yaml.safe_load((ROOT / 'compose.nordvpn.yaml').read_text())
-    assert nord == {'services': {'applier': {'deploy': {'resources': {'limits': {'memory': '512m'}}}}}}
+    assert nord == {'services': {'applier': {'environment': {'SERVER': '${SERVER:-}'},
+                                           'deploy': {'resources': {'limits': {'memory': '512m'}}}}}}
     # The whole capped download fits in the applier's scratch space.
     tmpfs = compose['services']['applier']['tmpfs']
     assert len(tmpfs) == 1 and tmpfs[0].startswith('/tmp:size=48m,')

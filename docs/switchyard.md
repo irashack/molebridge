@@ -9,6 +9,25 @@ By default it has no login. Put it behind [authenticated access](access.md)
 before anyone else can reach it, or turn on its
 [OpenID Connect sign-in](access.md#sign-in-with-openid-connect).
 
+## An exit set in configuration
+
+When an exit has `SERVER` set, the page shows "Set in configuration" and the
+configured server name. That exit is read-only: no location, fastest, saved
+or retry switching controls are shown, in the full page or the embed. Its
+connection state and Diagnostics remain available. Other exits in the same
+panel can still be switched.
+
+The panel learns the setting from the applier's `result.json`, through its
+existing read-only mount. A stale status keeps the exit read-only and shows
+its connection as unknown. A `POST /select` for that exit is refused with
+403 and "Exit is set in configuration; change SERVER to choose another
+server." `/api/status` exposes `view.selection_mode` as `configuration` and
+`view.configured_server` as the configured name; `desired` is null.
+
+Change or clear `SERVER` in the exit's configuration and apply it with
+[recovery](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
+explains validation, startup and what happens to a previous panel request.
+
 ## Switching
 
 The page has three parts:

@@ -256,6 +256,7 @@ services:
       HOST_IF: "${HOST_IF:-eth0}"
       HOST_TABLE: "${HOST_TABLE:-51822}"
       CONTROL_MARK: "${CONTROL_MARK:-0x1bd00}"
+      SERVER: "${SERVER:-}"
       GLUETUN_CONTROL_URL: http://127.0.0.1:8000
       GLUETUN_API_KEY_FILE: /run/secrets/gluetun/api_key
       GLUETUN_SERVERS_FILE: /gluetun-servers/servers.json

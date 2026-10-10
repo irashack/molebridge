@@ -4,6 +4,19 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- Add optional `SERVER`: a server hostname, or a PIA region id. When set,
+  configuration wins over `desired.json` for native Mullvad, PIA, NordVPN
+  and the gluetun backend, including gluetun restart restoration. Invalid
+  or unknown names report a quoted failure rather than using a panel choice.
+- Switchyard shows configured exits read-only, refuses selection posts and
+  exposes the setting through `/api/status`, using the applier's existing
+  status snapshot. Empty `SERVER` keeps panel selection unchanged.
+
+The `SERVER` behavior has not been tested on a live exit. Earlier live
+results are recorded in [docs/testing.md](docs/testing.md).
+
 ## 0.5.3 (2026-10-09)
 
 Applier only, like 0.5.2. Update every exit; a Switchyard panel on 0.5.1 or

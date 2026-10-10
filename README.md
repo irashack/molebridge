@@ -28,7 +28,9 @@ IVPN, Surfshark and Windscribe.
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
 (PIA) in a small web panel called Switchyard. Every device using the exit follows the switch without any client
-changes. Connections open through the exit drop when it switches.
+changes. Alternatively, set [SERVER](docs/configuration.md#a-server-set-in-configuration)
+to keep the exit on a configured server; the panel then shows it read-only.
+Connections open through the exit drop when it switches.
 
 <p align="center">
   <img src="docs/assets/switchyard.png" alt="Switchyard with four exits as tabs: Mullvad, PIA, NordVPN, and Surfshark through gluetun; the Mullvad exit is selected" width="900">

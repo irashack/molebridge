@@ -817,7 +817,8 @@ class EgressTierPanelTests(ServerIntegrationTests):
     def test_provider_confirmed_exit_has_no_tunnel_label(self):
         self._result(exit_confirmed=True, egress_tier='provider')
         _, body = self._get('/api/status')
-        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'provider'})
+        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'provider',
+                                                   'selection_mode': 'panel', 'configured_server': None})
         _, page = self._get('/')
         self.assertIn('data-tier-note title="No check by the provider itself; see Diagnostics" hidden>', page)
         self.assertIn('<dd data-f="egress_tier">provider-confirmed</dd>', page)
@@ -827,7 +828,8 @@ class EgressTierPanelTests(ServerIntegrationTests):
         self._tunnel_provider()
         self._result(exit_confirmed=False, egress_tier='tunnel')
         _, body = self._get('/api/status')
-        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'tunnel'})
+        self.assertEqual(json.loads(body)['view'], {'state': 'ok', 'label': 'connected', 'tier': 'tunnel',
+                                                   'selection_mode': 'panel', 'configured_server': None})
         _, page = self._get('/')
         self.assertIn('data-tier-note title="No check by the provider itself; see Diagnostics">tunnel checks only<',
                       page)
@@ -837,7 +839,8 @@ class EgressTierPanelTests(ServerIntegrationTests):
     def test_tunnel_tier_is_refused_for_a_provider_with_its_own_check(self):
         self._result(exit_confirmed=False, egress_tier='tunnel')
         _, body = self._get('/api/status')
-        self.assertEqual(json.loads(body)['view'], {'state': 'failed', 'label': 'verification failed', 'tier': None})
+        self.assertEqual(json.loads(body)['view'], {'state': 'failed', 'label': 'verification failed', 'tier': None,
+                                                   'selection_mode': 'panel', 'configured_server': None})
         _, page = self._get('/')
         self.assertIn('<dd data-f="egress_tier">not confirmed</dd>', page)
         self.assertIn('Diagnostics" hidden>', page)

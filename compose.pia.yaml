@@ -4,5 +4,7 @@
 # one value per file, mode 0600. No other container sees them.
 services:
   applier:
+    environment:
+      SERVER: "${SERVER:-}"
     volumes:
       - ./secrets/pia:/run/secrets/pia:ro

@@ -476,6 +476,25 @@ Gluetun refreshes the list by itself one `UPDATER_PERIOD` (24 hours) after it
 starts, or sooner if you trigger it
 ([below](#choosing-and-switching-servers)).
 
+## A configured server with the Molebridge applier
+
+The three-container form on this page has no applier, so Molebridge's
+`SERVER` setting has no effect there. Its server is chosen with gluetun's
+filters or control server as described below.
+
+If you want a declared server enforced after gluetun restarts, use the
+[full gluetun backend](configuration.md#gluetun-backend), including its
+applier, and set `SERVER` to one server hostname from its catalogue. The
+panel is optional. When `SERVER` is set, configuration wins: the applier
+ignores `desired.json` and restores `SERVER` after a restart, ahead of a
+saved panel selection. If you run Switchyard, it shows that exit read-only
+as "Set in configuration". Invalid or unknown names fail validation rather
+than falling back to a panel selection.
+
+`GLUETUN_SERVER_*` filters still choose gluetun's initial connection before
+the applier can converge. See [the setting and its validation](configuration.md#a-server-set-in-configuration)
+for the rule, startup behavior and how to change it.
+
 ## Choosing and switching servers
 
 Without the applier, nothing selects servers for you, and nothing watches

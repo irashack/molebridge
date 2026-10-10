@@ -155,6 +155,7 @@ services:
       EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
       PROVIDER: "${PROVIDER:-mullvad}"
+      SERVER: "${SERVER:-}"
       # PIA only, off by default; see docs/providers.md#port-forwarding.
       PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
       PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"

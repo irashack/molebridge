@@ -105,12 +105,12 @@ class PiaApplier(Applier):
 
     def __init__(self, state_dir: Path, config, *, secrets_dir=Path('/run/secrets/pia'),
                  port_forward=False, forward_target=None, run=command, clock=None, sleep=None,
-                 choose=random.SystemRandom().choice):
+                 choose=random.SystemRandom().choice, server=''):
         # make_catalog, called by the base constructor, reads port_forward.
         self.port_forward = port_forward
         self.forward_target = forward_target
         kwargs = {k: v for k, v in (('clock', clock), ('sleep', sleep)) if v is not None}
-        super().__init__(state_dir, config, run=run, **kwargs)
+        super().__init__(state_dir, config, run=run, server=server, **kwargs)
         self.secrets_dir = Path(secrets_dir)
         self.tunnel_path = self.directory / 'tunnel.json'
         self.choose = choose
@@ -137,7 +137,7 @@ class PiaApplier(Applier):
         elif target:
             raise ValueError('PIA_PORT_FORWARD_TARGET is set but PIA_PORT_FORWARD is off')
         return cls(state_dir, config, secrets_dir=Path(env.get('PIA_SECRETS_DIR', '/run/secrets/pia')),
-                   port_forward=port_forward, forward_target=target or None, **kwargs)
+                   port_forward=port_forward, forward_target=target or None, server=env.get('SERVER', ''), **kwargs)
 
     def make_catalog(self):
         return RelayCatalog(self.directory, 'pia', port_forward_only=self.port_forward)

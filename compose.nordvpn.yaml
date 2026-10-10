@@ -8,6 +8,8 @@
 # about 300 MB, so the applier gets more room than the default 128m.
 services:
   applier:
+    environment:
+      SERVER: "${SERVER:-}"
     deploy:
       resources:
         limits:

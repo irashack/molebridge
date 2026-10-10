@@ -691,7 +691,8 @@ def test_compose_passes_the_provider_everywhere():
     for service in ('wireguard', 'applier', 'control-panel'):
         assert compose['services'][service]['environment']['PROVIDER'] == '${PROVIDER:-mullvad}'
     override = yaml.safe_load((ROOT / 'compose.pia.yaml').read_text())
-    assert override['services'] == {'applier': {'volumes': ['./secrets/pia:/run/secrets/pia:ro']}}
+    assert override['services'] == {'applier': {'environment': {'SERVER': '${SERVER:-}'},
+                                               'volumes': ['./secrets/pia:/run/secrets/pia:ro']}}
 
 
 # -- egress check retry --------------------------------------------------------

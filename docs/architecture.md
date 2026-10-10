@@ -600,7 +600,8 @@ control mark: rule 88 sends it to the host table, and the post-rules accept
 it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN`, which the applier
 holds.
 
-**gluetun restarting.** Settings put at runtime are lost when gluetun
+**gluetun restarting.** With `SERVER` set, the applier returns to it instead
+of a saved selection. Without it, settings put at runtime are lost when gluetun
 restarts; it starts again from `GLUETUN_SERVER_*`. The applier keeps the
 server it last put and the last one it verified in
 `state/applier/gluetun-selection.json`. A request from the panel that was
@@ -651,6 +652,17 @@ hours cannot authorize a new switch or a healthy result. It does not remove a
 working tunnel merely because the API is unavailable.
 
 ## Requests and switching
+
+When `SERVER` is set, the applier uses it instead of reading `desired.json`.
+It validates the name and fresh-catalogue membership through the same
+request path, and retries a failed application on the periodic check.
+The gluetun restore path also targets `SERVER`, ahead of saved selection
+state. `result.json` carries `configured_server` (null when unset); the panel
+uses it to omit switching controls, refuse selection posts and ignore old
+panel requests when interpreting status. Connection freshness is checked
+independently. See [configuration](configuration.md#a-server-set-in-configuration).
+
+Without `SERVER`, the existing request sequence is:
 
 ```mermaid
 sequenceDiagram

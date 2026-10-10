@@ -49,7 +49,7 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from molebridge import countries, providers
 from molebridge.gluetun_catalog import DATA_STALE_SEC as GLUETUN_DATA_STALE_SEC
-from molebridge.state import (CATALOG_MAX_AGE, age_seconds, egress_tier, exit_confirmed, now_iso,
+from molebridge.state import (CATALOG_MAX_AGE, age_seconds, configured_server, egress_tier, exit_confirmed, now_iso,
                               provider_from_env, read_json, recent, status_view, valid_server_name,
                               write_json_atomic)
 from molebridge.relays import read_snapshot, snapshot_relays
@@ -677,14 +677,18 @@ def _field(container: Optional[Dict[str, Any]], key: str, default: str = '(unkno
 
 def status_payload(ex: Optional[Exit] = None):
     ex = ex or single_exit()
-    desired = read_json(ex.desired_path, 4096)
     result = read_json(ex.result_path, 16384)
+    configured = configured_server(result)
+    desired = None if configured is not None else read_json(ex.desired_path, 4096)
     desired = desired if isinstance(desired, dict) else None
     result = result if isinstance(result, dict) else None
     state, label = status_view(desired, result, ex.provider)
     # How a connected exit's egress was confirmed: 'provider' or 'tunnel'.
     tier = egress_tier(result, ex.provider) if state == 'ok' and result else None
-    return {'desired': desired, 'result': result, 'view': {'state': state, 'label': label, 'tier': tier}}
+    return {'desired': desired, 'result': result,
+            'view': {'state': state, 'label': label, 'tier': tier,
+                     'selection_mode': 'configuration' if configured is not None else 'panel',
+                     'configured_server': configured}}
 
 
 # Diagnostics wording per egress tier; the panel script keeps the same words.
@@ -874,6 +878,9 @@ def render_index_html(
     filters = spec.filters
     desired = desired if isinstance(desired, dict) else {}
     result = result if isinstance(result, dict) else {}
+    configured = configured_server(result)
+    if configured is not None:
+        desired = {}
     query = f'?exit={esc(ex.id)}' if ex.id else ''
 
     relays: Dict[str, Dict[str, Any]] = {}
@@ -885,7 +892,7 @@ def render_index_html(
         if isinstance(maybe_relays, dict) and relays_data.get('provider', 'mullvad') == provider:
             relays = maybe_relays
 
-    desired_server = str((desired or {}).get('server') or '')
+    desired_server = configured or str((desired or {}).get('server') or '')
     result_server = str((result or {}).get('server') or '')
     state, state_label = status_view(desired, result, provider)
     tier = egress_tier(result, provider) if result else None
@@ -911,7 +918,7 @@ def render_index_html(
     message = (result or {}).get('message')
     failure_note = ''
     retry = ''
-    if state == 'failed' and desired_server in relays:
+    if configured is None and state == 'failed' and desired_server in relays:
         # Explicit form ownership also keeps retry working without JS.
         retry = (f' <button type="submit" form="select-form" name="server" value="{esc(desired_server)}" '
                  f'class="relay-switch" data-retry>Retry</button>')
@@ -988,75 +995,17 @@ def render_index_html(
     connection_label = {'ok': 'Secure connection', 'applying': 'Switching route',
                         'failed': 'Connection needs attention', 'unknown': 'Connection unverified'}[state]
 
-    return f"""<!DOCTYPE html>
-<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{esc(spec.css_id)}"{provider_accent(provider)}>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="{'dark light' if PANEL_THEME == 'auto' else PANEL_THEME}">
-{theme_color_meta(provider)}
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="{esc(PANEL_SHORT_TITLE)}">
-<title>{title}</title>
-<!-- An authenticating proxy needs its session cookie, which manifest fetches omit by default. -->
-<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<link rel="icon" href="/static/icon-192.png?v={v['icon-192.png']}" type="image/png">
-<link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={v['apple-touch-icon.png']}">
-<link rel="stylesheet" href="/static/panel.css?v={v['panel.css']}">
-<script src="/static/panel.js?v={v['panel.js']}" defer></script>
-</head>
-<body class="{'embed' if embed else 'full'}">
-<main class="page" data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-switch-timeout="{SWITCH_TIMEOUT_S.get(spec.backend, 60)}" data-checked="{esc(str(result.get('checked_at') or ''))}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
-{heading}
-{tabs}
-<form method="post" action="/select" id="select-form">
-<input type="hidden" name="csrf_token" value="{token}">
-<input type="hidden" name="return" value="{return_to}">
-<input type="hidden" name="exit" value="{esc(ex.id)}">
-<div class="switchboard">
-<div class="overview">
-<section class="widget current-widget">
-  <div class="widget-header"><h2>{current_heading}{provider_note(provider)}</h2>{open_link}</div>
-  <div class="widget-content current">
-    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(connection_label)}</span></div>
-    <div class="current-row">
-      <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>{current_flag}</span></span>
-      <div class="current-main">
-        <div class="current-place" data-current-place>{current_place}</div>
-        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span> <button type="button" class="link-button copy-ip" data-copy-ip hidden>Copy</button></span></div>
-      </div>
-      <button type="button" class="link-button pin" data-pin aria-pressed="false" aria-label="Pin this server" title="Pin this server" hidden>☆</button>
-      <div class="current-side">
-        <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
-        <time class="checked-ago subdue" data-checked-ago hidden></time>
-        <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if tunnel_only else ' hidden'}>{esc(TIER_TEXT['tunnel'])}</span>
-        <span class="ms" data-current-ms></span>
-      </div>
-    </div>
-    <div data-notes>{switching_note}{failure_note}</div>
-    <details class="diagnostics">
-      <summary>Diagnostics</summary>
-      <dl>
-        <dt>Applier</dt><dd data-f="status">{_field(result, 'status')}</dd>
-        <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
-        <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
-        <dt>{esc(spec.label)} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>
-        <dt>Egress check</dt><dd data-f="egress_tier">{esc(TIER_TEXT[tier]) if result else '(unknown)'}</dd>{forward_row}
-        <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
-        <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
-        <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
-        <dt>Server</dt><dd data-current-details>{esc(current_details) or '(unknown)'}</dd>
-        <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
-        <dt>Requested</dt><dd data-requested-at>{_field(desired, 'requested_at', '')}</dd>
-        <dt>Relay list</dt><dd>{len(relays)} relays, {catalogue_age_text(relays_data, fetched_at)}{SERVER_LIST_UPDATE.get(result.get('server_list_update'), '')}</dd>
-      </dl>
-    </details>
-  </div>
-</section>
-
-<section class="widget" id="saved" hidden>
+    form_open = (f'<form method="post" action="/select" id="select-form">'
+                 f'<input type="hidden" name="csrf_token" value="{token}">'
+                 f'<input type="hidden" name="return" value="{return_to}">'
+                 f'<input type="hidden" name="exit" value="{esc(ex.id)}">') if configured is None else ''
+    form_close = '</form>' if configured is None else ''
+    configured_attr = f' data-configured="{esc(configured)}"' if configured is not None else ''
+    configuration_note = (f'<p class="note">Set in configuration: <strong>{esc(configured)}</strong>. '
+                          'Change SERVER in the exit configuration to choose another server.</p>') if configured is not None else ''
+    pin = ('<button type="button" class="link-button pin" data-pin aria-pressed="false" '
+           'aria-label="Pin this server" title="Pin this server" hidden>☆</button>') if configured is None else ''
+    switching_controls = f"""<section class="widget" id="saved" hidden>
   <div class="widget-header"><h2>Saved</h2></div>
   <div class="widget-content">
     <ol class="fastest-list" data-saved></ol>
@@ -1080,9 +1029,77 @@ def render_index_html(
     {locations_html}
     <p class="empty-state" data-filter-empty role="status" hidden>{esc('No matching locations.')}<br><span class="subdue">{esc('Try another name or clear your filters.')}</span></p>
   </div>
+</section>""" if configured is None else '</div>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en" data-theme="{PANEL_THEME}" data-style="{PANEL_STYLE}" data-provider="{esc(spec.css_id)}"{provider_accent(provider)}>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="{'dark light' if PANEL_THEME == 'auto' else PANEL_THEME}">
+{theme_color_meta(provider)}
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{esc(PANEL_SHORT_TITLE)}">
+<title>{title}</title>
+<!-- An authenticating proxy needs its session cookie, which manifest fetches omit by default. -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="icon" href="/static/icon-192.png?v={v['icon-192.png']}" type="image/png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={v['apple-touch-icon.png']}">
+<link rel="stylesheet" href="/static/panel.css?v={v['panel.css']}">
+<script src="/static/panel.js?v={v['panel.js']}" defer></script>
+</head>
+<body class="{'embed' if embed else 'full'}">
+<main class="page"{configured_attr} data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-switch-timeout="{SWITCH_TIMEOUT_S.get(spec.backend, 60)}" data-checked="{esc(str(result.get('checked_at') or ''))}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+{heading}
+{tabs}
+{form_open}
+<div class="switchboard">
+<div class="overview">
+<section class="widget current-widget">
+  <div class="widget-header"><h2>{current_heading}{provider_note(provider)}</h2>{open_link}</div>
+  <div class="widget-content current">
+    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(connection_label)}</span></div>
+    <div class="current-row">
+      <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>{current_flag}</span></span>
+      <div class="current-main">
+        <div class="current-place" data-current-place>{current_place}</div>
+        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span> <button type="button" class="link-button copy-ip" data-copy-ip hidden>Copy</button></span></div>
+      </div>
+      {pin}
+      <div class="current-side">
+        <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
+        <time class="checked-ago subdue" data-checked-ago hidden></time>
+        <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if tunnel_only else ' hidden'}>{esc(TIER_TEXT['tunnel'])}</span>
+        <span class="ms" data-current-ms></span>
+      </div>
+    </div>
+    {configuration_note}
+    <div data-notes>{switching_note}{failure_note}</div>
+    <details class="diagnostics">
+      <summary>Diagnostics</summary>
+      <dl>
+        <dt>Applier</dt><dd data-f="status">{_field(result, 'status')}</dd>
+        <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
+        <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
+        <dt>{esc(spec.label)} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>
+        <dt>Egress check</dt><dd data-f="egress_tier">{esc(TIER_TEXT[tier]) if result else '(unknown)'}</dd>{forward_row}
+        <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
+        <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
+        <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
+        <dt>Server</dt><dd data-current-details>{esc(current_details) or '(unknown)'}</dd>
+        <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
+        <dt>Requested</dt><dd data-requested-at>{_field(desired, 'requested_at', '')}</dd>
+        <dt>Relay list</dt><dd>{len(relays)} relays, {catalogue_age_text(relays_data, fetched_at)}{SERVER_LIST_UPDATE.get(result.get('server_list_update'), '')}</dd>
+      </dl>
+    </details>
+  </div>
 </section>
+
+{switching_controls}
 </div>
-</form>
+{form_close}
 <div class="sr-only" aria-live="polite" data-announce></div>
 </main>
 </body>
@@ -1464,6 +1481,9 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         if ex is None:
             self._send_plain(400, 'unknown exit')
             return
+        if configured_server(read_json(ex.result_path, 16384)) is not None:
+            self._send_plain(403, 'Exit is set in configuration; change SERVER to choose another server.')
+            return
         status, message = process_select(
             server=fields.get('server'),
             allowlist=load_allowlist(ex),
@@ -1489,8 +1509,10 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             nonce = new_csrf_nonce()
         token = csrf_token(nonce, self._csrf_binding(session))
         fetch_error, fetch_error_at = get_fetch_error(ex)
+        result = read_json(ex.result_path, 16384)
+        desired = None if configured_server(result) is not None else read_json(ex.desired_path, 4096)
         body = render_index_html(
-            read_json(ex.desired_path), read_json(ex.result_path), read_snapshot(ex.relays_path, ex.provider),
+            desired, result, read_snapshot(ex.relays_path, ex.provider),
             fetch_error, fetch_error_at, token, embed=embed, exit=ex,
             exits=[exit_summary(e) for e in visible_exits(session)],
             user=session.name if session is not None else None,

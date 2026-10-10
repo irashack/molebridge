@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
+import json
 import os
 import signal
 import subprocess
@@ -39,6 +40,9 @@ EGRESS_RETRY_BUDGET_SEC = 30
 SWITCH_TIMEOUT_SEC = 60
 REFRESH_SEC = 60
 POLL_SEC = 5
+# A valid provider hostname fits within 253 characters. Bound invalid input
+# too, so even JSON-escaped Unicode fits the readers' 16 KiB status limit.
+SERVER_REPORT_CHARS = 256
 NETBIRD_MODE_FAILED = ('NetBird is not running kernel WireGuard with its kernel firewall on the overlay '
                        'interface; see the troubleshooting guide.')
 
@@ -79,6 +83,9 @@ class Applier:
 
     @rejection.setter
     def rejection(self, value):
+        if value and self.configured_server:
+            value = value.replace('choose a server again to retry.', 'configured SERVER will retry automatically.')
+            value = value.replace('choose a server again after recovery.', 'configured SERVER will retry after recovery.')
         self._rejection = value
         # Every rejection is published by at least one check before any
         # check may clear it.
@@ -90,7 +97,10 @@ class Applier:
         interface must already carry it before a switch (Mullvad)."""
         return self.spec.address_before_switch
 
-    def __init__(self, state_dir: Path, config: RoutingConfig, *, run=command, clock=time.monotonic, sleep=time.sleep):
+    def __init__(self, state_dir: Path, config: RoutingConfig, *, run=command, clock=time.monotonic, sleep=time.sleep,
+                 server=''):
+        self.configured_server = server
+        self.configured_at = now_iso()
         self.directory = state_dir / 'applier'
         self.result_path = self.directory / 'result.json'
         self.desired_path = state_dir / 'panel' / 'desired.json'
@@ -111,7 +121,26 @@ class Applier:
     @classmethod
     def from_env(cls, state_dir, config, env, **kwargs):
         """The applier for this provider's settings; subclasses read their own."""
-        return cls(state_dir, config, **kwargs)
+        return cls(state_dir, config, server=env.get('SERVER', ''), **kwargs)
+
+    def configured_request(self):
+        """Use exactly the desired-state name validator; never read panel state."""
+        return desired_request({'server': self.configured_server, 'requested_at': self.configured_at},
+                               self.provider)
+
+    def configuration_error(self):
+        if not self.configured_server:
+            return None
+        # Quote untrusted text without allowing control characters into status/logs.
+        quoted = json.dumps(self.configured_server[:SERVER_REPORT_CHARS], ensure_ascii=True)
+        if self.configured_request() is None:
+            return f'Invalid SERVER {quoted}; no change applied.'
+        if self.catalog.usable() and self.configured_server not in self.catalog.relays:
+            return f'Unknown SERVER {quoted}; not in a fresh trusted relay catalogue; no change applied.'
+        return None
+
+    def switch_request(self, request):
+        return self.configured_request() if self.configured_server else desired_request(request, self.provider)
 
     def make_catalog(self):
         return RelayCatalog(self.directory, self.provider)
@@ -372,6 +401,7 @@ class Applier:
                   'request_id': request_token(self.request) if self.request else None,
                   'requested_server': self.request['server'] if self.request else None,
                   'provider': self.provider, 'routing_ok': False, 'unreachable_fallback': False,
+                  'configured_server': self.configured_server[:SERVER_REPORT_CHARS] or None,
                   'netbird_native': False, 'exit_confirmed': False, 'egress_tier': None,
                   **self.result_defaults(),
                   'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
@@ -390,6 +420,9 @@ class Applier:
                                          or not self.request or server != self.request['server'])
 
     def inspect(self, *, applying=False):
+        error = self.configuration_error()
+        if error:
+            return self.publish('failed', error)
         routing_ok, fallback = self.routing_status()
         native = self.netbird_native()
         fields = {'routing_ok': routing_ok, 'unreachable_fallback': fallback, 'netbird_native': native}
@@ -426,6 +459,8 @@ class Applier:
                            else f'Tunnel egress is not confirmed as {self.spec.label}.')
             elif not self.catalog.usable() or server is None:
                 failure = 'Current peer cannot be verified against a fresh relay catalogue.'
+            elif self.configured_server and server != self.configured_server:
+                failure = 'The configured SERVER is not the current server; waiting for convergence.'
             if self.rejection and (failure or self.rejection_stands(server)):
                 return emit('failed', self.rejection)
             if failure:
@@ -439,10 +474,14 @@ class Applier:
 
     def switch(self, request):
         # Also validate when called outside the polling loop (e.g. tests/tools).
-        request = desired_request(request, self.provider)
+        request = self.switch_request(request)
         self.request = request
         self.rejection = None
         self.pending = None
+        error = self.configuration_error()
+        if error:
+            self.rejection = error
+            return self.inspect()
         if request is None:
             self.rejection = 'Invalid desired-state file; no change applied.'
             return self.inspect()
@@ -519,8 +558,18 @@ class Applier:
         if self.clock() >= self.next_catalog:
             refreshed = self.catalog.refresh(self.fetch_catalog)
             self.next_catalog = self.clock() + (REFRESH_INTERVAL_S if refreshed else 60)
-        raw = read_json(self.desired_path, 4096)
-        request = desired_request(raw, self.provider)
+        if self.configured_server:
+            raw = None
+            request = self.configured_request()
+            error = self.configuration_error()
+            if error:
+                self.request, self.pending = request, None
+                result = self.publish('failed', error)
+                self.push_gatus(result)
+                return result
+        else:
+            raw = read_json(self.desired_path, 4096)
+            request = desired_request(raw, self.provider)
         if request is None and (raw is not None or self.desired_path.exists()):
             if self.last_request != 'invalid':
                 self.next_health = 0
@@ -533,7 +582,8 @@ class Applier:
             self.next_health = self.clock() + REFRESH_SEC
             self.push_gatus(result)
             return result
-        elif request and self.pending and self.catalog.usable():
+        elif request and self.catalog.usable() and (self.pending or
+                (self.configured_server and self.rejection and self.clock() >= self.next_health)):
             # A pending request retries once its prerequisites can be met. A
             # stale catalogue is checked here without probing; routing and the
             # tunnel are re-checked by the switch itself.
@@ -572,13 +622,17 @@ def main():
         spec = providers.from_env(os.environ)
         config = RoutingConfig.from_env(os.environ)
         if spec.applier == 'applier.apply:Applier':
-            applier = Applier(directory, config)
+            applier = Applier(directory, config, server=os.environ.get('SERVER', ''))
         else:
             applier = spec.applier_class().from_env(directory, config, os.environ)
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
             return 0 if (completed and recent(result.get('checked_at'))
+                         and (not applier.configured_server or
+                              (result.get('status') == 'ok'
+                               and result.get('configured_server') == applier.configured_server
+                               and result.get('server') == applier.configured_server))
                          and len(applier.peers()) == 1 and applier.routing_status()[0]
                          and applier.netbird_native()) else 1
         if args.doctor:

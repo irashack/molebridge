@@ -8,6 +8,7 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | Setting | Default | Purpose |
 |---|---|---|
 | `PROVIDER` | `mullvad` | `mullvad`, `pia` or `nordvpn` (experimental); see [providers](providers.md). Keep it unchanged after installation. |
+| `SERVER` | empty | Optional provider server hostname, or a PIA region id. When set, configuration wins; the applier ignores panel requests and Switchyard shows the exit read-only. See [a server set in configuration](#a-server-set-in-configuration). |
 | `EXIT_IF` | `mullvad` | Tunnel interface name, and the tunnel config's file name under `tunnel/wg_confs/`. Use `pia` with PIA and `nordvpn` with NordVPN. A custom name needs an explicit output path when you run the [config helper](#tunnel-config-helper). |
 | `COMPOSE_FILE` | `compose.yaml` | Set to `compose.yaml:compose.pia.yaml` for PIA, which mounts the PIA login into the applier, or to `compose.yaml:compose.nordvpn.yaml` for NordVPN, which gives the applier 512 MB of memory for NordVPN's server list. |
 | `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). |
@@ -63,6 +64,50 @@ refuses:
 See [architecture](architecture.md#netbird-requirements) and
 [troubleshooting](troubleshooting.md#startup).
 
+### A server set in configuration
+
+Set `SERVER` in `.env` to a name from your provider's relay catalogue: a
+server hostname for native Mullvad, native NordVPN and the gluetun backend,
+or a region id for PIA. Use the exact name, without spaces, a port, a URL or
+a comma-separated list. Leave it empty to keep the existing panel behavior.
+
+When `SERVER` is set, configuration wins. The applier ignores
+`state/panel/desired.json` entirely and converges to this server, including
+after tunnel recreation. With gluetun it also restores this server after a
+gluetun restart, ahead of the saved panel selection. This is not a default
+the panel can override. Switchyard shows the exit as "Set in configuration"
+with the configured name and no switching controls.
+
+The applier treats `SERVER` as untrusted input. It uses the same name
+validation as a desired-state request and requires membership in a fresh
+trusted catalogue for the configured provider. PIA's port-forwarding filter
+still applies. If no fresh catalogue is available, the request waits and
+retries when one becomes available. An invalid or unknown name reports a
+failed status with the name quoted, for example:
+
+```text
+Invalid SERVER "--bad"; no change applied.
+Unknown SERVER "absent.example.test"; not in a fresh trusted relay catalogue; no change applied.
+```
+
+These errors do not fall back to a panel request. Fix the setting and apply
+your configuration change with [recovery](operations.md#recovery). A failed
+application of a valid configured server retries on the periodic check;
+Molebridge does not choose another server. Removing `SERVER` returns control
+to the panel, including any `desired.json` request left there.
+
+`SERVER` goes only to the applier. It publishes `configured_server` in
+`result.json` (null when unset); the panel reads that file through its existing
+read-only mount, without reading the applier's environment or holding its
+credentials. A stale result still identifies the exit as read-only, while
+its connection status becomes unknown. Before the first result is available,
+the panel cannot know the setting; the applier still ignores its requests.
+
+With gluetun, `GLUETUN_SERVER_*` filters still control gluetun's first
+connection, before the applier runs. `SERVER` takes over once the applier has
+a fresh catalogue and can apply it. It has no effect in the three-container
+[standalone setup](gluetun-netbird-exit.md), which has no applier.
+
 ### Panel sign-in
 
 Optional OpenID Connect sign-in; the procedure is in
@@ -105,7 +150,7 @@ meaning. `PROVIDER` and the PIA settings don't apply.
 | `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The guard and NetBird's ICE blacklist use the same value. `.env.example` sets `mullvad` for the default backend; set `wg0` or keep it, as long as it fits. |
 | `GLUETUN_PROVIDER` | required | gluetun's `VPN_SERVICE_PROVIDER`. The panel can select servers for `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`, `surfshark` and `windscribe`; the applier refuses any other. `compose.gluetun.yaml` gives the applier and the panel `PROVIDER=gluetun-<this value>`. |
 | `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
-| `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). A selection in the panel replaces them while gluetun runs; after gluetun restarts, the applier puts your last verified selection back. |
+| `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). When `SERVER` is set, the applier converges to it and restores it after gluetun restarts. Otherwise a selection in the panel replaces these filters while gluetun runs, and the applier restores your last verified selection after a restart. |
 | `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the applier also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. |
 | `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. |
 | `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256..2147483647). Must differ from `EXIT_TABLE`; 51820 (gluetun) and 7120 (NetBird) are taken. |
@@ -225,11 +270,11 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | File | Writer | Reader | Contents |
 |---|---|---|---|
 | `applier/relays.json` | applier | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. A snapshot for another provider is ignored. |
-| `applier/gluetun-selection.json` | gluetun applier | gluetun applier | `desired`, `last_put` and `last_successful`: server hostnames, used to put the last verified server back after gluetun restarts. No secret. |
+| `applier/gluetun-selection.json` | gluetun applier | gluetun applier | `desired`, `last_put` and `last_successful`: server hostnames, used to put the last verified server back after gluetun restarts when `SERVER` is unset. With `SERVER`, configuration wins. No secret. |
 | `applier/tunnel.json` | PIA applier | PIA applier | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
-| `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `egress_tier` (`provider`, `tunnel` or null; see [status reporting](architecture.md#status-reporting)), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`, and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). A result with `netbird_native` false never counts as connected. |
+| `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
+| `applier/result.json` | applier | panel (read-only) | Observed `server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `egress_tier` (`provider`, `tunnel` or null; see [status reporting](architecture.md#status-reporting)), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`, and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). A result with `netbird_native` false never counts as connected. |
 
 Routing initialization reads only the `Address` line of the tunnel config, for
 the return-path rule (a PIA config has none; the applier installs the rule per
@@ -266,9 +311,9 @@ granted.
 |---|---|
 | `/`, `/?exit=<id>` | Full panel for the exit |
 | `/embed`, `/embed?exit=<id>` | Compact view for iframes |
-| `POST /select` | Choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode |
+| `POST /select` | Refused with 403 `Exit is set in configuration; change SERVER to choose another server.` for an exit set in configuration. Otherwise choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode |
 | `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
-| `/api/status?exit=<id>` | Desired server and applier result; omit `exit` for a single-exit panel |
+| `/api/status?exit=<id>` | Desired server and applier result, plus `view.selection_mode` (`configuration` or `panel`) and `view.configured_server` (name or null). In configuration mode `desired` is null; omit `exit` for a single-exit panel |
 | `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>` (up to 128 servers, a fixed sample beyond that; the answer's `country` gives `probed` and `total`), or `hosts=<a,b>` (64 at most); 256 servers per request in all; `fresh=1` ignores the cache. 429 with `Retry-After` while that exit already has a request running or four are running panel-wide |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |

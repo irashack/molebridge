@@ -5,36 +5,6 @@ would take as far as we know today.
 
 ## Backlog
 
-### A server set in configuration
-
-Today a valid request in `state/panel/desired.json` decides the server an
-exit uses. Without one, a native Mullvad exit keeps the peer in its tunnel
-config, a new PIA or NordVPN exit waits for a selection, and gluetun starts
-from its `GLUETUN_SERVER_*` filters. The panel writes the request, but the
-applier doesn't care who did, so an exit runs without a panel if you write
-that file yourself (its fields are in
-[configuration](docs/configuration.md#state-files)). That works, but it isn't
-a documented way to run, and it isn't declarative: after the first selection
-in a panel, the file is the panel's, and with the gluetun backend the applier
-deliberately puts the last verified server back after gluetun restarts, over
-`GLUETUN_SERVER_*`.
-
-The idea is a `SERVER` setting (a hostname, or a region for PIA) with one rule:
-when it is set, configuration wins.
-
-- The applier ignores `desired.json` and always converges to `SERVER`; a
-  gluetun restart returns to it too.
-- The panel shows that exit as set in configuration and offers no switching,
-  rather than accepting a selection the applier would undo.
-- Without `SERVER`, nothing changes: the panel drives the exit.
-
-What it takes: the setting and its validation against the provider's server
-names, the applier's request path and the gluetun restore path, a read-only
-state in the panel and in `/api/status`, docs (configuration, the panel page,
-the standalone gluetun guide) and tests. A middle ground, a configured default
-that the panel can override until the next restart, is close to what exists
-now and is the confusing option.
-
 ### A sidecar mode: Switchyard for an ordinary gluetun container
 
 gluetun's own documentation describes it as a sidecar: other containers
