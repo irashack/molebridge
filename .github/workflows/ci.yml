@@ -16,7 +16,7 @@ jobs:
   checks:
     name: Checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -26,8 +26,9 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Shell scripts
         run: |
-          for script in routing/10-exit-routing routing/wait-for-guards routing/gluetun-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh; do sh -n "$script"; done
-          shellcheck -S warning routing/10-exit-routing routing/wait-for-guards routing/gluetun-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh
+          scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh"
+          for script in $scripts; do sh -n "$script"; done
+          shellcheck -x -S warning $scripts
       - name: Compose file
         run: |
           cp .env.example .env
@@ -44,16 +45,22 @@ jobs:
         run: docker build --tag molebridge-applier:ci --file applier/Dockerfile .
       - name: Check runtime tools in the applier image
         run: docker run --rm --network none --entrypoint sh molebridge-applier:ci -c 'python --version && wg --version && ip -Version && curl --version && nft --version && test -s /app/applier/pia-ca.rsa.4096.crt'
-      - name: Build the routing image and check init ownership
+      - name: Build the routing image
         run: |
           docker build --tag molebridge-wireguard:ci --file routing/Dockerfile .
-          docker run --rm --network none --entrypoint sh molebridge-wireguard:ci -c 'test -x /custom-cont-init.d/10-exit-routing && test "$(stat -c %u /custom-cont-init.d/10-exit-routing)" = 0 && test "$(stat -c %u /usr/local/lib/molebridge/gluetun-rules)" = 0 && test "$(stat -c %a:%u /usr/local/lib/molebridge)" = 755:0'
-          # The guard runs as root with every capability dropped but NET_ADMIN:
-          # it must be able to read the shared rules without DAC override.
-          docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --entrypoint sh molebridge-wireguard:ci -c 'test -r /usr/local/lib/molebridge/gluetun-rules && . /usr/local/lib/molebridge/gluetun-rules'
+          # The guard and the exit run as root with every capability dropped
+          # but NET_ADMIN (and DAC_READ_SEARCH): they must read the shared
+          # rules without DAC override.
+          docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --entrypoint sh molebridge-wireguard:ci -c 'test -r /usr/local/lib/molebridge/contract-rules && . /usr/local/lib/molebridge/contract-rules'
+      - name: Routing image life cycle
+        # The image as compose.yaml runs it, with a throwaway config and a
+        # documentation-range peer: start, repair, tunnel loss, a failing or
+        # hanging bring-up, every stop, the guard mode.
+        run: sh tools/check-exit-image.sh molebridge-wireguard:ci
       - name: Linux namespace routing drills
         run: |
           # nft runs the PIA port-forwarding and ingress-guard drill; busybox,
           # mawk and gawk run the NetBird gate's JSON reader under each awk.
           sudo apt-get install -y --no-install-recommends nftables busybox mawk gawk >/dev/null
-          sudo sh tools/check-routing.sh
+          # busybox sh: the shell the routing image and NetBird's image use.
+          sudo env ROUTING_SH="busybox sh" sh tools/check-routing.sh

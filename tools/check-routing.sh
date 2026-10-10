@@ -12,6 +12,7 @@ created=''
 gate_pid=''
 listeners=''
 cleanup() {
+    if [ -n "${heartbeat_pid:-}" ]; then kill "$heartbeat_pid" 2>/dev/null || true; fi
     if [ -n "$gate_pid" ]; then kill "$gate_pid" 2>/dev/null || true; wait "$gate_pid" 2>/dev/null || true; fi
     for pid in $listeners; do kill "$pid" 2>/dev/null || true; done
     for ns in $created; do ip netns del "$ns" 2>/dev/null || true; done
@@ -22,9 +23,15 @@ cleanup() {
     rm -f "$work/auth-ok.toml" "$work/auth-bad.toml" "$work/preflight-started" "$work/preflight.out"
     rmdir "$work/nbstate" 2>/dev/null || true
     rm -rf "$work/gl"
+    rm -f "$work/rsh" "$work/owner" "$work/owner.tmp" "$work/reconcile.log" "$work/gate.log" "$work/rules-before" "$work/rules-after"
     rmdir "$work"
 }
 trap cleanup EXIT HUP INT TERM
+# The shell the routing scripts run under: ROUTING_SH, for example "busybox
+# sh", the shell the routing image and NetBird's image both use.
+printf '#!/bin/sh\nexec %s "$@"\n' "${ROUTING_SH:-sh}" > "$work/rsh"
+chmod 755 "$work/rsh"
+echo "Routing scripts run under: ${ROUTING_SH:-sh}"
 client=mb-client-$$
 exitns=mb-exit-$$
 outside=mb-outside-$$
@@ -115,7 +122,7 @@ EOF
 install_rules() {
     ip netns exec "$exitns" env OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 \
         OVERLAY_IF="$overlay_if" EXIT_IF=mullvad EXIT_TABLE=51821 ROUTING_READY_FILE="$work/ready" \
-        PROVIDER="${1:-mullvad}" TUNNEL_CONF="$work/${1:-mullvad}.conf" sh "$root/routing/10-exit-routing"
+        PROVIDER="${1:-mullvad}" TUNNEL_CONF="$work/${1:-mullvad}.conf" "$work/rsh" "$root/routing/10-exit-routing"
 }
 restore_routes() {
     for family in -4 -6; do
@@ -209,11 +216,31 @@ PY
 # The gate refuses unsupported NetBird settings before it looks at routing. No NetBird state exists here, so point it at an empty one.
 gate() {
     ip netns exec "$exitns" env NB_INTERFACE_NAME="$overlay_if" NB_DISABLE_USERSPACE_ROUTING=true \
-        NB_STATE_DIR="$work/nbstate" "$@"
+        NB_STATE_DIR="$work/nbstate" OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 EXIT_IF=mullvad \
+        EXIT_TABLE=51821 CONTRACT_RULES="$root/routing/contract-rules" OWNER_RECORD="$work/owner" "$@"
+}
+# The native exit's owner record, as routing/molebridge-exit writes it, for the
+# exit namespace: generation $1, stamp offset $2 seconds, namespace $3.
+owner_ns=$(ip netns exec "$exitns" stat -L -c %d:%i /proc/self/ns/net)
+write_owner() {
+    read -r owner_up _ < /proc/uptime
+    printf 'molebridge-exit 1 %s %s %s %s %s %s conf 0 -\n' "$(cat /proc/sys/kernel/random/boot_id)" \
+        "$((${owner_up%%.*} + ${2:-0}))" "${3:-$owner_ns}" "${1:-0a0a}" "$tunnel4" "$tunnel6" > "$work/owner.tmp"
+    mv -f "$work/owner.tmp" "$work/owner"
+}
+heartbeat_pid=''
+start_heartbeat() {
+    stop_heartbeat
+    ( while :; do write_owner "${1:-0a0a}"; sleep 1; done ) &
+    heartbeat_pid=$!
+}
+stop_heartbeat() {
+    if [ -n "$heartbeat_pid" ]; then kill "$heartbeat_pid" 2>/dev/null || :; wait "$heartbeat_pid" 2>/dev/null || :; fi
+    heartbeat_pid=''
 }
 # Bounded: a gate that failed to refuse would wait here for routing guards.
 gate_refuses() {
-    if gate "$@" timeout 5 sh "$root/routing/wait-for-guards" true 2>"$work/gate.err" ||
+    if gate "$@" timeout 5 "$work/rsh" "$root/routing/wait-for-guards" true 2>"$work/gate.err" ||
             ! grep -q 'refusing to start NetBird' "$work/gate.err"; then
         echo "FAIL NetBird gate did not refuse: ${*:-a stored profile}" >&2
         exit 1
@@ -235,7 +262,7 @@ for profile in '{\n    "WgIface": "%s",\n    "RosenpassEnabled": true\n}' '{"WgI
     gate_refuses
 done
 printf '{\n    "WgIface": "%s",\n    "RosenpassEnabled": false\n}\n' "$overlay_if" > "$work/nbstate/default.json"
-if ! gate sh "$root/routing/wait-for-guards" --check-config >/dev/null; then
+if ! gate "$work/rsh" "$root/routing/wait-for-guards" --check-config >/dev/null; then
     echo 'FAIL NetBird gate refused a profile for the guarded interface without Rosenpass' >&2
     exit 1
 fi
@@ -265,7 +292,8 @@ json_case() {
         shell='sh'
         [ ! -e "$dir/sh" ] || shell=$dir/sh
         if env PATH="$dir:$PATH" NB_INTERFACE_NAME=mesh0 NB_DISABLE_USERSPACE_ROUTING=true \
-                NB_STATE_DIR="$work/nbstate" "$shell" "${gate_script:-$root/routing/wait-for-guards}" \
+                NB_STATE_DIR="$work/nbstate" OVERLAY_CIDR=192.0.2.0/24 CONTRACT_RULES="$root/routing/contract-rules" \
+                "$shell" "${gate_script:-$root/routing/wait-for-guards}" \
                 --check-config >/dev/null 2>&1; then
             got=accept
         else
@@ -324,7 +352,7 @@ if [ -n "$awk_dirs" ]; then
             # gluetun's image sets HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE="{}".
             PATH="$dir:$PATH" HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH="$work/auth-$case.toml" \
                 HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE='{}' \
-                sh "$root/routing/gluetun-preflight" touch "$work/preflight-started" > "$work/preflight.out" 2>&1 || :
+                "$work/rsh" "$root/routing/gluetun-preflight" touch "$work/preflight-started" > "$work/preflight.out" 2>&1 || :
             if grep -q "$preflight_key" "$work/preflight.out"; then
                 echo "FAIL gluetun's role-file check printed the key (${dir##*/awk-})" >&2
                 exit 1
@@ -343,7 +371,7 @@ if [ -n "$awk_dirs" ]; then
         rm -f "$work/preflight-started"
         PATH="$dir:$PATH" HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH="$work/auth-ok.toml" \
             HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE='{"auth":"none"}' \
-            sh "$root/routing/gluetun-preflight" touch "$work/preflight-started" > /dev/null 2>&1 || :
+            "$work/rsh" "$root/routing/gluetun-preflight" touch "$work/preflight-started" > /dev/null 2>&1 || :
         if [ -f "$work/preflight-started" ]; then
             echo "FAIL gluetun's role-file check accepted a public default role (${dir##*/awk-})" >&2
             exit 1
@@ -354,7 +382,8 @@ if [ -n "$awk_dirs" ]; then
 fi
 
 # Start NetBird's gate before initialization, just as a runtime restart can.
-gate sh "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$work/gate-started" &
+start_heartbeat
+gate "$work/rsh" "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$work/gate-started" &
 gate_pid=$!
 sleep 2
 test ! -f "$work/gate-started"
@@ -379,6 +408,7 @@ done
 test -f "$work/gate-started"
 wait "$gate_pid"
 gate_pid=''
+stop_heartbeat
 echo 'PASS overlay startup waits for both routing guards and the local-delivery guard'
 restore_routes
 connected
@@ -465,6 +495,190 @@ for family in -4 -6; do
     fi
 done
 echo 'PASS routing reinstallation and recovery (one local-delivery rule, no rule 0)'
+
+# --- The native reconcile pass (10-exit-routing --reconcile), as the routing
+# image's entrypoint runs it: every single deletion is contained while it
+# lasts and repaired by one pass; insertions are removed.
+reconcile() {
+    rc_status=0
+    ip netns exec "$exitns" env OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 \
+        OVERLAY_IF="$overlay_if" EXIT_IF=mullvad EXIT_TABLE=51821 PROVIDER="${2:-mullvad}" \
+        CONTRACT_RULES="$root/routing/contract-rules" MOLEBRIDGE_ADDR4="${3-$tunnel4}" \
+        MOLEBRIDGE_ADDR6="${4-$tunnel6}" MOLEBRIDGE_RULE94="${5:-conf}" \
+        "$work/rsh" "$root/routing/10-exit-routing" --reconcile > "$work/reconcile.log" 2>&1 || rc_status=$?
+    if [ "$rc_status" != "$1" ]; then
+        echo "FAIL reconcile exited $rc_status, expected $1" >&2
+        cat "$work/reconcile.log" >&2
+        exit 1
+    fi
+}
+# ICMP errors that reach the host side: a counter in the outside namespace,
+# which holds the same destination as the tunnel side.
+printf '%s\n' 'table inet mbicmp {' '    chain input {' '        type filter hook input priority 0; policy accept;' \
+    '        icmp type destination-unreachable counter' '        icmpv6 type packet-too-big counter' '    }' '}' |
+    ip netns exec "$outside" nft -f -
+host_icmp() {
+    ip netns exec "$outside" nft list table inet mbicmp | awk '{ for (i = 1; i < NF; i++) if ($i == "packets") n += $(i + 1) } END { print n + 0 }'
+}
+reconcile 0
+for family in 4 6; do validate_family "$family" healthy; done
+before=$(host_icmp)
+for family in -4 -6; do
+    ip -n "$exitns" "$family" rule del priority 94
+    if too_big_reported "$family"; then echo "FAIL ICMP error reached the tunnel without rule 94 ($family)" >&2; exit 1; fi
+done
+[ "$(host_icmp)" = "$before" ] || { echo 'FAIL tunnel-sourced ICMP reached the host route with rule 94 deleted' >&2; exit 1; }
+reconcile 3
+for family in -4 -6; do too_big_reported "$family" || { echo "FAIL rule 94 not repaired ($family)" >&2; exit 1; }; done
+echo 'PASS rule 98 keeps tunnel-sourced ICMP off the host route while rule 94 is gone; one pass repairs it'
+for family in -4 -6; do ip -n "$exitns" "$family" route flush table 51821; done
+for family in -4 -6; do
+    if too_big_reported "$family"; then echo "FAIL ICMP error reached the tunnel with its table empty ($family)" >&2; exit 1; fi
+done
+[ "$(host_icmp)" = "$before" ] || { echo 'FAIL tunnel-sourced ICMP reached the host route with the exit table empty' >&2; exit 1; }
+blocked 'exit table emptied (fallback deleted with the tunnel route gone)'
+reconcile 3
+restore_routes
+connected
+echo 'PASS rule 98 holds with the exit table empty; one pass restores the fallback and the tunnel route'
+for family in -4 -6; do
+    ip -n "$exitns" "$family" rule del priority 94
+    ip -n "$exitns" "$family" rule del priority 98
+    too_big_reported "$family" || :
+done
+if [ "$(host_icmp)" = "$before" ]; then
+    echo 'FAIL the host-side ICMP counter saw nothing with rules 94 and 98 both gone; the drill is not sensitive' >&2
+    exit 1
+fi
+reconcile 3
+echo 'PASS drill confirmed sensitive: with both rules gone (two faults, outside the guarantee) the ICMP error takes the host route'
+for priority in 1 90 95 96 97 98; do
+    for family in -4 -6; do ip -n "$exitns" "$family" rule del priority "$priority"; done
+    case "$priority" in 95) blocked 'rule 95 deleted' ;; esac
+    reconcile 3
+    for family in 4 6; do validate_family "$family" healthy; done
+    connected
+done
+echo 'PASS each of rules 1, 90, 95, 96, 97 and 98 deleted: contained, and repaired by one pass'
+for family in -4 -6; do
+    ip -n "$exitns" "$family" rule add lookup main priority 50
+    ip -n "$exitns" "$family" rule add lookup local priority 0
+done
+ip -n "$exitns" route add 203.0.113.99 dev eth0 table 51821
+reconcile 3
+for family in 4 6; do validate_family "$family" healthy; done
+for family in -4 -6; do
+    if ip -n "$exitns" "$family" rule show | grep -Eq '^(0|50):'; then echo "FAIL inserted rule survived the pass ($family)" >&2; exit 1; fi
+done
+connected
+echo 'PASS inserted rules (lookup main at 50, lookup local at 0) and a foreign exit-table route are removed by one pass'
+for family in -4 -6; do
+    ip -n "$exitns" "$family" rule add iif "$overlay_if" unreachable priority 80
+    ip -n "$exitns" "$family" rule del priority 95
+done
+reconcile 3
+for family in -4 -6; do
+    if ip -n "$exitns" "$family" rule show | grep -q '^80:'; then echo "FAIL the temporary guard outlived a verified pass ($family)" >&2; exit 1; fi
+done
+connected
+echo 'PASS a temporary guard left from an unverified pass comes out once the pass verifies'
+
+# PIA: an addressless config, so the applier owns rules 94 and 98. The pass
+# never touches them while the applier changes address, as it does on a
+# switch: new pair first, then the address, then the old pair.
+for family in -4 -6; do ip -n "$exitns" "$family" rule del priority 94; ip -n "$exitns" "$family" rule del priority 98; done
+ip -n "$exitns" -6 route del default dev mullvad table 51821
+ip -n "$exitns" -4 rule add from "$tunnel4" ipproto icmp lookup 51821 priority 94
+ip -n "$exitns" -4 rule add from "$tunnel4" ipproto icmp unreachable priority 98
+pia_old=$tunnel4
+for round in 1 2 3; do
+    pia_new=203.0.113.$((10 + round))
+    ip -n "$exitns" -4 rule add from "$pia_new" ipproto icmp lookup 51821 priority 94
+    reconcile 0 pia '' '' applier
+    ip -n "$exitns" -4 rule add from "$pia_new" ipproto icmp unreachable priority 98
+    reconcile 0 pia '' '' applier
+    ip -n "$exitns" -4 addr add "$pia_new/32" dev mullvad
+    reconcile 0 pia '' '' applier
+    ip -n "$exitns" -4 rule del priority 94 from "$pia_old"
+    reconcile 0 pia '' '' applier
+    ip -n "$exitns" -4 rule del priority 98 from "$pia_old"
+    reconcile 0 pia '' '' applier
+    for family in -4 -6; do
+        if ip -n "$exitns" "$family" rule show | grep -q '^80:'; then echo "FAIL a temporary guard appeared during PIA's switch ($family)" >&2; exit 1; fi
+    done
+    [ "$(ip -n "$exitns" -4 rule show | grep -c '^9[48]:')" = 2 ] || { echo 'FAIL the pass changed PIA rules 94/98' >&2; exit 1; }
+    pia_old=$pia_new
+done
+echo "PASS PIA's rules 94 and 98 are left to the applier through three address changes; every pass verifies, no temporary guard"
+ip -n "$exitns" -4 rule del priority 94 from "$pia_old"
+ip -n "$exitns" -4 rule del priority 98 from "$pia_old"
+for round in 1 2 3; do ip -n "$exitns" -4 addr del "203.0.113.$((10 + round))/32" dev mullvad 2>/dev/null || :; done
+reconcile 3
+restore_routes
+connected
+for family in 4 6; do validate_family "$family" healthy; done
+
+# --- NetBird's gate, resident in native mode, with a stand-in NetBird.
+gate_case() {
+    # $1: what to break; $2: bound in seconds from the break to the gate's
+    # exit, with NetBird gone; $3: "stubborn" for a stand-in ignoring TERM.
+    rm -f "$work/gate-started"
+    start_heartbeat 0a0a
+    standin='touch "$1"; exec sleep 300'
+    [ "${3:-}" != stubborn ] || standin='touch "$1"; trap "" TERM; sleep 300 & sleep 300'
+    gate env GUARD_GRACE=5 "$work/rsh" "$root/routing/wait-for-guards" sh -c "$standin" gate "$work/gate-started" > "$work/gate.log" 2>&1 &
+    gate_pid=$!
+    attempt=0
+    while [ "$attempt" -lt 20 ] && [ ! -f "$work/gate-started" ]; do sleep 0.5; attempt=$((attempt + 1)); done
+    [ -f "$work/gate-started" ] || { echo "FAIL the gate did not start the stand-in ($1)" >&2; cat "$work/gate.log" >&2; exit 1; }
+    sleep 1
+    read -r t0 _ < /proc/uptime
+    case "$1" in
+        owner) stop_heartbeat ;;
+        future) stop_heartbeat; write_owner 0a0a 30 ;;
+        namespace) stop_heartbeat; write_owner 0a0a 0 1:1 ;;
+        rule97) for family in -4 -6; do ip -n "$exitns" "$family" rule del priority 97; done ;;
+        # The gate itself, not the subshell running gate(): as a container
+        # stop delivers it.
+        term) pkill -TERM -f 'routing/wait-for-guards' ;;
+    esac
+    gate_status=0
+    wait "$gate_pid" || gate_status=$?
+    gate_pid=''
+    read -r t1 _ < /proc/uptime
+    took=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%d", b - a + 0.999 }')
+    stop_heartbeat
+    if [ "$took" -gt "$2" ]; then echo "FAIL gate took ${took}s for $1, bound $2" >&2; cat "$work/gate.log" >&2; exit 1; fi
+    if pgrep -f 'sleep 300' >/dev/null; then echo "FAIL the stand-in survived the gate ($1)" >&2; exit 1; fi
+    case "$1" in
+        term) [ "$gate_status" = 0 ] ;;
+        *) [ "$gate_status" != 0 ] && grep -q 'stopping NetBird' "$work/gate.log" ;;
+    esac || { echo "FAIL gate exit $gate_status for $1" >&2; cat "$work/gate.log" >&2; exit 1; }
+    echo "PASS gate: $1 -> NetBird gone in ${took}s (bound $2 s)"
+}
+gate_case owner 10
+gate_case future 10
+gate_case namespace 10
+gate_case term 11
+gate_case owner 31 stubborn
+gate_case rule97 9
+install_rules
+restore_routes
+connected
+# A restarted owner (new generation, same namespace) is accepted.
+rm -f "$work/gate-started"
+start_heartbeat 0a0a
+gate env GUARD_GRACE=5 "$work/rsh" "$root/routing/wait-for-guards" sh -c 'touch "$1"; exec sleep 300' gate "$work/gate-started" > "$work/gate.log" 2>&1 &
+gate_pid=$!
+sleep 4
+start_heartbeat 0b0b
+sleep 8
+kill -0 "$gate_pid" || { echo 'FAIL the gate stopped NetBird for a new owner generation in the same namespace' >&2; cat "$work/gate.log" >&2; exit 1; }
+kill -TERM "$gate_pid"
+wait "$gate_pid" || :
+gate_pid=''
+stop_heartbeat
+echo 'PASS gate accepts a restarted owner (new generation) in the same namespace'
 
 # Exercise local-delivery regression coverage: local delivery from the overlay
 # is refused. With rule 1, nothing arriving on the overlay reaches a local
@@ -593,12 +807,13 @@ else
 fi
 
 # PIA: no Address in the config, so initialization installs every guard but no
-# return-path rule. A switch then assigns a per-server IPv4 address and rule
-# 94, as the applier does, and the tunnel carries no IPv6.
+# return-path rule or backstop. A switch then assigns a per-server IPv4
+# address and rules 94 and 98, as the applier does, and the tunnel carries no
+# IPv6.
 install_rules pia
 for family in -4 -6; do
-    if [ -n "$(ip -n "$exitns" "$family" rule show priority 94)" ]; then
-        echo "FAIL address-less PIA initialization installed a return-path rule ($family)" >&2
+    if ip -n "$exitns" "$family" rule show | grep -Eq '^9[48]:'; then
+        echo "FAIL address-less PIA initialization installed a return-path rule or its backstop ($family)" >&2
         exit 1
     fi
 done
@@ -620,6 +835,7 @@ ip -n "$exitns" -4 route replace default dev mullvad table 51821
 ip -n "$exitns" -4 neigh replace 198.51.100.100 lladdr 02:00:00:00:03:02 nud permanent dev mullvad
 ip -n "$tunnel" route replace 192.0.2.0/24 via "$pia4"
 ip -n "$exitns" -4 rule add from "$pia4" ipproto icmp lookup 51821 priority 94
+ip -n "$exitns" -4 rule add from "$pia4" ipproto icmp unreachable priority 98
 probe "$client" -4 || { echo 'FAIL IPv4 did not forward after the PIA address change' >&2; exit 1; }
 validate_family 4 healthy "$pia4"
 validate_family 4 failed "$tunnel4"
@@ -654,7 +870,7 @@ gl_env() {
         GLUETUN_RULES="$root/routing/gluetun-rules" "$@"
 }
 gl_guard() {
-    gl_env ip netns exec "$gl_exit" sh "$root/routing/10-exit-routing" "$@" > "$gl/guard.log" 2>&1 || {
+    gl_env ip netns exec "$gl_exit" "$work/rsh" "$root/routing/10-exit-routing" "$@" > "$gl/guard.log" 2>&1 || {
         cat "$gl/guard.log" >&2
         return 1
     }
@@ -987,7 +1203,7 @@ gl_record() {
 # True when the gate, given a few seconds, would start NetBird.
 gl_gate_starts() {
     rm -f "$gl/started"
-    gl_gate timeout 5 sh "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$gl/started" 2>/dev/null || :
+    gl_gate timeout 5 "$work/rsh" "$root/routing/wait-for-guards" sh -c 'touch "$1"' gate "$gl/started" 2>/dev/null || :
     [ -f "$gl/started" ]
 }
 
@@ -1286,7 +1502,7 @@ gluetun_drills() {
     # The NetBird gate in gluetun mode.
     for setting in NB_USE_LEGACY_ROUTING=true NB_SKIP_SOCKET_MARK=1 NB_DISABLE_CUSTOM_ROUTING=true \
             NB_FWMARK_BASE=0x2bd00; do
-        if gl_gate "$setting" timeout 5 sh "$root/routing/wait-for-guards" true 2>"$gl/gate.err" ||
+        if gl_gate "$setting" timeout 5 "$work/rsh" "$root/routing/wait-for-guards" true 2>"$gl/gate.err" ||
                 ! grep -q 'refusing to start NetBird' "$gl/gate.err"; then
             gl_fail "gluetun gate did not refuse $setting"
         fi
@@ -1310,14 +1526,14 @@ gluetun_drills() {
     echo 'PASS gluetun gate refuses to start NetBird on a missing rule 88/89/90/94/95/96, an early main-table rule or a host route in the exit table (IPv4 and IPv6)'
     : > "$gl/client.log"
     gl_record 0x1bd00
-    gl_gate timeout 30 sh "$root/routing/wait-for-guards" sh -c \
+    gl_gate timeout 30 "$work/rsh" "$root/routing/wait-for-guards" sh -c \
         'touch "$1"; sleep 3; echo "WARN client/net/env_linux.go:66: system doesn'"'"'t support required routing features, falling back to legacy routing" >> "$2"; exec sleep 60' \
         gate "$gl/started" "$gl/client.log" 2>"$gl/gate.err" && gl_fail 'gluetun gate exited zero after a legacy-routing line'
     [ -f "$gl/started" ] && grep -q 'stopping NetBird: NetBird logged that it runs without advanced routing' "$gl/gate.err" ||
         gl_fail 'gluetun gate did not stop NetBird on the legacy-routing line'
     rm -f "$gl/started"
     gl_record absent
-    gl_gate FWMARK_GRACE=5 timeout 30 sh "$root/routing/wait-for-guards" sh -c 'touch "$1"; exec sleep 60' \
+    gl_gate FWMARK_GRACE=5 timeout 30 "$work/rsh" "$root/routing/wait-for-guards" sh -c 'touch "$1"; exec sleep 60' \
         gate "$gl/started" 2>"$gl/gate.err" && gl_fail 'gluetun gate exited zero without the control mark'
     [ -f "$gl/started" ] && grep -q 'has not carried the control mark 0x1bd00' "$gl/gate.err" ||
         gl_fail 'gluetun gate did not stop NetBird without the control mark'

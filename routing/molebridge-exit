@@ -1,0 +1,476 @@
+#!/bin/sh
+# The routing image's entrypoint, run by tini.
+#
+# TUNNEL_BACKEND=gluetun: the guard sidecar; hands over to routing/10-exit-routing.
+#
+# Native backend (the default): the exit's own WireGuard tunnel, in a network
+# namespace this container owns. In order:
+#   1. validate the settings and the tunnel config, before anything changes;
+#   2. start the owner record (routing/contract-rules, owner_read), rewritten
+#      every 2 seconds from here until stopping;
+#   3. install the routing contract (10-exit-routing --install), before the
+#      tunnel exists;
+#   4. bring the tunnel up with wg-quick, supervised, retrying with backoff;
+#   5. reconcile every ROUTING_RECONCILE_INTERVAL seconds
+#      (10-exit-routing --reconcile) and recreate a lost tunnel.
+# Readiness (the file the health check reads) means: owner record written,
+# tunnel up, and the last reconcile verified. Steps 1 and 3 exit non-zero on
+# failure; a tunnel that won't come up keeps the container running, not
+# ready, so the namespace NetBird and the applier share isn't recreated.
+#
+# Every longer-running command (wg-quick and the teardown) runs in its own
+# process group under setsid and is supervised here with explicit deadlines:
+# TERM to the whole group, then KILL, then confirmed gone. busybox `timeout`
+# isn't used: it signals only its own child.
+#
+# The tunnel config holds the private key. Nothing here prints any of its
+# text: the validator's messages name a line number and a field from its own
+# list, and wg-quick's output is discarded.
+set -u
+set -f
+
+LIB=${MOLEBRIDGE_LIB:-/usr/local/lib/molebridge}
+TUNNEL_BACKEND=${TUNNEL_BACKEND:-wireguard}
+if [ "$TUNNEL_BACKEND" = gluetun ]; then
+    exec /bin/sh "$LIB/10-exit-routing" "$@"
+fi
+
+say() { echo "molebridge-exit: $1"; }
+fail() { echo "molebridge-exit: $1" >&2; exit 1; }
+[ "$TUNNEL_BACKEND" = wireguard ] || fail "TUNNEL_BACKEND must be wireguard or gluetun"
+# --check-config validates the settings and the tunnel config, changing
+# nothing, and says so.
+check_only=0
+case "$#:${1:-}" in
+    0:) : ;;
+    1:--check-config) check_only=1 ;;
+    *) fail "the only argument is --check-config" ;;
+esac
+
+OVERLAY_CIDR=${OVERLAY_CIDR:-}
+OVERLAY6_CIDR=${OVERLAY6_CIDR:-}
+OVERLAY_IF=${OVERLAY_IF:-wt0}
+EXIT_IF=${EXIT_IF:-mullvad}
+EXIT_TABLE=${EXIT_TABLE:-51821}
+PROVIDER=${PROVIDER:-mullvad}
+READY_FILE=${ROUTING_READY_FILE:-/run/molebridge-routing-ready}
+OWNER_FILE=${OWNER_RECORD:-/run/molebridge/exit-owner}
+INTERVAL=${ROUTING_RECONCILE_INTERVAL:-2}
+CONF_DIR=${TUNNEL_CONF_DIR:-/config/wg_confs}
+CONF=$CONF_DIR/$EXIT_IF.conf
+[ "$check_only" = 1 ] || rm -f "$READY_FILE"
+
+[ -f "$LIB/contract-rules" ] || fail "the shared rule definitions are missing ($LIB/contract-rules)"
+# shellcheck source=routing/contract-rules
+. "$LIB/contract-rules"
+gr_validate_common
+case "$PROVIDER" in
+    mullvad) regenerate='regenerate it with tools/prepare-tunnel-config.py (docs/setup.md)' ;;
+    pia) regenerate='regenerate it with tools/prepare-tunnel-config.py --pia (docs/setup.md)' ;;
+    nordvpn) regenerate='regenerate it with tools/nordvpn-key.py (docs/setup.md)' ;;
+    *) fail "PROVIDER must be mullvad, pia or nordvpn" ;;
+esac
+case "$INTERVAL" in ''|0*|*[!0-9]*) fail "ROUTING_RECONCILE_INTERVAL must be an even number of seconds, 2..60" ;; esac
+[ "${#INTERVAL}" -le 2 ] && [ "$INTERVAL" -ge 2 ] && [ "$INTERVAL" -le 60 ] && [ $((INTERVAL % 2)) -eq 0 ] ||
+    fail "ROUTING_RECONCILE_INTERVAL must be an even number of seconds, 2..60"
+
+# ---------------------------------------------------------------------------
+# The tunnel config. Only what tools/prepare-tunnel-config.py (Mullvad, and PIA
+# with --pia) and tools/nordvpn-key.py (NordVPN) write is accepted; see
+# docs/configuration.md#the-tunnel-config. On success the validator prints
+# "ok <IPv4 address|-> <IPv6 address|->"; otherwise one fixed message.
+# ---------------------------------------------------------------------------
+conf_validator='
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+function say(m) { if (!msg) msg = m; bad = 1 }
+function v4(a,   n, o, i) {
+    n = split(a, o, ".")
+    if (n != 4) return 0
+    for (i = 1; i <= 4; i++) {
+        if (o[i] !~ /^(0|[1-9][0-9]?[0-9]?)$/ || o[i] + 0 > 255) return 0
+    }
+    return 1
+}
+function v6(a,   d, head, tail, nl, nr, g, i, l, r) {
+    if (a !~ /^[0-9A-Fa-f:]+$/ || length(a) > 39) return 0
+    d = index(a, "::")
+    if (d) {
+        head = substr(a, 1, d - 1)
+        tail = substr(a, d + 2)
+        if (index(tail, "::")) return 0
+        nl = head == "" ? 0 : split(head, l, ":")
+        nr = tail == "" ? 0 : split(tail, r, ":")
+        if (nl + nr > 7) return 0
+        for (i = 1; i <= nl; i++) if (l[i] !~ /^[0-9A-Fa-f]([0-9A-Fa-f]?[0-9A-Fa-f]?[0-9A-Fa-f]?)$/) return 0
+        for (i = 1; i <= nr; i++) if (r[i] !~ /^[0-9A-Fa-f]([0-9A-Fa-f]?[0-9A-Fa-f]?[0-9A-Fa-f]?)$/) return 0
+        return 1
+    }
+    if (split(a, g, ":") != 8) return 0
+    for (i = 1; i <= 8; i++) if (g[i] !~ /^[0-9A-Fa-f]([0-9A-Fa-f]?[0-9A-Fa-f]?[0-9A-Fa-f]?)$/) return 0
+    return 1
+}
+function key(v) { return v ~ keyre }
+function number(v, lo, hi) { return v ~ /^[1-9][0-9]*$/ && length(v) <= 5 && v + 0 >= lo && v + 0 <= hi }
+BEGIN {
+    # A WireGuard key: 32 bytes in base64, so 42 characters, one whose low two
+    # bits are zero, and the padding.
+    keyre = "^"
+    for (i = 0; i < 42; i++) keyre = keyre "[A-Za-z0-9+/]"
+    keyre = keyre "[AEIMQUYcgkosw048]=$"
+    # Field names as printed in messages, by lowercase key, and their section.
+    split("PrivateKey Address MTU Table PostUp PreDown", f, " ")
+    for (i in f) { name[tolower(f[i])] = f[i]; section_of[tolower(f[i])] = "interface" }
+    split("PublicKey Endpoint AllowedIPs PersistentKeepalive", f, " ")
+    for (i in f) { name[tolower(f[i])] = f[i]; section_of[tolower(f[i])] = "peer" }
+    section = ""
+}
+{
+    line = trim($0)
+    if (line == "" || substr(line, 1, 1) == "#") next
+    if (line == "[Interface]") {
+        if (interfaces++ || peers) say("[Interface] on line " NR " is not supported; it must come once, first")
+        section = "interface"
+        next
+    }
+    if (line == "[Peer]") {
+        if (!interfaces || peers++) say("[Peer] on line " NR " is not supported")
+        section = "peer"
+        next
+    }
+    eq = index(line, "=")
+    k = tolower(trim(substr(line, 1, eq - 1)))
+    if (!eq || !(k in name) || section_of[k] != section) { say("unsupported field on line " NR); next }
+    if (k in seen) { say(name[k] " appears more than once"); next }
+    seen[k] = NR
+    value[k] = trim(substr(line, eq + 1))
+}
+END {
+    if (bad) { print msg; exit 1 }
+    if (!interfaces) { print "[Interface] is missing"; exit 1 }
+    want_peer = provider == "mullvad"
+    if (peers && !want_peer) { print "[Peer] is not supported for this provider"; exit 1 }
+    if (!peers && want_peer) { print "[Peer] is missing"; exit 1 }
+    split("privatekey mtu table postup predown", req, " ")
+    for (i = 1; i <= 5; i++) if (!(req[i] in seen)) { print name[req[i]] " is missing"; exit 1 }
+    if (provider != "pia" && !("address" in seen)) { print "Address is missing"; exit 1 }
+    if (provider == "pia" && ("address" in seen)) { print "Address on line " seen["address"] " is not supported for PIA"; exit 1 }
+    if (want_peer) {
+        split("publickey endpoint allowedips", req, " ")
+        for (i = 1; i <= 3; i++) if (!(req[i] in seen)) { print name[req[i]] " is missing"; exit 1 }
+    }
+    if (!key(value["privatekey"])) { print "PrivateKey on line " seen["privatekey"] " is not valid"; exit 1 }
+    a4 = "-"; a6 = "-"
+    if ("address" in seen) {
+        n = split(value["address"], parts, ",")
+        for (i = 1; i <= n; i++) {
+            a = trim(parts[i]); p = ""
+            if (index(a, "/")) { p = substr(a, index(a, "/") + 1); a = substr(a, 1, index(a, "/") - 1) }
+            if (v4(a) && (p == "" || p == "32") && a4 == "-") a4 = a
+            else if (v6(a) && (p == "" || p == "128") && a6 == "-") a6 = a
+            else { print "Address on line " seen["address"] " is not valid"; exit 1 }
+        }
+        if (a4 == "-" || (a6 != "-" && provider != "mullvad")) { print "Address on line " seen["address"] " is not valid"; exit 1 }
+    }
+    if (!number(value["mtu"], 1280, 1500)) { print "MTU on line " seen["mtu"] " is not valid"; exit 1 }
+    if (value["table"] != "off") { print "Table on line " seen["table"] " is not valid"; exit 1 }
+    up = "ip route replace default dev %i table " table
+    down = "ip route del default dev %i table " table
+    if (a6 != "-") {
+        up = up "; ip -6 route replace default dev %i table " table
+        down = down "; ip -6 route del default dev %i table " table
+    }
+    if (value["postup"] != up) { print "PostUp on line " seen["postup"] " is not valid"; exit 1 }
+    if (value["predown"] != down) { print "PreDown on line " seen["predown"] " is not valid"; exit 1 }
+    if (want_peer) {
+        if (!key(value["publickey"])) { print "PublicKey on line " seen["publickey"] " is not valid"; exit 1 }
+        e = value["endpoint"]
+        c = index(e, ":")
+        if (!c || !v4(substr(e, 1, c - 1)) || !number(substr(e, c + 1), 1, 65535)) {
+            print "Endpoint on line " seen["endpoint"] " is not valid"; exit 1
+        }
+        n = split(value["allowedips"], parts, ",")
+        got = ""
+        for (i = 1; i <= n; i++) got = got (i > 1 ? "," : "") trim(parts[i])
+        if (got != (a6 != "-" ? "0.0.0.0/0,::/0" : "0.0.0.0/0")) { print "AllowedIPs on line " seen["allowedips"] " is not valid"; exit 1 }
+        if (("persistentkeepalive" in seen) && !number(value["persistentkeepalive"], 1, 65535)) {
+            print "PersistentKeepalive on line " seen["persistentkeepalive"] " is not valid"; exit 1
+        }
+    }
+    print "ok " a4 " " a6
+}'
+
+validate_conf() {
+    [ -e "$CONF" ] || [ -L "$CONF" ] || fail "the tunnel config $CONF is missing; $regenerate"
+    if [ -L "$CONF" ] || [ ! -f "$CONF" ]; then fail "the tunnel config $CONF is not a regular file"; fi
+    [ -r "$CONF" ] || fail "the tunnel config $CONF can't be read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)"
+    size=$(wc -c < "$CONF" 2>/dev/null | tr -d ' ') || size=''
+    case "$size" in ''|*[!0-9]*) fail "the tunnel config $CONF can't be read" ;; esac
+    [ "$size" -le 4096 ] || fail "the tunnel config $CONF is larger than 4 KiB; $regenerate"
+    [ "$(tr -d '\000\r' < "$CONF" | wc -c | tr -d ' ')" = "$size" ] ||
+        fail "the tunnel config $CONF has NUL or carriage-return bytes; $regenerate"
+    verdict=$(LC_ALL=C awk -v provider="$PROVIDER" -v table="$EXIT_TABLE" "$conf_validator" < "$CONF" 2>/dev/null) ||
+        fail "the tunnel config $CONF is not supported: ${verdict:-it is unreadable}; $regenerate"
+    # Deliberate splitting of the validator's own output; globbing is off.
+    # shellcheck disable=SC2086
+    set -- $verdict
+    [ "$#" -eq 3 ] && [ "$1" = ok ] || fail "the tunnel config $CONF can't be read"
+    conf_addr4=$2
+    conf_addr6=$3
+    [ "$conf_addr4" != - ] || conf_addr4=''
+    if [ "$conf_addr6" = - ]; then
+        conf_addr6=''
+    else
+        conf_addr6=$(canonical_cidr6 "$conf_addr6/128") || fail "the tunnel config's IPv6 Address is not valid"
+        conf_addr6=${conf_addr6%/128}
+    fi
+    rule94=conf
+    [ -n "$conf_addr4$conf_addr6" ] || rule94=applier
+}
+validate_conf
+if [ "$check_only" = 1 ]; then
+    families='no address (the applier sets it)'
+    [ -z "$conf_addr4" ] || families='an IPv4 address'
+    [ -z "$conf_addr6" ] || families="$families and an IPv6 address"
+    say "configuration accepted ($CONF: $families)"
+    exit 0
+fi
+others=$(find "$CONF_DIR" -maxdepth 1 -name '*.conf' ! -name "$EXIT_IF.conf" 2>/dev/null | wc -l | tr -d ' ')
+[ "${others:-0}" = 0 ] || say "warning: $others other .conf file(s) in $CONF_DIR are ignored; only $EXIT_IF.conf is used"
+
+# ---------------------------------------------------------------------------
+# Time, the owner record and supervised workers.
+# ---------------------------------------------------------------------------
+
+# Boot-clock centiseconds, into now_cs.
+now_cs() {
+    read -r up _ < /proc/uptime || up=0.00
+    now_cs=${up%%.*}${up#*.}
+    now_cs=${now_cs#"${now_cs%%[!0]*}"}
+    now_cs=${now_cs:-0}
+}
+
+generation=$(cat /proc/sys/kernel/random/uuid 2>/dev/null) || fail "cannot draw a launch generation"
+case "$generation" in ''|*[!0-9a-f-]*) fail "cannot draw a launch generation" ;; esac
+repairs=0
+last_repair=-
+owner_ok=0
+owner_warned=0
+write_owner() {
+    owner_ok=0
+    if gr_clock && gr_netns; then
+        if printf 'molebridge-exit 1 %s %s %s %s %s %s %s %s %s\n' "$gr_boot" "$gr_now" "$gr_ns" "$generation" \
+                "${conf_addr4:--}" "${conf_addr6:--}" "$rule94" "$repairs" "$last_repair" > "$OWNER_FILE.tmp" 2>/dev/null &&
+                mv -f "$OWNER_FILE.tmp" "$OWNER_FILE" 2>/dev/null; then
+            owner_ok=1
+            owner_warned=0
+            return 0
+        fi
+    fi
+    if [ "$owner_warned" = 0 ]; then
+        echo "molebridge-exit: cannot write the owner record $OWNER_FILE; not ready" >&2
+        owner_warned=1
+    fi
+}
+
+# The current worker: its pid (also its process group), kind and deadlines.
+w_pid=''
+w_kind=''
+w_status=''
+start_worker() {
+    w_kind=$1
+    shift
+    setsid "$@" >/dev/null 2>&1 &
+    w_pid=$!
+    now_cs
+    w_start=$now_cs
+    w_termed=0
+    w_killed=0
+}
+# Leader finished (the shell has reaped it) and no group member left.
+worker_finished() {
+    kill -0 "$w_pid" 2>/dev/null && return 1
+    kill -0 "-$w_pid" 2>/dev/null && return 1
+    return 0
+}
+# One supervision step against deadlines in centiseconds from the worker's
+# start (or absolute, with $4 = abs): TERM to the group at $1, KILL at $2.
+# Returns 0 once finished, with w_status; 1 while running; 2 when the group
+# outlived $3.
+supervise() {
+    now_cs
+    base=$w_start
+    [ "${4:-}" != abs ] || base=0
+    if worker_finished; then
+        w_status=0
+        wait "$w_pid" 2>/dev/null || w_status=$?
+        [ "$w_killed$w_termed" = 00 ] || [ "$w_status" != 0 ] || w_status=143
+        return 0
+    fi
+    if [ "$now_cs" -ge $((base + $3)) ]; then return 2; fi
+    if [ "$w_killed" = 0 ] && [ "$now_cs" -ge $((base + $2)) ]; then
+        kill -KILL "-$w_pid" 2>/dev/null || :
+        w_killed=1
+    elif [ "$w_termed" = 0 ] && [ "$now_cs" -ge $((base + $1)) ]; then
+        kill -TERM "-$w_pid" 2>/dev/null || :
+        w_termed=1
+    fi
+    return 1
+}
+# Runs a worker to completion against absolute deadlines (centiseconds).
+run_bounded() {
+    rb_term=$1 rb_kill=$2 rb_gone=$3
+    shift 3
+    start_worker teardown "$@"
+    while :; do
+        supervise "$rb_term" "$rb_kill" "$rb_gone" abs
+        case $? in 0) return 0 ;; 2) return 2 ;; esac
+        sleep 0.2
+    done
+}
+
+link_present() { ip link show dev "$EXIT_IF" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------------------
+# Stopping. One absolute deadline, T + 7 s, with a reservation for each step.
+# The routing rules and the unreachable fallback stay: the namespace stays
+# fail-closed whatever happens to the tunnel.
+# ---------------------------------------------------------------------------
+stop_now() {
+    now_cs
+    t=$now_cs
+    rm -f "$READY_FILE"
+    say "stopping"
+    left=''
+    if [ -n "$w_pid" ]; then
+        w_start=$t
+        w_termed=0
+        w_killed=0
+        while :; do
+            supervise 0 150 200
+            case $? in
+                0) break ;;
+                2) left="$left a $w_kind worker;"; break ;;
+            esac
+            sleep 0.2
+        done
+        w_pid=''
+    fi
+    # Teardown never starts while anything of the bring-up survives.
+    if [ -z "$left" ] && link_present; then
+        run_bounded $((t + 450)) $((t + 500)) $((t + 550)) wg-quick down "$CONF" || left="$left wg-quick down;"
+    fi
+    if [ -z "$left" ] && link_present; then
+        run_bounded $((t + 600)) $((t + 650)) $((t + 680)) ip link del dev "$EXIT_IF" || left="$left ip link del;"
+    fi
+    if link_present; then left="$left the $EXIT_IF interface;"; fi
+    if [ -n "$left" ]; then
+        echo "molebridge-exit: cleanup incomplete:$left the routing guards stay in place" >&2
+        exit 1
+    fi
+    say "stopped; the routing guards stay in place"
+    exit 0
+}
+stopping=0
+trap 'stopping=1' INT TERM
+
+# ---------------------------------------------------------------------------
+# Start.
+# ---------------------------------------------------------------------------
+mkdir -p "${OWNER_FILE%/*}" 2>/dev/null || :
+write_owner
+CONTRACT_RULES=$LIB/contract-rules
+export OVERLAY_CIDR OVERLAY6_CIDR OVERLAY_IF EXIT_IF EXIT_TABLE PROVIDER CONTRACT_RULES
+TUNNEL_CONF=$CONF /bin/sh "$LIB/10-exit-routing" --install ||
+    fail "the routing contract could not be installed; no tunnel was started"
+MOLEBRIDGE_ADDR4=$conf_addr4
+MOLEBRIDGE_ADDR6=$conf_addr6
+MOLEBRIDGE_RULE94=$rule94
+export MOLEBRIDGE_ADDR4 MOLEBRIDGE_ADDR6 MOLEBRIDGE_RULE94
+
+now_cs
+next_owner=0
+next_reconcile=0
+next_attempt=0
+backoff=2
+reconcile_ok=0
+tunnel_ok=0
+was_ready=0
+while :; do
+    [ "$stopping" = 0 ] || stop_now
+    now_cs
+    if [ "$now_cs" -ge "$next_owner" ]; then
+        write_owner
+        next_owner=$((now_cs + 200))
+    fi
+
+    if [ -n "$w_pid" ]; then
+        # wg-quick up: TERM at 20 s, KILL at 23 s, gone by 23.5 s.
+        supervise 2000 2300 2350
+        case $? in
+            0)
+                w_pid=''
+                if [ "$w_status" = 0 ] && link_present; then
+                    say "tunnel up"
+                    backoff=2
+                else
+                    echo "molebridge-exit: tunnel bring-up failed (exit $w_status); retrying in $backoff s" >&2
+                    if link_present; then ip link del dev "$EXIT_IF" 2>/dev/null || :; fi
+                    next_attempt=$((now_cs + backoff * 100))
+                    backoff=$((backoff * 2))
+                    [ "$backoff" -le 60 ] || backoff=60
+                fi ;;
+            2)
+                echo "molebridge-exit: a wg-quick process survived KILL; retrying in $backoff s" >&2
+                w_pid=''
+                next_attempt=$((now_cs + backoff * 100)) ;;
+        esac
+    elif [ "$now_cs" -ge "$next_attempt" ]; then
+        if ! link_present || ! tunnel_up; then
+            if link_present; then
+                echo "molebridge-exit: $EXIT_IF is down; recreating it" >&2
+                ip link del dev "$EXIT_IF" 2>/dev/null || :
+            fi
+            say "bringing the tunnel up"
+            start_worker bring-up wg-quick up "$CONF"
+            tunnel_ok=0
+        fi
+    fi
+
+    now_cs
+    if [ "$now_cs" -ge "$next_reconcile" ]; then
+        starting=0
+        [ -z "$w_pid" ] || starting=1
+        status=0
+        MOLEBRIDGE_TUNNEL_STARTING=$starting /bin/sh "$LIB/10-exit-routing" --reconcile || status=$?
+        case "$status" in
+            0) reconcile_ok=1 ;;
+            3)
+                reconcile_ok=1
+                repairs=$((repairs + 1))
+                gr_clock && last_repair=$gr_now ;;
+            *) reconcile_ok=0 ;;
+        esac
+        now_cs
+        next_reconcile=$((now_cs + INTERVAL * 100))
+    fi
+
+    tunnel_ok=0
+    if [ -z "$w_pid" ] && link_present && tunnel_up; then tunnel_ok=1; fi
+    if [ "$owner_ok" = 1 ] && [ "$tunnel_ok" = 1 ] && [ "$reconcile_ok" = 1 ]; then
+        touch "$READY_FILE" 2>/dev/null || :
+        [ "$was_ready" = 1 ] || say "ready"
+        was_ready=1
+    else
+        rm -f "$READY_FILE"
+        [ "$was_ready" = 0 ] || echo "molebridge-exit: not ready" >&2
+        was_ready=0
+    fi
+
+    # 0.2 s steps while a worker runs, 2 s otherwise; a signal ends the wait.
+    pause=2
+    [ -z "$w_pid" ] || pause=0.2
+    sleep "$pause" &
+    sleeper=$!
+    wait "$sleeper" 2>/dev/null || :
+    kill "$sleeper" 2>/dev/null || :
+done

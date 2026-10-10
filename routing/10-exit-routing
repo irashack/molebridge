@@ -10,11 +10,20 @@
 # matches ICMP only, so other traffic a co-located process sources from that
 # address keeps the namespace's ordinary route.
 # Priority 97 is a permanent terminal guard if lookup 95 or its routes vanish.
+# Priority 98 is the backstop behind 94: tunnel-sourced ICMP is unreachable if
+# 94 is missing, or if the exit table is empty while the tunnel is down.
+#
+# The native backend (TUNNEL_BACKEND=wireguard, the default) is driven by the
+# routing image's entrypoint, routing/molebridge-exit: `--install` installs
+# the contract once, before the tunnel exists, and `--reconcile` makes one
+# repair pass. Neither touches the readiness marker; the entrypoint owns it.
+# Run without arguments, the script installs and then sets the marker, as it
+# did as a LinuxServer init script.
 #
 # TUNNEL_BACKEND=gluetun runs the same contract as a sidecar in gluetun's
 # namespace, adds NetBird's control-plane rules (88/89) and a host table, and
 # keeps everything in place in a loop; see the gluetun section below and
-# docs/architecture.md#gluetun-backend. The default, wireguard, is unchanged.
+# docs/architecture.md#gluetun-backend.
 set -eu
 set -f
 
@@ -26,9 +35,10 @@ EXIT_TABLE="${EXIT_TABLE:-51821}"
 PROVIDER="${PROVIDER:-mullvad}"
 READY_FILE="${ROUTING_READY_FILE:-/run/molebridge-routing-ready}"
 TUNNEL_BACKEND="${TUNNEL_BACKEND:-wireguard}"
-# A single gluetun reconcile pass leaves the marker for the pass to decide.
+# A single gluetun reconcile pass leaves the marker for the pass to decide;
+# the native modes leave it to the entrypoint.
 case "$TUNNEL_BACKEND:${1:-}" in
-    gluetun:--reconcile) : ;;
+    gluetun:--reconcile|wireguard:--install|wireguard:--reconcile) : ;;
     *) rm -f "$READY_FILE" ;;
 esac
 
@@ -111,7 +121,7 @@ install_local_guard() {
 # to Molebridge here: anything else at those priorities is removed. 102-104
 # sit between gluetun's 101 and NetBird's 105 so that the exit's own
 # unmarked traffic leaves only through gluetun's tunnel, or not at all. The
-# expected rules, exit table and host table are defined in routing/gluetun-rules,
+# expected rules, exit table and host table are defined in routing/contract-rules,
 # which NetBird's gate reads too, so both judge the namespace the same way.
 # The mark is exact (mask 0xffffffff) and `iif lo` limits 88/89 to locally
 # generated packets, so forwarded packets carrying NetBird's data-plane marks
@@ -126,12 +136,17 @@ INTERVAL="${ROUTING_RECONCILE_INTERVAL:-2}"
 # gate allows at least FWMARK_GRACE >= 5 seconds between good records.
 STATUS_INTERVAL=2
 # The rule set, its checks and the clock, shared with NetBird's gate.
-GLUETUN_RULES="${GLUETUN_RULES:-/usr/local/lib/molebridge/gluetun-rules}"
+# GLUETUN_RULES is the setting's name before 0.6.0.
+CONTRACT_RULES="${CONTRACT_RULES:-${GLUETUN_RULES:-/usr/local/lib/molebridge/contract-rules}}"
+
+load_contract() {
+    [ -f "$CONTRACT_RULES" ] || fail "the shared rule definitions are missing ($CONTRACT_RULES)"
+    # shellcheck source=routing/contract-rules
+    . "$CONTRACT_RULES"
+}
 
 gluetun_validate() {
-    [ -f "$GLUETUN_RULES" ] || fail "the shared rule definitions are missing ($GLUETUN_RULES)"
-    # shellcheck source=routing/gluetun-rules
-    . "$GLUETUN_RULES"
+    load_contract
     gr_validate
     gr_is_uint "$INTERVAL" && [ "${#INTERVAL}" -le 2 ] && [ "$INTERVAL" -ge 1 ] && [ "$INTERVAL" -le 60 ] ||
         fail "ROUTING_RECONCILE_INTERVAL must be 1..60 seconds"
@@ -164,6 +179,10 @@ gluetun_rule() {
             icmp=icmp
             [ "$rule_family" = -4 ] || icmp=ipv6-icmp
             set -- from "$gl_address" ipproto "$icmp" lookup "$EXIT_TABLE" ;;
+        98)
+            icmp=icmp
+            [ "$rule_family" = -4 ] || icmp=ipv6-icmp
+            set -- from "$gl_address" ipproto "$icmp" unreachable ;;
         95) set -- iif "$OVERLAY_IF" lookup "$EXIT_TABLE" ;;
         96) set -- oif "$EXIT_IF" lookup "$EXIT_TABLE" ;;
         97) set -- iif "$OVERLAY_IF" unreachable ;;
@@ -191,9 +210,11 @@ repair_priority() {
 
 # Missing rules go in before anything is removed, and rule 1 exists before
 # the kernel's rule 0 goes. A correct rule is removed only inside
-# repair_priority, behind its copy.
+# repair_priority, behind its copy, so rules 94 and 98 are never both gone.
+# $3 is "hold" to keep the gluetun kill switch out; $4 and $5 are
+# rule_actions' mode and priorities to leave alone.
 apply_rule_actions() {
-    actions=$(rule_actions "$1" "$2")
+    actions=$(rule_actions "$1" "$2" "${4:-gluetun}" "${5:-}")
     printf '%s\n' "$actions" | while read -r verb priority _; do
         [ "$verb" = add ] || continue
         # The kill switch waits for its exceptions' table ($3 = hold).
@@ -225,7 +246,10 @@ apply_rule_actions() {
 apply_exit_table() {
     actions=$(exit_table_actions "$1" "$2")
     case "$actions" in
-        *fallback*) ip "$1" route replace unreachable default metric 4096 table "$EXIT_TABLE" ;;
+        *fallback*)
+            if ip "$1" route replace unreachable default metric 4096 table "$EXIT_TABLE"; then
+                [ "$gl_quiet" = 1 ] || echo "10-exit-routing: IPv${1#-} unreachable fallback in table $EXIT_TABLE restored"
+            fi ;;
     esac
     case "$actions" in
         *tunnel*)
@@ -391,6 +415,97 @@ elif [ "$TUNNEL_BACKEND" != wireguard ]; then
     fail "TUNNEL_BACKEND must be wireguard or gluetun"
 fi
 
+# ---------------------------------------------------------------------------
+# Native backend.
+# ---------------------------------------------------------------------------
+
+# One reconcile pass for the entrypoint (routing/molebridge-exit), which
+# passes the tunnel config's canonical addresses in MOLEBRIDGE_ADDR4 and
+# MOLEBRIDGE_ADDR6 (empty for none), MOLEBRIDGE_RULE94 (conf, or applier when
+# the config has no address and the applier owns rules 94 and 98) and
+# MOLEBRIDGE_TUNNEL_STARTING=1 while `wg-quick up` runs. Missing rules and
+# routes go back, anything else in Molebridge's priorities 0-98 or the exit
+# table goes. A change to rules 90-97 happens behind the temporary guard at
+# priority 80, which comes out once the result verifies; while it can't be
+# verified the guard stays, and a later pass that finds everything else right
+# takes it out. Exit status: 0 when everything was in place, 3 when it is
+# after repairs, 1 when something is still wrong.
+native_reconcile() {
+    load_contract
+    gr_validate_common
+    nr_addr4=${MOLEBRIDGE_ADDR4:-}
+    nr_addr6=${MOLEBRIDGE_ADDR6:-}
+    nr_rule94=${MOLEBRIDGE_RULE94:-conf}
+    case "$nr_addr4" in *[!0-9.]*) fail "invalid MOLEBRIDGE_ADDR4" ;; esac
+    case "$nr_addr6" in *[!0-9a-f:]*) fail "invalid MOLEBRIDGE_ADDR6" ;; esac
+    case "$nr_rule94" in conf|applier) : ;; *) fail "MOLEBRIDGE_RULE94 must be conf or applier" ;; esac
+    [ "$nr_rule94" = conf ] || [ -z "$nr_addr4$nr_addr6" ] || fail "an addressless config has no addresses"
+    nr_skip=''
+    [ "$nr_rule94" = conf ] || nr_skip='94 98'
+    window="80:from all|iif $OVERLAY_IF|unreachable"
+    gl_quiet=0
+    nr_changed=0
+    nr_bad=0
+    for nr_family in -4 -6; do
+        gl_address=$nr_addr4
+        [ "$nr_family" = -4 ] || gl_address=$nr_addr6
+        # The tunnel carries IPv4 always (an addressless config's hooks route
+        # it too) and IPv6 when the config has an IPv6 address.
+        nr_tunnel=0
+        if [ "${MOLEBRIDGE_TUNNEL_STARTING:-0}" = 1 ]; then
+            nr_tunnel=2
+        elif tunnel_up && { [ "$nr_family" = -4 ] || [ -n "$nr_addr6" ]; }; then
+            nr_tunnel=1
+        fi
+        # The temporary guard, when it's there, is expected until a pass
+        # verifies: it only ever blocks forwarding.
+        nr_extra=''
+        if ip "$nr_family" rule show 2>/dev/null | awk -v iface="$OVERLAY_IF" '
+                $1 == "80:" && $2 == "from" && $3 == "all" && $4 == "iif" && $5 == iface &&
+                ((NF == 6 && $6 == "unreachable") || (NF == 7 && $6 == "[detached]" && $7 == "unreachable")) { f = 1 }
+                END { exit !f }'; then
+            nr_extra=$window
+        fi
+        nr_actions=$(rule_actions "$nr_family" "$(native_expected "$nr_family" "$gl_address" "$nr_extra")" native "$nr_skip")
+        if [ -n "$nr_actions" ]; then
+            nr_changed=1
+            if printf '%s\n' "$nr_actions" | grep -q '^[a-z]* 9[0-7]\( \|$\)'; then
+                if [ -z "$nr_extra" ]; then
+                    ip "$nr_family" rule add iif "$OVERLAY_IF" unreachable priority 80 ||
+                        echo "10-exit-routing: could not add the IPv${nr_family#-} temporary guard" >&2
+                    nr_extra=$window
+                fi
+            fi
+            apply_rule_actions "$nr_family" "$(native_expected "$nr_family" "$gl_address" "$nr_extra")" '' native "$nr_skip"
+        fi
+        if [ -n "$(exit_table_actions "$nr_family" "$nr_tunnel")" ]; then
+            nr_changed=1
+            apply_exit_table "$nr_family" "$nr_tunnel"
+        fi
+        if [ -n "$(native_problems "$nr_family" "$gl_address" "$nr_rule94" "$nr_tunnel" "$nr_extra")" ]; then
+            nr_bad=1
+            echo "10-exit-routing: IPv${nr_family#-} routing still differs after repair; the temporary guard stays if it is in" >&2
+            continue
+        fi
+        if [ -n "$nr_extra" ]; then
+            while ip "$nr_family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
+            [ -z "$(native_problems "$nr_family" "$gl_address" "$nr_rule94" "$nr_tunnel")" ] || nr_bad=1
+        fi
+    done
+    [ "$nr_bad" = 0 ] || return 1
+    [ "$nr_changed" = 0 ] || return 3
+    return 0
+}
+
+case "${1:-}" in
+    --reconcile)
+        nr_status=0
+        native_reconcile || nr_status=$?
+        exit "$nr_status" ;;
+    ''|--install) : ;;
+    *) fail "unknown argument (use --install or --reconcile)" ;;
+esac
+
 # The tunnel addresses come from the same file wg-quick will use, so the
 # return-path rules can exist before the interface does. Only the Address
 # line is read; the file also holds the private key and is never echoed.
@@ -415,7 +530,7 @@ done
 case "$PROVIDER" in
     mullvad) [ -n "$tunnel4" ] || fail "tunnel configuration needs an IPv4 Address" ;;
     # PIA assigns the tunnel address per server; the applier sets it and its
-    # return-path rule when it registers the key. The guards below still apply.
+    # return-path rules when it registers the key. The guards below still apply.
     pia) [ -z "$tunnel6" ] || fail "PIA tunnels carry no IPv6; remove the IPv6 Address" ;;
     # NordLynx: one IPv4 address on every server, and no IPv6.
     nordvpn)
@@ -435,7 +550,7 @@ for family in -4 -6; do
     ip "$family" route replace unreachable default metric 4096 table "$EXIT_TABLE"
 done
 for family in -4 -6; do
-    for priority in 90 94 95 96 97; do
+    for priority in 90 94 95 96 97 98; do
         while ip "$family" rule del priority "$priority" 2>/dev/null; do :; done
     done
     cidr=$OVERLAY_CIDR
@@ -458,6 +573,9 @@ for family in -4 -6; do
         # every protocol sourced from the tunnel address is forced into the
         # tunnel, including traffic from anything else sharing the namespace.
         ip "$family" rule add from "$tunnel" ipproto "$icmp" lookup "$EXIT_TABLE" priority 94
+        # The backstop: the same packets are unreachable if 94 or the exit
+        # table's routes are ever gone.
+        ip "$family" rule add from "$tunnel" ipproto "$icmp" unreachable priority 98
     fi
     ip "$family" rule add iif "$OVERLAY_IF" lookup "$EXIT_TABLE" priority 95
     ip "$family" rule add oif "$EXIT_IF" lookup "$EXIT_TABLE" priority 96
@@ -466,5 +584,5 @@ done
 for family in -4 -6; do
     while ip "$family" rule del iif "$OVERLAY_IF" unreachable priority 80 2>/dev/null; do :; done
 done
-touch "$READY_FILE"
-echo "10-exit-routing: rules installed (1/90/94/95/96/97, protected table)"
+[ "${1:-}" = --install ] || touch "$READY_FILE"
+echo "10-exit-routing: rules installed (1/90/94/95/96/97/98, protected table)"

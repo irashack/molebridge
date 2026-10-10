@@ -22,7 +22,7 @@ from molebridge.egress import (ECHO_MAX_BYTES, ECHO_URLS, HOST_LACKS_FAMILY, exi
                                parse_echo, tunnel_verdict)
 from molebridge.relays import REFRESH_INTERVAL_S, RelayCatalog, valid_key
 from molebridge.routing import (RETURN_PATH_SYSCTL, RoutingConfig, family_status, netbird_firewall_present,
-                                overlay_is_kernel_wireguard, return_path_enabled)
+                                overlay_is_kernel_wireguard, return_path_enabled, owner_record_valid, parse_owner_record)
 from molebridge.state import (decode_json, desired_request, now_iso, read_json, recent, request_token,
                               write_json_atomic)
 
@@ -65,6 +65,10 @@ def command(args, *, timeout=5, limit=1024 * 1024):
 
 
 class Applier:
+    # The native exit's owner record (routing/molebridge-exit). main() sets
+    # the path for the native backend; with None the check is skipped.
+    owner_path = None
+    owner_seen = None
     """The Mullvad applier, and the base for every provider's applier. A
     subclass sets `provider` (its registry id) and overrides the provider seam:
     catalogue options, `apply_relay`, `server_for`, `egress` and `tick`. The
@@ -183,10 +187,36 @@ class Applier:
             raise ValueError('missing IPv4 tunnel address')
         return found
 
+    def owner_live(self):
+        """True when the exit container's owner record is fresh and from this
+        boot and this network namespace (molebridge/routing.py,
+        owner_record_valid): its routing loop is running here. Without a
+        path, as for the gluetun backend, there is nothing to check."""
+        if self.owner_path is None:
+            return True
+        try:
+            with open(self.owner_path, 'rb') as handle:
+                text = handle.read(600).decode('ascii')
+            # The same files routing/contract-rules reads, and the same overrides.
+            boot = Path(os.environ.get('MOLEBRIDGE_BOOT_ID_FILE', '/proc/sys/kernel/random/boot_id')
+                        ).read_text(encoding='ascii').strip()
+            now = int(Path(os.environ.get('MOLEBRIDGE_UPTIME_FILE', '/proc/uptime')
+                           ).read_text(encoding='ascii').split()[0].split('.')[0])
+            namespace = os.stat(os.environ.get('MOLEBRIDGE_NETNS_PATH', '/proc/self/ns/net'))
+        except (OSError, ValueError, UnicodeError, IndexError):
+            return False
+        record = parse_owner_record(text)
+        if not owner_record_valid(record, boot=boot, now=now, netns=f'{namespace.st_dev}:{namespace.st_ino}',
+                                  seen=self.owner_seen):
+            return False
+        self.owner_seen = (record['generation'], record['stamp'])
+        return True
+
     def routing_status(self, *, require_address=True):
         """(protected, fallback). Without `require_address` an interface that has
         no address yet passes when its guards are intact: a provider that
-        assigns the address per server installs rule 94 with it."""
+        assigns the address per server installs rules 94 and 98 with it. With
+        the native backend, the exit's owner record must be live too."""
         checks = []
         try:
             self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
@@ -197,7 +227,8 @@ class Applier:
                 routes = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', self.config.table]))
                 checks.append(family_status(rules, routes, self.config, family,
                                             tunnel_address=addresses.get(family)))
-            return return_path and all(c[0] for c in checks), all(c[1] for c in checks)
+            owner = self.owner_live()
+            return return_path and owner and all(c[0] for c in checks), all(c[1] for c in checks)
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
 
@@ -625,6 +656,8 @@ def main():
             applier = Applier(directory, config, server=os.environ.get('SERVER', ''))
         else:
             applier = spec.applier_class().from_env(directory, config, os.environ)
+        if config.backend == 'wireguard':
+            applier.owner_path = Path(os.environ.get('OWNER_RECORD', '/run/molebridge/exit-owner'))
         if args.healthcheck:
             result = read_json(applier.result_path, 16384)
             completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')

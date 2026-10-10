@@ -18,7 +18,7 @@ ICMP_PROTOCOL = {4: 'icmp', 6: 'ipv6-icmp'}
 PROTOCOL_ALIASES = {'1': 'icmp', '58': 'ipv6-icmp'}
 TABLE_NAMES = {254: 'main', 255: 'local'}
 
-# NetBird's own netfilter objects in the pinned release (0.79.0): the nftables
+# NetBird's own netfilter objects in the pinned release (0.80.0): the nftables
 # backend creates table `netbird` (client/firewall/nftables/manager_linux.go:25,
 # 748-763); the iptables backend creates chains such as NETBIRD-RT-FWD-IN
 # (client/firewall/iptables/family_linux.go:40-46, chains_linux.go:16-36).
@@ -30,7 +30,7 @@ TABLE_NAMES = {254: 'main', 255: 'local'}
 NETBIRD_NFT_TABLE = 'netbird'
 NETBIRD_IPTABLES_PREFIX = 'NETBIRD-'
 
-# gluetun backend. Tables gluetun v3.41.3 and NetBird 0.79.0 use in the shared
+# gluetun backend. Tables gluetun v3.41.3 and NetBird 0.80.0 use in the shared
 # namespace: gluetun's WireGuard table and mark 51820
 # (internal/wireguard/settings.go:60-67), its inbound table 200
 # (internal/routing/inbound.go:11-12), NetBird's table 0x1BD0 = 7120
@@ -167,7 +167,8 @@ def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_
     `tunnel_address` is the family's global address on the exit interface, or
     None when the tunnel does not carry this family. With an address, the
     family must also have its tunnel default route and the priority-94
-    return-path rule, for exactly that address and ICMP alone. With
+    return-path rule, for exactly that address and ICMP alone, and with the
+    native backend the priority-98 backstop for the same packets. With
     tunnel_route=False the tunnel default may be missing (gluetun's interface
     exists with its address but is down; the guard removes the route then),
     though never replaced by another route.
@@ -209,7 +210,8 @@ def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_
         # HOST_IF's own subnets, from the host table without its default.
         expected[103] = {'iif': 'lo', 'table': config.host_table, 'suppress_prefixlen': 0}
         expected[104] = {'iif': 'lo', 'action': 'unreachable'}
-    owned_after_97 = (102, 103, 104) if config.gluetun else ()
+    # The native backend owns 98 too; with gluetun, 98 is gluetun's own.
+    owned_after_97 = (102, 103, 104) if config.gluetun else (98,)
     if tunnel_address is not None:
         try:
             address = ipaddress.ip_network(tunnel_address, strict=True)
@@ -219,6 +221,11 @@ def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_
             return False, False
         expected[94] = {'src': str(address), 'ipproto': ICMP_PROTOCOL[family],
                         'table': config.table}
+        if not config.gluetun:
+            # The backstop behind 94: the same packets are unreachable if 94
+            # or the exit table's routes are ever gone.
+            expected[98] = {'src': str(address), 'ipproto': ICMP_PROTOCOL[family],
+                            'action': 'unreachable'}
     found = set()
     rules_ok = True
     for rule in rules:
@@ -475,3 +482,61 @@ def return_path_enabled(value):
     """True when the sysctl file content says the kernel sources ICMP errors
     from the inbound interface address."""
     return isinstance(value, str) and value.strip() == '1'
+
+
+# The native exit's owner record (routing/contract-rules, owner_read): one
+# line, rewritten every 2 seconds by routing/molebridge-exit.
+OWNER_EXPIRY = 6
+
+
+def _uint(text):
+    return isinstance(text, str) and text.isascii() and text.isdigit() and len(text) <= 12
+
+
+def parse_owner_record(text):
+    """The owner record's fields as a dict, or None for anything but the
+    exact shape routing/molebridge-exit writes."""
+    if not isinstance(text, str) or len(text) > 513 or not text.endswith('\n') or text.count('\n') != 1:
+        return None
+    parts = text[:-1].split(' ')
+    if len(parts) != 11 or parts[:2] != ['molebridge-exit', '1']:
+        return None
+    _, _, boot, stamp, netns, generation, addr4, addr6, rule94, repairs, last = parts
+    if not re.fullmatch(r'[0-9a-f-]{1,64}', boot) or not _uint(stamp) or not re.fullmatch(r'[0-9]{1,20}:[0-9]{1,20}', netns):
+        return None
+    if not re.fullmatch(r'[0-9a-f-]{1,64}', generation) or rule94 not in ('conf', 'applier'):
+        return None
+    if not _uint(repairs) or not (last == '-' or _uint(last)):
+        return None
+    addresses = {}
+    for family, value in ((4, addr4), (6, addr6)):
+        if value == '-':
+            continue
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError:
+            return None
+        if address.version != family or str(address) != value:
+            return None
+        addresses[family] = value
+    if rule94 == 'applier' and addresses:
+        return None
+    return {'boot': boot, 'stamp': int(stamp), 'netns': netns, 'generation': generation,
+            'addresses': addresses, 'rule94': rule94, 'repairs': int(repairs),
+            'last_repair': None if last == '-' else int(last)}
+
+
+def owner_record_valid(record, *, boot, now, netns, seen=None):
+    """True when `record` (parse_owner_record's result) is a live owner's for
+    this boot and network namespace, by the rule NetBird's gate applies
+    (routing/contract-rules, owner_valid): written at most OWNER_EXPIRY
+    seconds before `now` (whole seconds of the boot clock), at most a second
+    in the future, and, within the generation of `seen` (the generation and
+    stamp last accepted), not older than that."""
+    if record is None or record['boot'] != boot or record['netns'] != netns:
+        return False
+    if record['stamp'] > now + 1 or now - record['stamp'] > OWNER_EXPIRY:
+        return False
+    if seen is not None and seen[0] == record['generation'] and record['stamp'] < seen[1]:
+        return False
+    return True

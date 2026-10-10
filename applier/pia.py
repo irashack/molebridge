@@ -29,6 +29,7 @@ from pathlib import Path
 
 from applier.apply import HANDSHAKE_FRESH_SEC, Applier, command
 from molebridge.relays import PIA_CN_RE, RelayCatalog, valid_ipv4, valid_key
+from molebridge.routing import PROTOCOL_ALIASES
 from molebridge.state import decode_json, now_iso, read_json, write_json_atomic
 
 PIA_TOKEN_URL = 'https://www.privateinternetaccess.com/api/client/v2/token'
@@ -237,13 +238,36 @@ class PiaApplier(Applier):
                     networks.append(ipaddress.IPv4Network(f"{entry['local']}/{prefix}", strict=False))
         return networks
 
-    def return_path_sources(self):
-        """Sources of the IPv4 priority-94 rules now installed."""
+    def rules_at(self, priority):
+        """The IPv4 rules now installed at `priority`."""
         rules = decode_json(self.run(['ip', '-j', '-4', 'rule', 'show']))
         if not isinstance(rules, list):
             raise ValueError('invalid rule listing')
-        return [r.get('src') for r in rules if isinstance(r, dict) and r.get('priority') == 94
-                and isinstance(r.get('src'), str)]
+        return [r for r in rules if isinstance(r, dict) and r.get('priority') == priority]
+
+    def return_path_sources(self, priority=94):
+        """Sources of the IPv4 rules now installed at 94 (the return path) or
+        98 (its backstop)."""
+        return [r.get('src') for r in self.rules_at(priority) if isinstance(r.get('src'), str)]
+
+    def return_path_rule(self, priority, address):
+        """The command arguments for rule 94 or 98 for `address`."""
+        action = ['lookup', self.config.table] if priority == 94 else ['unreachable']
+        return ['ip', '-4', 'rule', 'add', 'from', address, 'ipproto', 'icmp', *action, 'priority', str(priority)]
+
+    def return_path_exact(self, rule, priority, address):
+        """True when `rule` is exactly this exit's rule 94 or 98 for `address`."""
+        protocol = str(rule.get('ipproto', ''))
+        if PROTOCOL_ALIASES.get(protocol, protocol) != 'icmp' or rule.get('src') != address:
+            return False
+        if 'srclen' in rule and rule['srclen'] != 32:
+            return False
+        extra = set(rule) - {'priority', 'src', 'srclen', 'ipproto', 'table', 'action', 'protocol'}
+        if extra:
+            return False
+        if priority == 94:
+            return str(rule.get('table')) == self.config.table and 'action' not in rule
+        return rule.get('action') == 'unreachable' and 'table' not in rule
 
     # -- provider seam ---------------------------------------------------------
 
@@ -260,25 +284,32 @@ class PiaApplier(Applier):
         self.next_forward = 0
         with contextlib.suppress(RuntimeError):
             self.remove_forward_rules()
-        # The return-path rule for the new address goes in first and the old
-        # one comes out last, so the exit's ICMP errors always have a rule
-        # sending them into the tunnel. The new address is added before the
-        # old one goes: when an interface loses its last IPv4 address the
-        # kernel deletes every route through it, the tunnel default included,
-        # which is re-asserted afterwards.
+        # The return-path rule (94) and its backstop (98) for the new address
+        # go in first, and are confirmed, before the address changes; the old
+        # pair comes out last, 94 before 98, so the exit's ICMP errors always
+        # have a rule sending them into the tunnel or dropping them. A failure
+        # (RuntimeError from run) stops here, with the old address and its
+        # pair in place. The new address is added before the old one goes:
+        # when an interface loses its last IPv4 address the kernel deletes
+        # every route through it, the tunnel default included, which is
+        # re-asserted afterwards.
         new = registration['peer_ip']
-        sources = self.return_path_sources()
-        if new not in sources:
-            self.run(['ip', '-4', 'rule', 'add', 'from', new, 'ipproto', 'icmp',
-                      'lookup', table, 'priority', '94'])
+        old94, old98 = self.return_path_sources(94), self.return_path_sources(98)
+        if new not in old94:
+            self.run(self.return_path_rule(94, new))
+        if new not in old98:
+            self.run(self.return_path_rule(98, new))
+        if new not in self.return_path_sources(94) or new not in self.return_path_sources(98):
+            raise RuntimeError('the return-path rules for the new address are not in place')
         old = self.tunnel_addresses(require_ipv4=False).get(4)
         self.run(['ip', '-4', 'address', 'replace', new + '/32', 'dev', exit_if])
         if old and old != new:
             self.run(['ip', '-4', 'address', 'del', old + '/32', 'dev', exit_if])
         self.run(['ip', '-4', 'route', 'replace', 'default', 'dev', exit_if, 'table', table])
-        for source in sources:
-            if source != new:
-                self.run(['ip', '-4', 'rule', 'del', 'priority', '94', 'from', source])
+        for priority, sources in ((94, old94), (98, old98)):
+            for source in sources:
+                if source != new:
+                    self.run(['ip', '-4', 'rule', 'del', 'priority', str(priority), 'from', source])
         # IPv4 only: PIA carries no IPv6, which stays on the unreachable fallback.
         self.run(['wg', 'set', exit_if, 'peer', registration['server_key'],
                   'endpoint', f"{registration['server_ip']}:{registration['server_port']}",
@@ -325,6 +356,8 @@ class PiaApplier(Applier):
         return result
 
     def tick(self):
+        with contextlib.suppress(RuntimeError, ValueError, UnicodeError):
+            self.reconcile_tunnel()
         if not self.guard_installed:
             with contextlib.suppress(RuntimeError):
                 self.install_guard()
@@ -354,10 +387,17 @@ class PiaApplier(Applier):
         return super().switch(request)
 
     def reconcile_tunnel(self):
-        """Repair what an interrupted switch can leave behind: more than one
-        IPv4 address on the tunnel, or return-path rules for addresses no
-        longer on it. The recorded registration's address is kept when present.
-        Without this, the routing check would refuse every later switch."""
+        """Keep the tunnel's address and its rules 94 and 98 consistent, every
+        pass (tick) and before every switch: the routing image's loop leaves
+        both rules to this applier, since PIA's address changes per server.
+        Repairs what an interrupted switch, or a deletion, leaves behind: more
+        than one IPv4 address on the tunnel, a missing half of the kept
+        address's pair, and rules at 94 or 98 for addresses no longer on it or
+        not in their exact form. The recorded registration's address is kept
+        when present. A missing half goes in before anything is removed, and
+        94 and 98 are handled one after the other, so the kept address never
+        loses both. Without this, the routing check would refuse every later
+        switch."""
         exit_if, table = self.config.exit_if, self.config.table
         links = decode_json(self.run(['ip', '-j', 'address', 'show', 'dev', exit_if]))
         if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
@@ -368,18 +408,33 @@ class PiaApplier(Applier):
         recorded = read_json(self.tunnel_path, 4096)
         recorded = recorded.get('peer_ip') if isinstance(recorded, dict) else None
         keep = recorded if recorded in addresses else (addresses[0] if addresses else None)
-        sources = self.return_path_sources()
-        if keep and keep not in sources:
-            self.run(['ip', '-4', 'rule', 'add', 'from', keep, 'ipproto', 'icmp',
-                      'lookup', table, 'priority', '94'])
+        if keep:
+            for priority in (94, 98):
+                if not any(self.return_path_exact(r, priority, keep) for r in self.rules_at(priority)):
+                    self.run(self.return_path_rule(priority, keep))
         extra = [a for a in addresses if a != keep]
         for address in extra:
             self.run(['ip', '-4', 'address', 'del', address + '/32', 'dev', exit_if])
         if extra:
             self.run(['ip', '-4', 'route', 'replace', 'default', 'dev', exit_if, 'table', table])
-        for source in sources:
-            if source != keep:
-                self.run(['ip', '-4', 'rule', 'del', 'priority', '94', 'from', source])
+        for priority in (94, 98):
+            rules = self.rules_at(priority)
+            # Rules for other addresses go one by one, by source, which can't
+            # match the kept address's rule.
+            for rule in rules:
+                source = rule.get('src')
+                if isinstance(source, str) and source != keep:
+                    self.run(['ip', '-4', 'rule', 'del', 'priority', str(priority), 'from', source])
+            rules = self.rules_at(priority)
+            if len(rules) <= 1 and all(self.return_path_exact(r, priority, keep) for r in rules):
+                continue
+            # The kept address's rule isn't exact, or is doubled: clear the
+            # priority and put it back. The other half of the pair holds
+            # meanwhile.
+            for _ in rules:
+                self.run(['ip', '-4', 'rule', 'del', 'priority', str(priority)])
+            if keep:
+                self.run(self.return_path_rule(priority, keep))
 
     def retry_registration(self):
         """Re-register the requested region when its handshake has gone stale

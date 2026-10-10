@@ -53,6 +53,7 @@ def rules(family, tunnel=None):
              {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'}]
     if tunnel:
         table.insert(2, {'priority': 94, 'src': tunnel, 'ipproto': 'icmp', 'table': 51821})
+        table.append({'priority': 98, 'src': tunnel, 'ipproto': 'icmp', 'action': 'unreachable'})
     return table
 
 
@@ -80,14 +81,20 @@ class PiaKernel:
         self.nft = []
         self.scratch_seen = []
         self.return_path_gaps = 0
+        self.both_missing = 0
+        # A one-shot failure: the first command it matches raises.
+        self.fail_when = None
 
     def sleep(self, seconds):
         self.now += seconds
 
     def note_return_path(self):
-        """Record whether the tunnel address in use had a rule 94 at this step."""
-        sources = {r['src'] for r in self.rules[4] if r['priority'] == 94}
-        self.return_path_gaps += bool(self.addresses) and not set(self.addresses) & sources
+        """Record whether every tunnel address in use had both its rule 94 and
+        its backstop 98 at this step."""
+        found = {p: {r['src'] for r in self.rules[4] if r['priority'] == p} for p in (94, 98)}
+        for priority in (94, 98):
+            self.return_path_gaps += bool(set(self.addresses) - found[priority])
+        self.both_missing += bool(set(self.addresses) - found[94] - found[98])
 
     def argument_files(self, args):
         """Contents of every @file/<file argument, which must be 0600 scratch."""
@@ -103,6 +110,9 @@ class PiaKernel:
 
     def run(self, args, **kwargs):
         self.calls.append(args)
+        if self.fail_when and self.fail_when(args):
+            self.fail_when = None
+            raise RuntimeError('injected failure')
         text = ' '.join(args)
         for secret in (PASSWORD, TOKEN):
             assert secret not in text, 'secret in argv'
@@ -135,17 +145,22 @@ class PiaKernel:
                 self.routes[4] = [r for r in self.routes[4] if r.get('dev') != 'pia'] + [{'dst': 'default', 'dev': 'pia'}]
                 return ''
             if args[1:4] == ['-4', 'rule', 'del']:
-                assert args[4:7] == ['priority', '94', 'from']
-                match = [r for r in self.rules[4] if r['priority'] == 94 and r['src'] == args[7]]
+                assert args[4] == 'priority' and args[5] in ('94', '98') and args[6:7] in ([], ['from'])
+                match = [r for r in self.rules[4] if r['priority'] == int(args[5])
+                         and (len(args) == 6 or r['src'] == args[7])]
                 if not match:
                     raise RuntimeError('no such rule')
                 self.rules[4].remove(match[0])
                 self.note_return_path()
                 return ''
             if args[1:4] == ['-4', 'rule', 'add']:
-                assert args[4:] == ['from', self.expected_rule_source, 'ipproto', 'icmp', 'lookup', '51821', 'priority', '94']
-                self.rules[4] = sorted(self.rules[4] + [{'priority': 94, 'src': args[5], 'ipproto': 'icmp',
-                                                        'table': 51821}], key=lambda r: r['priority'])
+                if args[-1] == '94':
+                    assert args[4:] == ['from', self.expected_rule_source, 'ipproto', 'icmp', 'lookup', '51821', 'priority', '94']
+                    rule = {'priority': 94, 'src': args[5], 'ipproto': 'icmp', 'table': 51821}
+                else:
+                    assert args[4:] == ['from', self.expected_rule_source, 'ipproto', 'icmp', 'unreachable', 'priority', '98']
+                    rule = {'priority': 98, 'src': args[5], 'ipproto': 'icmp', 'action': 'unreachable'}
+                self.rules[4] = sorted(self.rules[4] + [rule], key=lambda r: r['priority'])
                 self.note_return_path()
                 return ''
             family = int(args[2][1:])
@@ -642,11 +657,14 @@ def test_interrupted_switch_is_repaired_before_the_next_one(runtime):
     # A switch died after adding the next address and its rule.
     kernel.addresses.append('10.0.0.9')
     kernel.rules[4] = sorted(kernel.rules[4] + [{'priority': 94, 'src': '10.0.0.9', 'ipproto': 'icmp',
-                                                'table': 51821}], key=lambda r: r['priority'])
+                                                'table': 51821},
+                                               {'priority': 98, 'src': '10.0.0.9', 'ipproto': 'icmp',
+                                                'action': 'unreachable'}], key=lambda r: r['priority'])
     assert applier.routing_status(require_address=False)[0] is False
     result = applier.switch({**request(), 'request_id': '2' * 32})
     assert result['status'] == 'ok' and kernel.addresses == ['10.0.0.2']
     assert [r['src'] for r in kernel.rules[4] if r['priority'] == 94] == ['10.0.0.2']
+    assert [r['src'] for r in kernel.rules[4] if r['priority'] == 98] == ['10.0.0.2']
     assert kernel.return_path_gaps == 0
 
 
@@ -749,3 +767,86 @@ def test_a_failed_reregistration_clears_once_the_tunnel_recovers_by_itself(runti
     result = applier.tick()
     assert result['status'] == 'ok' and result['server'] == REGION and applier.rejection is None
     assert sum(1 for c in kernel.calls if c[-1].endswith('/addKey')) == registrations
+
+
+# -- rules 94 and 98: the applier owns both for PIA's per-server address -------
+
+def pair(kernel, priority):
+    return sorted(r['src'] for r in kernel.rules[4] if r['priority'] == priority)
+
+
+def test_switch_installs_and_confirms_both_rules_before_the_address(runtime):
+    applier, kernel = runtime
+    applier.switch(request())
+    kernel.calls.clear()
+    kernel.addkey = {**kernel.addkey, 'server_key': OTHER_KEY, 'peer_ip': '10.0.0.3'}
+    kernel.expected_rule_source = '10.0.0.3'
+    assert applier.switch({**request(), 'request_id': '2' * 32})['status'] == 'ok'
+    steps = [' '.join(c[1:6]) for c in kernel.calls if c[0] == 'ip' and c[3] in ('add', 'del', 'replace')]
+    add94 = steps.index('-4 rule add from 10.0.0.3')
+    add98 = steps.index('-4 rule add from 10.0.0.3', add94 + 1)
+    address = steps.index('-4 address replace 10.0.0.3/32 dev')
+    old = steps.index('-4 address del 10.0.0.2/32 dev')
+    del94 = steps.index('-4 rule del priority 94')
+    del98 = steps.index('-4 rule del priority 98')
+    assert add94 < add98 < address < old < del94 < del98
+    assert pair(kernel, 94) == pair(kernel, 98) == ['10.0.0.3']
+    assert kernel.return_path_gaps == 0 and kernel.both_missing == 0
+
+
+STEPS = ['rule add from 10.0.0.3 ipproto icmp lookup', 'rule add from 10.0.0.3 ipproto icmp unreachable',
+         'address replace 10.0.0.3/32', 'address del 10.0.0.2/32', 'route replace default',
+         'rule del priority 94 from 10.0.0.2', 'rule del priority 98 from 10.0.0.2']
+
+
+@pytest.mark.parametrize('step', STEPS)
+def test_an_interrupted_switch_never_leaves_an_address_unprotected(runtime, step):
+    applier, kernel = runtime
+    applier.switch(request())
+    kernel.addkey = {**kernel.addkey, 'server_key': OTHER_KEY, 'peer_ip': '10.0.0.3'}
+    kernel.expected_rule_source = '10.0.0.3'
+    kernel.fail_when = lambda args: ' '.join(args[2:]).startswith(step)
+    applier.switch({**request(), 'request_id': '2' * 32})
+    assert kernel.fail_when is None, 'the step was never reached'
+    assert kernel.return_path_gaps == 0 and kernel.both_missing == 0
+    # The next pass (every tick) repairs whatever the interruption left.
+    kernel.expected_rule_source = kernel.addresses[0] if len(kernel.addresses) == 1 else '10.0.0.2'
+    applier.reconcile_tunnel()
+    assert len(kernel.addresses) == 1
+    assert pair(kernel, 94) == pair(kernel, 98) == kernel.addresses
+    assert kernel.return_path_gaps == 0 and kernel.both_missing == 0
+
+
+def test_every_tick_restores_a_deleted_backstop(runtime):
+    applier, kernel = runtime
+    applier.switch(request())
+    kernel.rules[4] = [r for r in kernel.rules[4] if r['priority'] != 98]
+    assert applier.routing_status()[0] is False
+    applier.tick()
+    assert pair(kernel, 98) == ['10.0.0.2']
+    assert applier.routing_status()[0] is True
+
+
+def test_an_orphaned_backstop_is_removed(runtime):
+    applier, kernel = runtime
+    applier.switch(request())
+    # An earlier switch died between removing the old 94 and the old 98.
+    kernel.rules[4].append({'priority': 98, 'src': '10.0.0.9', 'ipproto': 'icmp', 'action': 'unreachable'})
+    applier.reconcile_tunnel()
+    assert pair(kernel, 94) == pair(kernel, 98) == ['10.0.0.2']
+
+
+@pytest.mark.parametrize('priority,bad', [
+    (94, {'priority': 94, 'src': '10.0.0.2', 'ipproto': 'icmp', 'table': 'main'}),
+    (94, {'priority': 94, 'src': '10.0.0.2', 'table': 51821}),
+    (98, {'priority': 98, 'src': '10.0.0.2', 'ipproto': 'icmp', 'table': 51821}),
+    (98, {'priority': 98, 'src': '10.0.0.2', 'ipproto': 'icmp', 'action': 'unreachable', 'iif': 'wt0'}),
+])
+def test_a_rule_not_in_its_exact_form_is_replaced_and_its_partner_holds(runtime, priority, bad):
+    applier, kernel = runtime
+    applier.switch(request())
+    kernel.rules[4] = [r for r in kernel.rules[4] if r['priority'] != priority] + [bad]
+    applier.reconcile_tunnel()
+    exact = [r for r in kernel.rules[4] if r['priority'] == priority]
+    assert len(exact) == 1 and applier.return_path_exact(exact[0], priority, '10.0.0.2')
+    assert kernel.both_missing == 0

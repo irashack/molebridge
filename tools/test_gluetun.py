@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-RULES = ROOT / 'routing' / 'gluetun-rules'
+RULES = ROOT / 'routing' / 'contract-rules'
 sys.path.insert(0, str(ROOT))
 from molebridge.routing import (RoutingConfig, control_mark_value, family_status, host_table_status,  # noqa: E402
                                 render_post_rules)
@@ -317,6 +317,12 @@ class Namespace:
         wg = self.bin / 'wg'
         wg.write_text('#!/bin/sh\n[ -n "$FAKE_WG_FWMARK" ] || exit 1\nprintf \'%s\\n\' "$FAKE_WG_FWMARK"\n')
         wg.chmod(0o755)
+        # The gate starts NetBird in its own process group; where the host
+        # has no setsid (macOS), a stand-in that runs the command as is.
+        if not shutil.which('setsid'):
+            setsid = self.bin / 'setsid'
+            setsid.write_text('#!/bin/sh\nexec "$@"\n')
+            setsid.chmod(0o755)
         self.state_file = path / 'state.json'
         self.log = path / 'commands'
         self.ready = path / 'ready'
@@ -1009,7 +1015,7 @@ def test_gluetun_gate_stops_netbird_when_guards_stay_missing(gate, lose):
                'echo "$(cat "$MOLEBRIDGE_BOOT_ID_FILE") ${up%%.*} 0x1bd00" > "$GUARD_STATUS_FILE"; sleep 1; done')
     result = gate.run(command, FWMARK_GRACE='5', timeout=30)
     assert result.returncode == 1
-    assert 'routing guards missing for 5 seconds' in result.stderr
+    assert 'routing guards not intact for 5 seconds' in result.stderr
 
 
 def test_gluetun_gate_passes_on_netbird_exit_status(gate):
@@ -1019,10 +1025,12 @@ def test_gluetun_gate_passes_on_netbird_exit_status(gate):
     assert 'NetBird exited with status 3' in result.stderr
 
 
-def test_wireguard_gate_still_hands_over(gate):
-    result = gate.run('echo handed-over', TUNNEL_BACKEND='wireguard')
-    assert result.returncode == 0, result.stderr
-    assert 'handed-over' in result.stdout and 'watching' not in result.stdout
+def test_wireguard_gate_needs_the_native_contract(gate):
+    # The native gate checks the whole contract too, from the definitions
+    # compose.yaml mounts; tools/test_host_and_routing.py covers it in full.
+    result = gate.run('echo started', TUNNEL_BACKEND='wireguard', GLUETUN_RULES='')
+    assert result.returncode == 1 and 'routing contract definitions are missing' in result.stderr
+    assert 'started' not in result.stdout
 
 
 # Validator, post-rules and host tool.
@@ -1111,7 +1119,9 @@ def test_validator_accepts_an_explicit_all_ones_mask_and_numeric_mark():
 
 
 def test_wireguard_backend_keeps_rejecting_mark_rules():
-    rules = [r for r in json_rules(4) if r['priority'] not in (88, 89, 91, 92, 102, 103, 104)]
+    # gluetun's own 98 (local subnets) goes too: natively, 98 is the backstop behind 94.
+    rules = [r for r in json_rules(4) if r['priority'] not in (88, 89, 91, 92, 98, 102, 103, 104)]
+    rules.append({'priority': 98, 'src': '203.0.113.1', 'ipproto': 'icmp', 'action': 'unreachable'})
     wireguard = RoutingConfig('192.0.2.0/24', '2001:db8:1::/64', exit_if='wg0')
     assert status(rules, 4, wireguard) == (True, True)
     assert status(json_rules(4), 4, wireguard)[0] is False
@@ -1454,7 +1464,8 @@ def test_gluetun_compose_file_wires_the_guard_and_gate():
     assert guard['network_mode'] == 'service:gluetun'
     assert guard['cap_drop'] == ['ALL'] and guard['cap_add'] == ['NET_ADMIN']
     assert guard['environment']['TUNNEL_BACKEND'] == 'gluetun'
-    assert guard['entrypoint'] == ['/bin/sh', '/custom-cont-init.d/10-exit-routing']
+    # The image's own entrypoint (tini, then routing/molebridge-exit) runs the guard.
+    assert 'entrypoint' not in guard
     netbird = services['netbird']
     assert netbird['network_mode'] == 'service:gluetun'
     assert netbird['depends_on']['guard']['condition'] == 'service_healthy'

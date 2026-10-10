@@ -51,6 +51,8 @@ def rules(family):
             {'priority': 95, 'src': 'all', 'iif': 'wt0', 'table': 51821},
             {'priority': 96, 'src': 'all', 'oif': 'mullvad', 'table': 51821},
             {'priority': 97, 'src': 'all', 'iif': 'wt0', 'action': 'unreachable'},
+            {'priority': 98, 'src': TUNNEL[family], 'action': 'unreachable',
+             'ipproto': 'icmp' if family == 4 else 'ipv6-icmp'},
             {'priority': 105, 'src': 'all', 'table': 7120}]
 
 
@@ -149,6 +151,23 @@ class Kernel:
     @property
     def mutations(self):
         return [c for c in self.calls if c[:2] == ['wg', 'set']]
+
+
+def live_owner(path, monkeypatch, *, age=0, boot='00000000-0000-4000-8000-0000000000aa', netns=None,
+               generation='0a0a', addresses=('203.0.113.1', '2001:db8:3::1')):
+    """The routing image's owner record for --healthcheck, with the boot id,
+    clock and namespace the applier reads pointed at files here."""
+    (path / 'boot').write_text('00000000-0000-4000-8000-0000000000aa\n')
+    (path / 'uptime').write_text('5000.42 10.00\n')
+    (path / 'netns').write_text('')
+    found = os.stat(path / 'netns')
+    record = (f'molebridge-exit 1 {boot} {5000 - age} {netns or f"{found.st_dev}:{found.st_ino}"} {generation} '
+              f'{addresses[0]} {addresses[1]} conf 0 -\n')
+    (path / 'owner').write_text(record)
+    monkeypatch.setenv('OWNER_RECORD', str(path / 'owner'))
+    monkeypatch.setenv('MOLEBRIDGE_BOOT_ID_FILE', str(path / 'boot'))
+    monkeypatch.setenv('MOLEBRIDGE_UPTIME_FILE', str(path / 'uptime'))
+    monkeypatch.setenv('MOLEBRIDGE_NETNS_PATH', str(path / 'netns'))
 
 
 @pytest.fixture
@@ -376,7 +395,7 @@ def test_ipv4_only_tunnel_keeps_ipv6_guard_without_requiring_ipv6_egress(runtime
     kernel.failed_egress.add(6)
     # A return-path rule for an address the tunnel does not have is unexpected.
     assert app.inspect()['status'] == 'failed'
-    kernel.rules[6] = [r for r in rules(6) if r['priority'] != 94]
+    kernel.rules[6] = [r for r in rules(6) if r['priority'] not in (94, 98)]
     result = app.switch(request())
     assert result['status'] == 'ok'
     assert result['egress_ips'] == {'4': '203.0.113.10'}
@@ -612,8 +631,11 @@ def test_return_path_rule_explicit_host_length_is_accepted(family):
 
 def test_tunnel_without_a_family_expects_no_return_path_rule():
     assert status(rules(6), routes()[1:], 6, tunnel=False) == (False, True)
-    table = [r for r in rules(6) if r['priority'] != 94]
+    table = [r for r in rules(6) if r['priority'] not in (94, 98)]
     assert status(table, routes()[1:], 6, tunnel=False) == (True, True)
+    # The backstop alone is as unexpected as the return-path rule alone.
+    table = [r for r in rules(6) if r['priority'] != 94]
+    assert status(table, routes()[1:], 6, tunnel=False) == (False, True)
 
 
 @pytest.mark.parametrize('value', ['0\n', '', 'x'])
@@ -923,13 +945,55 @@ def test_clock_in_future_is_not_fresh_handshake(runtime):
 
 
 @pytest.mark.parametrize('status,expected', [('unknown', 1), ('applying', 1), ('ok', 0), ('failed', 0)])
-def test_container_health_waits_for_a_completed_check(runtime, monkeypatch, status, expected):
+def test_container_health_waits_for_a_completed_check(runtime, monkeypatch, tmp_path, status, expected):
     app, _ = runtime
     app.publish(status, 'Example status.')
+    live_owner(tmp_path, monkeypatch)
     monkeypatch.setattr(applier_module, 'Applier', lambda *a, **kw: app)
     monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
     monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
     assert applier_module.main() == expected
+
+
+@pytest.mark.parametrize('owner', ['missing', 'stale', 'future', 'other boot', 'other namespace', 'garbage'])
+def test_container_health_needs_a_live_owner_record(runtime, monkeypatch, tmp_path, owner):
+    # The routing image's loop must be running in this namespace: rules alone
+    # outlive it.
+    app, _ = runtime
+    app.publish('ok', 'Example status.')
+    changes = {'stale': {'age': 7}, 'future': {'age': -2}, 'other boot': {'boot': '00000000-0000-4000-8000-0000000000bb'},
+               'other namespace': {'netns': '1:1'}}.get(owner, {})
+    live_owner(tmp_path, monkeypatch, **changes)
+    if owner == 'missing':
+        (tmp_path / 'owner').unlink()
+    elif owner == 'garbage':
+        (tmp_path / 'owner').write_text('molebridge-exit 1 x\n')
+    monkeypatch.setattr(applier_module, 'Applier', lambda *a, **kw: app)
+    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
+    monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
+    assert applier_module.main() == 1
+
+
+def test_owner_record_six_seconds_old_still_counts(runtime, monkeypatch, tmp_path):
+    app, _ = runtime
+    app.publish('ok', 'Example status.')
+    live_owner(tmp_path, monkeypatch, age=6)
+    monkeypatch.setattr(applier_module, 'Applier', lambda *a, **kw: app)
+    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
+    monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
+    assert applier_module.main() == 0
+
+
+def test_owner_record_may_not_go_backwards_within_a_generation(runtime, monkeypatch, tmp_path):
+    app, _ = runtime
+    live_owner(tmp_path, monkeypatch, age=1)
+    app.owner_path = tmp_path / 'owner'
+    assert app.owner_live()
+    live_owner(tmp_path, monkeypatch, age=3)
+    assert not app.owner_live()
+    # A restarted owner (new generation) in the same namespace counts.
+    live_owner(tmp_path, monkeypatch, age=3, generation='0b0b')
+    assert app.owner_live()
 
 
 @pytest.mark.parametrize('broken', ['missing-tunnel', 'not-wireguard', 'no-peers', 'missing-overlay'])

@@ -448,6 +448,7 @@ def test_bad_config_makes_no_routing_changes(tmp_path, setting, value):
     assert '10-exit-routing:' in result.stderr
 
 
+BOOT = '00000000-0000-4000-8000-000000000001'
 LOCAL_GUARD = '1:\tnot from all iif mesh0 lookup local'
 TERMINAL = '97: from all iif mesh0 [detached] unreachable'
 GUARDS = LOCAL_GUARD + '\n' + TERMINAL
@@ -459,8 +460,26 @@ def gate_run(tmp_path, rule4, rule6, *, interface='mesh0', advance=False, check_
     for family, value in ((4, rule4), (6, rule6)):
         (tmp_path / f'rules-{family}').write_text(value)
     (tmp_path / 'state').mkdir(exist_ok=True)
+    # The rest of the native contract (routing/contract-rules), for an
+    # addressless config (no 94/98) and an IPv4 overlay only; the tests vary
+    # rules 1 and 97 and anything else in rules-4 and rules-6.
+    contract = f'95:\tfrom all iif {interface} lookup 51821\n96:\tfrom all oif mullvad lookup 51821\n'
+    (tmp_path / 'native-4').write_text('90:\tfrom all to 192.0.2.0/24 iif mullvad lookup main\n' + contract)
+    (tmp_path / 'native-6').write_text(contract)
+    # The exit's owner record, live at the fake clock, in the fake namespace.
+    (tmp_path / 'boot').write_text(BOOT + '\n')
+    (tmp_path / 'uptime').write_text('1000.00 1.00\n')
+    (tmp_path / 'owner').write_text(f'molebridge-exit 1 {BOOT} 1000 5:4026531992 0a0a - - applier 0 -\n')
     binaries = {
-        'ip': '#!/bin/sh\ncat "$GATE_DIR/rules${1}"\n',
+        'ip': '''#!/bin/sh
+case "$*" in
+    *"route show table"*) echo 'unreachable default metric 4096' ;;
+    *"rule show"*) cat "$GATE_DIR/rules${1}"; echo; cat "$GATE_DIR/native${1}" ;;
+    *) exit 1 ;;
+esac
+''',
+        'stat': '#!/bin/sh\necho 5:4026531992\n',
+        'setsid': '#!/bin/sh\nexec "$@"\n',
         'sleep': '''#!/bin/sh
 if [ "$ADVANCE" != 1 ]; then exit 42; fi
 if [ ! -f "$GATE_DIR/first-wait" ]; then
@@ -481,7 +500,10 @@ fi
     env = {k: v for k, v in os.environ.items() if not k.startswith(('NB_', 'WT_'))}
     env.update(GATE_DIR=posix_path(tmp_path), NB_INTERFACE_NAME=interface, NB_DISABLE_USERSPACE_ROUTING='true',
                NB_STATE_DIR=posix_path(tmp_path / 'state'), ADVANCE=str(int(advance)),
-               SCRIPT=posix_path(ROOT / 'routing' / 'wait-for-guards'))
+               SCRIPT=posix_path(ROOT / 'routing' / 'wait-for-guards'), OVERLAY_CIDR='192.0.2.0/24',
+               EXIT_IF='mullvad', EXIT_TABLE='51821', CONTRACT_RULES=posix_path(ROOT / 'routing' / 'contract-rules'),
+               OWNER_RECORD=posix_path(tmp_path / 'owner'), MOLEBRIDGE_BOOT_ID_FILE=posix_path(tmp_path / 'boot'),
+               MOLEBRIDGE_UPTIME_FILE=posix_path(tmp_path / 'uptime'))
     for key, value in env_changes.items():
         if value is None:
             env.pop(key, None)

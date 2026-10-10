@@ -1,0 +1,17 @@
+# Base-image digests for the two images Molebridge builds itself. A pull
+# request here is a prompt, not a release: rebuild, run docs/verification.md,
+# then merge (CONTRIBUTING.md).
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /routing
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(routing)"
+  - package-ecosystem: docker
+    directory: /applier
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(applier)"

@@ -12,8 +12,10 @@
 # Namespace ownership: `wireguard` creates the network namespace and the
 # provider tunnel. `netbird` and `applier` join it (`network_mode:
 # service:wireguard`) and share its interfaces and routing. If `wireguard`
-# is recreated, those two can remain in its old namespace. Recreate all four
-# together: tools/molebridge.py recover on Docker, or the Podman commands in
+# is recreated, those two can remain in its old namespace: its owner record
+# (exit-run volume) then no longer matches, NetBird's gate stops NetBird and
+# the applier reports routing as unsafe. Recreate all four together:
+# tools/molebridge.py recover on Docker, or the Podman commands in
 # docs/operations.md. `control-panel`
 # runs on its own network with no capabilities and talks to the applier only
 # through files under ./state.
@@ -33,7 +35,18 @@ services:
       dockerfile: routing/Dockerfile
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-wireguard"
     restart: unless-stopped
-    cap_add: [NET_ADMIN]
+    # NET_ADMIN for routing and the tunnel. DAC_READ_SEARCH reads the tunnel
+    # config when it belongs to your host user with mode 0600 (rootful
+    # Docker); a rootless engine's container root is that user already.
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, DAC_READ_SEARCH]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /run:size=1m,mode=0755,noexec,nosuid,nodev
+    # The entrypoint brings the tunnel down within 7 seconds of a stop; this
+    # leaves room so the engine never cuts it short.
+    stop_grace_period: 15s
     sysctls:
       # The namespace forwards overlay traffic into the tunnel.
       net.ipv4.ip_forward: "1"
@@ -45,8 +58,6 @@ services:
       net.ipv6.conf.all.disable_ipv6: "0"
       net.ipv6.conf.default.disable_ipv6: "0"
     environment:
-      PUID: "${PUID:-1000}"
-      PGID: "${PGID:-1000}"
       TZ: "${TZ:-Etc/UTC}"
       OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
       OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
@@ -57,6 +68,8 @@ services:
     volumes:
       # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
       - ./tunnel/wg_confs:/config/wg_confs:ro
+      # The owner record NetBird's gate and the applier check.
+      - exit-run:/run/molebridge
     healthcheck:
       test: ["CMD-SHELL", "test -f /run/molebridge-routing-ready && ip link show \"$$EXIT_IF\" >/dev/null 2>&1"]
       interval: 30s
@@ -77,13 +90,20 @@ services:
           memory: 256m
 
   netbird:
-    image: docker.io/netbirdio/netbird:0.79.0@sha256:9d8480d87b7f7c10d67b820eecf332ecca5c2756792d4bdfa532182b4fc3005f
+    image: docker.io/netbirdio/netbird:0.80.0@sha256:4976692ea44bb93871743d0b742b4a8f97f6425bfc458ca2d78e28fdb8bdf4ad
     # This gate also runs on daemon/host restarts, which ignore depends_on. It
-    # refuses NetBird settings Molebridge does not support (docs/configuration.md).
+    # refuses NetBird settings Molebridge does not support (docs/configuration.md),
+    # and stays in front of NetBird: it stops NetBird when the routing guards
+    # or the exit's owner record go (routing/wait-for-guards).
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-wait-for-guards", "/usr/local/bin/netbird-entrypoint.sh"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
     restart: unless-stopped
     network_mode: service:wireguard
+    # The gate stays in front of NetBird as its parent; an init reaps what it
+    # leaves behind and passes signals on. It ends NetBird within 11 seconds
+    # of a stop.
+    init: true
+    stop_grace_period: 15s
     # NetBird opens an IPv4 raw socket while bringing the overlay interface up.
     # Docker grants NET_RAW by default and Podman does not, where the engine
     # then fails with "failed to create ipv4 raw socket: operation not
@@ -106,12 +126,19 @@ services:
       # blacklist, so an upgrade sets it with the flag instead
       # (docs/setup.md#5-keep-ice-off-the-tunnel-interface).
       NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
+      # The gate checks the whole routing contract with the exit's settings.
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      EXIT_IF: "${EXIT_IF:-mullvad}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
     env_file:
       # NB_SETUP_KEY, needed only until the peer first enrolls.
       - path: ./secrets/netbird.env
         required: false
     volumes:
       - ./routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro
+      - ./routing/contract-rules:/usr/local/bin/molebridge-contract-rules:ro
+      - exit-run:/run/molebridge:ro
       # Durable peer identity; deleting it re-enrolls as a new peer.
       - netbird-data:/var/lib/netbird
     depends_on:
@@ -171,6 +198,9 @@ services:
     volumes:
       - ./state/panel:/state/panel:ro
       - ./state/applier:/state/applier
+      # The wireguard container's owner record: the applier counts routing
+      # as safe only while it is live (molebridge/routing.py).
+      - exit-run:/run/molebridge:ro
     depends_on:
       wireguard:
         condition: service_healthy
@@ -192,7 +222,8 @@ services:
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-control-panel"
     restart: unless-stopped
     # The user that owns ./state/panel, as the container sees it. Keep it equal
-    # to PUID:PGID on an engine that maps container uids to host uids directly.
+    # to your host user's uid:gid on an engine that maps container uids to host
+    # uids directly.
     # Under a rootless engine that remaps them, container root is already the
     # host user and an unmapped uid cannot read the 0700 state tree; set
     # PANEL_USER=0:0 there. See docs/configuration.md.
@@ -248,3 +279,5 @@ networks:
 
 volumes:
   netbird-data:
+  # The wireguard container's owner record (routing/molebridge-exit).
+  exit-run:
