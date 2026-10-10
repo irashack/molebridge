@@ -36,24 +36,27 @@ docker compose exec applier sh
 ```
 
 On PIA, select a region before completing checks 1–3, 6 and 8: registration
-supplies the tunnel address, peer and IPv4 rule 94. Select a region before
-the fail-closed drills and client or port-forwarding checks too. IPv6 stays
-blocked; PIA has no global IPv6 tunnel address or IPv6 rule 94.
+supplies the tunnel address, peer and IPv4 rules 94 and 98. Select a region
+before the fail-closed drills and client or port-forwarding checks too. IPv6
+stays blocked; PIA has no global IPv6 tunnel address or IPv6 rules 94 and
+98.
 
 On NordVPN, select a server before checks 3 and 8 and the drills: the config
-has no peer until you do. Its IPv4 address (`10.5.0.2`) and rule 94 come from
-the config, as with Mullvad; IPv6 stays blocked as on PIA.
+has no peer until you do. Its IPv4 address (`10.5.0.2`) and rules 94 and 98
+come from the config, as with Mullvad; IPv6 stays blocked as on PIA.
 
 1. Check the rules. `ip rule` shows priority 1 (`not from all iif wt0 lookup
    local`) and no priority-0 `from all lookup local` rule, then priority 90
    (`iif mullvad`, overlay destination → `main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp`
    → table 51821), 95 (`iif wt0` → table 51821), 96 (`oif mullvad` → table
-   51821), and 97 (`iif wt0 unreachable`). No temporary priority-80 guard
-   should remain. IPv6 has 1/95/96/97 in all cases, 90 when `OVERLAY6_CIDR` is
-   set, and 94 with `ipproto ipv6-icmp` when the tunnel has an IPv6 address.
-   Rule 94 must carry the protocol qualifier: without it every protocol
-   sourced from the tunnel address is forced into the tunnel, and the applier
-   reports `routing_ok` false.
+   51821), 97 (`iif wt0 unreachable`), and 98 (`from` the tunnel's IPv4
+   address, `ipproto icmp unreachable`), and nothing else up to priority 98.
+   No temporary priority-80 guard should remain. IPv6 has 1/95/96/97 in all
+   cases, 90 when `OVERLAY6_CIDR` is set, and 94 and 98 with `ipproto
+   ipv6-icmp` when the tunnel has an IPv6 address. Rules 94 and 98 must carry
+   the protocol qualifier: without it every protocol sourced from the tunnel
+   address is forced into the tunnel, or dropped, and the applier reports
+   `routing_ok` false. `ip` may print the protocol as `1` or `58`.
 2. Check the exit table. `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
@@ -122,20 +125,48 @@ NordVPN, IPv6 must remain blocked before, during and after each drill.
 Also record any client fallback to its own connection: server routing cannot
 enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
 
-| Drill | Break | Restore |
-|---|---|---|
-| Tunnel down | `docker compose exec wireguard wg-quick down /config/wg_confs/mullvad.conf` | `docker compose exec wireguard wg-quick up /config/wg_confs/mullvad.conf` |
-| IPv4 route deleted | `docker compose exec wireguard ip route del default dev mullvad table 51821` | `docker compose exec wireguard ip route replace default dev mullvad table 51821` |
-| IPv6 route deleted (dual-stack Mullvad only) | `docker compose exec wireguard ip -6 route del default dev mullvad table 51821` | `docker compose exec wireguard ip -6 route replace default dev mullvad table 51821` |
-| IPv4 lookup rule deleted | `docker compose exec wireguard ip rule del priority 95` | `python3 tools/molebridge.py recover` |
-| IPv6 lookup rule deleted | `docker compose exec wireguard ip -6 rule del priority 95` | `python3 tools/molebridge.py recover` |
-| Container stopped | `docker compose stop wireguard` | `python3 tools/molebridge.py recover` |
+The exit repairs a deleted rule or route at its next repair pass, every
+`ROUTING_RECONCILE_INTERVAL` seconds (2 by default), and brings a lost tunnel
+back within a few seconds whatever the interval. Two seconds is too short to
+watch a probe fail, so for these drills set a 20-second interval on the
+`wireguard` service in a `compose.override.yaml`
+([repair and gate timing](configuration.md#repair-and-gate-timing)):
 
-After each restore, confirm provider egress returns on the supported families.
-After the tunnel-down drill, the applier reapplies the saved server or region
-when the interface returns. If a request was rejected or failed, select again
-to retry; a failed request whose server is live and verified clears at a
-later check by itself.
+```yaml
+services:
+  wireguard:
+    environment:
+      ROUTING_RECONCILE_INTERVAL: "20"
+```
+
+Apply it with `python3 tools/molebridge.py recover`, and remove it and recover
+again when you're done. 20 seconds is shorter than the 30 seconds NetBird's
+gate allows the guards to be incomplete, so the gate doesn't stop NetBird
+during a rule drill. Follow the exit's log while you run them:
+`docker compose logs -f wireguard netbird`.
+
+| Drill | Break | Expect |
+|---|---|---|
+| Tunnel down | `docker compose exec wireguard wg-quick down /config/wg_confs/mullvad.conf` | The probe fails until the exit brings the tunnel back by itself: `molebridge-exit: bringing the tunnel up`, then `molebridge-exit: tunnel up`. |
+| IPv4 route deleted | `docker compose exec wireguard ip route del default dev mullvad table 51821` | The probe fails on the unreachable fallback until the next pass logs `10-exit-routing: IPv4 tunnel route through mullvad restored`. |
+| IPv6 route deleted (dual-stack Mullvad only) | `docker compose exec wireguard ip -6 route del default dev mullvad table 51821` | The same for IPv6: `10-exit-routing: IPv6 tunnel route through mullvad restored`. |
+| IPv4 lookup rule deleted | `docker compose exec wireguard ip rule del priority 95` | The probe fails on rule 97 until `10-exit-routing: added IPv4 rule 95`. |
+| IPv6 lookup rule deleted | `docker compose exec wireguard ip -6 rule del priority 95` | The same for IPv6: `10-exit-routing: added IPv6 rule 95`. |
+| Terminal rule deleted | `docker compose exec wireguard ip rule del priority 97` | The probe keeps working through rule 95 and the tunnel; then `10-exit-routing: added IPv4 rule 97`. |
+| Fallback deleted | `docker compose exec wireguard ip route del unreachable default metric 4096 table 51821` | The probe keeps working through the tunnel route; then `10-exit-routing: IPv4 unreachable fallback in table 51821 restored`. |
+| Return path deleted (Mullvad, NordVPN) | `docker compose exec wireguard ip rule del priority 94` | Until `10-exit-routing: added IPv4 rule 94`, `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` inside the namespace fails as unreachable (rule 98) instead of naming the host's interface. |
+| Inserted bypass | `docker compose exec wireguard ip rule add lookup main priority 50` | Removed at the next pass: `10-exit-routing: removed IPv4 rule 50: from all lookup main`. Nothing is promised about traffic before that. |
+| Owner gone | `docker compose pause wireguard` | The tunnel keeps forwarding at first, but within about 10 seconds NetBird's log shows `NetBird gate: stopping NetBird: the owner record expired (written <n> s ago) (see docs/troubleshooting.md)` and the probe fails. Restore with `docker compose unpause wireguard`; the restart policy starts `netbird` again, and its gate waits for a fresh record. |
+| Container stopped | `docker compose stop wireguard` | The probe fails, the exit's log ends with `molebridge-exit: stopped; the routing guards stay in place`, and NetBird's gate stops NetBird. Restore with `python3 tools/molebridge.py recover`. |
+
+On PIA, rules 94 and 98 belong to the applier, which puts a deleted one back
+within one of its passes, about 5 seconds, without a log line. After each
+drill, confirm provider egress returns on the supported families. After the
+tunnel-down drill, the applier reapplies the saved server or region when the
+interface returns. If a request was rejected or failed, select again to
+retry; a failed request whose server is live and verified clears at a later
+check by itself. These drills follow from the code and the isolated drills
+below; [testing](testing.md) records which have run on a live exit.
 
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked.
@@ -159,11 +190,14 @@ interface, runs the gate's JSON reader under gawk, mawk and busybox when they
 are installed, and keeps waiting while the kernel's priority-0 rule is in
 place.
 
-For each route deletion, confirm the next applier check reports `failed`,
-`/readyz` returns 503, and any monitoring push reports failure. On a
-dual-stack Mullvad tunnel, the other family should still work. On PIA,
-deleting the IPv4 default must leave both families blocked. A blocked client
-path must not appear healthy.
+A blocked client path must not appear healthy. The applier checks about once
+a minute, so a 20-second break can fall between two checks; the owner-gone
+drill lasts as long as you leave the container paused. During it, confirm
+the next applier check reports `failed` with "Routing protection is
+incomplete; run the recovery helper.", `/readyz` returns 503, and any
+monitoring push reports failure. During a route deletion on a dual-stack
+Mullvad tunnel, the other family should still work. On PIA, deleting the
+IPv4 default must leave both families blocked.
 
 Check that nothing arriving over NetBird reaches the exit itself. Inside the
 namespace, `ip route get <exit overlay address> from <client overlay address>
@@ -187,9 +221,9 @@ server or region again. Finally, verify the recovery helper, container
 recreation and host reboot preserve the NetBird peer identity and shared namespace.
 After a WireGuard restart outside Compose, confirm an applier stranded without
 the WireGuard interface becomes Docker-unhealthy even if its failure result is
-fresh. On a disposable deployment, start NetBird before the routing initializer:
-its entrypoint must wait until both priority-97 guards and both priority-1
-local-delivery rules exist in its namespace, with no priority-0 rule left.
+fresh. On a disposable deployment, start NetBird before the exit is ready:
+its gate must wait until the exit's owner record is live and the whole
+routing contract is in place in its namespace, with no priority-0 rule left.
 Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interface.
 
 Start with a saved desired selection, an expired catalogue and an unavailable

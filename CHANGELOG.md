@@ -13,8 +13,64 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 - Switchyard shows configured exits read-only, refuses selection posts and
   exposes the setting through `/api/status`, using the applier's existing
   status snapshot. Empty `SERVER` keeps panel selection unchanged.
+- **Molebridge's own routing image.** The `wireguard` container is built
+  from a digest-pinned Alpine 3.24.2 with `bash`, `iproute2`,
+  `wireguard-tools` and `tini`, instead of LinuxServer's WireGuard image. Its
+  entrypoint checks the settings and the tunnel config before anything
+  changes, installs the routing contract before the tunnel exists (a failed
+  install now stops the container instead of letting the tunnel come up),
+  brings the tunnel up under supervision, retrying after 2 seconds and
+  doubling to 60 while the container stays up and not ready, and stops
+  within about 7 seconds, leaving the rules in place. Only `<EXIT_IF>.conf`
+  is used. See [architecture](docs/architecture.md#start-supervision-and-stop).
+- **The tunnel config is checked against what the generators write.**
+  `DNS`, `PreUp`, `PostDown`, `SaveConfig`, `FwMark`, a `Table` other than
+  `off` and any other field are refused with a message that names the line
+  and field and never prints the file. `molebridge-exit --check-config`
+  (`docker compose run --rm --no-deps wireguard --check-config`) checks
+  without changing anything. `tools/prepare-tunnel-config.py` now refuses
+  more than one address per family and prefixes other than `/32` and
+  `/128`. See [the tunnel config](docs/configuration.md#the-tunnel-config).
+- **Native exits now repair drift.** Every `ROUTING_RECONCILE_INTERVAL`
+  seconds (2 by default, even, 2 to 60) the exit puts back a deleted rule,
+  fallback or tunnel route and removes an inserted rule at priorities 0–98
+  or a foreign route in the exit table; a lost tunnel interface is brought
+  back. Single deletions are contained by the remaining protections
+  meanwhile; nothing is promised about traffic before an insertion is
+  removed. See [drift and repair](docs/architecture.md#drift-and-repair).
+- **New native rule 98**, `from <tunnel address> ipproto icmp unreachable`
+  (`ipv6-icmp` for IPv6), backs up rule 94. With PIA the applier owns rules
+  94 and 98: it adds both before changing the address, removes the old pair
+  last, and repairs them on every pass.
+- **Owner record.** The exit writes `/run/molebridge/exit-owner` on a new
+  `exit-run` volume every 2 seconds. NetBird's gate and the applier count it
+  as live only from the same boot and network namespace and at most 6
+  seconds old; without it the applier reports `routing_ok` false and its
+  health check fails. See [the owner record](docs/architecture.md#the-owner-record).
+- **NetBird's gate stays in front of NetBird on native exits too.** It waits
+  for the owner record and the whole contract, runs NetBird as its child in
+  its own process group, and stops it as soon as the owner record isn't live
+  or the guards have been incomplete for `GUARD_GRACE` seconds (30 by
+  default, 5 to 30). Recovery is still `tools/molebridge.py recover`.
+- **Compose.** `wireguard`: `cap_drop: [ALL]` with `NET_ADMIN` and
+  `DAC_READ_SEARCH` (which lets rootful Docker read your mode-0600 tunnel
+  config), `no-new-privileges`, read-only root, a tmpfs on `/run`, the
+  `exit-run` volume, 15 seconds to stop. `netbird`: `init: true`, 15 seconds
+  to stop, the routing settings, and `routing/contract-rules` and `exit-run`
+  mounted read-only. `applier`: `exit-run` read-only. `PUID` and `PGID` are
+  no longer read. NetBird 0.80.0.
+- `routing/gluetun-rules` is now `routing/contract-rules`; the old name stays
+  as a link until 0.7.0. The gluetun backend's `guard` runs the image's own
+  entrypoint; `/custom-cont-init.d/10-exit-routing` stays in the image as a
+  link until 0.7.0.
 
-The `SERVER` behavior has not been tested on a live exit. Earlier live
+Upgrading from 0.5.3: build the routing image and check your tunnel config
+with it before you recover; see [operations](docs/operations.md#upgrades).
+
+Neither the `SERVER` behavior nor the routing image has been tested on a
+live exit. CI builds the image and runs its start, repair, bring-up failure
+and stop cases (`tools/check-exit-image.sh`) and the namespace drills,
+including the new drift and gate cases, under busybox sh. Earlier live
 results are recorded in [docs/testing.md](docs/testing.md).
 
 ## 0.5.3 (2026-10-09)

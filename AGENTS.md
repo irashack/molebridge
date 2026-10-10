@@ -32,6 +32,9 @@ route in `SECURITY.md`, never in a public issue or commit message.
 - **Untrusted input:** Mullvad's relay list, PIA's region list and API
   responses, desired-state files and form posts
   are untrusted. Validate before use; escape before rendering.
+- **Exits only:** Molebridge never ships its own tunnel for other containers'
+  traffic; that is gluetun's job. The routing image carries no provider
+  protocols, server catalogues or credentials.
 - **Honest status:** state what was tested and where. Untested platforms, and
   behavior described but not verified, say so.
 

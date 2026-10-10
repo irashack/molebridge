@@ -26,11 +26,12 @@ been tested in one configuration, this page says so.
   Python. NordVPN's key setup, `tools/nordvpn-key.py`, also needs `curl` and
   the usual CA certificates on the host.
 - **Build access on first setup.** Two small images are built locally from
-  pinned bases. The applier installs `wg`, `ip`, `curl` and `nft` from Debian's
-  signed repositories.
+  pinned bases. The routing image installs `bash`, `iproute2`,
+  `wireguard-tools` and `tini` from Alpine's signed repositories, and the
+  applier installs `wg`, `ip`, `curl` and `nft` from Debian's.
 - **Resources.** Measured on the tested Debian host while idle, with a
-  Mullvad exit: about 100 MB of RAM across the four containers, and about
-  500 MB of disk for images. The Compose memory limits add up to 896 MiB for
+  Mullvad exit and the earlier LinuxServer-based routing image: about 100 MB
+  of RAM across the four containers, and about 500 MB of disk for images. The Compose memory limits add up to 896 MiB for
   that stack, 1,280 MiB with NordVPN's larger applier limit, and 1,216 MiB
   with the gluetun backend; NordVPN and gluetun weren't measured. CPU use is mostly WireGuard
   encryption and scales with traffic.

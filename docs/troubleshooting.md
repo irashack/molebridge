@@ -11,28 +11,87 @@ dump`.
 
 ## Startup
 
-**`wireguard` never gets healthy, and `wg-quick` fails with no clear error
-(rootless Podman).** A rootless container can't load kernel modules. Load
-`wireguard` on the host and make it persist, as shown in
-[prerequisites](prerequisites.md#host), then recreate the project.
+**`wireguard` never gets healthy, and its log repeats `molebridge-exit:
+tunnel bring-up failed (exit <status>); retrying in <n> s`.** `wg-quick up`
+failed, and its own output is discarded because it can echo parts of the
+config. The container keeps retrying, after 2 seconds and then up to every
+60, and stays unhealthy; forwarded traffic is dropped meanwhile. On rootless
+Podman the usual cause is the WireGuard module: a rootless container can't
+load kernel modules, so load `wireguard` on the host and make it persist, as
+shown in [prerequisites](prerequisites.md#host), then recreate the project.
+To rule out the config and settings, run `docker compose run --rm --no-deps
+wireguard --check-config`.
 
-**`10-exit-routing: …` and the container exits.** The routing script checks
-its settings before touching anything and names the one it rejected, for
-example `OVERLAY_CIDR must use the network address` or `tunnel configuration
-is missing (expected mullvad.conf under wg_confs)`. Fix `.env` or the tunnel
-config and start again.
+**`molebridge-exit: …` or `10-exit-routing: …`, and the container exits.**
+The exit checks its settings and the tunnel config before touching anything,
+and names what it rejected, for example `OVERLAY_CIDR must use the network
+address`, `PROVIDER must be mullvad, pia or nordvpn` or
+`ROUTING_RECONCILE_INTERVAL must be an even number of seconds, 2..60`. Fix
+`.env`, your Compose override or the tunnel config and start again. If the
+log ends with `molebridge-exit: the routing contract could not be installed;
+no tunnel was started`, the `10-exit-routing:` line before it says why. No
+tunnel exists then, and temporary priority-80 rules already added stay in
+place.
+
+**`molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not
+supported: <reason>; regenerate it with tools/prepare-tunnel-config.py
+(docs/setup.md)`.** The config has something the generators don't write: a
+`DNS`, `PreUp`, `PostDown`, `SaveConfig` or `FwMark` line, a `Table` other
+than `off`, hooks for another table, a second address in a family, and so
+on. `<reason>` names the line number and field, never the line's text; [the
+tunnel config](configuration.md#the-tunnel-config) lists every reason and
+what is accepted. Regenerate the config with the command the message names
+(for NordVPN and PIA, move the old file aside first: neither tool
+overwrites one), or, for hooks on another table, write them exactly as
+[configuration](configuration.md#tunnel-config-helper) shows. When the file
+itself is the problem, the line reads `the tunnel config <path> is missing;
+regenerate it with …`, or says that it `is not a regular file` (a symlink,
+for example), `is larger than 4 KiB` or `has NUL or carriage-return bytes`
+(Windows line endings). A config for another
+interface name is ignored, with `molebridge-exit: warning: <n> other .conf
+file(s) in /config/wg_confs are ignored; only mullvad.conf is used`.
+
+**`molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf can't be
+read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)`.**
+Container root can't read your mode-0600 file. On rootful Docker,
+`compose.yaml` grants `DAC_READ_SEARCH` for this; an override that drops it
+breaks the start. When the container can't search `tunnel/wg_confs` itself,
+the message says the config `is missing` instead. A container root remapped
+to another host ID needs read access of its own; see
+[setup](setup.md#2-create-the-tunnel-config).
+
+**`molebridge-exit: cannot write the owner record /run/molebridge/exit-owner;
+not ready`.** The entrypoint can't write to `/run/molebridge`: the
+`exit-run` volume is mounted read-only there, or the directory isn't
+writable by container root. The container keeps running but isn't ready
+while this lasts, and NetBird's gate stops NetBird. Use the `wireguard`
+service from the current `compose.yaml`, which mounts the volume writable
+there.
+
+**Stopping `wireguard` logs `molebridge-exit: cleanup incomplete: <what
+remains> the routing guards stay in place` and the container exits with
+status 1.** Within the 7 seconds it allows itself, the entrypoint couldn't
+remove the tunnel interface, or a `wg-quick` or `ip` process it started
+outlived its deadline. The rules and the fallback stay in the namespace, so forwarded
+traffic still can't leave by another route. Run recovery, which recreates
+the namespace.
 
 **NetBird logs `failed to create ipv4 raw socket: operation not permitted`.**
 The `netbird` service needs `NET_RAW`. Docker grants it by default; Podman
 does not. `compose.yaml` adds it, so this means a modified Compose file.
 
-**NetBird's log stops at `NetBird gate: waiting for IPv4 and IPv6 routing
-guards`.** NetBird won't start until, in both address families, the
-priority-97 terminal guard and the priority-1 local-delivery rule exist and
-no other `lookup local` rule (such as the kernel's own priority-0 rule) could
-match the overlay interface. So the `wireguard` container didn't finish
-initializing. Check its log first. `ip rule` inside the namespace shows which
-rule is missing or left over.
+**NetBird's log stops at `NetBird gate: native backend: waiting for the
+exit's owner record (/run/molebridge/exit-owner) and the whole guard (rules
+1-98, exit table 51821)`.** NetBird won't start until the exit's owner record
+is live and, in both address families, the whole routing contract is in
+place, with no other `lookup local` rule (such as the kernel's own
+priority-0 rule) that could match the overlay interface
+([architecture](architecture.md#netbirds-gate)). So the `wireguard`
+container isn't running or didn't finish starting. Check its log first.
+Every 30 seconds the gate logs `NetBird gate: still waiting after <n>
+s:` and what is missing: an owner-record reason (see below), `rules;` or
+`exit;` for a family, or `IPv4: rule 1 or 97;`. `ip rule` inside the
+namespace shows which rule is missing or left over.
 
 **NetBird keeps restarting, and its log says `NetBird gate: refusing to start
 NetBird: <reason> (see docs/troubleshooting.md)`.** The gate in front of
@@ -101,6 +160,16 @@ NetBird's entrypoint refuses settings Molebridge doesn't support on the exit
 
   NetBird writes the field whenever it loads a profile, so one without it
   is rare; it means `wt0`, so keep `OVERLAY_IF=wt0` for such a profile.
+- `OVERLAY_CIDR is not set for NetBird; compose.yaml passes the routing
+  settings to it (docs/operations.md#upgrades)`, or `the routing contract
+  definitions are missing (/usr/local/bin/molebridge-contract-rules);
+  compose.yaml mounts routing/contract-rules there`. The `netbird` service
+  comes from a Compose file or unit older than the routing image it runs
+  with. Use the current `compose.yaml`, or add what it passes to `netbird`
+  to your own; see [upgrades](operations.md#upgrades). A setting the exit
+  itself would refuse, such as an invalid `OVERLAY_CIDR`, is refused here
+  with the same message, and `GUARD_GRACE must be 5..30 seconds` when
+  [`GUARD_GRACE`](configuration.md#repair-and-gate-timing) is out of range.
 - `cannot read the stored NetBird profile <file>`, `the stored NetBird
   profile <file> is not a valid JSON object`, `the stored NetBird profile
   <file> repeats WgIface or RosenpassEnabled` or `the stored NetBird profile
@@ -131,8 +200,41 @@ traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
 in `.env`. It also refuses settings the guard would refuse (`OVERLAY_CIDR`,
 `EXIT_IF`, the tables and `CONTROL_MARK`, with the guard's own message),
 `the guard's rule definitions are missing (<file>)` when
-`routing/gluetun-rules` isn't mounted, `FWMARK_GRACE must be 5..30 seconds`,
+`routing/contract-rules` isn't mounted (a deployment that still mounts
+`routing/gluetun-rules` at `/usr/local/bin/molebridge-gluetun-rules` keeps
+working until 0.7.0), `FWMARK_GRACE must be 5..30 seconds`,
 and `cannot read the boot clock (/proc/uptime and the boot id)`.
+
+**NetBird exits with `NetBird gate: stopping NetBird: <reason> (see
+docs/troubleshooting.md)`.** With the default backend, the gate stopped
+NetBird because the exit's [owner
+record](architecture.md#the-owner-record) or its guards went. The container
+exits with status 1 and its restart policy starts it again; the gate then
+waits as at first start. The reasons:
+
+- `the owner record expired (written <n> s ago)`: the `wireguard`
+  container's entrypoint stopped writing it, because the container stopped,
+  was paused or hung. Check `docker compose ps wireguard` and its log. If
+  it runs again in the same namespace, NetBird comes back once the record is
+  fresh; if `wireguard` was recreated, run recovery.
+- `the owner record is from another network namespace`: `wireguard` was
+  restarted or recreated into a new namespace, and `netbird` is still in the
+  old one. Run `python3 tools/molebridge.py recover`, or the Podman commands
+  in [operations](operations.md#rootless-podman).
+- `no valid owner record at /run/molebridge/exit-owner`: the file is
+  missing or isn't in the expected form, usually because `netbird` and
+  `wireguard` don't share the `exit-run` volume. Use the current
+  `compose.yaml`.
+- `the owner record is from another boot`, `the owner record is from the
+  future` or `the owner record went backwards`: these shouldn't happen on a
+  running host; run recovery.
+- `routing guards not intact for 30 seconds: <what>`: rules or the exit
+  table stayed wrong, and the exit's repair pass didn't put them right. Look
+  for `10-exit-routing:` lines in the `wireguard` log, such as
+  `10-exit-routing: IPv4 routing still differs after repair; the temporary
+  guard stays if it is in`.
+- `cannot read the boot clock`, `cannot read this network namespace` or
+  `the boot clock changed identity`: these shouldn't happen; run recovery.
 
 **gluetun backend: NetBird exits with `NetBird gate: stopping NetBird:
 <reason> (see docs/troubleshooting.md)`.** The gate stopped NetBird because
@@ -147,8 +249,8 @@ its control traffic could have used the provider tunnel:
   didn't come up, or the `guard` container isn't running (it reports the
   mark; check `docker compose ps guard` and its log); `off` or another mark
   means NetBird runs without its control mark.
-- `routing guards missing for 30 seconds`: the guard's rules disappeared and
-  weren't restored; check the `guard` log.
+- `routing guards not intact for 30 seconds: <what>`: the guard's rules
+  disappeared and weren't restored; check the `guard` log.
 
 - `the boot clock changed identity`: the kernel's boot id changed under a
   running gate, which shouldn't happen; restart the stack.
@@ -231,8 +333,8 @@ doesn't strip `Origin`, and that you opened the panel by the name listed in
 can't read a catalogue less than 24 hours old. Either the applier hasn't
 fetched one yet (give it a minute after first start), the provider's API is
 unreachable from the exit, or the panel can't read `state/applier/`. The last
-one usually means `PANEL_USER` is wrong: it must be `PUID:PGID` on Docker and
-`0:0` on rootless Podman.
+one usually means `PANEL_USER` is wrong: it must be your host user's
+`uid:gid` on Docker and `0:0` on rootless Podman.
 
 **The dashboard frame is blank.** Most often your proxy's session for the
 panel's hostname has expired: open the panel directly once to sign in. (With
@@ -401,7 +503,10 @@ unreachable from the exit.
 **"Routing protection is incomplete; run the recovery helper."** A routing
 rule or fallback route is missing, usually after part of the stack was
 recreated. Run recovery (below). The kernel's priority-0 `lookup local` rule
-reappearing counts too.
+reappearing counts too. With the default backend, so does an owner record
+that isn't live: `wireguard` stopped, paused or hung, or recreated into
+another namespace than the applier's. If `wireguard` comes back in the same
+namespace, the next check clears it; otherwise run recovery.
 
 **"NetBird is not running kernel WireGuard with its kernel firewall on the
 overlay interface; see the troubleshooting guide."** A selection waits with
@@ -429,7 +534,9 @@ connected in this state. The applier found one of these:
 
 **Clients get no connectivity at all after you restarted or recreated
 `wireguard` alone.** `netbird` and `applier` are still attached to the old
-network namespace. Recreate all four containers together:
+network namespace. NetBird's gate stops NetBird there with `the owner record
+is from another network namespace`, and the applier reports routing
+protection as incomplete. Recreate all four containers together:
 `python3 tools/molebridge.py recover` on Docker, or the Podman commands in
 [operations](operations.md#rootless-podman).
 

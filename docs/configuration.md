@@ -17,11 +17,10 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
 | `OVERLAY_IF` | `wt0` | NetBird's interface name inside the namespace. Compose passes it as `NB_INTERFACE_NAME` and uses it for the startup gate, routing and health checks. Keep it unchanged after the peer enrolls: the peer's stored profile keeps the name, and the gate refuses a profile for another interface ([troubleshooting](troubleshooting.md#startup)). |
-| `EXIT_TABLE` | `51821` | Dedicated table (256..2147483647). Must match the table in the tunnel config's `PostUp` and `PreDown` hooks; see the [config helper](#tunnel-config-helper). |
+| `EXIT_TABLE` | `51821` | Dedicated table (256..2147483647). Must match the table in the tunnel config's `PostUp` and `PreDown` hooks, or the `wireguard` container refuses the config; see the [config helper](#tunnel-config-helper). |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
-| `PUID`, `PGID` | `1000` | Host user and group that own `state/`. |
-| `PANEL_USER` | `1000:1000` | The panel's `user:` inside its container, as `uid:gid`. On an engine that maps container uids to host uids directly, set it to your `PUID:PGID`. On a rootless engine that remaps them, container root is already your host user and an unmapped uid cannot read the 0700 state tree: use `0:0`. The panel still holds no capabilities. |
+| `PANEL_USER` | `1000:1000` | The panel's `user:` inside its container, as `uid:gid`. On an engine that maps container uids to host uids directly, set it to your host user's `uid:gid` (`id -u` and `id -g`), the user that owns `state/`. On a rootless engine that remaps them, container root is already your host user and an unmapped uid cannot read the 0700 state tree: use `0:0`. The panel still holds no capabilities. |
 | `TZ` | `Etc/UTC` | Container time zone. |
 | `PANEL_PORT` | `8095` | Loopback port for the panel. |
 | `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Unlisted names get 421, except on `/healthz`; loopback names are accepted. Form posts require an allowed origin. |
@@ -35,6 +34,9 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `PANEL_EXITS` | empty | Set on a separate Switchyard container serving several exits. `compose.yaml` does not pass it to the bundled panel. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
+
+`PUID` and `PGID`, which releases up to 0.5.3 used for the routing image, are
+no longer read; an `.env` that still sets them works unchanged.
 
 `compose.yaml` also sets fixed NetBird settings that aren't in `.env`.
 `NB_DISABLE_DNS=true` stops NetBird configuring the namespace's resolver.
@@ -63,6 +65,22 @@ refuses:
 
 See [architecture](architecture.md#netbird-requirements) and
 [troubleshooting](troubleshooting.md#startup).
+
+### Repair and gate timing
+
+These are read with the default backend, by the services the table names. `compose.yaml` doesn't pass them from `.env`, and the
+defaults suit most exits. To change one, set it on the named service in a
+`compose.override.yaml`, and add that file to `COMPOSE_FILE` if you set
+`COMPOSE_FILE` ([an example](operations.md#exits-on-a-private-container-network)).
+
+| Setting | Service | Default | Purpose |
+|---|---|---|---|
+| `ROUTING_RECONCILE_INTERVAL` | `wireguard` | `2` | Seconds between repair passes ([drift and repair](architecture.md#drift-and-repair)): an even number, 2 to 60. The tunnel interface is checked every 2 seconds whatever this is. |
+| `GUARD_GRACE` | `netbird` | `30` | Seconds the routing guards may be seen incomplete before the gate stops NetBird, 5 to 30. The owner record has no grace. |
+| `OWNER_RECORD` | `wireguard`, `netbird`, `applier` | `/run/molebridge/exit-owner` | Where the [owner record](architecture.md#the-owner-record) is written and read, on the `exit-run` volume. Leave it unless you move the volume; it must be the same path in all three. |
+
+The gluetun backend's guard reads `ROUTING_RECONCILE_INTERVAL` with its own
+range; see [below](#gluetun-backend).
 
 ### A server set in configuration
 
@@ -242,6 +260,70 @@ python3 tools/nordvpn-key.py - OUTPUT
 and never overwrites an existing file. [Setup](setup.md#2-create-the-tunnel-config)
 shows both forms.
 
+## The tunnel config
+
+The `wireguard` container reads one file, `tunnel/wg_confs/<EXIT_IF>.conf`
+(`/config/wg_confs/<EXIT_IF>.conf` inside the container). Any other `.conf`
+file in that directory is ignored, with the warning `molebridge-exit:
+warning: <n> other .conf file(s) in /config/wg_confs are ignored; only
+<EXIT_IF>.conf is used`.
+
+Before anything changes, the container checks the file against what
+Molebridge's own generators write: `tools/prepare-tunnel-config.py` for
+Mullvad, the same with `--pia` for PIA, and `tools/nordvpn-key.py` for
+NordVPN. Anything else is refused, including fields `wg-quick` itself would
+accept. The file must be a regular file, not a symlink, readable by the
+container, at most 4 KiB, with no NUL bytes and no carriage returns (so no
+Windows line endings). Each line is blank, a comment starting with `#`, a
+section header written exactly `[Interface]` or `[Peer]`, or `Field = value`
+with a field from this table. Field names may be in any case; each may
+appear once.
+
+| Field | Rule |
+|---|---|
+| `[Interface]` | Once, first. |
+| `PrivateKey` | Required. A WireGuard key: 44 characters of base64 ending in `=`. |
+| `Address` | Mullvad and NordVPN: required. PIA: must be absent; the applier sets the address. Comma-separated: one IPv4 address and, for Mullvad only, at most one IPv6 address, each with `/32` or `/128` or no prefix. IPv4 without leading zeroes. |
+| `MTU` | Required, 1280 to 1500. The generators write 1420. |
+| `Table` | Required, `off`. |
+| `PostUp` | Required, exactly `ip route replace default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route replace default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
+| `PreDown` | Required, exactly `ip route del default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route del default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
+| `[Peer]` | Mullvad: once, after `[Interface]`. PIA and NordVPN: must be absent; the applier sets the peer. |
+| `PublicKey` | Required in `[Peer]`. A WireGuard key. |
+| `Endpoint` | Required in `[Peer]`. An IPv4 address without leading zeroes and a port, 1 to 65535, such as `192.0.2.10:51820`. |
+| `AllowedIPs` | Required in `[Peer]`. `0.0.0.0/0`, followed by `, ::/0` exactly when the config has an IPv6 address. |
+| `PersistentKeepalive` | Optional in `[Peer]`, 1 to 65535. The generator writes 25. |
+
+So `DNS`, `ListenPort`, `FwMark`, `SaveConfig`, `PreUp`, `PostDown`,
+`PresharedKey`, a `Table` other than `off` and every other field are refused,
+as is a second `[Peer]`. A refusal stops the container with status 1 before
+it changes any routing or creates the tunnel, and logs one line:
+
+```text
+molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not supported: unsupported field on line 4; regenerate it with tools/prepare-tunnel-config.py (docs/setup.md)
+```
+
+The reason is one of `unsupported field on line <n>`, `<field> on line <n> is
+not valid`, `<field> is missing`, `<field> appears more than once`,
+`[Interface] on line <n> is not supported; it must come once, first`,
+`[Peer] on line <n> is not supported`, `[Interface] is missing`, `[Peer] is
+missing`, `[Peer] is not supported for this provider` or `Address on line <n>
+is not supported for PIA`. The field names come from the table above, never
+from the file: no message quotes the config, which holds the private key. The
+end names the generator for your `PROVIDER` (`tools/prepare-tunnel-config.py
+--pia` for PIA, `tools/nordvpn-key.py` for NordVPN). The generators write the
+same file as in earlier releases, and the table change
+[above](#tunnel-config-helper) keeps the hooks in the required form, so a
+config made with them and not otherwise edited passes.
+`tools/prepare-tunnel-config.py` now also refuses a Mullvad file with more
+than one address in a family (`Interface Address has more than one address
+in a family`) or a prefix other than `/32` and `/128` (`Interface Address
+must be host addresses (/32 and /128)`).
+
+To check a config without starting anything, run
+`docker compose run --rm --no-deps wireguard --check-config`
+([setup](setup.md#4-start-the-exit-without-a-route-yet)).
+
 ## Secret files
 
 All mode 0600 and ignored by git. Document them by name only; never paste their
@@ -276,11 +358,12 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | applier | panel (read-only) | Observed `server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `egress_tier` (`provider`, `tunnel` or null; see [status reporting](architecture.md#status-reporting)), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`, and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). A result with `netbird_native` false never counts as connected. |
 
-Routing initialization reads only the `Address` line of the tunnel config, for
-the return-path rule (a PIA config has none; the applier installs the rule per
-registration); `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr`
-on the `wireguard` service for the same reason, and the applier and doctor
-require both. See [architecture](architecture.md#routing-contract).
+Routing installs the return-path rule and its backstop (rules 94 and 98)
+from the tunnel config's `Address` line (a PIA config has none; the applier
+installs both per registration); `compose.yaml` sets
+`net.ipv4.icmp_errors_use_inbound_ifaddr` on the `wireguard` service for the
+same reason, and the applier and doctor require both. See
+[architecture](architecture.md#routing-contract).
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 applier snapshots are mode 0644 so the non-root panel can read them; requests

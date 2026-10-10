@@ -112,7 +112,7 @@ Three containers share one network namespace, owned by `gluetun`:
 | Service | Role |
 |---|---|
 | `gluetun` | Owns the namespace, creates the tunnel interface (`wg0` by default), runs its own firewall. |
-| `guard` | Molebridge's routing script, in the image built from `routing/Dockerfile`, running as a sidecar. Installs and keeps the rules and routes below, and reports when they are all in place. |
+| `guard` | Molebridge's routing script, in the image built from `routing/Dockerfile`, running as a sidecar: the image's own entrypoint runs it when `TUNNEL_BACKEND=gluetun`, which `compose.gluetun.yaml` sets. Installs and keeps the rules and routes below, and reports when they are all in place. The image carries no provider logic, catalogue or credentials; the tunnel is gluetun's. |
 | `netbird` | The NetBird peer, started through the gate (`routing/wait-for-guards`), which waits for the guard and then supervises NetBird. |
 
 Gluetun deletes and recreates its tunnel interface on every reconnect, and the
@@ -161,8 +161,9 @@ The exit table is not gluetun's table 51820. An empty 51820 would let packets
 fall through to later rules instead of the fallback.
 
 [Architecture](architecture.md#gluetun-backend) explains each rule in more
-detail. `routing/10-exit-routing` is the guard, and `routing/gluetun-rules`
-defines the expected set for both the guard and the gate. Typing the rules by
+detail. `routing/10-exit-routing` is the guard, and `routing/contract-rules`
+(called `routing/gluetun-rules` before 0.6.0; that name stays as a link until
+0.7.0) defines the expected set for both the guard and the gate. Typing the rules by
 hand is not a substitute: the tunnel route has to come back every time gluetun
 recreates its interface, and that is the guard's loop.
 
@@ -199,7 +200,7 @@ reaches gluetun's rule 101. The gate therefore does four things.
    97 or 102 to 104; the exit table's fallback and no other route in it than
    the tunnel default; and a host table equal to the main table's host routes,
    with an IPv4 default. The gate uses the same definitions as the guard
-   (`routing/gluetun-rules`). Every 30 seconds of waiting it says what is still
+   (`routing/contract-rules`, mounted into the `netbird` container). Every 30 seconds of waiting it says what is still
    missing. It runs again on every start of the container, including after a
    daemon or host restart that ignores `depends_on`.
 3. **It stays in front of NetBird instead of handing over.** It logs `NetBird
@@ -237,7 +238,8 @@ forwarded traffic throughout.
   stack is tested as described in [requirements](prerequisites.md#host).
 - **Python 3.10 or later on the host**, for two small helpers in
   `tools/molebridge.py` that write gluetun's role file and post-rules.
-- **NetBird client 0.79.0**, the version this setup pins, and a NetBird
+- **NetBird client 0.80.0**, the version this setup pins (the tests above
+  ran with 0.79.0), and a NetBird
   account with admin access, either NetBird Cloud or self-hosted (only a
   self-hosted server has been tried). You need the groups, the policy, a
   setup key and the exit route. The steps are the same as for Molebridge;

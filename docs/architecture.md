@@ -45,7 +45,7 @@ One Compose project, four containers:
 
 | Container | Runtime | Role |
 |---|---|---|
-| `wireguard` | Local build from pinned LinuxServer WireGuard | Owns the namespace, installs routing, brings up the tunnel |
+| `wireguard` | Local build from pinned Alpine 3.24 with `bash`, `iproute2`, `wireguard-tools` and `tini` | Owns the namespace; checks the tunnel config, installs routing before the tunnel exists, brings the tunnel up and keeps it and the rules in place, writes the owner record |
 | `netbird` | Pinned official NetBird client | Joins the namespace as the overlay exit peer |
 | `applier` | Local build from the pinned Python slim base, Debian wg/ip/curl tools | Joins the namespace, owns the relay catalogue, validates requests and controls the peer |
 | `control-panel` | Pinned official Python slim | Separate bridge, loopback publish, no capabilities, no subprocesses. Runs as `PANEL_USER` (the host user's uid, or container root mapped to the host user under rootless Podman) |
@@ -91,12 +91,20 @@ The panel holds nothing that can change routing: it writes one
 file, and the applier decides whether that file names a server it will use.
 
 Build both derived images with `docker compose build wireguard applier`. The
-routing script is copied root-owned into the WireGuard image, so the checkout
+routing scripts are copied root-owned into the WireGuard image, so the checkout
 needs no root-owned directories. Each base is
-pinned by multi-architecture digest. Debian tools come from signed package
-repositories and may change on an uncached rebuild; rebuild deliberately and
-rerun verification. The Docker build context excludes configuration, state and
-secrets.
+pinned by multi-architecture digest. The Alpine and Debian tools come from
+those distributions' signed package repositories and may change on an
+uncached rebuild; rebuild deliberately and rerun verification. The Docker
+build context excludes configuration, state and secrets.
+
+The routing image holds no provider logic: no DNS, no server lists, no
+provider API calls and no credentials. Its one input from you is the tunnel
+config, which it checks against what Molebridge's own generators write
+([the tunnel config](configuration.md#the-tunnel-config)). The `wireguard`
+container runs with every capability dropped except `NET_ADMIN` and
+`DAC_READ_SEARCH`, `no-new-privileges`, and a read-only root filesystem with
+a tmpfs on `/run`.
 
 The panel can write only its request directory. It reads `state/applier/`
 through a read-only mount. It cannot change the relay catalogue, result or
@@ -115,19 +123,21 @@ Its filesystem is read-only except for its own state and bounded scratch space.
 
 ## Routing contract
 
-Initialization first replaces the kernel's priority-0 `lookup local` rule with
-the local-delivery guard at priority 1, adding the new rule before deleting
-the old one. It then installs temporary IPv4 and IPv6 `iif wt0 unreachable`
-rules at priority 80. They block forwarding while the permanent rules are
-rebuilt. The temporary rules are removed only after all installation commands
-succeed. A readiness marker gates the WireGuard healthcheck and Compose
-startup. NetBird's entrypoint also waits, in its own namespace and in both
-address families, for the exact priority-97 terminal rule and the priority-1
-guard, with no other `lookup local` rule that could match `wt0`, before
-launching the official entrypoint. This gate runs even when daemon or host
-restarts bypass Compose ordering; [NetBird requirements](#netbird-requirements)
-lists what else it refuses. `NB_INTERFACE_NAME` uses the same `OVERLAY_IF` as
-routing and the applier.
+The contract is installed before the tunnel interface exists
+([start, supervision and stop](#start-supervision-and-stop)). Installation
+first replaces the kernel's priority-0 `lookup local` rule with the
+local-delivery guard at priority 1, adding the new rule before deleting the
+old one. It then installs temporary IPv4 and IPv6 `iif wt0 unreachable` rules
+at priority 80. They block forwarding while the permanent rules are rebuilt.
+The temporary rules are removed only after all installation commands
+succeed; if a later command fails, the container exits with them in place
+and no tunnel. A readiness marker gates the WireGuard healthcheck and Compose
+startup. NetBird starts only through a gate that checks the exit's owner
+record and the whole contract in both address families, and stays in front
+of NetBird while it runs ([NetBird's gate](#netbirds-gate)). This gate runs
+even when daemon or host restarts bypass Compose ordering;
+[NetBird requirements](#netbird-requirements) lists what else it refuses.
+`NB_INTERFACE_NAME` uses the same `OVERLAY_IF` as routing and the applier.
 
 | Priority | Rule | Purpose |
 |---|---|---|
@@ -137,7 +147,13 @@ routing and the applier.
 | 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
 | 96 | `oif mullvad lookup 51821` | Interface-bound health probes use the same table. |
 | 97 | `iif wt0 unreachable` | Terminal guard if lookup 95 or all exit-table routes disappear. |
+| 98 | `from <tunnel address> ipproto icmp unreachable` | Backstop behind 94: the same ICMP errors are unreachable if rule 94 is missing, or if the exit table is empty while the tunnel is down. IPv6 uses `ipproto ipv6-icmp`. |
 | — | `unreachable default metric 4096 table 51821` | Fallback when the tunnel route is absent. |
+
+Molebridge owns priorities 0–98 in this namespace; anything else there is
+removed ([drift](#drift-and-repair)). This rule 98 is the native backend's
+own. The gluetun backend leaves 98 to gluetun, which uses it for something
+else ([below](#why-the-guard-is-policy-routing)).
 
 A forwarded packet, one that arrived from a device on `wt0`, meets the rules
 in priority order and stops at the first that decides:
@@ -172,12 +188,15 @@ through rule 90. Nothing in this path falls through to the main table, which
 holds the host's default route.
 
 IPv6 uses the same contract. Rule 90 is omitted for IPv6 when no IPv6 overlay
-range is configured. Rule 94 exists for each family that has a tunnel address:
-initialization reads the `Address` line of the tunnel config, the same file
-`wg-quick` uses, so the rule can exist before the interface does. Exactly one
-IPv4 address and at most one IPv6 address are supported. Table numbers 0–255
-are reserved and refused. Interface names, overlay ranges and tunnel addresses
-are validated.
+range is configured. Rules 94 and 98 exist for each family in which the
+tunnel config has an address: they are installed from the config's `Address`
+line, the same file `wg-quick` uses, so they exist before the interface does,
+and they stay through tunnel downtime. Exactly one IPv4 address and at most
+one IPv6 address are supported. A PIA config has no address: the applier
+adds rules 94 and 98 with the address it registers, and the exit's own loop
+leaves both priorities alone ([providers](providers.md#how-pia-differs)).
+Table numbers 0–255 are reserved and refused. Interface names, overlay ranges
+and the tunnel config are validated.
 
 The overlay link is narrower than the tunnel (NetBird 1280 bytes, Mullvad
 1420), so replies larger than the overlay MTU need an ICMP error back to their
@@ -191,6 +210,154 @@ the namespace. `compose.yaml` sets
 address; the kernel already selects the inbound interface's address for IPv6.
 Without rule 94 the errors would leave over the host's route with an
 unroutable source, and large UDP flows through the exit would silently stall.
+Rule 98 keeps that from happening when rule 94 or the exit table's routes
+are gone: the errors are dropped instead.
+
+### Start, supervision and stop
+
+The `wireguard` container's entrypoint, `routing/molebridge-exit`, runs under
+`tini` and does this, in order:
+
+1. **Checks the settings and the tunnel config** before anything changes. A
+   rejected setting or config line stops the container with status 1 and one
+   line naming it ([troubleshooting](troubleshooting.md#startup)). Only
+   `<EXIT_IF>.conf` is used; any other `.conf` file in `wg_confs` is ignored
+   with a warning. `molebridge-exit --check-config` runs only this step and
+   changes nothing ([setup](setup.md#4-start-the-exit-without-a-route-yet)).
+2. **Writes the [owner record](#the-owner-record)**, and from then on rewrites
+   it every 2 seconds until it stops.
+3. **Installs the routing contract** (`routing/10-exit-routing --install`).
+   If that fails, the container exits with status 1 and no tunnel was
+   started.
+4. **Brings the tunnel up** with `wg-quick up`. A bring-up that fails, or
+   hasn't finished after 20 seconds and is ended, is retried after 2
+   seconds, then 4, doubling up to 60. Meanwhile the container keeps running
+   and isn't ready, so the namespace NetBird and the applier share isn't
+   replaced, and forwarded traffic hits the exit table's fallback.
+   `wg-quick`'s output is discarded, because it can echo parts of the config;
+   the log says `molebridge-exit: tunnel bring-up failed (exit <status>);
+   retrying in <n> s`.
+5. **Keeps it all in place.** Every 2 seconds it checks the tunnel interface
+   and brings it up again the same way if it is gone or down. Every
+   `ROUTING_RECONCILE_INTERVAL` seconds (2 by default) it makes one repair
+   pass (`10-exit-routing --reconcile`; see [drift and
+   repair](#drift-and-repair)).
+
+The readiness marker that the health check reads is set only while the owner
+record is being written, the tunnel is up and the last repair pass ended with
+the contract verified, and is removed otherwise. It doesn't depend on a peer
+or a handshake: a PIA or NordVPN exit has no peer until you choose a server.
+
+On a stop (`docker compose stop`, a recreate), the entrypoint removes the
+readiness marker, stops writing the owner record, ends a bring-up still in
+progress, runs `wg-quick down`, and deletes the interface directly if it is
+still there. Each of these runs in its own process group under its own
+deadline, and the entrypoint signals the whole group, so a hook's children
+go too. The stop is designed to finish within 7 seconds on a responsive
+kernel; `compose.yaml` gives the container 15 (`stop_grace_period`), so the
+engine doesn't kill it first. The rules and the fallback stay, so the
+namespace stays fail-closed. The log ends with `molebridge-exit: stopped; the
+routing guards stay in place`, or, if the interface or one of those
+processes is still there, `molebridge-exit: cleanup incomplete: <what
+remains> the routing guards stay in place`, and the container exits with
+status 1.
+
+### Drift and repair
+
+The repair pass compares both families with the contract in
+`routing/contract-rules`: rules 1, 90, 95, 96 and 97; rules 94 and 98 for
+each family with a config address; nothing else at priorities 0–98; and an
+exit table holding the fallback and, while the tunnel is up, its default
+route in each family the tunnel carries, nothing else. What it promises
+holds for one fault at a time.
+
+A **deleted protection** is contained by the ones that remain, and put back
+by the end of the first pass that starts after the deletion, so within one
+interval:
+
+| Deleted | Contained by |
+|---|---|
+| Rule 1 | No `lookup local` rule is left, so overlay packets addressed to the exit are routed by 95 and 97 like any other: into the tunnel or dropped |
+| Rule 90 | Rules 95 and 97 still hold forwarded traffic; replies from the tunnel may not reach clients until 90 is back |
+| Rule 94 | Rule 98: tunnel-sourced ICMP is unreachable |
+| Rule 95 | Rule 97 |
+| Rule 96 | Rules 95 and 97 for forwarded traffic; the exit's own traffic bound to the tunnel interface uses the main table, which has no tunnel route |
+| Rule 97 | Rule 95 and the exit table's fallback |
+| Rule 98 | Rule 94 |
+| The fallback, tunnel up | The tunnel's default route |
+| The fallback, tunnel down | Rule 97 for forwarded traffic; rule 98 for tunnel-sourced ICMP, which finds nothing at 94 and falls through to it |
+| The tunnel interface | The fallback; the interface itself comes back within about 2 seconds plus the bring-up |
+
+An **inserted bypass**, any extra rule at priorities 0–98 (such as `lookup
+main` at 50, or the kernel's priority-0 `lookup local` put back) or a foreign
+route in the exit table, is removed and logged within one interval. Nothing
+is promised about traffic between the insertion and its removal: only root in
+the namespace can insert one, and root there can defeat any guard. Two
+faults at once are outside the guarantee.
+
+A pass that has to change rules 90–97 first adds the temporary priority-80
+rule, which blocks forwarding, and removes it in the same pass once the
+result verifies; if it doesn't verify, rule 80 stays until a pass does. A
+wrong rule whose selectors are a subset of the right one's is rebuilt behind
+a copy one priority earlier, as the [gluetun guard](#the-reconcile-loop)
+does, so a repair never leaves rules 94 and 98 both missing. A pass that
+finds everything in place changes nothing. Each change is logged, for example
+`10-exit-routing: added IPv4 rule 97`, `10-exit-routing: removed IPv4 rule
+50: from all lookup main` or `10-exit-routing: IPv4 unreachable fallback in
+table 51821 restored`, and counted in the owner record.
+
+With PIA's addressless config, the pass leaves priorities 94 and 98 alone
+entirely: it adds and removes nothing there, and neither its readiness nor
+NetBird's gate compares them. The applier keeps exactly one pair there, for
+the current address, and repairs it on every pass, every 5 seconds
+([providers](providers.md#how-pia-differs)); the same single-fault promise
+holds with the applier's pass in place of the interval.
+
+`tools/check-routing.sh` drills these cases in isolated namespaces, and
+`tools/check-exit-image.sh` runs the image's start, repair, bring-up failure
+and stop cases in a container; [testing](testing.md) records what has run on
+a live exit.
+
+### The owner record
+
+Rules can outlive their owner: in a namespace where the `wireguard`
+entrypoint has stopped or hung, or one that `netbird` and `applier` still
+share after `wireguard` was recreated into a new one. The owner record lets
+both tell a live exit from such leftovers.
+
+The entrypoint writes one line to `/run/molebridge/exit-owner`, on the
+`exit-run` volume, every 2 seconds, through a temporary file and a rename.
+`netbird` and `applier` mount the volume read-only. The line is:
+
+```text
+molebridge-exit 1 <boot id> <seconds> <namespace> <generation> <IPv4 address|-> <IPv6 address|-> <conf|applier> <repairs> <last repair|->
+```
+
+`<seconds>` is the kernel's boot clock (`/proc/uptime`), which wall-clock
+changes don't move; `<namespace>` is the device and inode of the network
+namespace; `<generation>` is a random id drawn at each start. The addresses
+are the tunnel config's, and `applier` means the config has none and the
+applier owns rules 94 and 98. It holds no key, peer or credential.
+
+A reader counts the record as live only if it has exactly this shape, comes
+from the reader's own boot and network namespace, is at most 6 seconds old by
+the reader's own clock, is no more than a second in the future, and, within
+the generation the reader last accepted, hasn't gone backwards. A new
+generation in the same namespace, the entrypoint restarted in place, is
+accepted. A record that stops advancing expires; nothing extends it. The gate
+reads it with `owner_valid` in `routing/contract-rules`, the applier with
+`owner_record_valid` in `molebridge/routing.py`.
+
+- **NetBird's gate** stops NetBird as soon as the record isn't live
+  ([below](#netbirds-gate)).
+- **The applier** counts routing protection as intact only with a live
+  record. Without one, `routing_ok` is false, switches wait, the result
+  fails with "Routing protection is incomplete; run the recovery helper.",
+  and `--healthcheck` and the doctor's `routing protection` check fail.
+
+Nothing recovers the stack by itself: a `netbird` or `applier` left in an old
+namespace stays there until you run `python3 tools/molebridge.py recover`
+([operations](operations.md#recovery)).
 
 ### NetBird requirements
 
@@ -236,8 +403,8 @@ twice and a root field name outside printable ASCII. Other fields may hold
 anything. The [configuration](configuration.md#env) page lists exactly what it
 refuses. The host doctor runs the same checks in the running container.
 
-These NetBird settings were checked against the 0.79.0 source, the release
-Molebridge pins; a NetBird upgrade needs them checked again.
+The gate cites these NetBird settings from the source of the release
+Molebridge pins, 0.80.0; a NetBird upgrade needs them checked again.
 
 The tunnel uses `Table = off`. Its `PostUp` adds a default route through
 `mullvad` to the exit table; `PreDown` removes it. The fallback and terminal
@@ -251,12 +418,14 @@ The applier checks, on every pass:
   rule other than rule 1's form could match the overlay interface;
 - both fallback routes are present;
 - the exit table has no route through another interface;
-- in each family with a global tunnel address, there is a tunnel default and
-  a return-path rule for exactly that address and its ICMP protocol;
-- the ICMP source sysctl is set.
+- in each family with a global tunnel address, there is a tunnel default, a
+  return-path rule (94) for exactly that address and its ICMP protocol, and
+  its backstop (98) for the same packets;
+- the ICMP source sysctl is set;
+- the exit's [owner record](#the-owner-record) is live.
 
 An IPv4-only tunnel still needs the IPv6 fail-closed guards, and must have no
-IPv6 return-path rule. An unknown rule ahead of the guard, an extra selector,
+IPv6 return-path rule or backstop. An unknown rule ahead of the guard, an extra selector,
 or a leftover temporary guard means the result can't be healthy.
 
 Sharing the namespace has one consequence for NetBird itself: by default it
@@ -270,15 +439,63 @@ peer's stored configuration wins, so an already enrolled peer needs the
 stored field because no `netbird` command prints it. See
 [setup](setup.md#5-keep-ice-off-the-tunnel-interface).
 
-A privileged actor can remove or bypass these protections. Health polling
-detects drift; it is not an instantaneous defense against a compromised host.
+### NetBird's gate
+
+`routing/wait-for-guards` is the `netbird` container's entrypoint with both
+backends; this describes the default one, and
+[the gluetun backend](#netbirds-control-mark-and-the-gate) adds its own
+checks. `compose.yaml` passes it `OVERLAY_CIDR`, `OVERLAY6_CIDR`, `EXIT_IF` and
+`EXIT_TABLE`, and mounts `routing/contract-rules` and the `exit-run` volume
+read-only, so it judges the namespace with the same definitions and settings
+as the exit. The gate:
+
+1. refuses the unsupported NetBird settings [above](#netbird-requirements),
+   and its own settings when they are missing or out of range;
+2. waits until the owner record is live and, in both families, the whole
+   contract is in place: rules 1, 90, 95, 96 and 97, rules 94 and 98 for the
+   addresses the owner record names (with PIA's addressless config, those two
+   priorities aren't compared), nothing else at priorities 0–98, and the exit
+   table's fallback with no route there but the tunnel's default. The tunnel
+   route itself isn't required, so NetBird can start while the tunnel is
+   still coming up. It logs `NetBird gate: native backend: waiting for the
+   exit's owner record (/run/molebridge/exit-owner) and the whole guard (rules
+   1-98, exit table 51821)`, and every 30 seconds what is still missing;
+3. starts NetBird's own entrypoint as its child, in a process group of its
+   own, so a stop reaches the daemon and not only the wrapper script, and
+   logs `NetBird gate: NetBird started; watching the routing guards and the
+   exit's owner record`;
+4. checks every 2 seconds, and stops NetBird (TERM to its group, KILL 20
+   seconds later), logging `NetBird gate: stopping NetBird: <reason> (see
+   docs/troubleshooting.md)` and exiting with status 1, as soon as the owner
+   record isn't live, with no grace, or once the guards haven't been seen
+   intact for `GUARD_GRACE` seconds (30 by default).
+
+From those cadences, a record last written at time *t* reads as expired by
+*t* + 7 seconds, NetBird is signalled by *t* + 10 and gone by *t* + 31. For
+the guards, it is signalled within `GUARD_GRACE` + 4 seconds of the last
+check that found them intact (34 at the default) and gone within
+`GUARD_GRACE` + 25. On the container's own stop, the gate sends TERM to
+NetBird's group at once and KILL 10 seconds later, and exits within 11
+seconds, inside the 15 seconds `compose.yaml` gives `netbird`
+(`stop_grace_period`); `init: true` gives the container an init that reaps
+what the gate leaves behind. These bounds come from the intervals in the
+code; they assume a responsive host.
+
+After the gate stops NetBird, the restart policy starts the container again
+and the gate waits as it does at first start. It can't repair a replaced
+namespace: that takes [recovery](operations.md#recovery).
+
+A privileged actor can remove or bypass these protections. The repair pass,
+the gate and health polling detect drift within the intervals above; none of
+them is an instantaneous defense against a compromised host.
 
 ## gluetun backend
 
 **Experimental.** Live passes with NordVPN on Docker and on rootless
 Podman; see [testing](testing.md#gluetun-backend-pass-at-a3bb14f) for what
 they covered and what they didn't. Everything below was also read in the source of the
-pinned releases (gluetun v3.41.3, NetBird 0.79.0), exercised in isolated
+pinned releases (gluetun v3.41.3, NetBird 0.79.0, then pinned; the pin is
+now 0.80.0), exercised in isolated
 namespaces by `tools/check-routing.sh` (routing, guard and gate) and covered
 by unit tests against fakes (the applier). Without the applier and the panel,
 the guard and gate alone make a smaller setup:
@@ -299,7 +516,7 @@ and is dropped when the tunnel or its routes are gone.
 | Container | Image | Role |
 |---|---|---|
 | `gluetun` | Pinned `qmcgaw/gluetun` v3.41.3 | Owns the namespace, its firewall and the tunnel interface (`EXIT_IF`, kernel WireGuard) |
-| `guard` | The routing image from `compose.yaml` | Joins the namespace, installs the rules below and keeps them in place; `NET_ADMIN` only |
+| `guard` | The routing image from `compose.yaml`, in its guard mode (`TUNNEL_BACKEND=gluetun`, the image's own entrypoint) | Joins the namespace, installs the rules below and keeps them in place; `NET_ADMIN` only |
 | `netbird` | Pinned official NetBird client | Joins the namespace; starts only through the gate, which stays its parent |
 | `applier` | The applier image from `compose.yaml` | Joins the namespace; reads gluetun's server list, selects servers through gluetun's control server and verifies the result |
 | `control-panel` | Unchanged | Shows the provider's name with "via gluetun" |
@@ -423,7 +640,7 @@ The guard therefore keeps running, as its own container, and every
 - refreshes the host table when the main table's host routes change;
 - checks every rule in 0–97 in both families, adds a missing one and removes
   any other. The expected rules and tables are defined once, in
-  `routing/gluetun-rules`, which the gate reads too. A wrong rule whose selectors are a subset of the right one's
+  `routing/contract-rules`, which the gate reads too. A wrong rule whose selectors are a subset of the right one's
   could take the right one with it when deleted, so that priority is rebuilt
   behind a copy one priority earlier. The fallback route and the correct
   rules 1 and 97 are never removed otherwise;
@@ -444,10 +661,10 @@ gate in front of NetBird's entrypoint (`routing/wait-for-guards`, with
 
 - refuses to start NetBird when `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK`
   or `NB_DISABLE_CUSTOM_ROUTING` is true, or when `NB_FWMARK_BASE` differs
-  from `CONTROL_MARK` (NetBird 0.79.0 honors that variable;
+  from `CONTROL_MARK` (NetBird 0.80.0, the pinned release, honors that variable;
   `compose.gluetun.yaml` sets both from `CONTROL_MARK`);
 - waits, in both families, for the whole guard, judged by the same
-  definitions the guard itself uses (`routing/gluetun-rules`, mounted into
+  definitions the guard itself uses (`routing/contract-rules`, mounted into
   the NetBird container next to the gate): every rule in the table above
   that applies, exactly, including 102–104, and nothing else at
   priorities 0–97 or 102–104; the exit
@@ -793,7 +1010,8 @@ second attempt fails too.
 `/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
 verified connected result, at either tier; otherwise 503. Docker's applier healthcheck checks
 freshness, a live WireGuard exit interface with exactly one peer, current
-routing protection, and NetBird on kernel WireGuard with its kernel firewall,
+routing protection (with the default backend, including a live
+[owner record](#the-owner-record)), and NetBird on kernel WireGuard with its kernel firewall,
 after a completed inspection; startup
 and an in-progress switch do not count as completed checks. It does not restart unhealthy
 containers. The host-side doctor additionally checks the shared namespace and

@@ -28,14 +28,14 @@ Edit `.env`. The settings you must set:
 |---|---|
 | `OVERLAY_CIDR` | Your NetBird peer range |
 | `OVERLAY6_CIDR` | Your NetBird IPv6 range, if you have one |
-| `PUID`, `PGID` | The output of `id -u` and `id -g` |
-| `PANEL_USER` | `PUID:PGID` on Docker; `0:0` on rootless Podman |
+| `PANEL_USER` | Your `id -u`:`id -g` on Docker; `0:0` on rootless Podman |
 | `NB_HOSTNAME` | The peer name the exit should have in NetBird |
 | `NB_MANAGEMENT_URL` | Your management URL, if you self-host NetBird |
 | `PROVIDER`, `EXIT_IF`, `COMPOSE_FILE` | For PIA only: `pia`, `pia`, `compose.yaml:compose.pia.yaml`. For NordVPN only (experimental): `nordvpn`, `nordvpn`, `compose.yaml:compose.nordvpn.yaml` |
 
 Everything else can wait; [configuration](configuration.md) lists every
-setting. Create `state/panel` as the same user as `PUID`/`PGID`.
+setting. Create `state/panel` as your own user, as the `mkdir` above does.
+`PUID` and `PGID` are no longer used.
 
 ## 2. Create the tunnel config
 
@@ -49,7 +49,9 @@ python3 tools/prepare-tunnel-config.py ~/Downloads/<your-file>.conf &&
 This writes `tunnel/wg_confs/mullvad.conf` with mode 0600. It keeps the key,
 the tunnel addresses and the starting server, and drops the DNS line.
 WireGuard's own routing is replaced by the exit table that the routing script
-guards. Nothing secret is printed.
+guards. Nothing secret is printed. The `wireguard` container accepts only the
+files these tools write ([the tunnel config](configuration.md#the-tunnel-config)),
+so don't add fields by hand.
 
 **PIA.** Generate a key, then store the login, one value per file:
 
@@ -92,6 +94,21 @@ your Nord Account if you won't make another config. Set `EXIT_TABLE` in the
 environment for a table other than `51821`, as for the
 [config helper](configuration.md#tunnel-config-helper).
 
+**Who can read it.** Keep the config mode 0600, owned by you, in the 0700
+`tunnel/wg_confs` directory. The `wireguard` container runs as its own root
+with every capability dropped except `NET_ADMIN` and `DAC_READ_SEARCH`:
+
+- **Docker (rootful):** container root is the host's root but has no
+  `DAC_OVERRIDE`, so it reads your file through `DAC_READ_SEARCH`, which
+  `compose.yaml` grants. Without it the container can't open the directory
+  or the file and refuses to start.
+- **Rootless Podman:** container root is your own user, the file's owner, so
+  ordinary owner access is enough.
+- **A container root remapped to another host ID** (some Quadlet setups):
+  `DAC_READ_SEARCH` only applies to files whose owner and group are both
+  mapped into the container. Otherwise give that ID read access to the file
+  and search access to the directories, for example with an ACL.
+
 ## 3. Add the NetBird setup key
 
 Open `secrets/netbird.env` in an editor, so the key never lands in shell
@@ -105,21 +122,37 @@ Write one line: `NB_SETUP_KEY=` followed by the key.
 
 ## 4. Start the exit, without a route yet
 
+Build the images, then check your settings and the tunnel config without
+starting anything:
+
 ```sh
 docker compose build wireguard applier
-docker compose up -d wireguard netbird applier
-docker compose ps
-docker compose logs wireguard | grep 10-exit-routing
+docker compose run --rm --no-deps wireguard --check-config
 ```
 
-The log should end with a line that starts `10-exit-routing: rules
-installed`, and `wireguard` and `netbird`
-should become healthy. With Mullvad, `applier` becomes healthy too, once it
+It prints one line, `molebridge-exit: configuration accepted
+(/config/wg_confs/mullvad.conf: an IPv4 address and an IPv6 address)` (or
+`an IPv4 address`, or for PIA `no address (the applier sets it)`), or the
+setting or config line it refused ([the tunnel
+config](configuration.md#the-tunnel-config)). It changes no routing and
+creates no tunnel. Then start:
+
+```sh
+docker compose up -d wireguard netbird applier
+docker compose ps
+docker compose logs wireguard
+```
+
+The log should show `10-exit-routing: rules installed
+(1/90/94/95/96/97/98, protected table)`, then `molebridge-exit: bringing the
+tunnel up`, `molebridge-exit: tunnel up` and `molebridge-exit: ready`, and
+`wireguard` and `netbird` should become healthy. With Mullvad, `applier` becomes healthy too, once it
 has verified the starting server. With PIA, `applier` stays unhealthy until
 you pick a region in step 7, because a fresh PIA tunnel has no peer yet; the
 same goes for NordVPN until you pick a server. If
-the routing script refuses to start, it names the setting it rejected
-([troubleshooting](troubleshooting.md#startup)).
+`wireguard` refuses to start, its log names the setting or config line it
+rejected ([troubleshooting](troubleshooting.md#startup)); if the tunnel
+won't come up, it keeps retrying and stays unhealthy.
 
 In the NetBird dashboard, check that the peer appears under `NB_HOSTNAME` and
 is in `exit-nodes`. Then delete `secrets/netbird.env`: the peer's identity now
