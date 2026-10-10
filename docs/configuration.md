@@ -276,8 +276,8 @@ accept. The file must be a regular file, not a symlink, readable by the
 container, at most 4 KiB, with no NUL bytes and no carriage returns (so no
 Windows line endings). Each line is blank, a comment starting with `#`, a
 section header written exactly `[Interface]` or `[Peer]`, or `Field = value`
-with a field from this table. Field names may be in any case; each may
-appear once.
+with a field from this table. Use the field names exactly as shown; each
+may appear once.
 
 | Field | Rule |
 |---|---|

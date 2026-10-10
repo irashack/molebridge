@@ -801,7 +801,7 @@ NFT
     done
     for family in -4 -6; do ip -n "$exitns" "$family" rule del priority 0; done
     ip netns exec "$exitns" nft delete table inet mb_local_dnat
-    echo 'PASS without rule 1 the DNATed traffic is delivered (drill confirmed sensitive)'
+    echo 'PASS with the kernel'\''s rule 0 back the DNATed traffic is delivered (drill confirmed sensitive)'
 else
     echo 'SKIP DNAT local-delivery drill (nft not installed)'
 fi

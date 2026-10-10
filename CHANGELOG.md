@@ -26,7 +26,8 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 - **The tunnel config is checked against what the generators write.**
   `DNS`, `PreUp`, `PostDown`, `SaveConfig`, `FwMark`, a `Table` other than
   `off` and any other field are refused with a message that names the line
-  and field and never prints the file. `molebridge-exit --check-config`
+  (and the field, when it is one Molebridge accepts) and never prints the
+  file. `molebridge-exit --check-config`
   (`docker compose run --rm --no-deps wireguard --check-config`) checks
   without changing anything. `tools/prepare-tunnel-config.py` now refuses
   more than one address per family and prefixes other than `/32` and

@@ -38,7 +38,8 @@ supported: <reason>; regenerate it with tools/prepare-tunnel-config.py
 (docs/setup.md)`.** The config has something the generators don't write: a
 `DNS`, `PreUp`, `PostDown`, `SaveConfig` or `FwMark` line, a `Table` other
 than `off`, hooks for another table, a second address in a family, and so
-on. `<reason>` names the line number and field, never the line's text; [the
+on. `<reason>` names the line number (and the field, when it is one
+Molebridge accepts), never the line's text; [the
 tunnel config](configuration.md#the-tunnel-config) lists every reason and
 what is accepted. Regenerate the config with the command the message names
 (for NordVPN and PIA, move the old file aside first: neither tool
@@ -56,7 +57,9 @@ read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)`.**
 Container root can't read your mode-0600 file. On rootful Docker,
 `compose.yaml` grants `DAC_READ_SEARCH` for this; an override that drops it
 breaks the start. When the container can't search `tunnel/wg_confs` itself,
-the message says the config `is missing` instead. A container root remapped
+the line reads `molebridge-exit: the tunnel config directory /config/wg_confs
+can't be searched (on Docker the container needs DAC_READ_SEARCH; see
+docs/setup.md)`. A container root remapped
 to another host ID needs read access of its own; see
 [setup](setup.md#2-create-the-tunnel-config).
 

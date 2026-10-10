@@ -11,8 +11,9 @@ information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
 Commands use the defaults: tunnel interface `mullvad`, exit table `51821`,
 and overlay interface `wt0`. For PIA, substitute `pia` for `mullvad` in
 interface names and config paths, and `nordvpn` for NordVPN; the table stays
-`51821`. NordVPN is experimental: its one live pass covered the egress and
-IPv6 checks and the local-delivery refusal, not the fail-closed drills
+`51821`. NordVPN is experimental: its live passes covered the egress and IPv6
+checks, the local-delivery refusal and v0.6.0's repair drills, not the
+client-held fail-closed drills
 ([testing](testing.md#nordvpn-pass-at-036e1cc)). If you changed
 `EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use your values. For rootless Podman,
 use the [Podman commands](operations.md#rootless-podman).
@@ -21,7 +22,10 @@ use the [Podman commands](operations.md#rootless-podman).
 checks and drills on this page don't carry over by renaming. Use the ones in
 [gluetun as a NetBird exit](gluetun-netbird-exit.md#verification), which
 apply with the applier and panel running too, then
-`python3 tools/molebridge.py doctor`. The [client checks](#from-a-client)
+`python3 tools/molebridge.py doctor`. That page's recreation commands name
+only `gluetun guard netbird`, for the standalone setup; with the full backend
+the applier shares gluetun's namespace too, so wherever a drill recreates
+gluetun, use `python3 tools/molebridge.py recover` instead. The [client checks](#from-a-client)
 below apply as written. One difference matters when you read results: in
 gluetun's namespace, unmarked traffic the exit sends goes into gluetun's
 tunnel, and only NetBird's marked control traffic uses the host's
@@ -160,7 +164,8 @@ during a rule drill. Follow the exit's log while you run them:
 | Container stopped | `docker compose stop wireguard` | The probe fails, the exit's log ends with `molebridge-exit: stopped; the routing guards stay in place`, and NetBird's gate stops NetBird. Restore with `python3 tools/molebridge.py recover`. |
 
 On PIA, rules 94 and 98 belong to the applier, which puts a deleted one back
-within one of its passes, about 5 seconds, without a log line. After each
+within one pass of its loop (normally 5 seconds, longer during a switch or
+health check), without a log line. After each
 drill, confirm provider egress returns on the supported families. After the
 tunnel-down drill, the applier reapplies the saved server or region when the
 interface returns. If a request was rejected or failed, select again to
@@ -175,16 +180,17 @@ The isolated `tools/check-routing.sh` drill also
 deletes all exit-table routes together to exercise the terminal guard, and
 checks that an oversized tunnel reply produces an ICMP error back over the
 tunnel, that a missing return-path rule is detected, and that with the tunnel
-route gone no error reaches the tunnel side. It does not watch the host-side
-interface, so it cannot tell a dropped error from one sent over the host's
-route; a capture on that interface during a live flow can (see step 6
-above).
+route gone no error reaches the tunnel side. It also counts ICMP errors that
+reach the host side: none escape with rule 94 missing or with the exit table
+empty, and removing rules 94 and 98 together shows the counter can see them.
+On a live exit, a capture on the host-side interface during a live flow
+does the same (see step 6 above).
 
 For local delivery, the same drill sends TCP and UDP from the overlay side to
 the exit's overlay and host-side addresses, in both families, and checks that
 no listener in the exit's namespace receives them, also after an nftables
-DNAT to a local port. It confirms that it detects local delivery when rule 1
-is missing. It also checks that the NetBird gate refuses unsupported NetBird
+DNAT to a local port. It confirms that it can see local delivery, before and
+after the DNAT, by restoring the kernel's priority-0 `lookup local` rule. It also checks that the NetBird gate refuses unsupported NetBird
 settings, profiles other than the default and a default profile for another
 interface, runs the gate's JSON reader under gawk, mawk and busybox when they
 are installed, and keeps waiting while the kernel's priority-0 rule is in

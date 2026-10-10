@@ -144,7 +144,9 @@ docker compose logs wireguard
 ```
 
 The log should show `10-exit-routing: rules installed
-(1/90/94/95/96/97/98, protected table)`, then `molebridge-exit: bringing the
+(1/90/94/95/96/97/98, protected table)` (with PIA, `10-exit-routing: rules
+installed (1/90/95/96/97, protected table; 94 and 98 come with the address
+the applier sets)`), then `molebridge-exit: bringing the
 tunnel up`, `molebridge-exit: tunnel up` and `molebridge-exit: ready`, and
 `wireguard` and `netbird` should become healthy. With Mullvad, `applier` becomes healthy too, once it
 has verified the starting server. With PIA, `applier` stays unhealthy until

@@ -11,7 +11,8 @@ picks the exits from mullvad, pia, nordvpn, and two on the gluetun backend:
 mullvad-gluetun and surfshark (which has only the tunnel checks). --live fills the
 native catalogues from the providers' public server lists instead of the
 small built-in sample; gluetun's is always the sample. --fail <id> makes that
-exit's switches fail, to see the failed state.
+exit's switches fail, to see the failed state. --configured <id> pins that exit
+to its starting server as SERVER would, to see the read-only view.
 """
 from __future__ import annotations
 
@@ -106,7 +107,7 @@ def live(provider):
         return spec.parse_catalog(response.read(spec.catalog_max_bytes + 1).decode())
 
 
-def seed(state, exit_id, provider, relays, current):
+def seed(state, exit_id, provider, relays, current, configured=None):
     applier = state / exit_id / 'applier'
     snapshot = {'fetched_at': now_iso(), 'provider': provider, 'relays': relays}
     if providers.get(provider).backend == 'gluetun':
@@ -114,10 +115,10 @@ def seed(state, exit_id, provider, relays, current):
     write_json_atomic(applier / 'relays.json', snapshot, public=True)
     write_json_atomic(state / exit_id / 'panel' / 'desired.json',
                       {'server': current, 'requested_at': now_iso(), 'request_id': secrets.token_hex(16)})
-    apply(state, exit_id, provider, relays)
+    apply(state, exit_id, provider, relays, configured=configured)
 
 
-def apply(state, exit_id, provider, relays, fail=False):
+def apply(state, exit_id, provider, relays, fail=False, configured=None):
     """What an applier would record after a verified (or failed) switch."""
     desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
     previous = read_json(state / exit_id / 'applier' / 'result.json') or {}
@@ -128,6 +129,11 @@ def apply(state, exit_id, provider, relays, fail=False):
         'egress_ip': '203.0.113.7', 'egress_city': info.get('city'), 'egress_country': info.get('country'),
         'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.',
         'egress_tier': providers.get(provider).egress_tier}
+    if configured:
+        # SERVER wins over desired.json (molebridge/state.py, configured_server).
+        info = relays.get(configured, {})
+        result.update(server=configured, configured_server=configured, requested_server=configured,
+                      egress_city=info.get('city'), egress_country=info.get('country'))
     if result['egress_tier'] == 'tunnel':
         result['exit_confirmed'] = False
     if fail:
@@ -137,7 +143,7 @@ def apply(state, exit_id, provider, relays, fail=False):
     write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
 
 
-def fake_appliers(state, exits, failing=''):
+def fake_appliers(state, exits, failing='', pinned=None):
     # The seeded requests are already applied.
     seen = {exit_id: ((read_json(state / exit_id / 'panel' / 'desired.json') or {}).get('request_id'), float('inf'))
             for exit_id in exits}
@@ -148,13 +154,14 @@ def fake_appliers(state, exits, failing=''):
             if request != seen.get(exit_id, (None,))[0]:
                 seen[exit_id] = (request, time.monotonic())
             elif time.monotonic() - seen[exit_id][1] > 4:
-                apply(state, exit_id, provider, relays, fail=exit_id == failing)
+                apply(state, exit_id, provider, relays, fail=exit_id == failing,
+                      configured=(pinned or {}).get(exit_id))
                 seen[exit_id] = (request, float('inf'))
         # Keep results fresh, as the real applier's periodic checks do.
         for exit_id, (provider, relays) in exits.items():
             result = read_json(state / exit_id / 'applier' / 'result.json') or {}
             desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
-            if result.get('request_id') == desired.get('request_id'):
+            if result.get('request_id') == desired.get('request_id') or result.get('configured_server'):
                 result['checked_at'] = now_iso()
                 write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
         time.sleep(1)
@@ -168,22 +175,26 @@ def main():
     parser.add_argument('--style', default='provider')
     parser.add_argument('--fail', default='', metavar='ID', help="make this exit's switches fail")
     parser.add_argument('--exits', default='mullvad,pia', help='comma-separated, from ' + ', '.join(EXITS))
+    parser.add_argument('--configured', default='', metavar='ID',
+                        help='pin this exit to its starting server, as SERVER does')
     args = parser.parse_args()
     chosen = [name.strip() for name in args.exits.split(',') if name.strip()]
     if not chosen or any(name not in EXITS for name in chosen):
         parser.error('--exits takes ' + ', '.join(EXITS))
     with tempfile.TemporaryDirectory(prefix='switchyard-preview-') as tmp:
         state = Path(tmp)
-        exits = {}
+        exits, pinned = {}, {}
         for exit_id in chosen:
             provider, current = EXITS[exit_id]
             native = providers.get(provider).backend == 'native'
             relays = live(provider) if args.live and native else sample(provider)
             if current not in relays:
                 current = sorted(relays)[0]
-            seed(state, exit_id, provider, relays, current)
+            if exit_id == args.configured:
+                pinned[exit_id] = current
+            seed(state, exit_id, provider, relays, current, configured=pinned.get(exit_id))
             exits[exit_id] = (provider, relays)
-        threading.Thread(target=fake_appliers, args=(state, exits, args.fail), daemon=True).start()
+        threading.Thread(target=fake_appliers, args=(state, exits, args.fail, pinned), daemon=True).start()
         env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS=','.join(f'{e}={EXITS[e][0]}' for e in chosen),
                    PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='home')
         # The sample relays' addresses answer nothing, so their latency is made

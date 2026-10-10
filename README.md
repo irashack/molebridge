@@ -1,9 +1,13 @@
 <p align="center">
-  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge: stay on NetBird, exit through Mullvad, PIA, NordVPN or gluetun" width="1000">
+  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge: your NetBird network, out through any VPN. Mullvad, PIA and NordVPN natively, or any WireGuard provider through gluetun" width="1000">
 </p>
 
 <p align="center">
-  <strong>A self-hosted NetBird exit node that sends traffic through Mullvad, PIA or NordVPN.</strong>
+  <strong>Your NetBird network, out through any VPN.</strong><br>
+  A self-hosted NetBird exit node that leaves through Mullvad, PIA or NordVPN,
+  or through any provider gluetun connects to over WireGuard, with routing
+  that fails closed. Its panel switches servers for the native providers and
+  six of gluetun's.
 </p>
 
 <p align="center">
@@ -23,8 +27,12 @@ node. Your devices stay on NetBird, select the exit, and their Internet
 traffic leaves through the VPN provider.
 
 An experimental second backend hands the tunnel to
-[gluetun](https://github.com/qdm12/gluetun) instead, which adds FastestVPN,
-IVPN, Surfshark and Windscribe.
+[gluetun](https://github.com/qdm12/gluetun) instead. Switchyard can then
+choose servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
+Windscribe through gluetun, and [a standalone guide](docs/gluetun-netbird-exit.md)
+puts any gluetun WireGuard connection behind Molebridge's routing guard
+without the panel (OpenVPN isn't covered). Only NordVPN through gluetun has had a live pass so far. Whichever
+path you choose, the devices using the exit are NetBird peers.
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
 (PIA) in a small web panel called Switchyard. Every device using the exit follows the switch without any client
@@ -70,8 +78,9 @@ Three containers share one network namespace: the WireGuard tunnel, a NetBird
 peer, and an "applier" that controls the tunnel. The fourth, the panel, runs
 outside it. The tunnel container is a small Alpine image you build locally:
 it checks the tunnel config, installs the routing rules before the tunnel
-exists, and keeps both in place while it runs. It holds no provider logic or
-credentials. With the gluetun backend, gluetun owns the namespace and the
+exists, and keeps both in place while it runs. The image bundles no provider
+logic or credentials; the running container reads your WireGuard private key
+from the mounted tunnel config. With the gluetun backend, gluetun owns the namespace and the
 tunnel, and a Molebridge "guard" container keeps the same routing rules in
 place beside it ([architecture](docs/architecture.md#gluetun-backend)). Traffic forwarded from your devices can only go into the tunnel.
 If the tunnel or its routes disappear, that traffic is dropped; it never falls
@@ -147,8 +156,9 @@ Podman details, is in [requirements](docs/prerequisites.md).
   rootless Podman, without the client-held fail-closed drills. The
   experimental [gluetun backend](docs/providers.md#the-gluetun-backend)
   selects servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
-  Windscribe through gluetun; only NordVPN has been tried live. Other providers aren't
-  supported. Some could be added if there's interest;
+  Windscribe through gluetun; only NordVPN has been tried live. Other gluetun
+  WireGuard providers need the [standalone setup](docs/gluetun-netbird-exit.md),
+  without server selection in Switchyard. Some could be added if there's interest;
   [other providers](docs/other-providers.md) says which, and what that
   support would realistically look like.
 - **One provider per exit.** To offer more than one, run one exit per

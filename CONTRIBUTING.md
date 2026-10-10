@@ -55,10 +55,8 @@ CI also builds both images and checks what they contain; see
 
 On a disposable Linux host, `sudo sh tools/check-routing.sh` runs the routing
 failure drills in isolated network namespaces, with no accounts or real
-endpoints. It needs `ip`, `ping`, `python3` and `nft`. Without `nft` several
-packet-level drills are skipped, among them the PIA port-forwarding, DNAT
-and gluetun ones, and the script still passes, so install it and read the
-`SKIP` lines. With BusyBox, `mawk` and `gawk` installed it also runs the
+endpoints. It needs `ip`, `ping`, `python3` and `nft`; without `nft` the native repair
+drills fail, so install it and read any `SKIP` lines. With BusyBox, `mawk` and `gawk` installed it also runs the
 NetBird gate's JSON reader under each awk. CI runs the same drills on every
 push.
 

@@ -289,7 +289,10 @@ read it before you start.
 
    [Configuration](configuration.md#gluetun-backend) lists every setting. The
    panel and applier settings in `.env.example` have no effect on these three
-   services.
+   services. Some providers need gluetun settings beyond this table; supply
+   them in a Compose override listed in `COMPOSE_FILE`. AirVPN, for example,
+   also needs its preshared key: mount the key file and set
+   `WIREGUARD_PRESHARED_KEY_SECRETFILE` to its path in the container.
 
 3. **Put the provider's WireGuard private key in a file.** Open it in an
    editor, so the key never lands in shell history. It holds one line:
@@ -679,8 +682,8 @@ needs an explanation.
 Keep those breaks short: while `guard` is stopped its marking records go stale,
 and after 30 seconds the gate stops NetBird (it comes back with the guard).
 
-The guard restores a deleted rule or route within `ROUTING_RECONCILE_INTERVAL`
-seconds, so the second and third drills stop it first and make the change from
+The guard tries to restore a deleted rule or route on its next repair pass
+(`ROUTING_RECONCILE_INTERVAL` is the delay between passes, not a deadline), so the second and third drills stop it first and make the change from
 a one-off container that runs `ip` in the same namespace (`docker compose run`
 with `--no-deps` and `--entrypoint ip`):
 
