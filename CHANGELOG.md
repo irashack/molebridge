@@ -4,6 +4,29 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- **The routing image now refuses field names in any spelling but the
+  generators'.** `address`, `privatekey`, `allowedIPs` and every other
+  spelling that differs from [the table](docs/configuration.md#the-tunnel-config)
+  are refused with `unsupported field on line <n>`. `wg-quick` and `wg` read
+  field names in any case, and so did the check, but `10-exit-routing` reads
+  only `Address`: a lowercase `address` passed the check, then the rule
+  installer missed it, and Mullvad and NordVPN exits stopped with
+  `10-exit-routing: tunnel configuration needs an IPv4 Address`. With PIA,
+  the rule installer run on its own and `tools/molebridge.py check` took
+  such a file as an addressless config, leaving rules 94 and 98 to the
+  applier, while `wg-quick` would still have assigned the address (the
+  image's own check refused it there, as `Address on line <n> is not
+  supported for PIA`). `10-exit-routing` now refuses an `Address` in
+  another case (`10-exit-routing: tunnel configuration spells Address
+  another way; write it as Address`), and `tools/molebridge.py check`
+  refuses a PIA config with an address or peer in any case. Configs the
+  generators wrote are unaffected.
+
+Tested with `pytest -q panel tools` on macOS and `tools/check-exit-image.sh`
+on OrbStack (Docker Engine 29.4.0); no live exit has run this change.
+
 ## 0.6.0 (2026-10-10)
 
 - Add optional `SERVER`: a server hostname, or a PIA region id. When set,

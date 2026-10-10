@@ -37,9 +37,10 @@ place.
 supported: <reason>; regenerate it with tools/prepare-tunnel-config.py
 (docs/setup.md)`.** The config has something the generators don't write: a
 `DNS`, `PreUp`, `PostDown`, `SaveConfig` or `FwMark` line, a `Table` other
-than `off`, hooks for another table, a second address in a family, and so
-on. `<reason>` names the line number (and the field, when it is one
-Molebridge accepts), never the line's text; [the
+than `off`, hooks for another table, a second address in a family, a field
+name in another case such as `address` for `Address`, and so on.
+`<reason>` names the line number (and the field, when it is one Molebridge
+accepts), never the line's text; [the
 tunnel config](configuration.md#the-tunnel-config) lists every reason and
 what is accepted. Regenerate the config with the command the message names
 (for NordVPN and PIA, move the old file aside first: neither tool

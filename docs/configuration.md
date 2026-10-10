@@ -277,7 +277,9 @@ container, at most 4 KiB, with no NUL bytes and no carriage returns (so no
 Windows line endings). Each line is blank, a comment starting with `#`, a
 section header written exactly `[Interface]` or `[Peer]`, or `Field = value`
 with a field from this table. Use the field names exactly as shown; each
-may appear once.
+may appear once. Case matters: `wg-quick` would read `address` or
+`ADDRESS` as `Address`, but the container refuses any spelling but the one
+in the table with `unsupported field on line <n>`.
 
 | Field | Rule |
 |---|---|

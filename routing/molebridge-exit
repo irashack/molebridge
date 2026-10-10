@@ -117,11 +117,14 @@ BEGIN {
     keyre = "^"
     for (i = 0; i < 42; i++) keyre = keyre "[A-Za-z0-9+/]"
     keyre = keyre "[AEIMQUYcgkosw048]=$"
-    # Field names as printed in messages, by lowercase key, and their section.
+    # The fields, spelled exactly as the generators write them, and their
+    # section. wg-quick and wg read field names in any case, but
+    # 10-exit-routing reads Address as spelled here, so any other spelling is
+    # an unsupported field.
     split("PrivateKey Address MTU Table PostUp PreDown", f, " ")
-    for (i in f) { name[tolower(f[i])] = f[i]; section_of[tolower(f[i])] = "interface" }
+    for (i in f) section_of[f[i]] = "interface"
     split("PublicKey Endpoint AllowedIPs PersistentKeepalive", f, " ")
-    for (i in f) { name[tolower(f[i])] = f[i]; section_of[tolower(f[i])] = "peer" }
+    for (i in f) section_of[f[i]] = "peer"
     section = ""
 }
 {
@@ -138,9 +141,9 @@ BEGIN {
         next
     }
     eq = index(line, "=")
-    k = tolower(trim(substr(line, 1, eq - 1)))
-    if (!eq || !(k in name) || section_of[k] != section) { say("unsupported field on line " NR); next }
-    if (k in seen) { say(name[k] " appears more than once"); next }
+    k = trim(substr(line, 1, eq - 1))
+    if (!eq || !(k in section_of) || section_of[k] != section) { say("unsupported field on line " NR); next }
+    if (k in seen) { say(k " appears more than once"); next }
     seen[k] = NR
     value[k] = trim(substr(line, eq + 1))
 }
@@ -150,50 +153,50 @@ END {
     want_peer = provider == "mullvad"
     if (peers && !want_peer) { print "[Peer] is not supported for this provider"; exit 1 }
     if (!peers && want_peer) { print "[Peer] is missing"; exit 1 }
-    split("privatekey mtu table postup predown", req, " ")
-    for (i = 1; i <= 5; i++) if (!(req[i] in seen)) { print name[req[i]] " is missing"; exit 1 }
-    if (provider != "pia" && !("address" in seen)) { print "Address is missing"; exit 1 }
-    if (provider == "pia" && ("address" in seen)) { print "Address on line " seen["address"] " is not supported for PIA"; exit 1 }
+    split("PrivateKey MTU Table PostUp PreDown", req, " ")
+    for (i = 1; i <= 5; i++) if (!(req[i] in seen)) { print req[i] " is missing"; exit 1 }
+    if (provider != "pia" && !("Address" in seen)) { print "Address is missing"; exit 1 }
+    if (provider == "pia" && ("Address" in seen)) { print "Address on line " seen["Address"] " is not supported for PIA"; exit 1 }
     if (want_peer) {
-        split("publickey endpoint allowedips", req, " ")
-        for (i = 1; i <= 3; i++) if (!(req[i] in seen)) { print name[req[i]] " is missing"; exit 1 }
+        split("PublicKey Endpoint AllowedIPs", req, " ")
+        for (i = 1; i <= 3; i++) if (!(req[i] in seen)) { print req[i] " is missing"; exit 1 }
     }
-    if (!key(value["privatekey"])) { print "PrivateKey on line " seen["privatekey"] " is not valid"; exit 1 }
+    if (!key(value["PrivateKey"])) { print "PrivateKey on line " seen["PrivateKey"] " is not valid"; exit 1 }
     a4 = "-"; a6 = "-"
-    if ("address" in seen) {
-        n = split(value["address"], parts, ",")
+    if ("Address" in seen) {
+        n = split(value["Address"], parts, ",")
         for (i = 1; i <= n; i++) {
             a = trim(parts[i]); p = ""
             if (index(a, "/")) { p = substr(a, index(a, "/") + 1); a = substr(a, 1, index(a, "/") - 1) }
             if (v4(a) && (p == "" || p == "32") && a4 == "-") a4 = a
             else if (v6(a) && (p == "" || p == "128") && a6 == "-") a6 = a
-            else { print "Address on line " seen["address"] " is not valid"; exit 1 }
+            else { print "Address on line " seen["Address"] " is not valid"; exit 1 }
         }
-        if (a4 == "-" || (a6 != "-" && provider != "mullvad")) { print "Address on line " seen["address"] " is not valid"; exit 1 }
+        if (a4 == "-" || (a6 != "-" && provider != "mullvad")) { print "Address on line " seen["Address"] " is not valid"; exit 1 }
     }
-    if (!number(value["mtu"], 1280, 1500)) { print "MTU on line " seen["mtu"] " is not valid"; exit 1 }
-    if (value["table"] != "off") { print "Table on line " seen["table"] " is not valid"; exit 1 }
+    if (!number(value["MTU"], 1280, 1500)) { print "MTU on line " seen["MTU"] " is not valid"; exit 1 }
+    if (value["Table"] != "off") { print "Table on line " seen["Table"] " is not valid"; exit 1 }
     up = "ip route replace default dev %i table " table
     down = "ip route del default dev %i table " table
     if (a6 != "-") {
         up = up "; ip -6 route replace default dev %i table " table
         down = down "; ip -6 route del default dev %i table " table
     }
-    if (value["postup"] != up) { print "PostUp on line " seen["postup"] " is not valid"; exit 1 }
-    if (value["predown"] != down) { print "PreDown on line " seen["predown"] " is not valid"; exit 1 }
+    if (value["PostUp"] != up) { print "PostUp on line " seen["PostUp"] " is not valid"; exit 1 }
+    if (value["PreDown"] != down) { print "PreDown on line " seen["PreDown"] " is not valid"; exit 1 }
     if (want_peer) {
-        if (!key(value["publickey"])) { print "PublicKey on line " seen["publickey"] " is not valid"; exit 1 }
-        e = value["endpoint"]
+        if (!key(value["PublicKey"])) { print "PublicKey on line " seen["PublicKey"] " is not valid"; exit 1 }
+        e = value["Endpoint"]
         c = index(e, ":")
         if (!c || !v4(substr(e, 1, c - 1)) || !number(substr(e, c + 1), 1, 65535)) {
-            print "Endpoint on line " seen["endpoint"] " is not valid"; exit 1
+            print "Endpoint on line " seen["Endpoint"] " is not valid"; exit 1
         }
-        n = split(value["allowedips"], parts, ",")
+        n = split(value["AllowedIPs"], parts, ",")
         got = ""
         for (i = 1; i <= n; i++) got = got (i > 1 ? "," : "") trim(parts[i])
-        if (got != (a6 != "-" ? "0.0.0.0/0,::/0" : "0.0.0.0/0")) { print "AllowedIPs on line " seen["allowedips"] " is not valid"; exit 1 }
-        if (("persistentkeepalive" in seen) && !number(value["persistentkeepalive"], 1, 65535)) {
-            print "PersistentKeepalive on line " seen["persistentkeepalive"] " is not valid"; exit 1
+        if (got != (a6 != "-" ? "0.0.0.0/0,::/0" : "0.0.0.0/0")) { print "AllowedIPs on line " seen["AllowedIPs"] " is not valid"; exit 1 }
+        if (("PersistentKeepalive" in seen) && !number(value["PersistentKeepalive"], 1, 65535)) {
+            print "PersistentKeepalive on line " seen["PersistentKeepalive"] " is not valid"; exit 1
         }
     }
     print "ok " a4 " " a6

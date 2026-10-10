@@ -272,7 +272,8 @@ class Host:
                 raise CheckError('Tunnel configuration must use Table = off.')
             if not spec.address_before_switch:
                 # PIA assigns the address per registration; the config has none.
-                if re.search(r'^\s*Address\s*=', text, re.M) or re.search(r'^\s*\[Peer\]', text, re.M):
+                # Any spelling counts: wg-quick reads field names in any case.
+                if re.search(r'^\s*Address\s*=', text, re.M | re.I) or re.search(r'^\s*\[Peer\]', text, re.M | re.I):
                     raise CheckError(f'A {spec.label} tunnel configuration has no Address or Peer; regenerate it with --pia.')
                 families = set()
             else:
