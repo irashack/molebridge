@@ -172,5 +172,9 @@ def configured_server(result):
     if isinstance(result, dict):
         value = result.get('configured_server')
         if isinstance(value, str) and value:
-            return value
+            # A malformed name (a lone surrogate, a control character) keeps
+            # the lock but is shown escaped, so rendering it can't fail.
+            value = value.encode('utf-8', 'backslashreplace').decode('utf-8')
+            value = ''.join(c if c.isprintable() else f'\\x{ord(c):02x}' for c in value)
+            return value[:256]
     return None

@@ -122,7 +122,7 @@ def test_invalid_configured_text_escaped_and_not_reported_connected():
     res = result(configured_server=configured, status='failed')
     page = app.render_index_html(desire(), res, None, None, None, 'token')
     assert '<script>bad</script>' not in page
-    assert html.escape(configured) in page
+    assert html.escape(configured.replace('\n', '\\x0a')) in page
     assert 'action="/select"' not in page
     assert status_view(desire(), res) == ('failed', 'failed')
 
@@ -149,3 +149,12 @@ def test_configuration_lock_is_per_exit(tmp_path, monkeypatch):
     assert h._send_body.call_args.args[0] == 303
     assert app.read_json(writable.desired_path)['server'] == 'se-sto-wg-001'
     assert not configured.desired_path.exists()
+
+
+@pytest.mark.parametrize('bad', ['\ud800', 'bad\x00name', 'x' * 5000])
+def test_malformed_configured_server_keeps_the_lock_and_renders(bad, tmp_path):
+    ex = app.Exit.under('', PROVIDERS[0], 'Example', tmp_path)
+    page = app.render_index_html(desire(), result(configured_server=bad), None, None, None,
+                                 'token', exit=ex, embed=False)
+    page.encode('utf-8')
+    assert 'Set in configuration:' in page and 'id="select-form"' not in page
