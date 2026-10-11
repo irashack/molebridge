@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.7.0 (unreleased)
+## 0.7.0 (2026-10-11)
 
 One status record, one judgment of it, and one way to change servers; and
 an experimental second exit kind, the **gluetun sidecar**. Upgrade
