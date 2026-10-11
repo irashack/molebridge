@@ -280,11 +280,23 @@ def test_a_new_owner_generation_reapplies_once_at_once(tmp_path, monkeypatch):
     live_owner(tmp_path, monkeypatch, generation='0b0b')
     app.owner_seen = None
     assert app.tick()['status'] == 'ok' and len(adds(kernel)) == 2
-    # The same generation again: no second exception, the drift timer applies.
+    # A failure backing off: no peer in the same generation waits for the
+    # backoff; a new generation is re-applied once at once.
     kernel.now += REAPPLY_GUARD_SEC
-    kernel.keys = []
+    kernel.fail_set = True
+    kernel.keys = [OTHER_KEY]
+    write_json_atomic(app.desired_path, request(request_id='9' * 32))
     app.tick()
-    assert len(adds(kernel)) == 2
+    assert app.attempt.state == 'failed'
+    kernel.fail_set = False
+    kernel.keys = []
+    app.attempt.next_action_at = kernel.now + 900  # a late backoff step
+    kernel.now += REAPPLY_GUARD_SEC
+    app.tick()
+    assert app.attempt.state == 'failed'
+    live_owner(tmp_path, monkeypatch, generation='0c0c')
+    app.owner_seen = None
+    assert app.tick()['status'] == 'ok' and app.attempt.state == 'idle'
 
 
 def test_a_new_owner_generation_still_respects_the_guard(tmp_path, monkeypatch):
@@ -301,6 +313,17 @@ def test_a_new_owner_generation_still_respects_the_guard(tmp_path, monkeypatch):
     kernel.now += 10
     app.tick()
     assert len(adds(kernel)) == 1
+
+
+def test_no_native_peer_while_idle_is_applied_at_once(setup):
+    """The exit's routing loop recreated a lost tunnel from its config,
+    which (NordVPN, PIA) has no peer."""
+    app, kernel, _ = setup
+    write_json_atomic(app.desired_path, request())
+    app.tick()
+    kernel.now += REAPPLY_GUARD_SEC
+    kernel.keys = []
+    assert app.tick()['status'] == 'ok' and kernel.keys == [KEY] and len(adds(kernel)) == 2
 
 
 def test_no_peer_after_a_failed_mutation_waits_for_the_backoff(setup):
@@ -451,3 +474,16 @@ def test_a_request_arriving_during_verification_is_not_judged_by_the_old_one(set
     app.tick()
     # Verified, but the operator has already asked for another server.
     assert pushed == []
+
+
+def test_the_overlay_health_check_leaves_a_missing_peer_to_the_pipeline(setup):
+    """A lost tunnel comes back without its peer; killing the applier for
+    that (HealthOnFailure=kill on the homelab) would only delay the repair."""
+    app, kernel, _ = setup
+    write_json_atomic(app.desired_path, request())
+    app.tick()
+    kernel.keys = []
+    assert app.healthy()
+    kernel.tunnel_present = False
+    with pytest.raises(RuntimeError):
+        app.healthy()
