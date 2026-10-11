@@ -137,33 +137,15 @@ def request_token(request):
     return request.get('request_id') or f"{request['server']}@{request['requested_at']}"
 
 
-def status_view(desired, result, provider='mullvad'):
-    """One interpretation for HTML, API, monitoring and browser polling."""
-    desired = desired if isinstance(desired, dict) else {}
-    result = result if isinstance(result, dict) else {}
-    if configured_server(result) is not None:
-        desired = {}
-    if not recent(result.get('checked_at')):
-        return 'unknown', 'status stale' if result else 'awaiting status'
-    request = desired_request(desired, provider)
-    if request and result.get('request_id') != request_token(request):
-        if recent(desired.get('requested_at')):
-            return 'applying', 'switching'
-        return 'unknown', 'request not acknowledged'
-    status = result.get('status')
-    if status == 'ok':
-        # Results written before the NetBird mode check have no such field.
-        if (result.get('routing_ok') is not True or egress_tier(result, provider) is None
-                or result.get('netbird_native', True) is not True
-                or (configured_server(result) is not None
-                    and result.get('server') != configured_server(result))):
-            return 'failed', 'verification failed'
-        return 'ok', 'connected'
-    if status == 'applying':
-        return 'applying', 'switching'
-    if status == 'failed':
-        return 'failed', 'failed'
-    return 'unknown', 'unknown'
+def status_view(desired, result, provider='mullvad', kind='overlay'):
+    """(state, label) for an exit, as molebridge/verdict.py judges it."""
+    from molebridge.verdict import ExitConfig, Target, assess
+    try:
+        exit_config = ExitConfig(provider, kind)
+    except ValueError:
+        return 'unknown', 'unknown provider'
+    verdict = assess(exit_config, result, Target.for_panel(result, desired, provider))
+    return verdict.state, verdict.label
 
 
 def configured_server(result):

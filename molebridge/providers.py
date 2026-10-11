@@ -84,6 +84,10 @@ class Provider:
     # A provider whose colour the panel uses as the accent on that style
     # (its CSS data-accent), as gluetun's entries do; empty for none.
     accent: str = ''
+    # The provider can forget a registration while the peer stays the same
+    # (PIA): a handshake stale for 180 s or more then re-registers the same
+    # server through the admission pipeline (decision D15).
+    registration_lapses: bool = False
 
     @property
     def css_id(self):
@@ -111,7 +115,7 @@ REGISTRY: Dict[str, Provider] = {p.id: p for p in (
         validate_entry=pia.validate_pia_entry, applier='applier.pia:PiaApplier',
         address_before_switch=False, egress_tier='provider', ipv6=False,
         secret_files=('secrets/pia/username', 'secrets/pia/password'),
-        layout='regions', filters={'port_forward': 'Port forwarding'},
+        layout='regions', filters={'port_forward': 'Port forwarding'}, registration_lapses=True,
         badges=(('port_forward', 'PF', 'Port forwarding'), ('geo', 'virtual', 'Virtual location')),
         theme_colors=('#1c1e22', '#f2f4f5'), details=pia.details),
     Provider(

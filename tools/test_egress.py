@@ -131,6 +131,11 @@ def tunnel_provider(monkeypatch):
     return spec
 
 
+def tier(result):
+    egress = result['checks']['egress']
+    return egress['tier'] if egress['state'] == 'pass' else None
+
+
 def ok_result(**changes):
     return {'status': 'ok', 'checked_at': now_iso(), 'routing_ok': True, 'netbird_native': True,
             'server': HOST, 'exit_confirmed': False, 'egress_tier': 'tunnel', **changes}
@@ -144,7 +149,7 @@ def test_tunnel_tier_counts_only_for_a_provider_without_its_own_check(tunnel_pro
         assert egress_tier(ok_result(), provider) is None
     assert status_view(None, ok_result(egress_tier=None), 'tunnelvpn') == ('failed', 'verification failed')
     assert status_view(None, ok_result(egress_tier='TUNNEL'), 'tunnelvpn') == ('failed', 'verification failed')
-    assert status_view(None, ok_result(), 'examplevpn') == ('failed', 'verification failed')
+    assert status_view(None, ok_result(), 'examplevpn') == ('unknown', 'unknown provider')
 
 
 def test_provider_tier_keeps_meaning_provider_confirmed(tunnel_provider):
@@ -215,7 +220,7 @@ def test_tunnel_checks_connect_a_provider_without_its_own_check(tunnel_runtime):
     app, kernel = tunnel_runtime
     result = app.inspect()
     assert result['status'] == 'ok' and result['server'] == HOST
-    assert result['exit_confirmed'] is False and result['egress_tier'] == 'tunnel'
+    assert tier(result) == 'tunnel'
     assert result['egress_ip'] == TUNNEL_IP and result['egress_ips'] == {'4': TUNNEL_IP, '6': TUNNEL_IP6}
     assert status_view(None, json.loads(app.result_path.read_text()), 'tunnelvpn') == ('ok', 'connected')
     echoes = [c for c in kernel.calls if c[0] == 'curl']
@@ -235,7 +240,7 @@ def test_any_failed_tunnel_check_fails_the_exit(tunnel_runtime, change):
     app, kernel = tunnel_runtime
     change(kernel)
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
     assert result['message'] in ('Tunnel egress did not pass the tunnel checks.',
                                  'Tunnel inspection or egress check failed.',
                                  'Tunnel handshake is missing or stale; check the account and connectivity.')
@@ -245,7 +250,7 @@ def test_a_host_shown_to_have_no_ipv6_of_its_own_still_verifies(tunnel_runtime):
     app, kernel = tunnel_runtime
     kernel.echo_down.add((6, False))
     kernel.host_routes6, kernel.host_links6 = list(NO_HOST_ROUTES6), []
-    assert app.inspect()['egress_tier'] == 'tunnel'
+    assert tier(app.inspect()) == 'tunnel'
 
 
 @pytest.mark.parametrize('evidence', [
@@ -260,7 +265,7 @@ def test_ipv6_on_loopback_or_in_a_policy_table_keeps_the_measurement_required(tu
     kernel.host_routes6 = list(NO_HOST_ROUTES6) + evidence.get('routes', [])
     kernel.host_links6 = evidence.get('links', [])
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
 
 
 @pytest.mark.parametrize('failure', ['down', 'malformed'])
@@ -278,7 +283,7 @@ def test_a_failed_ipv6_measurement_is_unverified_without_evidence(tunnel_runtime
     else:
         kernel.host_routes6 = 'not a list'
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
     # No usable measurement is no answer: asked once more, then the check fails.
     assert result['message'] == 'Tunnel inspection or egress check failed.'
     assert kernel.now == EGRESS_RETRY_SEC
@@ -290,7 +295,7 @@ def test_a_host_measurement_that_fails_once_is_asked_once_more(tunnel_runtime):
     off_tunnel = lambda args: args[0] == 'curl' and args[-1] in ALL_ECHO_URLS and '--interface' not in args
     calls = unanswered(app, kernel, off_tunnel)
     result = app.inspect()
-    assert result['status'] == 'ok' and result['egress_tier'] == 'tunnel'
+    assert result['status'] == 'ok' and tier(result) == 'tunnel'
     assert kernel.now == 10 + EGRESS_RETRY_SEC and len(calls) == 3  # IPv4 twice, then IPv6
 
 
@@ -345,7 +350,7 @@ def test_a_failed_ipv4_measurement_is_unverified_even_without_ipv6(tunnel_runtim
     kernel.echo_down.add((4, False))
     kernel.host_routes6, kernel.host_links6 = [], []
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
 
 
 def test_catalogue_exit_addresses_must_match(tmp_path, tunnel_runtime):
@@ -360,14 +365,14 @@ def test_unknown_peer_is_never_tunnel_verified(tunnel_runtime):
     app, kernel = tunnel_runtime
     kernel.keys = ['AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=']
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
 
 
 def test_a_switch_completes_on_the_tunnel_tier(tunnel_runtime):
     app, kernel = tunnel_runtime
     kernel.keys = ['AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=']
     result = app.switch(request())
-    assert result['status'] == 'ok' and result['egress_tier'] == 'tunnel' and kernel.keys == [KEY]
+    assert result['status'] == 'ok' and tier(result) == 'tunnel' and kernel.keys == [KEY]
 
 
 def test_provider_tier_results_carry_the_tier(tmp_path):
@@ -375,11 +380,11 @@ def test_provider_tier_results_carry_the_tier(tmp_path):
     kernel = Kernel()
     app = Applier(tmp_path, CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep)
     result = app.inspect()
-    assert result['status'] == 'ok' and result['exit_confirmed'] is True and result['egress_tier'] == 'provider'
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     kernel.probe = {**kernel.probe, 'mullvad_exit_ip': False}
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
     assert result['message'] == 'Tunnel egress is not confirmed as Mullvad.'
     assert not any(c[-1] in ALL_ECHO_URLS for c in kernel.calls)
     kernel.egress_ok = False
-    assert app.publish('unknown', 'x')['egress_tier'] is None
+    assert app.publish('unknown', 'x')['checks']['egress']['state'] == 'unknown'

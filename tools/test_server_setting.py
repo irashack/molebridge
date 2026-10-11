@@ -113,67 +113,87 @@ def test_bad_configuration_has_quoted_failure_and_no_fallback(tmp_path, provider
 @pytest.mark.parametrize('provider', [p.removeprefix('gluetun-') for p in NAMES if p.startswith('gluetun-') and p != 'gluetun-surfshark'])
 def test_gluetun_restore_and_request_use_server_not_saved_or_panel(tmp_path, monkeypatch, provider):
     app, kernel, control = gluetun_make(tmp_path, provider, server=HOST_B)
+    app.update_threshold = None
     app.save_selection(desired=HOST_C, last_put=HOST_A, last_successful=HOST_C)
     write_json_atomic(app.desired_path, request(HOST_C))
-    import applier.gluetun_applier as module
+    import applier.apply as module
     original = module.read_json
     def read(path, *args):
         assert path != app.desired_path
         return original(path, *args)
     monkeypatch.setattr(module, 'read_json', read)
-    assert app.restore() == HOST_B
-    assert control.puts == [HOST_B]
-    # Let gluetun complete its fake reconnect, then use the normal request path.
-    app.update_threshold = None
     result = app.tick()
+    assert control.puts == [HOST_B]
     assert result['status'] == 'ok', result['message']
-    assert result['server'] == HOST_B
+    assert result['server'] == HOST_B and result['selection']['source'] == 'configured'
     kernel.tunnel = HOST_A
     kernel.now += 91
-    assert app.restore() == HOST_B
-    assert control.puts[-1] == HOST_B
+    app.tick()
+    assert control.puts[-1] == HOST_B and len(control.puts) == 2
 
 
 def test_configuration_retries_failed_apply_and_reconverges(tmp_path):
     app, kernel = native(tmp_path, 'mullvad', HOST)
+    kernel.keys = []
     kernel.fail_set = True
     failed = app.tick()
     assert failed['status'] == 'failed'
-    assert 'configured SERVER will retry automatically.' in failed['message']
+    assert failed['message'] == 'Peer update failed; retrying automatically.'
+    assert failed['selection']['source'] == 'configured' and failed['selection']['next_action'] == 'reapply'
     kernel.fail_set = False
     kernel.now += REFRESH_SEC
     assert app.tick()['status'] == 'ok'
-    # A recreated interface has no peer; the configuration remains authoritative.
+    # A recreated interface has no peer; the configuration remains
+    # authoritative and is applied again once that has lasted.
     kernel.keys = []
-    assert app.tick()['status'] == 'ok'
+    kernel.now += 1
+    app.tick()
+    kernel.now += 90
+    assert app.tick()['status'] == 'ok' and kernel.keys == [ENTRY['public_key']]
 
 
 def test_configuration_waits_for_fresh_catalogue_then_validates(tmp_path):
     app, kernel = native(tmp_path, 'mullvad', HOST)
+    kernel.keys = []
     app.catalog.snapshot['fetched_at'] = '2000-01-01T00:00:00Z'
     result = app.tick()
     assert result['status'] == 'failed'
-    assert app.pending and not kernel.mutations
+    assert app.attempt.state == 'pending' and not kernel.mutations
     app.catalog.snapshot['fetched_at'] = now_iso()
     assert app.tick()['status'] == 'ok'
 
 
-@pytest.mark.parametrize('status,reported,actual,expected', [
-    ('ok', HOST, HOST, 0), ('failed', HOST, HOST, 1),
-    ('ok', None, HOST, 1), ('ok', HOST, 'zz-zzz-wg-999', 1),
-    ('failed', '--bad', HOST, 1), ('failed', 'zz-zzz-wg-999', HOST, 1),
+@pytest.mark.parametrize('status,reported,actual,verified', [
+    ('ok', HOST, HOST, True), ('failed', HOST, HOST, False),
+    # The local SERVER is authoritative even when the record omits it.
+    ('ok', None, HOST, True), ('ok', HOST, 'zz-zzz-wg-999', False),
+    ('failed', '--bad', HOST, False), ('failed', 'zz-zzz-wg-999', HOST, False),
 ])
-def test_configured_health_requires_success_on_server(tmp_path, monkeypatch, status, reported, actual, expected):
+def test_configured_server_is_the_doctors_question_not_the_health_checks(tmp_path, monkeypatch, status, reported,
+                                                                          actual, verified, capsys):
+    """D5: the container health check is operational; whether the exit is
+    verified on SERVER is the verdict's, which the doctor reports."""
     import applier.apply as module
-    app, kernel = native(tmp_path, 'mullvad', HOST)
-    write_json_atomic(app.result_path, app.publish(status, 'Example status.',
-                      configured_server=reported, server=actual))
     from test_runtime import live_owner
+    app, kernel = native(tmp_path, 'mullvad', HOST)
+    checks = app.blank_checks()
+    for name in checks:
+        if checks[name]['state'] == 'unknown':
+            checks[name] = {'state': 'pass', 'at': now_iso(), 'server': actual}
+    checks['handshake']['age_s'] = 1
+    checks['egress'].update(tier='provider', expected_families=['4'], families={'4': 'pass'})
+    checks['traffic_protection']['from'] = 'routing'
+    app.publish(status, 'Example status.', configured_server=reported, server=actual, checks=checks,
+                egress_ips={'4': '203.0.113.10'})
     live_owner(tmp_path, monkeypatch)
     monkeypatch.setattr(module, 'Applier', lambda *args, **kwargs: app)
-    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
     monkeypatch.setenv('OVERLAY_CIDR', CONFIG.overlay)
-    assert module.main() == expected
+    monkeypatch.setattr(sys, 'argv', ['applier', '--healthcheck'])
+    assert module.main() == 0
+    monkeypatch.setattr(sys, 'argv', ['applier', '--doctor'])
+    assert module.main() == (0 if verified else 1)
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-1].startswith(('PASS ' if verified else 'FAIL ') + 'verified Mullvad egress')
 
 
 def test_configured_inspection_cannot_mark_a_different_server_healthy(tmp_path, monkeypatch):

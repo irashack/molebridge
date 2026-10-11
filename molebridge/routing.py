@@ -38,6 +38,7 @@ NETBIRD_IPTABLES_PREFIX = 'NETBIRD-'
 # default mark base is 0x1BD00 with the low byte left for its offsets
 # (client/net/fwmark.go:17-26).
 BACKENDS = ('wireguard', 'gluetun')
+KINDS = ('overlay', 'sidecar')
 RESERVED_TABLES = {'51820', '7120'}
 DEFAULT_CONTROL_MARK = '0x1bd00'
 # gluetun's WireGuard fwmark, fixed in v3.41.3 (internal/wireguard/settings.go:64-66).
@@ -77,9 +78,25 @@ class RoutingConfig:
     host_if: str = 'eth0'
     host_table: str = '51822'
     control_mark: str = DEFAULT_CONTROL_MARK
+    # 'overlay': a NetBird exit under Molebridge's routing contract.
+    # 'sidecar': an ordinary gluetun other containers share; no contract, no
+    # overlay, no NetBird (docs/gluetun-sidecar.md).
+    kind: str = 'overlay'
 
     @classmethod
     def from_env(cls, env):
+        kind = env.get('EXIT_KIND', '') or 'overlay'
+        if kind not in KINDS:
+            raise ValueError('EXIT_KIND must be overlay or sidecar')
+        backend = env.get('TUNNEL_BACKEND', 'wireguard')
+        if kind == 'sidecar':
+            if backend != 'gluetun':
+                raise ValueError('EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun')
+            exit_if = env.get('EXIT_IF', 'wg0')
+            if not GLUETUN_INTERFACE.fullmatch(exit_if):
+                raise ValueError('with gluetun, EXIT_IF may hold only letters, digits and underscores')
+            # Nothing of the routing contract is configured or read.
+            return cls('', exit_if=exit_if, backend=backend, kind=kind)
         overlay = ipaddress.IPv4Network(env.get('OVERLAY_CIDR', ''), strict=True)
         overlay6 = env.get('OVERLAY6_CIDR', '')
         if overlay.prefixlen == 0:
@@ -119,6 +136,10 @@ class RoutingConfig:
     @property
     def gluetun(self):
         return self.backend == 'gluetun'
+
+    @property
+    def sidecar(self):
+        return self.kind == 'sidecar'
 
 
 def _normalize_prefix(rule, key, family):
@@ -241,62 +262,8 @@ def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_
             rules_ok = False
             continue
         found.add(priority)
-        normalized = dict(rule)
-        if 'table' in normalized:
-            normalized['table'] = _table_name(normalized['table'])
-            if normalized['table'] is None:
-                rules_ok = False
-                continue
-        if 'not' in normalized:
-            # iproute2 prints an inverted rule's flag as `"not": null`.
-            if normalized['not'] not in (None, True):
-                rules_ok = False
-                continue
-            normalized['not'] = True
-        if 'fwmark' in normalized or 'fwmask' in normalized:
-            # iproute2 prints both as hex strings and hides an all-ones mask.
-            try:
-                for key in ('fwmark', 'fwmask'):
-                    value = normalized.get(key, 0xFFFFFFFF)
-                    if type(value) is str:
-                        value = int(value, 16 if value.lower().startswith('0x') else 10)
-                    elif type(value) is not int:
-                        raise ValueError
-                    normalized[key] = value
-            except ValueError:
-                rules_ok = False
-                continue
-            if normalized.pop('fwmask') != 0xFFFFFFFF:
-                rules_ok = False
-                continue
-        if 'suppress_prefixlen' in normalized and type(normalized['suppress_prefixlen']) is not int:
-            rules_ok = False
-            continue
-        if 'ipproto' in normalized:
-            if type(normalized['ipproto']) not in (int, str):
-                rules_ok = False
-                continue
-            protocol = str(normalized['ipproto'])
-            normalized['ipproto'] = PROTOCOL_ALIASES.get(protocol, protocol)
-        try:
-            for key in ('src', 'dst'):
-                if key in normalized and normalized[key] != 'all':
-                    normalized[key] = _normalize_prefix(normalized, key, family)
-        except ValueError:
-            rules_ok = False
-            continue
-        # Reject extra selectors, inversion other than rule 1's, suppressors
-        # and goto actions.
-        metadata = {'priority', 'protocol', 'src', 'dst', 'iif_detached', 'oif_detached'}
-        if set(normalized) - (set(spec) | metadata):
-            rules_ok = False
-        for key in ('src', 'dst'):
-            if normalized.get(key, 'all') != spec.get(key, 'all'):
-                rules_ok = False
-        if any(k not in normalized or normalized[k] != v for k, v in spec.items()):
-            rules_ok = False
-        # iproute2 prints these flags as null, so their presence is what counts.
-        if 'iif_detached' in normalized or 'oif_detached' in normalized:
+        normalized = _normalize_rule(rule, family)
+        if normalized is None or not _rule_matches(normalized, spec):
             rules_ok = False
     rules_ok = rules_ok and found == set(expected)
     fallback = False
@@ -315,6 +282,130 @@ def family_status(rules, routes, config, family, *, tunnel_address=None, tunnel_
             routes_ok = False
     tunnel_ok = tunnel_default or tunnel_address is None or not tunnel_route
     return rules_ok and routes_ok and fallback and tunnel_ok, fallback
+
+
+def _normalize_rule(rule, family):
+    """`ip -j rule show`'s rendering of one rule, in the canonical form the
+    expected rules use, or None when it can't be read."""
+    normalized = dict(rule)
+    if 'table' in normalized:
+        normalized['table'] = _table_name(normalized['table'])
+        if normalized['table'] is None:
+            return None
+    if 'not' in normalized:
+        # iproute2 prints an inverted rule's flag as `"not": null`.
+        if normalized['not'] not in (None, True):
+            return None
+        normalized['not'] = True
+    if 'fwmark' in normalized or 'fwmask' in normalized:
+        # iproute2 prints both as hex strings and hides an all-ones mask.
+        try:
+            for key in ('fwmark', 'fwmask'):
+                value = normalized.get(key, 0xFFFFFFFF)
+                if type(value) is str:
+                    value = int(value, 16 if value.lower().startswith('0x') else 10)
+                elif type(value) is not int:
+                    raise ValueError
+                normalized[key] = value
+        except ValueError:
+            return None
+        if normalized.pop('fwmask') != 0xFFFFFFFF:
+            return None
+    if 'suppress_prefixlen' in normalized and type(normalized['suppress_prefixlen']) is not int:
+        return None
+    if 'ipproto' in normalized:
+        if type(normalized['ipproto']) not in (int, str):
+            return None
+        protocol = str(normalized['ipproto'])
+        normalized['ipproto'] = PROTOCOL_ALIASES.get(protocol, protocol)
+    try:
+        for key in ('src', 'dst'):
+            if key in normalized and normalized[key] != 'all':
+                normalized[key] = _normalize_prefix(normalized, key, family)
+    except ValueError:
+        return None
+    return normalized
+
+
+def _rule_matches(normalized, spec):
+    """True when a normalized rule has exactly the expected selectors and
+    action, and isn't detached."""
+    # Reject extra selectors, inversion other than rule 1's, suppressors and
+    # goto actions.
+    metadata = {'priority', 'protocol', 'src', 'dst', 'iif_detached', 'oif_detached'}
+    if set(normalized) - (set(spec) | metadata):
+        return False
+    for key in ('src', 'dst'):
+        if normalized.get(key, 'all') != spec.get(key, 'all'):
+            return False
+    if any(k not in normalized or normalized[k] != v for k, v in spec.items()):
+        return False
+    # iproute2 prints these flags as null, so their presence is what counts.
+    return 'iif_detached' not in normalized and 'oif_detached' not in normalized
+
+
+def gluetun_transition_status(rules, routes, config, family, *, tunnel_address=None, previous_address=None,
+                              interface_present=True, interface_up=True):
+    """(safe, ready) for one family of the gluetun backend while a switch is
+    being verified.
+
+    A PUT makes gluetun drop and recreate its tunnel interface, and the guard
+    repairs the routing behind it, asynchronously. `ready` is `family_status`
+    itself. `safe` (the protective predicate) is the same validation with
+    exactly these reconnection states tolerated, any other deviation being
+    unsafe:
+    - the exit table's tunnel default route missing (the unreachable fallback
+      must stay, and any other route is still unsafe);
+    - rules 90 and 96, which name the exit interface, in the kernel's detached
+      form while that interface is absent: Linux detaches them when the
+      interface goes. A detached rule while it is present is unsafe;
+    - the address present before its rule 94 is recreated;
+    - rule 94 for the previous address and for the current one at once, as
+      the guard adds before it deletes (routing/10-exit-routing), each at
+      most once and in its exact form. Rule 94 for any other address is
+      unsafe.
+    Rule 98 is gluetun's own here (`family_status`)."""
+    ready, _fallback = family_status(rules, routes, config, family, tunnel_address=tunnel_address,
+                                     tunnel_route=interface_up)
+    if ready:
+        return True, True
+    if not isinstance(rules, list) or not isinstance(routes, list):
+        return False, False
+    adjusted, return_paths = [], []
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get('priority'), int):
+            return False, False
+        if rule['priority'] == 94:
+            return_paths.append(rule)
+            continue
+        if rule['priority'] in (90, 96) and not interface_present:
+            rule = {k: v for k, v in rule.items() if k not in ('iif_detached', 'oif_detached')}
+        adjusted.append(rule)
+    allowed = []
+    for address in (previous_address, tunnel_address):
+        if address is None or address in allowed:
+            continue
+        try:
+            network = ipaddress.ip_network(address, strict=True)
+        except ValueError:
+            return False, False
+        if network.version != family or network.prefixlen != network.max_prefixlen:
+            return False, False
+        allowed.append(address)
+    matched = set()
+    for rule in return_paths:
+        normalized = _normalize_rule(rule, family)
+        found = None
+        for address in allowed:
+            spec = {'src': str(ipaddress.ip_network(address)), 'ipproto': ICMP_PROTOCOL[family],
+                    'table': config.table}
+            if normalized is not None and _rule_matches(normalized, spec):
+                found = address
+        if found is None or found in matched:
+            return False, False
+        matched.add(found)
+    safe, _ = family_status(adjusted, routes, config, family, tunnel_address=None)
+    return safe, False
 
 
 def _host_routes(routes, config):

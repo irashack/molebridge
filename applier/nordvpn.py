@@ -74,7 +74,8 @@ class NordApplier(Applier):
                         '--proto', '=https', '--max-filesize', str(INSIGHTS_MAX_BYTES), '-fsS',
                         '--max-time', '10', NORD_INSIGHTS_URL], timeout=12, limit=INSIGHTS_MAX_BYTES)
         fields = parse_insights(decode_json(raw))
-        return {**fields, 'egress_ips': {'4': fields['egress_ip']}}
+        return {**fields, 'egress_ips': {'4': fields['egress_ip']},
+                'families': {'4': 'pass' if fields['exit_confirmed'] is True else 'fail'}}
 
     def egress_for(self, server, handshake_age):
         relay = self.catalog.relays.get(server) if server else None
@@ -99,15 +100,7 @@ class NordApplier(Applier):
     def egress(self):
         return self.egress_for(None, None)
 
-    def inspect(self, *, applying=False):
-        if not applying and not self.request:
-            try:
-                unselected = not self.peers()
-            except (RuntimeError, ValueError, UnicodeError):
-                unselected = False
-            if unselected:
-                routing_ok, fallback = self.routing_status()
-                return self.publish('failed', 'No NordVPN server is selected yet; choose one in the panel.',
-                                    routing_ok=routing_ok, unreachable_fallback=fallback,
-                                    netbird_native=self.netbird_native())
-        return super().inspect(applying=applying)
+    def no_peer_message(self, keys):
+        if not keys and self.target is None:
+            return 'No NordVPN server is selected yet; choose one in the panel.'
+        return super().no_peer_message(keys)

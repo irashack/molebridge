@@ -24,6 +24,7 @@ from applier.gluetun_applier import (CATALOG_REREAD_SEC, GLUETUN_SWITCH_TIMEOUT_
 from molebridge import gluetun_catalog, providers, relays
 from molebridge.routing import RoutingConfig
 from molebridge.state import now_iso, read_json, status_view, write_json_atomic
+from molebridge.verdict import ExitConfig, Target, assess
 
 CONFIG = RoutingConfig.from_env({'TUNNEL_BACKEND': 'gluetun', 'OVERLAY_CIDR': '192.0.2.0/24',
                                  'OVERLAY6_CIDR': '2001:db8:1::/64', 'EXIT_IF': 'wg0'})
@@ -234,6 +235,11 @@ def request(server=HOST_B, request_id='a' * 32):
     return {'server': server, 'requested_at': now_iso(), 'request_id': request_id}
 
 
+def tier(result):
+    egress = result['checks']['egress']
+    return egress['tier'] if egress['state'] == 'pass' else None
+
+
 def published(applier):
     return read_json(applier.result_path)
 
@@ -302,18 +308,21 @@ def test_switch_puts_the_server_and_waits_out_gluetuns_restart(tmp_path):
         statuses.append(status)
         return real_publish(status, message, **fields)
     applier.publish = record
+    gluetun.restart_ticks = 12
     result = applier.switch(request(HOST_B))
     assert gluetun.puts == [HOST_B]
     assert result['status'] == 'ok' and result['server'] == HOST_B, result
     # The interface going away during the switch was not a failure.
     assert 'failed' not in statuses and statuses.count('applying') >= 2
-    assert result['egress_tier'] == 'tunnel' and result['exit_confirmed'] is False
-    assert applier.selection == {'desired': HOST_B, 'last_put': HOST_B, 'last_successful': HOST_B}
+    assert tier(result) == 'tunnel'
+    assert applier.selection == {'desired': HOST_B, 'last_put': HOST_B, 'last_applied': HOST_B,
+                                 'last_successful': HOST_B}
     assert read_json(tmp_path / 'applier' / 'gluetun-selection.json') == applier.selection
     # The host's own address was measured off the tunnel, with NetBird's control mark.
     assert applier.marked and all(mark == 0x1bd00 for _, _, mark in applier.marked)
-    view = status_view(request(HOST_B) | {'request_id': result['request_id']}, result, 'gluetun-ivpn')
-    assert view == ('ok', 'connected')
+    verdict = assess(ExitConfig('gluetun-ivpn'), result,
+                     Target.for_panel(result, request(HOST_B) | {'request_id': result['request_id']}, 'gluetun-ivpn'))
+    assert (verdict.state, verdict.label) == ('ok', 'connected')
 
 
 def test_a_refused_selection_fails_without_waiting(tmp_path):
@@ -321,7 +330,7 @@ def test_a_refused_selection_fails_without_waiting(tmp_path):
     gluetun.fail = True
     result = applier.switch(request(HOST_B))
     assert result['status'] == 'failed'
-    assert result['message'] == 'gluetun did not accept the server selection; choose a server again to retry.'
+    assert result['message'] == 'gluetun did not accept the server selection; retrying automatically.'
     assert kernel.now == 0
 
 
@@ -330,7 +339,8 @@ def test_a_switch_that_lands_elsewhere_times_out(tmp_path):
     gluetun.connect_to = HOST_C
     result = applier.switch(request(HOST_B))
     assert result['status'] == 'failed'
-    assert result['message'] == 'Switch verification timed out; choose a server again to retry.'
+    assert result['message'] == 'Switch verification timed out; retrying automatically.'
+    assert result['selection']['next_action'] == 'reapply'
     assert kernel.now >= GLUETUN_SWITCH_TIMEOUT_SEC
     assert applier.selection['last_successful'] is None
 
@@ -346,14 +356,14 @@ def test_tunnel_checks_fail_when_the_echo_is_the_hosts_own_address(tmp_path):
     applier, kernel, _ = make(tmp_path)
     kernel.egress = HOST4
     result = applier.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
     assert result['message'] == 'Tunnel egress did not pass the tunnel checks.'
 
 
 def test_mullvad_through_gluetun_uses_mullvads_own_check(tmp_path):
     applier, kernel, _ = make(tmp_path, 'mullvad')
     result = applier.inspect()
-    assert result['status'] == 'ok' and result['egress_tier'] == 'provider' and result['mullvad_exit_ip'] is True
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     assert any('am.i.mullvad.net' in c[-1] for c in kernel.calls if c[0] == 'curl')
     kernel.mullvad_exit = False
     result = applier.inspect()
@@ -363,7 +373,7 @@ def test_mullvad_through_gluetun_uses_mullvads_own_check(tmp_path):
 def test_nordvpn_through_gluetun_uses_nordvpns_own_check(tmp_path):
     applier, kernel, _ = make(tmp_path, 'nordvpn')
     result = applier.inspect()
-    assert result['status'] == 'ok' and result['egress_tier'] == 'provider'
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     assert any(c[-1].endswith('/ips/insights') for c in kernel.calls if c[0] == 'curl')
     assert 'mullvad_exit_ip' not in result
 
@@ -377,7 +387,8 @@ def test_a_missing_guard_rule_holds_the_request(tmp_path, priority):
     assert applier.routing_status()[0] is False
     result = applier.switch(request(HOST_B))
     assert gluetun.puts == [] and result['status'] == 'failed'
-    assert applier.pending.startswith('Waiting for tunnel and overlay routing')
+    assert applier.attempt.state == 'pending'
+    assert applier.attempt.message.startswith('Waiting for tunnel and overlay routing')
 
 
 def test_the_host_table_is_part_of_the_guard(tmp_path):
@@ -394,7 +405,7 @@ def test_no_tunnel_interface_is_not_a_routing_failure(tmp_path):
     kernel.tunnel = None
     assert applier.routing_status() == (True, True)
     result = applier.inspect()
-    assert result['routing_ok'] is True and result['status'] == 'failed'
+    assert result['checks']['routing']['state'] == 'pass' and result['status'] == 'failed'
 
 
 def test_a_tunnel_without_its_route_is_not_protected(tmp_path):
@@ -415,54 +426,64 @@ def settled(applier, kernel, *, last_put=HOST_B, last_successful=HOST_B, live=HO
 def test_gluetun_on_its_start_up_server_gets_the_last_verified_one_back(tmp_path):
     applier, kernel, gluetun = make(tmp_path)
     settled(applier, kernel)
-    assert applier.restore() == HOST_B and gluetun.puts == [HOST_B]
-    # Not again within a switch timeout, even if the peer has not changed yet.
+    result = applier.tick()
+    assert gluetun.puts == [HOST_B] and result['status'] == 'ok'
+    assert result['selection']['source'] == 'restore'
+    # Not again within the 90 s guard, even if the peer has not changed yet.
     kernel.pending = None
     kernel.tunnel = HOST_A
-    assert applier.restore() is None and gluetun.puts == [HOST_B]
+    applier.tick()
+    assert gluetun.puts == [HOST_B]
     kernel.now += GLUETUN_SWITCH_TIMEOUT_SEC
-    assert applier.restore() == HOST_B
+    result = applier.tick()
+    assert gluetun.puts == [HOST_B, HOST_B] and result['selection']['source'] == 'reconverge'
 
 
-def test_no_restore_while_gluetun_runs_what_was_last_put(tmp_path):
+def test_no_restore_while_the_panels_request_is_live(tmp_path):
     applier, kernel, gluetun = make(tmp_path)
     settled(applier, kernel, last_put=HOST_C, last_successful=HOST_B, live=HOST_C)
-    assert applier.restore() is None and gluetun.puts == []
+    applier.attempt.target_key = request(HOST_C)['request_id']
+    applier.attempt.target, applier.attempt.source = HOST_C, 'panel'
+    write_json_atomic(applier.desired_path, request(HOST_C))
+    applier.tick()
+    assert gluetun.puts == []
 
 
 def test_no_restore_when_the_live_server_is_unknown(tmp_path):
     applier, kernel, gluetun = make(tmp_path)
     settled(applier, kernel)
     kernel.tunnel = None
-    assert applier.restore() is None and gluetun.puts == []
+    applier.tick()
+    assert gluetun.puts == [] and applier.attempt.state == 'pending'
 
 
 def test_the_panels_request_takes_precedence(tmp_path):
     applier, kernel, gluetun = make(tmp_path)
     settled(applier, kernel)
     write_json_atomic(applier.desired_path, request(HOST_C))
-    # Not yet handled: the request path applies it.
-    assert applier.restore() is None
     applier.tick()
     assert gluetun.puts == [HOST_C]
     assert applier.selection['last_successful'] == HOST_C
-    # Handled and verified, then gluetun restarts: the request path puts it again.
+    # Verified, then gluetun restarts: the pipeline puts it again.
     kernel.tunnel = HOST_A
     kernel.now += GLUETUN_SWITCH_TIMEOUT_SEC
-    assert applier.restore() is None
     applier.tick()
     assert gluetun.puts == [HOST_C, HOST_C]
 
 
 def test_a_refused_request_falls_back_to_the_last_verified_server_after_a_restart(tmp_path):
+    """D12: a rejected panel request never becomes the target; the last
+    verified server is still restored, and the rejection stays shown."""
     applier, kernel, gluetun = make(tmp_path)
     settled(applier, kernel, live=HOST_B)
     write_json_atomic(applier.desired_path, request('four.example.test'))
     applier.tick()
-    assert applier.rejection and gluetun.puts == []
+    assert applier.request_rejected() and gluetun.puts == []
     kernel.tunnel = HOST_A
-    applier.tick()
+    result = applier.tick()
     assert gluetun.puts == [HOST_B]
+    assert result['status'] == 'failed' and result['selection']['outcome'] == 'rejected'
+    assert result['message'].startswith('Requested server is not in a fresh')
 
 
 # Doctor and setup ----------------------------------------------------------
@@ -805,7 +826,7 @@ def test_every_check_through_gluetun_is_asked_once_more_when_unanswered(tmp_path
     calls = unanswered(applier, kernel, lambda args: args[0] == 'curl' and check(args[-1]))
     start = kernel.now
     result = applier.inspect()
-    assert result['status'] == 'ok' and result['egress_tier'] in ('provider', 'tunnel')
+    assert result['status'] == 'ok' and tier(result) in ('provider', 'tunnel')
     assert kernel.now - start == 10 + EGRESS_RETRY_SEC
     # The tunnel tier stops at the first unanswered echo, then asks both services.
     assert len(calls) == (3 if provider == 'ivpn' else 2)

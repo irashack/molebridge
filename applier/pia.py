@@ -27,7 +27,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from applier.apply import HANDSHAKE_FRESH_SEC, Applier, command
+from applier.apply import Applier, CredentialRejected, command
 from molebridge.relays import PIA_CN_RE, RelayCatalog, valid_ipv4, valid_key
 from molebridge.routing import PROTOCOL_ALIASES
 from molebridge.state import decode_json, now_iso, read_json, write_json_atomic
@@ -40,8 +40,6 @@ ADDKEY_PORT = 1337
 FORWARD_API_PORT = 19999
 # PIA tokens last 24 hours; mint a new one well before that.
 TOKEN_MAX_AGE_SEC = 12 * 60 * 60
-# A stale handshake re-registers the same region at most this often.
-REREGISTER_SEC = 5 * 60
 # PIA drops a forwarded port that is not re-bound within 15 minutes.
 BIND_INTERVAL_SEC = 10 * 60
 FORWARD_RETRY_SEC = 60
@@ -117,7 +115,6 @@ class PiaApplier(Applier):
         self.choose = choose
         self.token = None
         self.token_at = None
-        self.last_attempt = None
         self.last_result = None
         self.forward = None
         self.forward_error = None
@@ -163,13 +160,27 @@ class PiaApplier(Applier):
         return data
 
     def pia_token(self):
+        """A token minted from the account login, reused for
+        TOKEN_MAX_AGE_SEC. A login PIA refuses (HTTP 401 or 403) is a
+        definite credential rejection: CredentialRejected. Any other failure
+        is uncertain and retried."""
         if self.token and self.token_at is not None and self.clock() - self.token_at < TOKEN_MAX_AGE_SEC:
             return self.token
         username = read_secret(self.secrets_dir / 'username')
         password = read_secret(self.secrets_dir / 'password')
         with scratch(username, password) as (user_file, password_file):
-            data = self.curl('--form', f'username=<{user_file}', '--form', f'password=<{password_file}',
-                             PIA_TOKEN_URL)
+            raw = self.run(['curl', '--noproxy', '*', '--proto', '=https', '-sS', '--max-time', '15',
+                            '--max-filesize', '16384', '--write-out', '\n%{http_code}',
+                            '--form', f'username=<{user_file}', '--form', f'password=<{password_file}',
+                            PIA_TOKEN_URL], timeout=17, limit=16400)
+        body, _, code = raw.rpartition('\n')
+        if code in ('401', '403'):
+            raise CredentialRejected('PIA refused the login')
+        if code != '200':
+            raise RuntimeError('PIA token request failed')
+        data = decode_json(body)
+        if not isinstance(data, dict):
+            raise ValueError('invalid PIA response')
         token = data.get('token')
         if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
             raise ValueError('invalid PIA token response')
@@ -192,20 +203,28 @@ class PiaApplier(Applier):
                          '-G', *encoded, f'https://{cn}:{port}/{path}')
 
     def register(self, region):
-        """Register the interface key on one of the region's servers."""
+        """Register the interface key on one of the region's servers. An
+        expired or revoked token looks like any other refusal, so a refusal
+        with a reused token is asked once more with a freshly minted one."""
         server = self.choose(region['servers'])
         public_key = self.public_key()
-        try:
-            with scratch(self.pia_token()) as (token_file,):
-                data = self.pinned(server['cn'], server['ip'], ADDKEY_PORT, 'addKey',
-                                   f'pt@{token_file}', f'pubkey={public_key}')
-            port = data.get('server_port')
-            if data.get('status') != 'OK' or not valid_key(data.get('server_key')):
-                raise ValueError('PIA refused the key registration')
-        except (RuntimeError, ValueError):
-            # An expired or revoked token looks like any other refusal.
-            self.token = None
-            raise
+        for attempt in range(2):
+            reused = self.token is not None
+            try:
+                with scratch(self.pia_token()) as (token_file,):
+                    data = self.pinned(server['cn'], server['ip'], ADDKEY_PORT, 'addKey',
+                                       f'pt@{token_file}', f'pubkey={public_key}')
+                port = data.get('server_port')
+                if data.get('status') != 'OK' or not valid_key(data.get('server_key')):
+                    raise ValueError('PIA refused the key registration')
+                break
+            except CredentialRejected:
+                self.token = None
+                raise
+            except (RuntimeError, ValueError):
+                self.token = None
+                if attempt or not reused:
+                    raise
         if type(port) is not int or not 0 < port < 65536 or data.get('server_ip') != server['ip']:
             raise ValueError('invalid PIA registration response')
         if 'peer_pubkey' in data and data['peer_pubkey'] != public_key:
@@ -274,7 +293,6 @@ class PiaApplier(Applier):
     def apply_relay(self, relay, keys):
         """Register first, so a refused registration changes nothing. Then
         replace the peer, the tunnel address and its return-path rule."""
-        self.last_attempt = self.clock()
         registration = self.register(relay)
         exit_if, table = self.config.exit_if, self.config.table
         for key in keys:
@@ -337,23 +355,33 @@ class PiaApplier(Applier):
         if type(data.get('connected')) is not bool or not valid_ipv4(data.get('ip')):
             raise ValueError('invalid egress response')
         return {'egress_ip': data['ip'], 'egress_city': None, 'egress_country': None,
-                'exit_confirmed': data['connected'], 'egress_ips': {'4': data['ip']}}
+                'exit_confirmed': data['connected'], 'egress_ips': {'4': data['ip']},
+                'families': {'4': 'pass' if data['connected'] else 'fail'}}
 
-    def inspect(self, *, applying=False):
-        if not applying and not self.request:
-            try:
-                unregistered = not self.peers()
-            except (RuntimeError, ValueError, UnicodeError):
-                unregistered = False
-            if unregistered:
-                routing_ok, fallback = self.routing_status(require_address=False)
-                self.last_result = self.publish(
-                    'failed', 'No PIA region is registered yet; choose one in the panel.',
-                    routing_ok=False, unreachable_fallback=fallback)
-                return self.last_result
-        result = super().inspect(applying=applying)
+    def no_peer_message(self, keys):
+        if not keys and self.target is None:
+            return 'No PIA region is registered yet; choose one in the panel.'
+        return super().no_peer_message(keys)
+
+    def publish(self, status, message, **fields):
+        result = super().publish(status, message, **fields)
         self.last_result = result
         return result
+
+    def release_signature(self, why):
+        """A refused login waits for the credential files to change (their
+        identity and times, never their content), or for Retry."""
+        if why != 'credentials':
+            return super().release_signature(why)
+        found = []
+        for name in ('username', 'password'):
+            try:
+                info = os.stat(self.secrets_dir / name)
+            except OSError:
+                found.append(None)
+                continue
+            found.append([info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns])
+        return found
 
     def tick(self):
         with contextlib.suppress(RuntimeError, ValueError, UnicodeError):
@@ -370,8 +398,6 @@ class PiaApplier(Applier):
                 self.remove_forward_rules()
                 self.forward_reconciled = True
         result = super().tick()
-        retry = self.retry_registration()
-        result = retry or result
         if self.port_forward:
             if self.guard_installed and self.forward_reconciled:
                 self.maintain_forward()
@@ -381,10 +407,11 @@ class PiaApplier(Applier):
                 self.forward_error = 'Waiting for the ingress guard; port forwarding is not started.'
         return result
 
-    def switch(self, request):
+    def gate(self, target):
+        # Repair first: it is what lets a damaged exit pass the gates.
         with contextlib.suppress(RuntimeError, ValueError, UnicodeError):
             self.reconcile_tunnel()
-        return super().switch(request)
+        return super().gate(target)
 
     def reconcile_tunnel(self):
         """Keep the tunnel's address and its rules 94 and 98 consistent, every
@@ -436,38 +463,13 @@ class PiaApplier(Applier):
             if keep:
                 self.run(self.return_path_rule(priority, keep))
 
-    def retry_registration(self):
-        """Re-register the requested region when its handshake has gone stale
-        (PIA forgets a key after a server restart or long inactivity) or its
-        registration failed. Never another region, and at most every
-        REREGISTER_SEC."""
-        request, last = self.request, self.last_result
-        if not request or self.pending or not isinstance(last, dict) or last.get('status') != 'failed':
-            return None
-        if request['server'] not in self.catalog.relays:
-            return None
-        # Judged as switch() judges it: a tunnel whose first registration
-        # failed (a recreated tunnel while PIA's API was down) has no address
-        # yet, so the result's routing_ok, which requires one, would keep it
-        # unregistered for good.
-        if not self.routing_status(require_address=self.address_before_switch)[0]:
-            return None
-        age = last.get('handshake_age_s')
-        if age is not None and age < HANDSHAKE_FRESH_SEC:
-            return None
-        if self.last_attempt is not None and self.clock() - self.last_attempt < REREGISTER_SEC:
-            return None
-        result = self.switch(request)
-        self.push_gatus(result)
-        return result
-
     # -- optional port forwarding ----------------------------------------------
 
     def maintain_forward(self):
         """Keep one forwarded port bound on the current server and pointed at
-        the configured overlay address. Runs only after a healthy check."""
-        last = self.last_result
-        if not isinstance(last, dict) or last.get('status') != 'ok' or self.clock() < self.next_forward:
+        the configured overlay address. Runs only while the verdict on the
+        last published record is ok."""
+        if self.clock() < self.next_forward or self.assess(self.last_result).state != 'ok':
             return
         try:
             current = self.registration()

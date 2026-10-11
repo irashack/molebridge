@@ -18,11 +18,19 @@ tunnel, and this applier selects servers through gluetun's control server.
   including rules 88/89/91/92 and the host table, and egress at the
   provider's tier: Mullvad's and NordVPN's own checks through the tunnel
   where the provider has one, the tunnel checks otherwise.
-- The selection Molebridge last put and the last one verified are kept in
-  state/applier/gluetun-selection.json. gluetun starts from its environment
-  (GLUETUN_SERVER_*), not from what was put at runtime; when the live server
-  is not the one last put, and no pending request of the panel's covers it,
-  the last verified one is put again.
+- The selection Molebridge last put, the last one live after a PUT and the
+  last one verified are kept in state/applier/gluetun-selection.json. gluetun
+  starts from its environment (GLUETUN_SERVER_*), not from what was put at
+  runtime. Without SERVER or an accepted panel request, the last verified
+  server is the target (`restore`), and the admission pipeline puts it back
+  like any other drift (applier/apply.py). A tunnel-tier sidecar is never
+  verified, so it restores the last one live after a PUT.
+- While a switch is verified, gluetun's reconnection states withhold
+  readiness without aborting it; anything else the protective predicate
+  refuses does (`molebridge.routing.gluetun_transition_status`).
+- With EXIT_KIND=sidecar there is no routing contract and no NetBird:
+  traffic protection is gluetun's firewall, and which containers use the
+  tunnel is the host doctor's check (tools/molebridge.py).
 
 The API key (GLUETUN_API_KEY_FILE, mode 0600) is full gluetun
 administration; only this container mounts it. gluetun's control server
@@ -43,15 +51,15 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from applier.apply import Applier, command
+from applier.apply import ROUTING_FAILED, NETBIRD_MODE_FAILED, Applier, Selection, command
 from applier.gluetun import GluetunClient
 from applier.nordvpn import NordApplier
 from molebridge import gluetun_catalog, providers
-from molebridge.egress import ECHO_MAX_BYTES, parse_echo
+from molebridge.egress import ECHO_MAX_BYTES, ECHO_URLS, parse_echo
 from molebridge.relays import RelayCatalog, snapshot_limit
-from molebridge.routing import (RETURN_PATH_SYSCTL, control_mark_value, family_status, host_table_status,
-                                return_path_enabled)
-from molebridge.state import decode_json, desired_request, now_iso, read_json, request_token, write_json_atomic
+from molebridge.routing import (RETURN_PATH_SYSCTL, control_mark_value, family_status, gluetun_transition_status,
+                                host_table_status, return_path_enabled)
+from molebridge.state import decode_json, now_iso, read_json, write_json_atomic
 
 DEFAULT_CONTROL_URL = 'http://127.0.0.1:8000'
 DEFAULT_API_KEY_FILE = '/run/secrets/gluetun/api_key'
@@ -91,7 +99,10 @@ def updater_period(value):
     return hours * 3600 + minutes * 60 + seconds
 # Linux's SO_MARK; Python names it only where the platform has it.
 SO_MARK = getattr(socket, 'SO_MARK', 36)
-SELECTION_KEYS = ('desired', 'last_put', 'last_successful')
+SELECTION_KEYS = ('desired', 'last_put', 'last_applied', 'last_successful')
+# A snapshot taken while gluetun's interface changes underneath is taken
+# again, at most this many times; meanwhile the exit isn't ready.
+TRANSITION_SAMPLES = 3
 
 
 def iso(timestamp):
@@ -265,6 +276,7 @@ def marked_echo(url, family, mark, *, timeout=10):
 class GluetunApplier(Applier):
     """One subclass per registry entry (below) sets `provider`."""
     provider = ''
+    switch_timeout = GLUETUN_SWITCH_TIMEOUT_SEC
     # NordVPN's typed egress check, reused as is for gluetun-nordvpn.
     insights = NordApplier.insights
     endpoints = NordApplier.endpoints
@@ -279,10 +291,9 @@ class GluetunApplier(Applier):
         self.fetch_marked = fetch_marked or marked_echo
         self.selection_path = self.directory / 'gluetun-selection.json'
         self.selection = self.load_selection()
-        # The clock time of the last PUT; a restore waits a full switch
-        # timeout after it, so a reconnect in progress is never mistaken for
-        # gluetun having reverted.
-        self.last_put_at = None
+        # The tunnel's addresses before the switch being verified: its rule
+        # 94 may linger while gluetun reconnects.
+        self.previous_addresses = {}
         # The one refresh of gluetun's server list this process may start:
         # None (not needed or not yet), 'updating', 'done' or 'failed'.
         self.update_threshold = min(UPDATE_IF_OLDER_SEC, updater_period_s) if updater_period_s else None
@@ -322,8 +333,44 @@ class GluetunApplier(Applier):
         """Ask gluetun for exactly this server. Records it before the result
         is known: gluetun may apply a selection whose answer is lost."""
         self.save_selection(last_put=relay['hostname'])
-        self.last_put_at = self.clock()
         self.client.select_server(relay)
+
+    def restore_target(self):
+        """The server to put back when nothing else selects one."""
+        key = 'last_successful'
+        if self.kind == 'sidecar' and self.spec.egress_tier == 'tunnel':
+            key = 'last_applied'
+        server = self.selection.get(key)
+        return Selection(server, 'restore') if server else None
+
+    def before_mutation(self, target):
+        if target.source in ('panel', 'operator-retry'):
+            self.save_selection(desired=target.server)
+        try:
+            self.previous_addresses = self.tunnel_addresses(require_ipv4=False)
+        except (RuntimeError, ValueError, UnicodeError):
+            self.previous_addresses = {}
+
+    def on_applied(self, server):
+        if self.selection.get('last_applied') != server:
+            self.save_selection(last_applied=server)
+
+    def on_verified(self, server):
+        if self.selection.get('last_successful') != server:
+            self.save_selection(last_successful=server)
+
+    def mutation_failed_message(self):
+        return 'gluetun did not accept the server selection; retrying automatically.'
+
+    def waiting_message(self):
+        return 'Waiting for gluetun to connect to the requested server.'
+
+    def control_answers(self):
+        try:
+            return self.client.vpn_status() in ('running', 'starting', 'stopping', 'stopped', 'crashed',
+                                                'completed')
+        except (RuntimeError, ValueError):
+            return False
 
     # -- the provider seam -------------------------------------------------
 
@@ -343,7 +390,25 @@ class GluetunApplier(Applier):
             return NordApplier.egress_for(self, server, handshake_age)
         if self.spec.egress_check == 'mullvad':
             return Applier.egress(self)
+        if self.kind == 'sidecar':
+            return self.unmeasurable_egress()
         return self.tunnel_egress(server, handshake_age)
+
+    def unmeasurable_egress(self):
+        """A tunnel-tier provider in a sidecar: in plain gluetun's namespace
+        nothing leaves off the tunnel, so the host's own address can't be
+        measured and the tunnel checks can't pass. The tunnel's address is
+        still read, for display, from one echo service."""
+        addresses = {}
+        for family in sorted(self.tunnel_addresses()):
+            try:
+                addresses[str(family)] = self.echo(ECHO_URLS[family][0], family, tunnel=True)
+            except (RuntimeError, ValueError, UnicodeError):
+                continue
+        return {'egress_ip': addresses.get('4'), 'egress_city': None, 'egress_country': None,
+                'exit_confirmed': False, 'egress_tier': None, 'egress_ips': addresses, 'families': {},
+                'reason': 'host-address-not-measurable',
+                'message': "Switched; the egress couldn't be compared with this host's address."}
 
     def echo(self, url, family, *, tunnel):
         if tunnel:
@@ -366,7 +431,7 @@ class GluetunApplier(Applier):
         except RuntimeError:
             return None, False
 
-    def routing_status(self, *, require_address=True):
+    def routing_status(self, *, require_address=True, owner=True):
         """(protected, fallback) for gluetun's namespace: the whole guard in
         both families, including the host table. gluetun's interface coming
         and going is not a routing failure: without it, or while it is down,
@@ -388,6 +453,78 @@ class GluetunApplier(Applier):
             return return_path and all(c[0] for c in checks), all(c[1] for c in checks)
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
+
+    def link_state(self):
+        """(present, up, ifindex) of the tunnel interface."""
+        try:
+            links = decode_json(self.run(['ip', '-j', 'link', 'show', 'dev', self.config.exit_if]))
+        except RuntimeError:
+            return False, False, None
+        if not isinstance(links, list) or len(links) != 1 or not isinstance(links[0], dict):
+            raise ValueError('invalid tunnel interface')
+        flags = links[0].get('flags')
+        return True, isinstance(flags, list) and 'UP' in flags, links[0].get('ifindex')
+
+    def transition_status(self):
+        """(safe, ready) while a switch is verified, by the protective
+        predicate. The interface, addresses and rules are read separately, so
+        a sample is taken again when the interface changed during it (its
+        presence or ifindex differ before and after, or it is present with
+        detached rules); after TRANSITION_SAMPLES such samples the exit is
+        safe so far and not ready."""
+        for _ in range(TRANSITION_SAMPLES):
+            before = self.link_state()
+            self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
+            present, up, _ = before
+            addresses = {}
+            if present:
+                try:
+                    addresses = self.tunnel_addresses(require_ipv4=False)
+                except RuntimeError:
+                    addresses = None
+            return_path = return_path_enabled(self.run(['cat', RETURN_PATH_SYSCTL]))
+            snapshot = {}
+            for family in (4, 6):
+                rules = decode_json(self.run(['ip', '-j', f'-{family}', 'rule', 'show']))
+                routes = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', self.config.table]))
+                host = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table',
+                                             self.config.host_table]))
+                main = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', 'main']))
+                snapshot[family] = rules, routes, host, main
+            after = self.link_state()
+            detached = present and any(isinstance(r, dict) and ('iif_detached' in r or 'oif_detached' in r)
+                                       for rules, *_ in snapshot.values() if isinstance(rules, list) for r in rules)
+            if before != after or addresses is None or detached:
+                continue
+            safe = ready = return_path
+            for family, (rules, routes, host, main) in snapshot.items():
+                family_safe, family_ready = gluetun_transition_status(
+                    rules, routes, self.config, family, tunnel_address=addresses.get(family),
+                    previous_address=self.previous_addresses.get(family), interface_present=present,
+                    interface_up=up)
+                safe = safe and family_safe
+                ready = ready and family_ready and host_table_status(host, self.config, family, main=main)
+            return safe, ready
+        return True, False
+
+    def measure_guards(self, checks, at, finding):
+        if self.switch_deadline is None:
+            return super().measure_guards(checks, at, finding)
+        try:
+            safe, ready = self.transition_status()
+        except (RuntimeError, ValueError, UnicodeError):
+            safe = ready = False
+        native = self.netbird_native()
+        checks['routing'] = {'state': 'pass' if ready else 'fail', 'at': at, 'fallback': safe}
+        if safe and not ready:
+            checks['routing']['reason'] = 'reconnecting'
+        checks['traffic_protection'] = {'state': checks['routing']['state'], 'at': at, 'from': 'routing'}
+        checks['netbird'] = {'state': 'pass' if native else 'fail', 'at': at}
+        finding['safe'] = safe and native
+        if not ready:
+            finding['guard'] = ROUTING_FAILED
+        elif not native:
+            finding['guard'] = NETBIRD_MODE_FAILED
 
     def tunnel_works(self):
         """gluetun's tunnel carries traffic now: one peer with a handshake
@@ -454,133 +591,20 @@ class GluetunApplier(Applier):
         print("applier: asked gluetun to update its server list", flush=True)
 
     def publish(self, status, message, *, server=None, **fields):
-        # While a switch is being verified, gluetun restarting its tunnel is
-        # expected: report it as switching, not as a failure.
-        if (self.switch_deadline is not None and status == 'failed'
-                and not self.rejection and not self.pending):
-            status, message = 'applying', 'Waiting for gluetun to connect to the requested server.'
         fields.setdefault('server_list_update', self.update_state if self.update_state in ('updating', 'failed')
                           else None)
         return super().publish(status, message, server=server, **fields)
 
-    def switch(self, request):
-        request = self.switch_request(request)
-        self.request = request
-        self.rejection = None
-        self.pending = None
-        error = self.configuration_error()
-        if error:
-            self.rejection = error
-            return self.inspect()
-        if request is None:
-            self.rejection = 'Invalid desired-state file; no change applied.'
-            return self.inspect()
-        if not self.catalog.usable():
-            self.pending = 'Waiting for a fresh trusted relay catalogue; request will retry automatically.'
-            return self.inspect()
-        if request['server'] not in self.catalog.relays:
-            self.rejection = 'Requested server is not in a fresh trusted relay catalogue; no change applied.'
-            return self.inspect()
-        routing_ok, fallback = self.routing_status()
-        if not routing_ok:
-            self.pending = ('Waiting for tunnel and overlay routing; request will retry automatically. '
-                            'Run recovery if this persists.')
-            return self.inspect()
-        if not self.netbird_native():
-            self.pending = ('Waiting for NetBird to run kernel WireGuard with its kernel firewall; '
-                            'request will retry automatically.')
-            return self.inspect()
-        relay = self.catalog.relays[request['server']]
-        try:
-            current = self.server_for(self.peers())
-        except (RuntimeError, ValueError, UnicodeError):
-            current = None
-        self.publish('applying', 'Applying the requested server.', server=current,
-                     routing_ok=True, unreachable_fallback=fallback, netbird_native=True)
-        self.save_selection(desired=request['server'])
-        try:
-            self.put(relay)
-        except (RuntimeError, ValueError, UnicodeError):
-            self.rejection = 'gluetun did not accept the server selection; choose a server again to retry.'
-            return self.inspect()
-        deadline = self.switch_deadline = self.clock() + GLUETUN_SWITCH_TIMEOUT_SEC
-        try:
-            while self.clock() < deadline:
-                result = self.inspect(applying=True)
-                if result['status'] == 'ok' and result['server'] == request['server']:
-                    self.save_selection(last_successful=request['server'])
-                    return result
-                self.sleep(3)
-            self.rejection = 'Switch verification timed out; choose a server again to retry.'
-            return self.inspect()
-        finally:
-            self.switch_deadline = None
-
-    def inspect(self, *, applying=False):
-        result = super().inspect(applying=applying)
-        if (result.get('status') == 'ok' and result.get('server')
-                and result['server'] != self.selection.get('last_successful')
-                and result['server'] == self.selection.get('last_put')):
-            # A verified pass on the server last put, e.g. after a restore.
-            self.save_selection(last_successful=result['server'])
-        return result
-
-    def restore(self):
-        """With SERVER, restore configuration without consulting panel state.
-        Otherwise put the last verified server again when gluetun runs another one
-        than Molebridge last put, as after gluetun restarts with its
-        environment's selection. Only when the panel's request is absent or
-        was refused: otherwise the request path applies the request again
-        itself. Nothing happens until gluetun's peer can be identified, nor
-        within a switch timeout of the last PUT."""
-        target = self.configured_server or self.selection.get('last_successful')
-        last_put = self.selection.get('last_put')
-        if self.configuration_error():
-            return None
-        if not target or target not in self.catalog.relays or not self.catalog.usable():
-            return None
-        if self.last_put_at is not None and self.clock() - self.last_put_at < GLUETUN_SWITCH_TIMEOUT_SEC:
-            return None
-        request = None if self.configured_server else desired_request(read_json(self.desired_path, 4096), self.provider)
-        # A request not yet handled, or handled and not refused, is the
-        # request path's: it applies (or re-applies) the request itself.
-        if request is not None and (request_token(request) != self.last_request or not self.rejection):
-            return None
-        try:
-            live = self.server_for(self.peers())
-        except (RuntimeError, ValueError, UnicodeError):
-            return None
-        if live is None or live == (target if self.configured_server else last_put):
-            return None
-        try:
-            self.put(self.catalog.relays[target])
-        except (RuntimeError, ValueError, UnicodeError):
-            print('applier: gluetun did not accept '
-                  + ('SERVER' if self.configured_server else 'the last verified server') + ' again', flush=True)
-            return None
-        print('applier: gluetun was not running the selected server; put '
-              + ('SERVER' if self.configured_server else 'the last verified one') + ' again', flush=True)
-        self.next_health = 0
-        return target
-
-    def tick(self):
-        # The catalogue is handled here, so the base tick never finds it due
-        # (it would wait six hours after a refresh, not one minute).
+    def maintain_catalog(self):
+        # gluetun's own list, checked every minute (the base would wait six
+        # hours after a refresh).
         self.update_servers()
         if self.clock() >= self.next_catalog:
             self.catalog.refresh()
             self.next_catalog = self.clock() + CATALOG_POLL_SEC
-        self.restore()
-        return super().tick()
 
-    def doctor_checks(self):
-        checks = super().doctor_checks()
-        try:
-            answered = self.client.vpn_status() in ('running', 'starting', 'stopping', 'stopped', 'crashed',
-                                                    'completed')
-        except (RuntimeError, ValueError):
-            answered = False
-        checks["gluetun's control server answers with the API key"] = answered
+    def backend_checks(self):
+        checks = {"gluetun's control server answers with the API key": self.control_answers()}
         data = self.catalog.snapshot.get('data_timestamp')
         age = data_age(data, self.wallclock())
         checks["gluetun's server data less than 30 days old"] = age is not None and age <= DATA_STALE_SEC

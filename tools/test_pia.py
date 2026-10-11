@@ -76,6 +76,8 @@ class PiaKernel:
                        'peer_pubkey': OUR_KEY, 'dns_servers': ['10.0.0.243']}
         self.addkey_fail = False
         self.token_fail = False
+        # The token endpoint's HTTP status: 401 or 403 is a refused login.
+        self.token_status = '200'
         self.port = 43210
         self.bind_fail = False
         self.nft = []
@@ -194,7 +196,10 @@ class PiaKernel:
                 if self.token_fail:
                     raise RuntimeError('command failed')
                 assert files == {'username': USERNAME, 'password': PASSWORD}
-                return json.dumps({'token': TOKEN})
+                # Without -f: the status code follows the body.
+                assert '-f' not in ' '.join(args).split() and args[args.index('--write-out') + 1] == '\n%{http_code}'
+                body = json.dumps({'token': TOKEN}) if self.token_status == '200' else '{"message": "unauthorized"}'
+                return body + '\n' + self.token_status
             if url == pia_module.PIA_STATUS_URL:
                 assert args[args.index('--interface') + 1] == 'pia'
                 return json.dumps({'connected': self.connected, 'ip': '203.0.113.30'})
@@ -313,7 +318,8 @@ def test_request_names_are_provider_specific():
 
 def test_status_uses_the_generic_confirmation():
     desired = request()
-    result = {'checked_at': now_iso(), 'request_id': '1' * 32, 'status': 'ok', 'routing_ok': True}
+    result = {'checked_at': now_iso(), 'request_id': '1' * 32, 'status': 'ok', 'routing_ok': True,
+              'server': REGION, 'requested_server': REGION}
     assert status_view(desired, {**result, 'exit_confirmed': True}, 'pia')[0] == 'ok'
     assert status_view(desired, {**result, 'exit_confirmed': False, 'mullvad_exit_ip': True}, 'pia')[0] == 'failed'
 
@@ -348,7 +354,8 @@ def test_switch_registers_then_sets_address_rule_and_peer(runtime, tmp_path):
     applier, kernel = runtime
     result = applier.switch(request())
     assert result['status'] == 'ok' and result['server'] == REGION
-    assert result['exit_confirmed'] is True and result['provider'] == 'pia' and 'mullvad_exit_ip' not in result
+    assert result['checks']['egress']['state'] == 'pass' and result['checks']['egress']['tier'] == 'provider'
+    assert result['provider'] == 'pia' and 'mullvad_exit_ip' not in result
     assert kernel.keys == [SERVER_KEY] and kernel.addresses == ['10.0.0.2']
     assert [r['src'] for r in kernel.rules[4] if r['priority'] == 94] == ['10.0.0.2']
     assert not any(r['priority'] == 94 for r in kernel.rules[6])
@@ -444,10 +451,10 @@ def test_egress_must_be_confirmed_by_pia(runtime):
     applier, kernel = runtime
     kernel.connected = False
     result = applier.switch(request())
-    assert result['status'] == 'failed' and result['exit_confirmed'] is False
-    assert result['message'] == 'Switch verification timed out; choose a server again to retry.'
-    applier.rejection = None
-    assert applier.inspect()['message'] == 'Tunnel egress is not confirmed as PIA.'
+    assert result['status'] == 'failed' and result['checks']['egress']['state'] == 'fail'
+    # Applied, not verified: re-checked, not registered again (D7).
+    assert result['message'] == 'Tunnel egress is not confirmed as PIA.'
+    assert applier.attempt.state == 'unverified'
 
 
 def test_unregistered_exit_says_so(runtime):
@@ -456,40 +463,77 @@ def test_unregistered_exit_says_so(runtime):
     assert result['status'] == 'failed' and 'No PIA region' in result['message']
 
 
+def addkeys(kernel):
+    return sum(1 for c in kernel.calls if c[-1].endswith('/addKey'))
+
+
 def test_saved_region_is_registered_after_tunnel_recreation(runtime):
     applier, kernel = runtime
     desire(applier)
     assert applier.tick()['status'] == 'ok'
     # The wireguard container was recreated: no peer, no address, no rule 94.
+    # Without its owner record's new generation (tested in test_runtime.py),
+    # a missing peer is waited out like any drift.
     kernel.keys, kernel.addresses = [], []
     kernel.rules[4] = rules(4)
     kernel.now += 1
+    applier.tick()
+    assert kernel.keys == []
+    kernel.now += 90
     assert applier.tick()['status'] == 'ok' and kernel.keys == [SERVER_KEY]
 
 
-def test_stale_handshake_reregisters_the_same_region_with_backoff(runtime):
+def test_stale_handshake_reregisters_the_same_region_on_the_backoff(runtime):
+    """D15: PIA can forget a registration while the peer stays; a handshake
+    stale for 180 s re-registers the same region, paced by the backoff."""
     applier, kernel = runtime
     desire(applier)
     applier.tick()
+    assert addkeys(kernel) == 1
     kernel.age = 10_000
     kernel.now += 30
     applier.next_health = 0
     assert applier.tick()['status'] == 'failed'
-    registrations = sum(1 for c in kernel.calls if c[-1].endswith('/addKey'))
-    kernel.now += 30
-    applier.next_health = 0
+    kernel.now += 29
     applier.tick()
-    assert sum(1 for c in kernel.calls if c[-1].endswith('/addKey')) == registrations
-    kernel.now += pia_module.REREGISTER_SEC
-    applier.next_health = 0
+    assert addkeys(kernel) == 1
+    kernel.now += 1
     applier.tick()
-    assert sum(1 for c in kernel.calls if c[-1].endswith('/addKey')) == registrations + 1
+    # Re-registered one minute after the last registration; still stale, so
+    # applied but unverified.
+    assert addkeys(kernel) == 2 and applier.attempt.state == 'unverified'
+    assert applier.attempt.backoff_step == 1
+    mutated = applier.attempt.last_mutation_at
+    while kernel.now < mutated + 119:
+        kernel.now = min(kernel.now + 10, mutated + 119)
+        applier.tick()
+    assert addkeys(kernel) == 2
+    kernel.now = mutated + 120
+    applier.tick()
+    assert addkeys(kernel) == 3
     assert {c[4] for c in kernel.calls if c[:2] == ['wg', 'set'] and c[-1] != 'remove'} == {SERVER_KEY}
+    # The handshake comes back: verified, the backoff starts over.
+    kernel.age = 1
+    kernel.now += 60
+    applier.next_health = 0
+    assert applier.tick()['status'] == 'ok' and applier.attempt.backoff_step == 0
+
+
+def test_an_egress_failure_alone_never_reregisters(runtime):
+    applier, kernel = runtime
+    desire(applier)
+    applier.tick()
+    kernel.connected = False
+    for _ in range(30):
+        kernel.now += 60
+        applier.tick()
+    assert addkeys(kernel) == 1 and applier.attempt.state == 'unverified'
 
 
 def test_failed_registration_on_a_fresh_tunnel_is_retried_with_backoff(runtime):
     # A recreated tunnel has no peer and no address; PIA's API was down for the
-    # first registration. Once it answers, the applier registers on its own.
+    # first registration. Once it answers, the applier registers on its own,
+    # after the backoff (test_runtime.py covers the steps).
     applier, kernel = runtime
     desire(applier)
     kernel.keys, kernel.addresses = [], []
@@ -497,14 +541,53 @@ def test_failed_registration_on_a_fresh_tunnel_is_retried_with_backoff(runtime):
     kernel.token_fail = True
     result = applier.tick()
     assert result['status'] == 'failed' and result['message'].startswith('Peer update failed')
+    assert applier.attempt.state == 'failed' and applier.attempt.next_action == 'reapply'
     kernel.token_fail = False
     kernel.now += 30
-    applier.next_health = 0
     applier.tick()
     assert kernel.keys == []
-    kernel.now += pia_module.REREGISTER_SEC
-    applier.next_health = 0
+    kernel.now += 30
     assert applier.tick()['status'] == 'ok' and kernel.keys == [SERVER_KEY]
+
+
+def test_a_refused_login_is_rejected_until_the_credentials_change(runtime, secrets_dir):
+    applier, kernel = runtime
+    desire(applier)
+    kernel.keys, kernel.addresses = [], []
+    kernel.rules[4] = rules(4)
+    kernel.token_status = '401'
+    result = applier.tick()
+    assert result['status'] == 'failed' and result['message'].startswith('PIA refused the login')
+    assert result['selection']['outcome'] == 'rejected'
+    tokens = sum(1 for c in kernel.calls if c[-1] == pia_module.PIA_TOKEN_URL)
+    for _ in range(20):
+        kernel.now += 60
+        applier.tick()
+    assert sum(1 for c in kernel.calls if c[-1] == pia_module.PIA_TOKEN_URL) == tokens
+    # Corrected credentials are tried again.
+    kernel.token_status = '200'
+    os.utime(secrets_dir / 'password', ns=(1, 1))
+    kernel.now += 5
+    assert applier.tick()['status'] == 'ok' and kernel.keys == [SERVER_KEY]
+
+
+def test_a_refusal_with_a_reused_token_is_asked_again_with_a_fresh_one(runtime):
+    applier, kernel = runtime
+    desire(applier)
+    assert applier.tick()['status'] == 'ok'
+    refusals = iter([True])
+    real = kernel.run
+
+    def refuse_once(args, **kwargs):
+        if args[0] == 'curl' and args[-1].endswith('/addKey') and next(refusals, False):
+            kernel.calls.append(args)
+            return json.dumps({'status': 'ERROR'})
+        return real(args, **kwargs)
+    applier.run = refuse_once
+    write_json_atomic(applier.desired_path, {**request(), 'request_id': '3' * 32})
+    tokens = sum(1 for c in kernel.calls if c[-1] == pia_module.PIA_TOKEN_URL)
+    assert applier.tick()['status'] == 'ok'
+    assert sum(1 for c in kernel.calls if c[-1] == pia_module.PIA_TOKEN_URL) == tokens + 1
 
 
 def test_container_healthcheck_needs_a_registered_tunnel(runtime):
@@ -725,7 +808,7 @@ def test_an_unanswered_pia_status_call_is_asked_once_more(runtime):
     calls = unanswered(applier, kernel, pia_status)
     start = kernel.now
     result = applier.inspect()
-    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert result['status'] == 'ok' and result['checks']['egress']['state'] == 'pass'
     assert len(calls) == 2 and kernel.now - start == 10 + EGRESS_RETRY_SEC
 
 
@@ -756,17 +839,19 @@ def test_a_failed_reregistration_clears_once_the_tunnel_recovers_by_itself(runti
     desire(applier)
     assert applier.tick()['status'] == 'ok'
     kernel.age, kernel.addkey_fail = 10_000, True
-    kernel.now += pia_module.REREGISTER_SEC
+    kernel.now += 60
     applier.next_health = 0
+    applier.tick()
+    kernel.now += 60
     result = applier.tick()
     assert result['status'] == 'failed' and result['message'].startswith('Peer update failed')
-    registrations = sum(1 for c in kernel.calls if c[-1].endswith('/addKey'))
+    registrations = addkeys(kernel)
     kernel.age = 1
     kernel.now += 60
     applier.next_health = 0
     result = applier.tick()
-    assert result['status'] == 'ok' and result['server'] == REGION and applier.rejection is None
-    assert sum(1 for c in kernel.calls if c[-1].endswith('/addKey')) == registrations
+    assert result['status'] == 'ok' and result['server'] == REGION and applier.attempt.state == 'idle'
+    assert addkeys(kernel) == registrations
 
 
 # -- rules 94 and 98: the applier owns both for PIA's per-server address -------

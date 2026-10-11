@@ -1,11 +1,19 @@
-"""Own the relay catalogue, validate requests, switch peers and report health.
+"""Own the relay catalogue, admit selections, switch peers and report health.
 
 This is a trusted NET_ADMIN component. The config file is not mounted, but
 namespace privileges can retrieve the live WireGuard key. Never use wg dump.
+
+Every change to the live selection goes through one admission pipeline
+(`Applier.admit`, `Applier.run_pipeline`), whatever asked for it: the
+configured SERVER, the panel's request, gluetun's restore, reconvergence and
+automatic retries. Its state is the attempt record (applier/attempt.py). The
+status record it publishes is schema 2 (molebridge/verdict.py), judged by
+`molebridge.verdict.assess` wherever it is read.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -15,8 +23,10 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from applier.attempt import UNIDENTIFIED_SEC, Attempt, backoff, read_boot_id
 from molebridge import providers
 from molebridge.egress import (ECHO_MAX_BYTES, ECHO_URLS, HOST_LACKS_FAMILY, exit_addresses, host_lacks_ipv6,
                                parse_echo, tunnel_verdict)
@@ -25,6 +35,7 @@ from molebridge.routing import (RETURN_PATH_SYSCTL, RoutingConfig, family_status
                                 overlay_is_kernel_wireguard, return_path_enabled, owner_record_valid, parse_owner_record)
 from molebridge.state import (decode_json, desired_request, now_iso, read_json, recent, request_token,
                               write_json_atomic)
+from molebridge.verdict import NOT_CHECKED_BY, SCHEMA, ExitConfig, Target, assess, fixed_checks, required_checks
 
 HANDSHAKE_FRESH_SEC = 180
 # A health check whose egress check gets no usable answer (a timeout, a
@@ -40,11 +51,27 @@ EGRESS_RETRY_BUDGET_SEC = 30
 SWITCH_TIMEOUT_SEC = 60
 REFRESH_SEC = 60
 POLL_SEC = 5
+# A panel request this recent is the operator asking now: it is applied
+# even when the server is already live (a PIA region registers anew). An
+# older one, as after an upgrade, is re-inspected first.
+FRESH_REQUEST_SEC = 150
 # A valid provider hostname fits within 253 characters. Bound invalid input
 # too, so even JSON-escaped Unicode fits the readers' 16 KiB status limit.
 SERVER_REPORT_CHARS = 256
 NETBIRD_MODE_FAILED = ('NetBird is not running kernel WireGuard with its kernel firewall on the overlay '
                        'interface; see the troubleshooting guide.')
+ROUTING_FAILED = 'Routing protection is incomplete; run the recovery helper.'
+INVALID_DESIRED = 'Invalid desired-state file; no change applied.'
+UNLISTED = 'Requested server is not in a fresh trusted relay catalogue; no change applied.'
+
+
+class MutationRefused(RuntimeError):
+    """The change was refused before it took effect (a definite outcome)."""
+
+
+class CredentialRejected(MutationRefused):
+    """The provider refused the account's login: retrying can't help until
+    the credentials change or the operator retries."""
 
 
 def command(args, *, timeout=5, limit=1024 * 1024):
@@ -64,6 +91,18 @@ def command(args, *, timeout=5, limit=1024 * 1024):
     return raw.decode('utf-8', errors='strict')
 
 
+class Selection(Target):
+    """A target with its identity: a panel request's token,
+    'configured:<server>' or 'restore:<server>'. A new identity is a new
+    target for the pipeline."""
+
+    @property
+    def key(self):
+        if self.source == 'panel':
+            return request_token(self.request)
+        return f'{self.source}:{self.server}'
+
+
 class Applier:
     """The Mullvad applier, and the base for every provider's applier. A
     subclass sets `provider` (its registry id) and overrides the provider seam:
@@ -73,27 +112,13 @@ class Applier:
     # the path for the native backend; with None the check is skipped.
     owner_path = None
     owner_seen = None
+    owner_generation = None
     provider = 'mullvad'
+    switch_timeout = SWITCH_TIMEOUT_SEC
 
     @property
     def spec(self):
         return providers.get(self.provider)
-
-    @property
-    def rejection(self):
-        """Why the current request failed, shown until a new request, or
-        until a later check finds that request met (`rejection_stands`)."""
-        return self._rejection
-
-    @rejection.setter
-    def rejection(self, value):
-        if value and self.configured_server:
-            value = value.replace('choose a server again to retry.', 'configured SERVER will retry automatically.')
-            value = value.replace('choose a server again after recovery.', 'configured SERVER will retry after recovery.')
-        self._rejection = value
-        # Every rejection is published by at least one check before any
-        # check may clear it.
-        self.rejection_reported = False
 
     @property
     def address_before_switch(self):
@@ -101,26 +126,43 @@ class Applier:
         interface must already carry it before a switch (Mullvad)."""
         return self.spec.address_before_switch
 
+    @property
+    def kind(self):
+        return self.config.kind
+
+    @property
+    def exit_config(self):
+        return ExitConfig(self.provider, self.kind)
+
     def __init__(self, state_dir: Path, config: RoutingConfig, *, run=command, clock=time.monotonic, sleep=time.sleep,
-                 server=''):
+                 server='', boot_id=None):
         self.configured_server = server
         self.configured_at = now_iso()
         self.directory = state_dir / 'applier'
         self.result_path = self.directory / 'result.json'
+        self.attempt_path = self.directory / 'attempt.json'
         self.desired_path = state_dir / 'panel' / 'desired.json'
-        self.catalog = self.make_catalog()
         self.config, self.run, self.clock, self.sleep = config, run, clock, sleep
-        self.last_request = None
+        self.catalog = self.make_catalog()
+        self.boot_id = boot_id or read_boot_id()
+        self.attempt = Attempt.load(self.attempt_path, boot_id=self.boot_id, now=self.clock())
+        # The panel's latest valid request (its acknowledgement), or the
+        # configured one; whether desired.json is unreadable.
         self.request = None
+        self.invalid_desired = False
+        self.target = None
         self.next_catalog = 0
         self.next_health = 0
-        self.rejection = None
-        self.pending = None
+        # The last inspection's findings (`measure`).
+        self.measurement = None
+        # Since when a live peer the catalogue can't name has been seen.
+        self.unidentified_since = None
         # While a switch is being verified, the time it gives up.
         self.switch_deadline = None
         # While an egress check is asked a second time, the time after which
         # it starts no further request.
         self.retry_deadline = None
+        self.started = False
 
     @classmethod
     def from_env(cls, state_dir, config, env, **kwargs):
@@ -143,9 +185,6 @@ class Applier:
             return f'Unknown SERVER {quoted}; not in a fresh trusted relay catalogue; no change applied.'
         return None
 
-    def switch_request(self, request):
-        return self.configured_request() if self.configured_server else desired_request(request, self.provider)
-
     def make_catalog(self):
         return RelayCatalog(self.directory, self.provider)
 
@@ -161,6 +200,10 @@ class Applier:
         if code != '200':
             raise ValueError('unexpected catalogue HTTP status; redirects refused')
         return body
+
+    def catalog_signature(self):
+        """What a rejection for an unlisted server waits to change."""
+        return sorted(self.catalog.relays) if self.catalog.usable() else None
 
     def tunnel_addresses(self, *, require_ipv4=True):
         """Global tunnel addresses by family, read from the interface, never its routes.
@@ -210,13 +253,15 @@ class Applier:
                                   seen=self.owner_seen):
             return False
         self.owner_seen = (record['generation'], record['stamp'])
+        self.owner_generation = record['generation']
         return True
 
-    def routing_status(self, *, require_address=True):
+    def routing_status(self, *, require_address=True, owner=True):
         """(protected, fallback). Without `require_address` an interface that has
         no address yet passes when its guards are intact: a provider that
         assigns the address per server installs rules 94 and 98 with it. With
-        the native backend, the exit's owner record must be live too."""
+        the native backend and `owner`, the exit's owner record must be live
+        too."""
         checks = []
         try:
             self.run(['ip', 'link', 'show', 'dev', self.config.overlay_if])
@@ -227,8 +272,8 @@ class Applier:
                 routes = decode_json(self.run(['ip', '-j', f'-{family}', 'route', 'show', 'table', self.config.table]))
                 checks.append(family_status(rules, routes, self.config, family,
                                             tunnel_address=addresses.get(family)))
-            owner = self.owner_live()
-            return return_path and owner and all(c[0] for c in checks), all(c[1] for c in checks)
+            live = self.owner_live() if owner else True
+            return return_path and live and all(c[0] for c in checks), all(c[1] for c in checks)
         except (RuntimeError, ValueError, UnicodeError):
             return False, False
 
@@ -307,7 +352,8 @@ class Applier:
         confirmed = all(p['mullvad_exit_ip'] for p in probes.values())
         first = probes.get(4) or next(iter(probes.values()))
         return {**first, 'mullvad_exit_ip': confirmed, 'exit_confirmed': confirmed,
-                'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()}}
+                'egress_ips': {str(f): p['egress_ip'] for f, p in probes.items()},
+                'families': {str(f): 'pass' if p['mullvad_exit_ip'] else 'fail' for f, p in probes.items()}}
 
     def egress_for(self, server, handshake_age):
         """Egress fields for the current server. A provider with its own typed
@@ -329,7 +375,7 @@ class Applier:
         before any further request. There is no second attempt while a switch
         is verified (its own loop asks again until its timeout), when the
         check fails whatever the answer (a missing or stale handshake, a
-        rejected or pending request, a peer not in a fresh catalogue), or when
+        rejected or pending selection, a peer not in a fresh catalogue), or when
         the first attempt took longer than EGRESS_RETRY_WITHIN_SEC; the second
         starts no request after EGRESS_RETRY_BUDGET_SEC. The previous result
         stays published until this check's own result replaces it."""
@@ -338,8 +384,8 @@ class Applier:
             return self.egress_for(server, handshake_age)
         except (RuntimeError, ValueError, UnicodeError):
             fresh = type(handshake_age) is int and 0 <= handshake_age < HANDSHAKE_FRESH_SEC
-            doomed = (not fresh or self.rejection_stands(server) or self.pending or server is None
-                      or not self.catalog.usable())
+            doomed = (not fresh or self.attempt.state in ('pending', 'rejected') or self.request_rejected()
+                      or server is None or not self.catalog.usable())
             slow = self.clock() - started > EGRESS_RETRY_WITHIN_SEC
             if applying or self.switch_deadline is not None or doomed or slow:
                 raise
@@ -381,7 +427,8 @@ class Applier:
             links = decode_json(self.run(['ip', '-j', '-6', 'address', 'show', 'scope', 'global']))
         except (RuntimeError, ValueError, UnicodeError):
             return False
-        return host_lacks_ipv6(routes, links, {self.config.exit_if, self.config.overlay_if})
+        interfaces = {self.config.exit_if} | ({self.config.overlay_if} if self.kind == 'overlay' else set())
+        return host_lacks_ipv6(routes, links, interfaces)
 
     def tunnel_egress(self, server, handshake_age):
         """The "tunnel" tier (molebridge/egress.py), for every family the
@@ -392,7 +439,7 @@ class Applier:
         own address is measured, so no later request can turn a failed check
         into a retryable one."""
         relay = self.catalog.relays.get(server) if server else None
-        verified, addresses = relay is not None, {}
+        verified, addresses, families = relay is not None, {}, {}
         for family in sorted(self.tunnel_addresses()):
             echoes = []
             for url in ECHO_URLS[family]:
@@ -402,6 +449,7 @@ class Applier:
             expected = exit_addresses(relay, family)
             if len(set(echoes)) != 1 or (expected is not None and echoes[0] not in expected):
                 verified = False
+                families[str(family)] = 'fail'
                 break
             self.within_retry_budget()
             host = self.host_address(family)
@@ -409,11 +457,12 @@ class Applier:
                 raise RuntimeError('host address measurement failed')
             verified = tunnel_verdict(echoes, host, expected,
                                       handshake_age, max_handshake_age=HANDSHAKE_FRESH_SEC) and verified
+            families[str(family)] = 'pass' if verified else 'fail'
             if not verified:
                 break
         return {'egress_ip': addresses.get('4'), 'egress_city': None, 'egress_country': None,
                 'exit_confirmed': False, 'egress_tier': 'tunnel' if verified else None,
-                'egress_ips': addresses}
+                'egress_ips': addresses, 'families': families}
 
     def egress_tier(self, fields):
         """'provider' when the provider confirmed egress; 'tunnel' when the
@@ -424,146 +473,651 @@ class Applier:
             return 'tunnel'
         return None
 
-    def result_defaults(self):
-        return {'mullvad_exit_ip': False}
+    # -- the status record (schema 2, molebridge/verdict.py) ------------------
 
-    def publish(self, status, message, *, server=None, **fields):
-        result = {'server': server, 'status': status, 'message': message, 'checked_at': now_iso(),
-                  'request_id': request_token(self.request) if self.request else None,
+    @property
+    def backend(self):
+        return self.exit_config.backend
+
+    def result_defaults(self):
+        return {}
+
+    def blank_checks(self):
+        """Every check, unmeasured: required ones `unknown`, the rest as the
+        kind fixes them."""
+        checks = {name: {'state': 'unknown'} for name in required_checks(self.kind, self.backend)}
+        for name, state in fixed_checks(self.kind, self.backend).items():
+            checks[name] = {'state': state}
+            if state == 'not-checked':
+                checks[name]['by'] = NOT_CHECKED_BY[name]
+        return checks
+
+    def wall(self, deadline):
+        """A boot-clock deadline as wall-clock time, for display."""
+        if deadline is None:
+            return None
+        moment = datetime.now(timezone.utc) + timedelta(seconds=max(0.0, deadline - self.clock()))
+        return moment.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def request_rejected(self):
+        """True while the panel's current request stands refused: it is
+        acknowledged with its reason and never becomes the target (D12)."""
+        if self.configured_server:
+            return False
+        if self.invalid_desired:
+            return True
+        rejected = self.attempt.rejected
+        return bool(self.request and rejected and rejected.get('key') == request_token(self.request))
+
+    def rejection_message(self):
+        if self.invalid_desired:
+            return INVALID_DESIRED
+        return (self.attempt.rejected or {}).get('reason') or UNLISTED
+
+    def selection_record(self):
+        attempt = self.attempt
+        if self.request_rejected():
+            return {'source': 'panel', 'outcome': 'rejected', 'attempt': 0,
+                    'target': self.request['server'] if self.request else None,
+                    'next_action': None, 'next_action_at': None}
+        return {'source': attempt.source or 'seed', 'outcome': attempt.outcome, 'attempt': attempt.attempts,
+                'target': attempt.target, 'next_action': attempt.next_action,
+                'next_action_at': self.wall(attempt.next_action_at) if attempt.next_action else None}
+
+    def publish(self, status, message, *, server=None, checks=None, **fields):
+        result = {'schema': SCHEMA, 'kind': self.kind, 'backend': self.backend, 'provider': self.provider,
+                  'status': status, 'message': message, 'checked_at': now_iso(),
+                  'server': server,
                   'requested_server': self.request['server'] if self.request else None,
-                  'provider': self.provider, 'routing_ok': False, 'unreachable_fallback': False,
                   'configured_server': self.configured_server[:SERVER_REPORT_CHARS] or None,
-                  'netbird_native': False, 'exit_confirmed': False, 'egress_tier': None,
-                  **self.result_defaults(),
-                  'handshake_age_s': None, 'egress_ip': None, 'egress_city': None, 'egress_country': None,
-                  'egress_ips': {}}
+                  'request_id': request_token(self.request) if self.request else None,
+                  'selection': self.selection_record(),
+                  'checks': checks or self.blank_checks(),
+                  'egress_ip': None, 'egress_ips': {}, 'egress_city': None, 'egress_country': None,
+                  **self.result_defaults()}
         result.update(fields)
         write_json_atomic(self.result_path, result, public=True)
         return result
 
-    def rejection_stands(self, server):
-        """True when a rejection outlasts this check whatever it finds. Once
-        it has been published, a check that finds the requested server live
-        and passes every other check clears it: the request is met. That is
-        the case after an automatic re-registration failed while the tunnel
-        it meant to repair came back by itself."""
-        return bool(self.rejection) and (not self.rejection_reported or bool(self.pending)
-                                         or not self.request or server != self.request['server'])
+    def save_attempt(self):
+        self.attempt.save(self.attempt_path)
+
+    # -- inspection -------------------------------------------------------------
+
+    def no_peer_message(self, keys):
+        return 'Expected exactly one tunnel peer.'
+
+    def measure_guards(self, checks, at, finding):
+        """The overlay's own guards: the routing contract (traffic protection),
+        NetBird's kernel mode and, on the native backend, the owner record."""
+        protected, fallback = self.routing_status(owner=False)
+        native = self.netbird_native()
+        checks['routing'] = {'state': 'pass' if protected else 'fail', 'at': at, 'fallback': fallback}
+        checks['traffic_protection'] = {'state': checks['routing']['state'], 'at': at, 'from': 'routing'}
+        checks['netbird'] = {'state': 'pass' if native else 'fail', 'at': at}
+        owner = True
+        if 'owner_record' in required_checks(self.kind, self.backend):
+            owner = self.owner_live()
+            checks['owner_record'] = {'state': 'pass' if owner else 'fail', 'at': at}
+        finding['safe'] = protected and native and owner
+        if not protected or not owner:
+            finding['guard'] = ROUTING_FAILED
+        elif not native:
+            finding['guard'] = NETBIRD_MODE_FAILED
+
+    def measure(self, *, applying=False):
+        """One inspection: every check this kind requires, each stamped with
+        when it was measured, stopping where later checks can't pass. Returns
+        the finding; `emit` publishes it."""
+        at = now_iso()
+        checks = self.blank_checks()
+        finding = {'status': 'failed', 'message': None, 'server': None, 'checks': checks, 'fields': {},
+                   'safe': True, 'guard': None, 'peers': None, 'age': None, 'at': self.clock()}
+        selected = self.target
+        if selected is None and self.configured_server:
+            selected = self.configured_selection()
+        target = selected.server if selected is not None else None
+        error = self.configuration_error()
+        if error:
+            finding['message'] = error
+            return finding
+        try:
+            if self.kind == 'overlay':
+                self.measure_guards(checks, at, finding)
+            keys = self.peers()
+            finding['peers'] = len(keys)
+            server = finding['server'] = self.server_for(keys)
+            peer = {'state': 'fail', 'at': at, 'server': server}
+            if not keys:
+                peer['reason'] = 'no-peer'
+            elif len(keys) > 1:
+                peer['reason'] = 'multiple-peers'
+            elif not self.catalog.usable():
+                peer['reason'] = 'catalogue-stale'
+            elif server is None:
+                peer['reason'] = 'unidentified'
+            elif target is not None and server != target:
+                peer['reason'] = 'not-target'
+            else:
+                peer['state'] = 'pass'
+            checks['peer'] = peer
+            if len(keys) != 1:
+                finding['message'] = self.no_peer_message(keys)
+                return finding
+            age = finding['age'] = self.handshake_age(keys[0])
+            fresh = type(age) is int and 0 <= age < HANDSHAKE_FRESH_SEC
+            checks['handshake'] = {'state': 'pass' if fresh else 'fail', 'at': at, 'server': server, 'age_s': age}
+            if finding['guard']:
+                finding['message'] = finding['guard']
+                return finding
+            expected = [str(f) for f in sorted(self.tunnel_addresses())]
+        except (RuntimeError, ValueError, UnicodeError):
+            finding['message'] = 'Tunnel inspection or egress check failed.'
+            return finding
+        try:
+            egress = self.checked_egress(server, age, applying=applying)
+        except (RuntimeError, ValueError, UnicodeError):
+            checks['egress'] = {'state': 'fail', 'at': now_iso(), 'server': server, 'reason': 'unanswered',
+                                'tier': None, 'expected_families': expected, 'families': {}}
+            finding['message'] = 'Tunnel inspection or egress check failed.'
+            return finding
+        tier = self.egress_tier(egress)
+        families = {f: v for f, v in (egress.get('families') or {}).items() if f in expected}
+        if tier is not None:
+            families = {f: 'pass' for f in expected}
+        passing = {f for f, v in families.items() if v == 'pass'}
+        reason = egress.get('reason') or ('tunnel-checks-failed' if self.spec.egress_tier == 'tunnel'
+                                          else 'not-confirmed')
+        check = {'state': 'pass' if tier else 'fail', 'at': now_iso(), 'server': server, 'tier': tier,
+                 'expected_families': expected, 'families': {f: families.get(f, 'unknown') for f in expected}}
+        if not tier:
+            check['reason'] = reason
+        checks['egress'] = check
+        finding['fields'] = {'egress_ip': egress.get('egress_ip'), 'egress_city': egress.get('egress_city'),
+                             'egress_country': egress.get('egress_country'),
+                             'egress_ips': {f: ip for f, ip in (egress.get('egress_ips') or {}).items()
+                                            if f in passing}}
+        if not fresh:
+            failure = 'Tunnel handshake is missing or stale; check the account and connectivity.'
+        elif tier is None:
+            failure = (egress.get('message') or
+                       ('Tunnel egress did not pass the tunnel checks.' if self.spec.egress_tier == 'tunnel'
+                        else f'Tunnel egress is not confirmed as {self.spec.label}.'))
+        elif not self.catalog.usable() or server is None:
+            failure = 'Current peer cannot be verified against a fresh relay catalogue.'
+        elif target is not None and server != target:
+            failure = ('The configured SERVER is not the current server; waiting for convergence.'
+                       if self.configured_server else
+                       'The live server is not the selected one; waiting for convergence.')
+        else:
+            failure = None
+        finding['status'], finding['message'] = ('failed', failure) if failure else ('ok', 'Healthy.')
+        return finding
+
+    def emit(self, finding, *, applying=False):
+        """Publish a finding, with the pipeline's own state taking precedence:
+        a refused request, missing prerequisites or a failed mutation are
+        what the exit reports until a check finds the target met."""
+        status, message = finding['status'], finding['message']
+        attempt = self.attempt
+        held = attempt.state in ('pending', 'rejected') and (attempt.target is not None or self.configured_server)
+        if self.request_rejected():
+            status, message = 'failed', self.rejection_message()
+        elif held:
+            status, message = 'failed', attempt.message
+        elif attempt.state == 'failed' and status != 'ok':
+            status, message = 'failed', attempt.message
+        elif applying and status == 'failed' and finding['safe']:
+            # A switch being verified: what isn't there yet is expected.
+            status, message = 'applying', self.waiting_message()
+        return self.publish(status, message, server=finding['server'], checks=finding['checks'],
+                            **finding['fields'])
+
+    def waiting_message(self):
+        return 'Waiting for tunnel verification.'
 
     def inspect(self, *, applying=False):
-        error = self.configuration_error()
-        if error:
-            return self.publish('failed', error)
-        routing_ok, fallback = self.routing_status()
-        native = self.netbird_native()
-        fields = {'routing_ok': routing_ok, 'unreachable_fallback': fallback, 'netbird_native': native}
-        server = None
+        """Measure and publish (tests and tools)."""
+        finding = self.measurement = self.measure(applying=applying)
+        return self.emit(finding, applying=applying)
 
-        def emit(status, message):
-            if self.pending:
-                status, message = 'failed', self.pending
-            if applying and routing_ok and native and status == 'failed' and not self.rejection:
-                status, message = 'applying', 'Waiting for tunnel verification.'
-            result = self.publish(status, message, server=server, **fields)
-            if self.rejection and result['message'] == self.rejection:
-                self.rejection_reported = True
-            return result
+    def check(self):
+        """The periodic check: re-checks the selection, never switches."""
+        finding = self.measurement = self.measure()
+        attempt, target = self.attempt, self.target
+        if target is not None and attempt.state not in ('pending', 'rejected', 'attempting'):
+            on_target = finding['server'] == target.server
+            if finding['status'] == 'ok' and on_target:
+                if attempt.state != 'idle' or attempt.outcome != 'verified':
+                    attempt.settle()
+                    self.save_attempt()
+                self.on_verified(target.server)
+            elif on_target and attempt.state == 'idle':
+                # Applied, not verified: re-checked, never switched again (D7).
+                attempt.state, attempt.outcome, attempt.message = 'unverified', 'applied-unverified', None
+                attempt.next_action = 'recheck'
+                attempt.next_action_at = self.clock() + REFRESH_SEC
+                attempt.mutation_certainty = None
+                self.save_attempt()
+            elif attempt.state == 'unverified':
+                attempt.next_action_at = self.clock() + REFRESH_SEC
+        self.next_health = self.clock() + REFRESH_SEC
+        return self.emit(finding)
 
+    def on_verified(self, server):
+        """A check passed on `server` as the target (gluetun records it)."""
+
+    def on_applied(self, server):
+        """`server` is live after a mutation, verified or not."""
+
+    # -- target resolution --------------------------------------------------------
+
+    def resolve(self, *, peek=False):
+        """The effective target: SERVER, else the panel's accepted request,
+        else (gluetun) the server to restore, else None. With `peek`, nothing
+        is remembered (the Gatus push and the doctor)."""
+        if self.configured_server:
+            if not peek:
+                self.request, self.invalid_desired = self.configured_request(), False
+            return self.configured_selection()
+        raw = read_json(self.desired_path, 4096)
+        request = desired_request(raw, self.provider)
+        invalid = request is None and (raw is not None or self.desired_path.exists())
+        if not peek:
+            self.request, self.invalid_desired = request, invalid
+        if request is not None and not self.refused(request):
+            return Selection(request['server'], 'panel', request)
+        return self.restore_target()
+
+    def restore_target(self):
+        return None
+
+    def configured_selection(self):
+        # An invalid SERVER can't match any server: kept bounded, as reported.
+        return Selection(self.configured_server[:SERVER_REPORT_CHARS], 'configured')
+
+    def refused(self, request):
+        """True while `request` stands rejected: the same request, and
+        nothing changed that could let it pass."""
+        rejected = self.attempt.rejected
+        return (bool(rejected) and rejected.get('key') == request_token(request)
+                and rejected.get('release') == self.release_signature(rejected.get('why')))
+
+    def release_signature(self, why):
+        """What a rejection waits for: the catalogue for an unlisted server,
+        the credentials for a refused login. Others are never released."""
+        if why == 'catalogue':
+            names = self.catalog_signature()
+            return None if names is None else hashlib.sha256('\n'.join(names).encode('utf-8')).hexdigest()
+        return why
+
+    # -- admission ------------------------------------------------------------------
+
+    def tick(self):
+        self.maintain_catalog()
+        self.target = self.resolve()
+        result = None
+        if not self.started:
+            self.started = True
+            result = self.resume()
+        if result is None:
+            result = self.admit(self.target)
+        if result is None and self.clock() >= self.next_health:
+            result = self.check()
+        if result is not None:
+            self.push_gatus(result)
+        return result
+
+    def maintain_catalog(self):
+        if self.clock() >= self.next_catalog:
+            refreshed = self.catalog.refresh(self.fetch_catalog)
+            self.next_catalog = self.clock() + (REFRESH_INTERVAL_S if refreshed else 60)
+
+    def resume(self):
+        """At start, an attempt interrupted mid-mutation is inspected first,
+        never replayed: its live server either is the target (verify) or not
+        (a failed, uncertain attempt, re-applied on its backoff, which
+        inspects again first)."""
+        attempt = self.attempt
+        if attempt.state != 'attempting':
+            return None
+        print('applier: an interrupted switch is inspected before anything else', flush=True)
+        finding = self.measurement = self.measure()
+        if attempt.target is not None and finding['server'] == attempt.target:
+            if finding['status'] == 'ok':
+                attempt.settle()
+                self.on_verified(attempt.target)
+            else:
+                attempt.state, attempt.outcome, attempt.message = 'unverified', 'applied-unverified', None
+                attempt.next_action, attempt.next_action_at = 'recheck', self.clock() + REFRESH_SEC
+        else:
+            attempt.state, attempt.outcome = 'failed', 'mutation-failed'
+            attempt.mutation_certainty = 'uncertain'
+            attempt.message = 'The last switch was interrupted; retrying automatically.'
+            attempt.schedule('reapply', self.clock())
+        self.save_attempt()
+        self.next_health = self.clock() + REFRESH_SEC
+        return self.emit(finding)
+
+    def admit(self, target):
+        """The triggers, in precedence order (docs/architecture.md):
+        1-2. a new effective target (a new request id is "Retry now");
+        3. no live peer: at once when the native owner generation is new
+           (once per generation), else as 7;
+        4. a due re-apply on the backoff;
+        5. a lapsed registration (D15);
+        6-7. a live peer that isn't the target, only from idle or unverified;
+             after UNIDENTIFIED_SEC when the catalogue can't name it.
+        Nothing re-applies within REAPPLY_GUARD_SEC of the last mutation."""
+        attempt = self.attempt
+        now = self.clock()
+        key = target.key if target is not None else None
+        if key != attempt.target_key:
+            return self.start(target)
+        if target is None or attempt.state == 'attempting':
+            return None
+        if attempt.state == 'pending':
+            if self.gate(target) is not None:
+                return None
+            return self.run_pipeline(target, attempt.source or target.source, reinspect=not self.asked_now(target))
+        if attempt.state == 'rejected':
+            why = attempt.extra.get('why')
+            if attempt.extra.get('release') != self.release_signature(why):
+                return self.run_pipeline(target, attempt.source or target.source, reinspect=True)
+            return None
         try:
             keys = self.peers()
-            server = self.server_for(keys)
-            if len(keys) != 1:
-                return emit('failed', self.rejection or 'Expected exactly one tunnel peer.')
-            age = self.handshake_age(keys[0])
-            fields['handshake_age_s'] = age
-            if not routing_ok:
-                return emit('failed', 'Routing protection is incomplete; run the recovery helper.')
-            if not native:
-                return emit('failed', NETBIRD_MODE_FAILED)
-            fields.update(self.checked_egress(server, age, applying=applying))
-            fields['egress_tier'] = self.egress_tier(fields)
-            failure = None
-            if age is None or age >= HANDSHAKE_FRESH_SEC:
-                failure = 'Tunnel handshake is missing or stale; check the account and connectivity.'
-            elif fields['egress_tier'] is None:
-                failure = ('Tunnel egress did not pass the tunnel checks.' if self.spec.egress_tier == 'tunnel'
-                           else f'Tunnel egress is not confirmed as {self.spec.label}.')
-            elif not self.catalog.usable() or server is None:
-                failure = 'Current peer cannot be verified against a fresh relay catalogue.'
-            elif self.configured_server and server != self.configured_server:
-                failure = 'The configured SERVER is not the current server; waiting for convergence.'
-            if self.rejection and (failure or self.rejection_stands(server)):
-                return emit('failed', self.rejection)
-            if failure:
-                return emit('failed', failure)
-            if self.rejection:
-                print('applier: the requested server passed every check; clearing the earlier failure', flush=True)
-                self.rejection = None
-            return emit('ok', 'Healthy.')
         except (RuntimeError, ValueError, UnicodeError):
-            return emit('failed', self.rejection or 'Tunnel inspection or egress check failed.')
+            return None
+        guard = attempt.guard_passed(now)
+        if not keys:
+            # One re-apply when the native exit container started again (its
+            # peer is gone with it). Otherwise no peer is drift like any
+            # other, waited out first: gluetun leaves its interface without a
+            # peer for a moment while it reconnects by itself.
+            generation = self.current_generation()
+            if guard and generation is not None and attempt.generation not in (None, generation):
+                print('applier: the exit container started again; applying the selection', flush=True)
+                return self.run_pipeline(target, 'reconverge', reinspect=True)
+        if attempt.next_action == 'reapply' and attempt.next_action_at is not None and now >= attempt.next_action_at:
+            return self.run_pipeline(target, 'retry', reinspect=True)
+        live = None
+        if keys and self.catalog.usable():
+            try:
+                live = self.server_for(keys)
+            except (RuntimeError, ValueError, UnicodeError):
+                return None
+            if (self.spec.registration_lapses and live == target.server
+                    and attempt.state in ('idle', 'unverified') and self.registration_lapsed(now)
+                    and (attempt.last_mutation_at is None
+                         or now >= attempt.last_mutation_at + backoff(attempt.backoff_step))):
+                return self.run_pipeline(target, 'retry', repair=True)
+        elif keys:
+            # A stale catalogue can't name anything: not drift.
+            self.unidentified_since = None
+            return None
+        if live is not None:
+            self.unidentified_since = None
+            if live != target.server and attempt.state in ('idle', 'unverified') and guard:
+                return self.run_pipeline(target, 'reconverge', reinspect=True)
+            return None
+        if self.unidentified_since is None:
+            self.unidentified_since = now
+        elif now - self.unidentified_since >= UNIDENTIFIED_SEC and attempt.state in ('idle', 'unverified') and guard:
+            self.unidentified_since = None
+            return self.run_pipeline(target, 'reconverge', reinspect=True)
+        return None
+
+    def current_generation(self):
+        """The native exit's owner generation now, or None."""
+        if self.owner_path is None:
+            return None
+        return self.owner_generation if self.owner_live() else None
+
+    def registration_lapsed(self, now):
+        """The last inspection, recent, found the target's handshake stale for
+        HANDSHAKE_FRESH_SEC, or never completed that long after the last
+        mutation. An egress failure alone never counts (D15)."""
+        finding = self.measurement
+        if not finding or now - finding['at'] > 2 * REFRESH_SEC or self.target is None:
+            return False
+        return finding['server'] == self.target.server and self.handshake_stale(finding, now)
+
+    def handshake_stale(self, finding, now=None):
+        age = finding.get('age')
+        if finding.get('peers') != 1:
+            return False
+        if age is None:
+            last = self.attempt.last_mutation_at
+            return last is None or (now if now is not None else self.clock()) - last >= HANDSHAKE_FRESH_SEC
+        return age >= HANDSHAKE_FRESH_SEC
+
+    def start(self, target):
+        """A new effective target: a new attempt, its backoff from the start."""
+        previous = self.attempt
+        self.unidentified_since = None
+        if target is None:
+            self.attempt = Attempt.new(source='seed', target=None, target_key=None, boot_id=self.boot_id,
+                                       rejected=previous.rejected, generation=previous.generation)
+            self.save_attempt()
+            self.next_health = 0
+            return None
+        source = target.source
+        if (source == 'panel' and previous.target == target.server
+                and previous.state in ('failed', 'rejected', 'unverified', 'pending')):
+            source = 'operator-retry'
+        fresh = self.asked_now(target)
+        self.attempt = Attempt.new(source=source, target=target.server, target_key=target.key, boot_id=self.boot_id,
+                                   rejected=previous.rejected, generation=previous.generation)
+        return self.run_pipeline(target, source, reinspect=not fresh)
+
+    def asked_now(self, target):
+        """True for a panel request made within FRESH_REQUEST_SEC: the
+        operator asking now, applied even when the server is already live."""
+        return target.source == 'panel' and recent(target.request.get('requested_at'), FRESH_REQUEST_SEC)
 
     def switch(self, request):
-        # Also validate when called outside the polling loop (e.g. tests/tools).
-        request = self.switch_request(request)
-        self.request = request
-        self.rejection = None
-        self.pending = None
+        """Apply a panel request now, as a new target (tests and tools)."""
+        self.target = target = self.resolve_request(request)
+        if target is None:
+            return self.inspect()
+        self.attempt = Attempt.new(source=target.source, target=target.server, target_key=target.key,
+                                   boot_id=self.boot_id, rejected=self.attempt.rejected,
+                                   generation=self.attempt.generation)
+        return self.run_pipeline(target, target.source)
+
+    def resolve_request(self, request):
+        if self.configured_server:
+            self.request, self.invalid_desired = self.configured_request(), False
+            return self.configured_selection()
+        request = desired_request(request, self.provider)
+        self.request, self.invalid_desired = request, request is None
+        return Selection(request['server'], 'panel', request) if request else None
+
+    def gate(self, target):
+        """None when the pipeline may mutate, else (state, message, why):
+        `pending` (prerequisites missing) or `rejected` (invalid or unlisted)."""
         error = self.configuration_error()
         if error:
-            self.rejection = error
-            return self.inspect()
-        if request is None:
-            self.rejection = 'Invalid desired-state file; no change applied.'
-            return self.inspect()
+            return 'rejected', error, 'catalogue' if error.startswith('Unknown') else 'invalid'
         if not self.catalog.usable():
-            self.pending = 'Waiting for a fresh trusted relay catalogue; request will retry automatically.'
+            return 'pending', 'Waiting for a fresh trusted relay catalogue; request will retry automatically.', None
+        if target.server not in self.catalog.relays:
+            return 'rejected', UNLISTED, 'catalogue'
+        if self.kind == 'overlay':
+            if not self.routing_status(require_address=self.address_before_switch)[0]:
+                return 'pending', ('Waiting for tunnel and overlay routing; request will retry automatically. '
+                                   'Run recovery if this persists.'), None
+            if not self.netbird_native():
+                return 'pending', ('Waiting for NetBird to run kernel WireGuard with its kernel firewall; '
+                                   'request will retry automatically.'), None
+        try:
+            self.peers()
+        except (RuntimeError, ValueError, UnicodeError):
+            return 'pending', 'Waiting for the WireGuard interface; request will retry automatically.', None
+        return None
+
+    def run_pipeline(self, target, source, *, reinspect=False, repair=False):
+        """Gates, then (after a fresh inspection when re-applying) the
+        mutation and its verification. The same steps for every source."""
+        attempt = self.attempt
+        attempt.source = source
+        gate = self.gate(target)
+        if gate is not None:
+            state, message, why = gate
+            attempt.state, attempt.outcome, attempt.message = state, state, message
+            attempt.next_action = attempt.next_action_at = None
+            attempt.extra = {'why': why, 'release': self.release_signature(why)} if state == 'rejected' else {}
+            if state == 'rejected' and target.source == 'panel':
+                attempt.rejected = {'key': target.key, 'reason': message, 'why': why,
+                                    'release': attempt.extra['release']}
+            self.save_attempt()
+            self.next_health = self.clock() + REFRESH_SEC
             return self.inspect()
-        if request['server'] not in self.catalog.relays:
-            self.rejection = 'Requested server is not in a fresh trusted relay catalogue; no change applied.'
-            return self.inspect()
-        routing_ok, fallback = self.routing_status(require_address=self.address_before_switch)
-        if not routing_ok:
-            self.pending = 'Waiting for tunnel and overlay routing; request will retry automatically. Run recovery if this persists.'
-            return self.inspect()
-        if not self.netbird_native():
-            self.pending = 'Waiting for NetBird to run kernel WireGuard with its kernel firewall; request will retry automatically.'
-            return self.inspect()
-        relay = self.catalog.relays[request['server']]
+        if attempt.rejected and attempt.rejected.get('key') == target.key:
+            # Admitted again (what refused it changed): no longer refused.
+            attempt.rejected = None
+        attempt.extra = {}
+        if reinspect or repair:
+            finding = self.measurement = self.measure()
+            if finding['server'] == target.server:
+                if finding['status'] == 'ok':
+                    attempt.settle()
+                    self.save_attempt()
+                    self.on_verified(target.server)
+                    self.next_health = self.clock() + REFRESH_SEC
+                    return self.emit(finding)
+                if not (repair and self.handshake_stale(finding)):
+                    attempt.state, attempt.outcome, attempt.message = 'unverified', 'applied-unverified', None
+                    attempt.next_action, attempt.next_action_at = 'recheck', self.clock() + REFRESH_SEC
+                    self.save_attempt()
+                    self.next_health = self.clock() + REFRESH_SEC
+                    return self.emit(finding)
+                print('applier: the registration lapsed; registering the same server again', flush=True)
+                # Repairs pace themselves on the backoff too (D15).
+                attempt.backoff_step += 1
+        return self.mutate(target)
+
+    def mutate(self, target):
+        attempt = self.attempt
+        relay = self.catalog.relays[target.server]
         try:
             keys = self.peers()
+            current = self.server_for(keys)
         except (RuntimeError, ValueError, UnicodeError):
-            self.pending = 'Waiting for the WireGuard interface; request will retry automatically.'
+            attempt.state, attempt.outcome = 'pending', 'pending'
+            attempt.message = 'Waiting for the WireGuard interface; request will retry automatically.'
+            self.save_attempt()
             return self.inspect()
+        self.before_mutation(target)
+        attempt.state, attempt.outcome, attempt.message = 'attempting', None, None
+        attempt.attempts += 1
+        attempt.last_mutation_at = self.clock()
+        attempt.mutation_certainty = 'uncertain'
+        attempt.next_action = attempt.next_action_at = None
+        attempt.generation = self.current_generation() or attempt.generation
+        # Recorded before any I/O: a lost response can hide success.
+        self.save_attempt()
+        self.publish('applying', 'Applying the requested server.', server=current)
         try:
-            self.publish('applying', 'Applying the requested server.', server=self.server_for(keys),
-                         routing_ok=True, unreachable_fallback=fallback, netbird_native=True)
             self.apply_relay(relay, keys)
-            deadline = self.switch_deadline = self.clock() + SWITCH_TIMEOUT_SEC
+        except CredentialRejected:
+            attempt.state, attempt.outcome, attempt.mutation_certainty = 'rejected', 'rejected', 'definite'
+            attempt.message = self.credentials_message()
+            attempt.extra = {'why': 'credentials', 'release': self.release_signature('credentials')}
+            if target.source == 'panel':
+                attempt.rejected = {'key': target.key, 'reason': attempt.message, **attempt.extra}
+            self.save_attempt()
+            self.next_health = self.clock() + REFRESH_SEC
+            return self.inspect()
+        except (RuntimeError, ValueError, UnicodeError) as exc:
+            attempt.state, attempt.outcome = 'failed', 'mutation-failed'
+            attempt.mutation_certainty = 'definite' if isinstance(exc, MutationRefused) else 'uncertain'
+            attempt.message = self.mutation_failed_message()
+            attempt.schedule('reapply', self.clock())
+            self.save_attempt()
+            # The target may be live all the same: the check says so.
+            return self.check()
+        return self.verify(target)
+
+    def before_mutation(self, target):
+        """Just before the mutation's I/O (gluetun records its selection)."""
+
+    def mutation_failed_message(self):
+        return 'Peer update failed; retrying automatically.'
+
+    def credentials_message(self):
+        return f'{self.spec.label} refused the login; correct the credentials, or retry.'
+
+    def verify(self, target):
+        """Inspect until the target verifies or the provider's timeout. A lost
+        protective guard aborts. At the timeout, a live target is applied but
+        unverified (re-checked, D7); anything else is a failed attempt."""
+        attempt = self.attempt
+        deadline = self.switch_deadline = self.clock() + self.switch_timeout
+        finding = None
+        try:
             while self.clock() < deadline:
-                result = self.inspect(applying=True)
-                if result['status'] == 'ok' and result['server'] == request['server']:
-                    return result
-                if not result['routing_ok']:
-                    self.rejection = 'Routing changed during the switch; choose a server again after recovery.'
-                    return self.inspect()
+                finding = self.measurement = self.measure(applying=True)
+                if finding['status'] == 'ok' and finding['server'] == target.server:
+                    attempt.settle()
+                    self.save_attempt()
+                    self.on_applied(target.server)
+                    self.on_verified(target.server)
+                    self.next_health = self.clock() + REFRESH_SEC
+                    return self.emit(finding)
+                if not finding['safe']:
+                    attempt.state, attempt.outcome = 'failed', 'mutation-failed'
+                    attempt.message = 'Routing changed during the switch; retrying after recovery.'
+                    attempt.schedule('reapply', self.clock())
+                    self.save_attempt()
+                    self.next_health = self.clock() + REFRESH_SEC
+                    return self.emit(finding)
+                self.emit(finding, applying=True)
                 self.sleep(3)
-            self.rejection = 'Switch verification timed out; choose a server again to retry.'
-            return self.inspect()
-        except (RuntimeError, ValueError, UnicodeError):
-            self.rejection = 'Peer update failed; choose a server again to retry.'
-            return self.inspect()
         finally:
             self.switch_deadline = None
+        # The loop's last inspection, seconds old, decides; measuring again
+        # would only wait out the same answers.
+        if finding is None:
+            finding = self.measurement = self.measure()
+        if finding['server'] == target.server:
+            self.on_applied(target.server)
+            if finding['status'] == 'ok':
+                attempt.settle()
+                self.on_verified(target.server)
+            else:
+                attempt.state, attempt.outcome, attempt.message = 'unverified', 'applied-unverified', None
+                attempt.next_action, attempt.next_action_at = 'recheck', self.clock() + REFRESH_SEC
+        else:
+            attempt.state, attempt.outcome = 'failed', 'mutation-failed'
+            attempt.message = 'Switch verification timed out; retrying automatically.'
+            attempt.schedule('reapply', self.clock())
+        self.save_attempt()
+        self.next_health = self.clock() + REFRESH_SEC
+        return self.emit(finding)
+
+    # -- reporting ---------------------------------------------------------------------
+
+    def assess(self, result, *, now=None):
+        """This applier's verdict on a record, against its own target."""
+        return assess(self.exit_config, result, self.resolve(peek=True), now)
 
     def push_gatus(self, result):
+        """Push the verdict, not the raw status. Never `applying`: a switch in
+        progress, or a request that arrived while one ran, isn't a sample."""
         base, token = os.environ.get('GATUS_URL', ''), os.environ.get('GATUS_TOKEN', '')
         if not base or not token:
             return
         endpoint = urllib.parse.quote(os.environ.get('GATUS_ENDPOINT', 'molebridge'), safe='')
         if not base.startswith(('http://', 'https://')) or any(c in token for c in '\r\n'):
             return
-        query = urllib.parse.urlencode({'success': str(result['status'] == 'ok').lower(), 'error': result['message']})
+        verdict = self.assess(result)
+        if verdict.state == 'applying':
+            return
+        success = verdict.state == 'ok'
+        error = '' if success else (verdict.message or result.get('message') or verdict.label)
+        query = urllib.parse.urlencode({'success': str(success).lower(), 'error': error})
         # Keep the token out of argv and logs.
         with tempfile.TemporaryDirectory() as directory:
             header = Path(directory) / 'header'
@@ -576,71 +1130,43 @@ class Applier:
                 print('applier: monitoring push failed', flush=True)
 
     def doctor_checks(self):
-        """Fixed labels and results for `--doctor`; no addresses or names."""
+        """Fixed labels and results for `--doctor`; no addresses or names. The
+        last line is the verdict against this applier's own target, with its
+        reason codes when it fails."""
         result = read_json(self.result_path, 16384)
-        result = result if isinstance(result, dict) else {}
-        return {'recent applier check': recent(result.get('checked_at')),
-                'routing protection': self.routing_status()[0],
-                'NetBird kernel WireGuard and kernel firewall': self.netbird_native(),
-                'fresh relay catalogue': self.catalog.usable(),
-                f'verified {self.spec.label} egress': recent(result.get('checked_at')) and result.get('status') == 'ok'}
+        checks = {'recent applier check': isinstance(result, dict) and recent(result.get('checked_at'))}
+        if self.kind == 'overlay':
+            checks['routing protection'] = self.routing_status()[0]
+            checks['NetBird kernel WireGuard and kernel firewall'] = self.netbird_native()
+        checks['fresh relay catalogue'] = self.catalog.usable()
+        checks.update(self.backend_checks())
+        verdict = self.assess(result)
+        label = f'verified {self.spec.label} egress'
+        if verdict.state != 'ok':
+            label = (label + ' - ' + ', '.join(verdict.reasons or (verdict.label,)))[:100]
+        checks[label] = verdict.state == 'ok'
+        return checks
 
-    def tick(self):
-        if self.clock() >= self.next_catalog:
-            refreshed = self.catalog.refresh(self.fetch_catalog)
-            self.next_catalog = self.clock() + (REFRESH_INTERVAL_S if refreshed else 60)
-        if self.configured_server:
-            raw = None
-            request = self.configured_request()
-            error = self.configuration_error()
-            if error:
-                self.request, self.pending = request, None
-                result = self.publish('failed', error)
-                self.push_gatus(result)
-                return result
-        else:
-            raw = read_json(self.desired_path, 4096)
-            request = desired_request(raw, self.provider)
-        if request is None and (raw is not None or self.desired_path.exists()):
-            if self.last_request != 'invalid':
-                self.next_health = 0
-            self.last_request, self.request = 'invalid', None
-            self.pending = None
-            self.rejection = 'Invalid desired-state file; no change applied.'
-        elif request and request_token(request) != self.last_request:
-            result = self.switch(request)
-            self.last_request = request_token(request)
-            self.next_health = self.clock() + REFRESH_SEC
-            self.push_gatus(result)
-            return result
-        elif request and self.catalog.usable() and (self.pending or
-                (self.configured_server and self.rejection and self.clock() >= self.next_health)):
-            # A pending request retries once its prerequisites can be met. A
-            # stale catalogue is checked here without probing; routing and the
-            # tunnel are re-checked by the switch itself.
-            result = self.switch(request)
-            self.next_health = self.clock() + REFRESH_SEC
-            self.push_gatus(result)
-            return result
-        elif request and not self.rejection and not self.pending:
-            # A recreated tunnel may start with the downloaded peer again.
-            try:
-                if self.server_for(self.peers()) != request['server']:
-                    result = self.switch(request)
-                    self.next_health = self.clock() + REFRESH_SEC
-                    self.push_gatus(result)
-                    return result
-            except (RuntimeError, ValueError):
-                pass
-        elif request is None and not self.desired_path.exists():
-            self.request, self.last_request, self.rejection = None, None, None
-            self.pending = None
-        if self.clock() >= self.next_health:
-            result = self.inspect()
-            self.next_health = self.clock() + REFRESH_SEC
-            self.push_gatus(result)
-            return result
-        return None
+    def backend_checks(self):
+        return {}
+
+    def healthy(self):
+        """The container health check, operational only (D5): a fresh
+        completed check, ok or failed, and an intact namespace for the kind.
+        Whether the exit is verified is the verdict's, the doctor's and
+        monitoring's question, never a reason to restart it."""
+        result = read_json(self.result_path, 16384)
+        completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
+        if not completed or not recent(result.get('checked_at')):
+            return False
+        if len(self.peers()) != 1:
+            return False
+        if self.kind == 'sidecar':
+            return self.control_answers()
+        return self.routing_status()[0] and self.netbird_native()
+
+    def control_answers(self):
+        return True
 
 
 def main():
@@ -652,6 +1178,8 @@ def main():
     try:
         spec = providers.from_env(os.environ)
         config = RoutingConfig.from_env(os.environ)
+        # Refuses a sidecar with a native provider, at start.
+        ExitConfig(spec.id, config.kind)
         if spec.applier == 'applier.apply:Applier':
             applier = Applier(directory, config, server=os.environ.get('SERVER', ''))
         else:
@@ -659,15 +1187,7 @@ def main():
         if config.backend == 'wireguard':
             applier.owner_path = Path(os.environ.get('OWNER_RECORD', '/run/molebridge/exit-owner'))
         if args.healthcheck:
-            result = read_json(applier.result_path, 16384)
-            completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
-            return 0 if (completed and recent(result.get('checked_at'))
-                         and (not applier.configured_server or
-                              (result.get('status') == 'ok'
-                               and result.get('configured_server') == applier.configured_server
-                               and result.get('server') == applier.configured_server))
-                         and len(applier.peers()) == 1 and applier.routing_status()[0]
-                         and applier.netbird_native()) else 1
+            return 0 if applier.healthy() else 1
         if args.doctor:
             checks = applier.doctor_checks()
             for label, passed in checks.items():

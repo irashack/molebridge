@@ -67,6 +67,11 @@ def routes():
             {'type': 'unreachable', 'dst': 'default', 'metric': 4096}]
 
 
+def check(result, name):
+    """A check's state in a schema-2 record."""
+    return result['checks'][name]['state']
+
+
 def by_priority(table, priority):
     return next(rule for rule in table if rule['priority'] == priority)
 
@@ -267,7 +272,7 @@ def test_saved_selection_retries_after_catalogue_recovers(runtime):
     app.fetch_catalog = lambda: next(responses)
     write_json_atomic(app.desired_path, request())
     assert app.tick()['status'] == 'failed'
-    assert app.pending and not app.rejection
+    assert app.attempt.state == 'pending'
     assert not kernel.mutations
     # While the catalogue stays stale nothing is probed or pushed again.
     probes = len([c for c in kernel.calls if c[0] == 'curl'])
@@ -276,7 +281,7 @@ def test_saved_selection_retries_after_catalogue_recovers(runtime):
     result = app.tick()
     assert result['status'] == 'ok' and result['request_id'] == '0' * 32
     assert len(kernel.mutations) == 1
-    assert not app.pending
+    assert app.attempt.state != 'pending'
 
 
 @pytest.mark.parametrize('prerequisite', ['overlay', 'tunnel', 'route'])
@@ -288,26 +293,24 @@ def test_saved_selection_retries_after_routing_recovers(runtime, prerequisite):
         kernel.routes[6] = routes()[1:]
     write_json_atomic(app.desired_path, request())
     assert app.tick()['status'] == 'failed'
-    assert app.pending and not kernel.mutations
+    assert app.attempt.state == 'pending' and not kernel.mutations
     kernel.overlay_present = kernel.tunnel_present = True
     kernel.routes[6] = routes()
     assert app.tick()['status'] == 'ok'
     assert len(kernel.mutations) == 1
 
 
-def test_unlisted_request_requires_explicit_retry_even_after_catalogue_change(runtime):
+def test_unlisted_request_is_tried_again_once_the_catalogue_changes(runtime):
     app, kernel = runtime
     unlisted = 'xx-xxx-wg-999'
     write_json_atomic(app.desired_path, request(server=unlisted))
     assert app.tick()['status'] == 'failed'
-    assert app.rejection and not app.pending
+    assert app.request_rejected()
     # Listed now, under another key than the live peer's.
     assert app.catalog.refresh(lambda: json.dumps(payload(hostname=unlisted, public_key='AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=')))
-    kernel.now += 60
-    assert app.tick()['status'] == 'failed'
-    assert not kernel.mutations
-    write_json_atomic(app.desired_path, request(server=unlisted, request_id='1' * 32))
+    # The catalogue changed, so the request is admitted again.
     assert app.tick()['status'] == 'ok'
+    assert len(kernel.mutations) == 2
 
 
 def test_removing_pending_request_cancels_retry(runtime):
@@ -318,7 +321,7 @@ def test_removing_pending_request_cancels_retry(runtime):
     app.desired_path.unlink()
     kernel.overlay_present = True
     app.tick()
-    assert not app.pending and not kernel.mutations
+    assert not app.attempt.state == 'pending' and not kernel.mutations
 
 
 def test_tunnel_disappearing_before_peer_update_leaves_request_pending(runtime):
@@ -329,7 +332,7 @@ def test_tunnel_disappearing_before_peer_update_leaves_request_pending(runtime):
     app.peers = missing_interface
     write_json_atomic(app.desired_path, request())
     assert app.tick()['status'] == 'failed'
-    assert app.pending and not kernel.mutations
+    assert app.attempt.state == 'pending' and not kernel.mutations
     app.peers = peers
     assert app.tick()['status'] == 'ok'
 
@@ -338,7 +341,7 @@ def test_switch_and_observed_initial_peer(runtime):
     app, kernel = runtime
     assert app.inspect()['server'] == HOST
     result = app.switch(request())
-    assert result['status'] == 'ok' and result['routing_ok']
+    assert result['status'] == 'ok' and check(result, 'routing') == 'pass'
     assert result['request_id'] == '0' * 32
     assert len(kernel.mutations) == 1
     assert all('dump' not in c and 'private-key' not in c and 'showconf' not in c for c in kernel.calls)
@@ -357,7 +360,7 @@ def test_missing_fallback_prevents_switch_success(runtime):
     app, kernel = runtime
     kernel.routes[6] = kernel.routes[6][:1]
     result = app.switch(request())
-    assert result['status'] == 'failed' and not result['unreachable_fallback']
+    assert result['status'] == 'failed' and not result['checks']['routing']['fallback']
     assert not kernel.mutations
 
 
@@ -366,8 +369,8 @@ def test_single_family_route_loss_is_unhealthy_and_refuses_switch(runtime, famil
     app, kernel = runtime
     kernel.routes[family] = routes()[1:]
     result = app.inspect()
-    assert result['status'] == 'failed' and not result['routing_ok']
-    assert result['unreachable_fallback'] is True
+    assert result['status'] == 'failed' and not check(result, 'routing') == 'pass'
+    assert result['checks']['routing']['fallback'] is True
     assert status_view(None, result)[0] == 'failed'
     assert app.switch(request())['status'] == 'failed'
     assert not kernel.mutations
@@ -513,7 +516,7 @@ def test_netbird_kernel_firewall_detection(listing, expected):
 def test_healthy_result_records_netbird_kernel_mode(runtime):
     app, kernel = runtime
     result = app.inspect()
-    assert result['status'] == 'ok' and result['netbird_native'] is True
+    assert result['status'] == 'ok' and check(result, 'netbird') == 'pass'
     assert ['nft', '-j', 'list', 'chains'] in kernel.calls
 
 
@@ -537,12 +540,12 @@ def test_netbird_outside_kernel_mode_is_never_connected(runtime, fault):
         app.run = run
     result = app.inspect()
     assert result['status'] == 'failed' and result['message'] == NETBIRD_MODE_FAILED
-    assert result['routing_ok'] is True and result['netbird_native'] is False
+    assert check(result, 'routing') == 'pass' and check(result, 'netbird') == 'fail'
     assert status_view(None, result) == ('failed', 'failed')
     # A switch waits instead of changing the tunnel, and retries later.
     result = app.switch(request())
     assert result['status'] == 'failed' and 'kernel firewall' in result['message']
-    assert app.pending and not kernel.mutations
+    assert app.attempt.state == 'pending' and not kernel.mutations
 
 
 def test_status_never_connected_when_netbird_mode_failed():
@@ -643,7 +646,7 @@ def test_return_path_sysctl_is_required_for_health_and_switching(runtime, value)
     app, kernel = runtime
     kernel.return_path = value
     result = app.inspect()
-    assert result['status'] == 'failed' and not result['routing_ok']
+    assert result['status'] == 'failed' and not check(result, 'routing') == 'pass'
     assert app.switch(request())['status'] == 'failed'
     assert not kernel.mutations
 
@@ -709,7 +712,8 @@ def test_an_unanswered_egress_check_is_asked_once_more(runtime, capsys):
     probes = unanswered(app, kernel, mullvad_probe(6))
     statuses = published(app)
     result = app.inspect()
-    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert result['status'] == 'ok' and check(result, 'egress') == 'pass'
+    assert result['checks']['egress']['tier'] == 'provider'
     assert len(probes) == 2 and statuses == ['ok']
     assert kernel.now == 10 + EGRESS_RETRY_SEC
     assert 'asking once more' in capsys.readouterr().out
@@ -721,7 +725,8 @@ def test_an_egress_check_unanswered_twice_fails_after_one_pause(runtime, capsys)
     statuses = published(app)
     result = app.inspect()
     assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
-    assert result['exit_confirmed'] is False and result['egress_tier'] is None
+    assert result['checks']['egress'] == {**result['checks']['egress'], 'state': 'fail', 'reason': 'unanswered',
+                                          'tier': None}
     assert len(probes) == 2 and statuses == ['failed']
     assert kernel.now == 10 + EGRESS_RETRY_SEC + 10
     assert 'no answer twice' in capsys.readouterr().out
@@ -761,8 +766,8 @@ def test_a_stale_or_missing_handshake_is_not_asked_again(runtime, age):
 
 
 @pytest.mark.parametrize('change', [
-    lambda app: setattr(app, 'rejection', 'Invalid desired-state file; no change applied.'),
-    lambda app: setattr(app, 'pending', 'Waiting for a fresh trusted relay catalogue; request will retry automatically.'),
+    lambda app: setattr(app, 'invalid_desired', True),
+    lambda app: setattr(app.attempt, 'state', 'pending'),
     lambda app: app.catalog.relays.clear(),
 ])
 def test_a_check_that_fails_anyway_is_not_asked_again(runtime, change):
@@ -784,7 +789,9 @@ def test_a_negative_answer_is_kept_when_a_later_request_would_go_unanswered(runt
     unanswered(app, kernel, mullvad_probe(6), times=1 if negative == 4 else 0)
     result = app.inspect()
     assert result['status'] == 'failed' and result['message'] == 'Tunnel egress is not confirmed as Mullvad.'
-    assert result['mullvad_exit_ip'] is False and result['egress_tier'] is None
+    egress = result['checks']['egress']
+    assert egress['state'] == 'fail' and egress['reason'] == 'not-confirmed' and egress['tier'] is None
+    assert egress['families'][str(negative)] == 'fail'
     assert kernel.now == 0 and len(probes) == (0 if negative == 4 else 1)
 
 
@@ -830,57 +837,84 @@ def test_a_health_tick_publishes_and_pushes_once_after_a_retry(runtime, monkeypa
 
 
 OTHER_HOST, OTHER_KEY = 'se-sto-wg-002', 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE='
-PEER_UPDATE_FAILED = 'Peer update failed; choose a server again to retry.'
+PEER_UPDATE_FAILED = 'Peer update failed; retrying automatically.'
 
 
-def test_a_met_rejection_clears_on_a_later_check_that_passes(runtime, capsys):
+def test_a_switch_that_never_verifies_is_rechecked_not_reapplied(runtime):
+    """D7: applied but unverified is re-checked; the tunnel isn't touched
+    again while the live server is the target."""
     app, kernel = runtime
     kernel.egress_ok = False
     write_json_atomic(app.desired_path, request())
     result = app.tick()
-    assert result['message'] == 'Switch verification timed out; choose a server again to retry.'
+    assert result['status'] == 'failed' and result['message'] == 'Tunnel inspection or egress check failed.'
     assert result['server'] == HOST and len(kernel.mutations) == 1
+    assert app.attempt.state == 'unverified' and result['selection']['outcome'] == 'applied-unverified'
+    assert result['selection']['next_action'] == 'recheck'
+    for _ in range(20):
+        kernel.now += 60
+        app.tick()
+    assert len(kernel.mutations) == 1
     kernel.egress_ok = True  # the tunnel comes good on the requested server
     kernel.now += 60
     result = app.tick()
-    assert result['status'] == 'ok' and result['server'] == HOST and app.rejection is None
-    assert len(kernel.mutations) == 1  # nothing applied again
-    assert 'clearing the earlier failure' in capsys.readouterr().out
+    assert result['status'] == 'ok' and result['server'] == HOST and app.attempt.state == 'idle'
+    assert result['selection']['outcome'] == 'verified' and len(kernel.mutations) == 1
 
 
-def test_a_rejection_is_published_before_any_check_may_clear_it(runtime):
-    app, kernel = runtime
-    app.request, app.rejection = request(), PEER_UPDATE_FAILED
-    assert app.inspect()['message'] == PEER_UPDATE_FAILED
-    assert app.inspect()['status'] == 'ok' and app.rejection is None
-
-
-def test_a_rejection_stands_while_another_server_is_live(runtime):
+def test_a_failed_mutation_is_reported_until_a_check_finds_the_target(runtime):
     app, kernel = runtime
     app.catalog.relays[OTHER_HOST] = {**ENTRY, 'hostname': OTHER_HOST, 'public_key': OTHER_KEY}
     kernel.keys = [OTHER_KEY]
-    app.request, app.rejection = request(), PEER_UPDATE_FAILED
+    kernel.fail_set = True
+    write_json_atomic(app.desired_path, request())
+    result = app.tick()
+    assert result['status'] == 'failed' and result['message'] == PEER_UPDATE_FAILED
+    assert result['selection']['outcome'] == 'mutation-failed' and result['selection']['next_action'] == 'reapply'
+    assert app.attempt.state == 'failed' and app.attempt.mutation_certainty == 'uncertain'
+    # The live peer is the target after all (a lost response): the next check
+    # finds it met, and nothing is applied again.
+    kernel.fail_set = False
+    kernel.keys = [KEY]
+    kernel.now += 60
+    result = app.tick()
+    assert result['status'] == 'ok' and app.attempt.state == 'idle'
+    assert len([c for c in kernel.mutations if c[-1] != 'remove']) == 0
+
+
+def test_a_failed_mutation_stands_while_another_server_is_live(runtime):
+    app, kernel = runtime
+    app.catalog.relays[OTHER_HOST] = {**ENTRY, 'hostname': OTHER_HOST, 'public_key': OTHER_KEY}
+    kernel.keys = [OTHER_KEY]
+    kernel.fail_set = True
+    write_json_atomic(app.desired_path, request())
     for _ in range(3):
-        result = app.inspect()
+        result = app.tick() or app.inspect()
         assert result['status'] == 'failed' and result['message'] == PEER_UPDATE_FAILED
         assert result['server'] == OTHER_HOST
 
 
-@pytest.mark.parametrize('change', [
-    lambda app, k: setattr(k, 'egress_ok', False),
-    lambda app, k: setattr(k, 'age', 500),
-    lambda app, k: setattr(app, 'pending', 'Waiting for the WireGuard interface; request will retry automatically.'),
-    lambda app, k: setattr(app, 'request', None),
-])
-def test_a_rejection_stays_while_a_check_fails_or_nothing_was_requested(runtime, change):
+def test_a_failed_mutation_is_retried_on_the_backoff_after_inspecting(runtime):
     app, kernel = runtime
-    app.request, app.rejection = request(), PEER_UPDATE_FAILED
-    app.inspect()
-    change(app, kernel)
-    assert app.inspect()['status'] == 'failed' and app.rejection == PEER_UPDATE_FAILED
+    app.catalog.relays[OTHER_HOST] = {**ENTRY, 'hostname': OTHER_HOST, 'public_key': OTHER_KEY}
+    kernel.keys = [OTHER_KEY]
+    kernel.fail_set = True
+    write_json_atomic(app.desired_path, request())
+    app.tick()
+    attempts = [len(kernel.calls)]
+    for wait in (59, 1):
+        kernel.now += wait
+        app.tick()
+    # Re-applied after one minute, not before.
+    assert app.attempt.attempts == 2 and app.attempt.backoff_step == 2
+    kernel.fail_set = False
+    for wait in (119, 1):
+        kernel.now += wait
+        app.tick()
+    assert app.attempt.state == 'idle' and app.attempt.attempts == 3 and kernel.keys == [KEY]
 
 
-def test_switch_timeout_does_not_repeat_or_failover(runtime):
+def test_a_switch_timeout_never_fails_over_and_a_new_request_retries_now(runtime):
     app, kernel = runtime
     kernel.egress_ok = False
     write_json_atomic(app.desired_path, request())
@@ -897,13 +931,15 @@ def test_switch_timeout_does_not_repeat_or_failover(runtime):
 
 def test_peer_update_failure_not_hidden(runtime):
     app, kernel = runtime
+    app.catalog.relays[OTHER_HOST] = {**ENTRY, 'hostname': OTHER_HOST, 'public_key': OTHER_KEY}
+    kernel.keys = [OTHER_KEY]
     kernel.fail_set = True
     result = app.switch(request())
     assert result['status'] == 'failed'
     assert 'update failed' in result['message']
 
 
-def test_routing_failure_after_peer_update_requires_explicit_retry(runtime):
+def test_routing_lost_during_a_switch_aborts_it(runtime):
     app, kernel = runtime
     run = kernel.run
     def lose_route(args, **kwargs):
@@ -913,22 +949,18 @@ def test_routing_failure_after_peer_update_requires_explicit_retry(runtime):
         return result
     app.run = lose_route
     write_json_atomic(app.desired_path, request())
-    assert app.tick()['status'] == 'failed'
-    assert app.rejection and not app.pending
+    result = app.tick()
+    assert result['status'] == 'failed'
+    assert result['message'] == 'Routing changed during the switch; retrying after recovery.'
+    assert app.attempt.state == 'failed' and app.attempt.next_action == 'reapply'
     app.run = run
     kernel.routes[6] = routes()
     kernel.now += 60
-    # Never applied again on its own. The switch's own result showed the
-    # routing fault, so the next check publishes the rejection; the peer it
-    # set is the requested one, so once routing is back the check after that
-    # finds the request met.
-    assert app.tick()['message'] == 'Routing changed during the switch; choose a server again after recovery.'
-    kernel.now += 60
+    # The peer it set is the requested one: once routing is back the next
+    # check finds the target met, and nothing is applied again.
     result = app.tick()
     assert len(kernel.mutations) == 1
-    assert result['status'] == 'ok' and result['server'] == HOST and app.rejection is None
-    write_json_atomic(app.desired_path, request(request_id='1' * 32))
-    assert app.tick()['status'] == 'ok'
+    assert result['status'] == 'ok' and result['server'] == HOST and app.attempt.state == 'idle'
 
 
 @pytest.mark.parametrize('value', ['true', 1, None, {}])
@@ -1082,10 +1114,12 @@ def test_status_never_trusts_old_invalid_or_future_checks(when):
 def test_status_requires_routing_and_request_ack():
     req = request()
     result = {'status': 'ok', 'checked_at': now_iso(), 'routing_ok': False, 'mullvad_exit_ip': True,
-              'request_id': request_token(req)}
+              'request_id': request_token(req), 'server': HOST, 'requested_server': HOST}
     assert status_view(req, result)[0] == 'failed'
     result['routing_ok'] = True
     assert status_view(req, result)[0] == 'ok'
+    # The acknowledged request must also be the server the record reports.
+    assert status_view(req, {**result, 'server': 'se-sto-wg-002'})[0] == 'failed'
     assert status_view(request(request_id='1' * 32), result)[0] == 'applying'
     assert status_view(request(request_id='1' * 32, requested_at=timestamp(151)), result)[0] == 'unknown'
 

@@ -57,6 +57,11 @@ def rules(family):
     return table
 
 
+def tier(result):
+    egress = result['checks']['egress']
+    return egress['tier'] if egress['state'] == 'pass' else None
+
+
 class NordKernel:
     """Just enough of iproute2, wg, nft and NordVPN's insights call."""
 
@@ -218,7 +223,7 @@ def test_failed_removal_adds_no_peer(nord):
     kernel.fail_remove = True
     result = app.switch(request(US))
     assert result['status'] == 'failed'
-    assert result['message'] == 'Peer update failed; choose a server again to retry.'
+    assert result['message'] == 'Peer update failed; retrying automatically.'
     assert kernel.peers == {DE_KEY: '198.51.100.22:51820'}
     assert all(c[-1] == 'remove' for c in kernel.mutations)
 
@@ -276,9 +281,15 @@ def test_recreated_tunnel_gets_the_selection_back(nord):
     assert app.tick()['status'] == 'ok' and kernel.peers == {US_KEY: '198.51.100.14:51820'}
     kernel.peers = {}  # the wireguard container came back from its config, which has no peer
     kernel.calls.clear()
+    # Without its owner record's new generation (test_runtime.py), a missing
+    # peer is waited out like any drift.
+    app.tick()
+    kernel.now += 90
     assert app.tick()['status'] == 'ok' and kernel.peers == {US_KEY: '198.51.100.14:51820'}
-    # Same key, other server in the location: still not the selection, so it is applied again.
+    # Same key, other server in the location: still not the selection, so it
+    # is applied again after the 90 s guard.
     kernel.peers = {US_KEY: '198.51.100.11:51820'}
+    kernel.now += 90
     assert app.tick()['server'] == US2
 
 
@@ -288,7 +299,7 @@ def test_protected_egress_is_the_provider_tier(nord):
     app, kernel = nord
     connect(kernel, US)
     result = app.inspect()
-    assert result['status'] == 'ok' and result['exit_confirmed'] is True and result['egress_tier'] == 'provider'
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     assert (result['egress_ip'], result['egress_city'], result['egress_country']) == ('198.51.100.11', 'Dallas',
                                                                                        'United States')
     assert result['egress_ips'] == {'4': '198.51.100.11'} and result['provider'] == 'nordvpn'
@@ -302,7 +313,7 @@ def test_unprotected_egress_elsewhere_fails_at_once(nord):
     connect(kernel, US)
     kernel.insights = [json.loads((FIXTURES / 'nordvpn-insights-unprotected.json').read_text())]
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None and result['exit_confirmed'] is False
+    assert result['status'] == 'failed' and tier(result) is None
     assert result['message'] == 'Tunnel egress is not confirmed as NordVPN.'
     assert len(kernel.insight_calls) == 1 and kernel.now == 0
 
@@ -313,7 +324,7 @@ def test_cached_answer_for_the_servers_own_address_is_asked_again(nord):
     stale = {'ip': '198.51.100.11', 'country': 'Unknown', 'city': 'Unknown', 'country_code': 'Unknown', 'protected': False}
     kernel.insights = [stale, stale, {**stale, 'protected': True, 'city': 'Dallas'}]
     result = app.inspect()
-    assert result['status'] == 'ok' and result['egress_tier'] == 'provider'
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     assert len(kernel.insight_calls) == 3 and kernel.now == 2 * INSIGHTS_RETRY_SEC
 
 
@@ -339,8 +350,9 @@ def test_a_switch_waits_out_a_cached_answer_within_its_own_timeout(nord):
     kernel.now = 0
     result = app.switch(request(US) | {'request_id': 'b' * 32})
     assert result['status'] == 'failed' and kernel.now <= SWITCH_TIMEOUT_SEC + 3
-    assert result['message'] == 'Switch verification timed out; choose a server again to retry.'
-    assert app.switch_deadline is None
+    # The server is the one requested: applied, not yet verified, re-checked.
+    assert result['message'] == 'Tunnel egress is not confirmed as NordVPN.'
+    assert app.attempt.state == 'unverified' and app.switch_deadline is None
 
 
 @pytest.mark.parametrize('answer', [
@@ -353,7 +365,7 @@ def test_unusable_insights_answers_fail_closed(nord, answer):
     connect(kernel, US)
     kernel.insights = [answer]
     result = app.inspect()
-    assert result['status'] == 'failed' and result['egress_tier'] is None
+    assert result['status'] == 'failed' and tier(result) is None
     if 'Unknown' not in answer:
         assert result['message'] == 'Tunnel inspection or egress check failed.'
 
@@ -382,7 +394,8 @@ def test_missing_tunnel_address_blocks_a_switch(nord):
     app.run = no_address
     result = app.switch(request(US))
     assert result['status'] == 'failed' and not kernel.mutations
-    assert app.pending.startswith('Waiting for tunnel and overlay routing')
+    assert app.attempt.state == 'pending'
+    assert app.attempt.message.startswith('Waiting for tunnel and overlay routing')
 
 
 def test_fresh_exit_asks_for_a_server(nord):
@@ -390,7 +403,8 @@ def test_fresh_exit_asks_for_a_server(nord):
     result = app.inspect()
     assert result['status'] == 'failed'
     assert result['message'] == 'No NordVPN server is selected yet; choose one in the panel.'
-    assert result['routing_ok'] is True and result['netbird_native'] is True and not kernel.insight_calls
+    assert result['checks']['routing']['state'] == 'pass' and result['checks']['netbird']['state'] == 'pass'
+    assert not kernel.insight_calls
 
 
 def test_applier_is_built_from_the_registry(tmp_path, monkeypatch):
@@ -473,7 +487,7 @@ def test_an_unanswered_insights_check_is_asked_once_more(nord):
     calls = unanswered(app, kernel, insights_call)
     start = kernel.now
     result = app.inspect()
-    assert result['status'] == 'ok' and result['exit_confirmed'] is True
+    assert result['status'] == 'ok' and tier(result) == 'provider'
     assert len(calls) == 2 and kernel.now - start == 10 + EGRESS_RETRY_SEC
 
 
