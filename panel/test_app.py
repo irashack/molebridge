@@ -428,7 +428,7 @@ class SwitcherRenderTests(unittest.TestCase):
         page = app.render_index_html(desired, result, _catalogue(_relay()), None, None, 'tok')
         self.assertNotIn('data-retry', page)
         ok = {'status': 'ok', 'routing_ok': True, 'mullvad_exit_ip': True, 'checked_at': app.now_iso(),
-              'request_id': 'a' * 32, 'server': 'se-sto-wg-001'}
+              'request_id': 'a' * 32, 'server': 'se-sto-wg-001', 'requested_server': 'se-sto-wg-001'}
         page = app.render_index_html(self._failed()[0], ok, _catalogue(_relay()), None, None, 'tok')
         self.assertNotIn('data-retry', page)
 
@@ -637,7 +637,7 @@ class PiaPanelTests(unittest.TestCase):
         page = app.render_index_html(None, result, self.catalogue(), None, None, 'tok')
         self.assertIn('data-provider="pia"', page)
         self.assertIn('value="ex_example"', page)
-        self.assertIn('<dt>PIA IP</dt><dd data-f="exit_confirmed">True</dd>', page)
+        self.assertIn('<dd data-f="egress_tier">provider-confirmed</dd>', page)
         self.assertIn('data-f="forwarded_port">43210<', page)
         self.assertIn('port forwarding · virtual location', page)
         self.assertNotIn('Mullvad', page)
@@ -898,7 +898,7 @@ class NordPanelTests(unittest.TestCase):
                   'egress_ip': '198.51.100.11', 'egress_city': 'Dallas', 'egress_country': 'United States'}
         page = app.render_index_html(None, result, self.catalogue(), None, None, 'tok')
         self.assertIn('data-provider="nordvpn" data-layout="tree"', page)
-        self.assertIn('<dt>NordVPN IP</dt><dd data-f="exit_confirmed">True</dd>', page)
+        self.assertIn('<dt>Egress confirmation</dt><dd data-f="egress_tier">provider-confirmed</dd>', page)
         self.assertIn('<span class="country-name">United States</span>', page)
         self.assertIn('2 countries', page)
         self.assertIn('<div class="city-name">Dallas', page)
@@ -955,7 +955,8 @@ class NordPanelTests(unittest.TestCase):
     def test_status_view_and_readiness_use_nordvpn_names(self):
         desired = {'server': 'us9001.nordvpn.com', 'requested_at': app.now_iso(), 'request_id': 'a' * 32}
         result = {'checked_at': app.now_iso(), 'status': 'ok', 'server': 'us9001.nordvpn.com', 'routing_ok': True,
-                  'netbird_native': True, 'exit_confirmed': True, 'request_id': 'a' * 32}
+                  'netbird_native': True, 'exit_confirmed': True, 'request_id': 'a' * 32,
+                  'requested_server': 'us9001.nordvpn.com'}
         self.assertEqual(app.status_view(desired, result, 'nordvpn'), ('ok', 'connected'))
         self.assertEqual(app.status_view(desired, result, 'mullvad'), ('ok', 'connected'))
         self.assertEqual(app.status_view(desired, {**result, 'exit_confirmed': False}, 'nordvpn'),

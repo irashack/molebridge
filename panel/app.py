@@ -49,9 +49,11 @@ from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Tu
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from molebridge import countries, providers
 from molebridge.gluetun_catalog import DATA_STALE_SEC as GLUETUN_DATA_STALE_SEC
-from molebridge.state import (CATALOG_MAX_AGE, age_seconds, configured_server, egress_tier, exit_confirmed, now_iso,
-                              provider_from_env, read_json, recent, status_view, valid_server_name,
+from molebridge.state import (CATALOG_MAX_AGE, SWITCH_TIMEOUTS, age_seconds, configured_server, now_iso,
+                              provider_from_env, read_json, recent, status_view, valid_server_name,  # noqa: F401
                               write_json_atomic)
+from molebridge.verdict import (CHECKS, KINDS, NOT_CHECKED_BY, ExitConfig, Target, Verdict, assess, fixed_checks,
+                                legacy_projection)
 from molebridge.relays import read_snapshot, snapshot_relays
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -74,8 +76,9 @@ EXIT_COOKIE_NAME = 'molebridge_exit'
 
 
 class Exit(NamedTuple):
-    """One exit the panel controls: its provider and its state files. The
-    panel writes only desired_path; the rest belong to that exit's applier."""
+    """One exit the panel controls: its provider, its kind and its state
+    files. The panel writes only desired_path; the rest belong to that exit's
+    applier."""
     id: str
     provider: str
     label: str
@@ -83,16 +86,25 @@ class Exit(NamedTuple):
     result_path: Path
     relays_path: Path
     relay_error_path: Path
+    # 'overlay' (a NetBird exit) or 'sidecar' (an ordinary gluetun other
+    # containers share): the operator's configuration, never the record's.
+    kind: str = 'overlay'
 
     @classmethod
-    def under(cls, exit_id: str, provider: str, label: str, state_dir: Path) -> 'Exit':
+    def under(cls, exit_id: str, provider: str, label: str, state_dir: Path, kind: str = 'overlay') -> 'Exit':
         return cls(exit_id, provider, label, state_dir / 'panel' / 'desired.json',
                    state_dir / 'applier' / 'result.json', state_dir / 'applier' / 'relays.json',
-                   state_dir / 'applier' / 'relay-error.json')
+                   state_dir / 'applier' / 'relay-error.json', kind)
+
+    @property
+    def config(self) -> ExitConfig:
+        """This exit as molebridge/verdict.py judges it."""
+        return ExitConfig(self.provider, self.kind, self.id)
 
 
 def parse_exits(raw: str, state_dir: Path) -> List[Exit]:
-    """PANEL_EXITS: comma-separated `id=provider[:label]`. Each exit's state is
+    """PANEL_EXITS: comma-separated `id=provider[/kind][:label]`, kind being
+    overlay (the default) or sidecar. Each exit's state is
     $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one exit
     whose state is $STATE_DIR itself."""
     exits: List[Exit] = []
@@ -101,27 +113,43 @@ def parse_exits(raw: str, state_dir: Path) -> List[Exit]:
             continue
         exit_id, sep, rest = entry.partition('=')
         provider, _, label = rest.partition(':')
-        exit_id, provider, label = exit_id.strip(), provider.strip(), label.strip()
+        # No provider id contains '/'.
+        provider, slash, kind = provider.partition('/')
+        exit_id, provider, label, kind = exit_id.strip(), provider.strip(), label.strip(), kind.strip()
         if not sep or not EXIT_ID_RE.fullmatch(exit_id):
             raise ValueError(f'PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in {entry!r}')
         if provider not in providers.REGISTRY:
             raise ValueError(f'PANEL_EXITS: provider must be one of {", ".join(providers.PROVIDERS)}, in {entry!r}')
+        if slash and kind not in KINDS:
+            raise ValueError(f'PANEL_EXITS: the kind after / is overlay or sidecar, in {entry!r}')
+        kind = kind or 'overlay'
+        try:
+            ExitConfig(provider, kind, exit_id)
+        except ValueError:
+            raise ValueError(f'PANEL_EXITS: a sidecar exit needs a gluetun provider (gluetun-<name>/sidecar), '
+                             f'in {entry!r}') from None
         label = label or providers.get(provider).label
         if len(label) > 40 or not label.isprintable():
             raise ValueError(f'PANEL_EXITS: labels are at most 40 printable characters, in {entry!r}')
         if any(e.id == exit_id for e in exits):
             raise ValueError(f'PANEL_EXITS: duplicate exit id {exit_id!r}')
-        exits.append(Exit.under(exit_id, provider, label, state_dir / exit_id))
+        exits.append(Exit.under(exit_id, provider, label, state_dir / exit_id, kind))
     return exits
 
 
 EXITS = parse_exits(os.environ.get('PANEL_EXITS', ''), STATE_DIR)
+# A single-exit panel's kind, as its applier's EXIT_KIND. PANEL_EXITS names
+# each exit's kind itself, and this is then unused.
+EXIT_KIND = os.environ.get('EXIT_KIND', '') or 'overlay'
+if not EXITS:
+    # Refuses an unknown kind, or a sidecar on a native provider, at start.
+    ExitConfig(PROVIDER, EXIT_KIND)
 
 
 def single_exit() -> Exit:
     """The one exit of a panel without PANEL_EXITS; read at call time."""
     return Exit('', PROVIDER, providers.get(PROVIDER).label, DESIRED_PATH, APPLIER_RESULT_PATH,
-                RELAYS_PATH, RELAY_ERROR_PATH)
+                RELAYS_PATH, RELAY_ERROR_PATH, EXIT_KIND)
 
 
 def all_exits() -> List[Exit]:
@@ -594,6 +622,16 @@ def process_select(*, server: Optional[str], allowlist: set, desired_path: Path,
     return 303, 'ok'
 
 
+# One lock per exit, held from assessing the exit to writing its request.
+_select_locks: Dict[Path, threading.Lock] = {}
+_select_locks_guard = threading.Lock()
+
+
+def select_lock(ex: Exit) -> threading.Lock:
+    with _select_locks_guard:
+        return _select_locks.setdefault(ex.desired_path, threading.Lock())
+
+
 # --------------------------------------------------------------------------
 # Page rendering
 # --------------------------------------------------------------------------
@@ -657,10 +695,9 @@ def relay_data(hostname: str, info: Dict[str, Any], provider: Optional[str] = No
             f' data-details="{html.escape(relay_details(info, provider))}"')
 
 
-# How long the applier gives a switch before it fails it, per backend
-# (applier/apply.py SWITCH_TIMEOUT_SEC, applier/gluetun_applier.py
-# GLUETUN_SWITCH_TIMEOUT_SEC); the page says so while a switch runs.
-SWITCH_TIMEOUT_S = {'native': 60, 'gluetun': 90}
+# How long the applier gives a switch before it fails it, per backend; the
+# page says so while a switch runs. Shared with the appliers.
+SWITCH_TIMEOUT_S = SWITCH_TIMEOUTS
 
 
 def relay_details(info: Dict[str, Any], provider: Optional[str] = None) -> str:
@@ -675,35 +712,189 @@ def _field(container: Optional[Dict[str, Any]], key: str, default: str = '(unkno
     return html.escape(str(value)) if value is not None else default
 
 
-def status_payload(ex: Optional[Exit] = None):
+# --------------------------------------------------------------------------
+# Status: one read, one verdict, every consumer
+# --------------------------------------------------------------------------
+
+# Every word the page shows about an exit's status, for the HTML here and
+# for the page script, which receives this table in the page (data-text) and
+# has no wording of its own. Only fixed text: nothing from a record.
+TEXT: Dict[str, Any] = {
+    'connection': {
+        'overlay': {'ok': 'Secure connection', 'applying': 'Switching route',
+                    'failed': 'Connection needs attention', 'unknown': 'Connection unverified'},
+        'sidecar': {'ok': 'Secure connection', 'applying': 'Switching server',
+                    'failed': 'Connection needs attention', 'unknown': 'Connection unverified'},
+    },
+    # How a connected exit's egress was confirmed.
+    'tier': {'provider': 'provider-confirmed', 'tunnel': 'tunnel checks only', 'none': 'not confirmed'},
+    'failed': 'Tunnel verification failed.',
+    'stale': 'Status is stale or unavailable. Details are from the last check.',
+    'unverified': "The connection can't be confirmed. Details are from the last check.",
+    'unreachable': 'Cannot reach the panel. Connection status is unknown.',
+    'drop': {'overlay': 'Open connections through the exit will drop.',
+             'sidecar': 'Open connections through the tunnel will drop.'},
+    'gives_up': 'Verification gives up after {s} seconds.',
+    'next': {'recheck': 'Re-checking at {at} UTC.', 'reapply': 'Retrying at {at} UTC.'},
+    'checks': {'routing': 'Routing protection', 'netbird': 'NetBird kernel mode', 'owner_record': 'Owner record',
+               'peer': 'Tunnel peer', 'handshake': 'Handshake', 'egress': 'Egress check',
+               'traffic_protection': 'Traffic protection', 'app_attachment': 'App attachment'},
+    # Only `pass` reads as passed.
+    'check_state': {'pass': 'passed', 'fail': 'failed', 'unknown': 'unknown', 'n/a': 'not applicable',
+                    'legacy': 'not reported individually'},
+    'not_checked': 'not checked by Molebridge ({by})',
+    'handshake_age': ', {age} s old',
+    # Why a check failed, from the record's fixed vocabulary; any other
+    # reason isn't shown.
+    'reason': {'no-peer': 'no tunnel peer', 'multiple-peers': 'more than one tunnel peer',
+               'catalogue-stale': 'no fresh server list', 'unidentified': 'peer not in the server list',
+               'not-target': 'not the selected server', 'unanswered': 'the check got no answer',
+               'not-confirmed': 'not confirmed by the provider', 'tunnel-checks-failed': 'tunnel checks failed',
+               'host-address-not-measurable': "this host's address can't be measured",
+               'reconnecting': 'gluetun is reconnecting'},
+    'reason_format': '{text}: {reason}',
+}
+# Kept for older callers: the tier wording, keyed as the verdict's tier.
+TIER_TEXT = {'provider': TEXT['tier']['provider'], 'tunnel': TEXT['tier']['tunnel'], None: TEXT['tier']['none']}
+_TEXT_JSON = json.dumps(TEXT, separators=(',', ':'))
+
+
+class ExitStatus(NamedTuple):
+    """One read of an exit's state files and the one verdict on it. The page,
+    /api/status, the exit tabs, /readyz and the switch gate all render this."""
+    desired: Optional[Dict[str, Any]]
+    result: Optional[Dict[str, Any]]
+    verdict: Verdict
+
+    @property
+    def configured(self) -> Optional[str]:
+        """The configured lock (SERVER), which holds even when the record is stale."""
+        return self.verdict.configured_server
+
+
+def judge(ex: Exit, desired: Any, result: Any) -> ExitStatus:
+    """The verdict on `result` for this exit. The panel's own request is the
+    target unless configuration holds the exit, when it is ignored."""
+    result = result if isinstance(result, dict) else None
+    desired = desired if isinstance(desired, dict) and configured_server(result) is None else None
+    verdict = assess(ex.config, result, Target.for_panel(result, desired, ex.provider))
+    return ExitStatus(desired, result, verdict)
+
+
+def read_status(ex: Optional[Exit] = None) -> ExitStatus:
     ex = ex or single_exit()
     result = read_json(ex.result_path, 16384)
-    configured = configured_server(result)
-    desired = None if configured is not None else read_json(ex.desired_path, 4096)
-    desired = desired if isinstance(desired, dict) else None
-    result = result if isinstance(result, dict) else None
-    state, label = status_view(desired, result, ex.provider)
-    # How a connected exit's egress was confirmed: 'provider' or 'tunnel'.
-    tier = egress_tier(result, ex.provider) if state == 'ok' and result else None
-    return {'desired': desired, 'result': result,
-            'view': {'state': state, 'label': label, 'tier': tier,
-                     'selection_mode': 'configuration' if configured is not None else 'panel',
-                     'configured_server': configured}}
+    # A configured exit's request file isn't even read.
+    desired = None if configured_server(result) is not None else read_json(ex.desired_path, 4096)
+    return judge(ex, desired, result)
 
 
-# Diagnostics wording per egress tier; the panel script keeps the same words.
-TIER_TEXT = {'provider': 'provider-confirmed', 'tunnel': 'tunnel checks only', None: 'not confirmed'}
+def verdict_json(ex: Exit, verdict: Verdict) -> Dict[str, Any]:
+    """The verdict as /api/status sends it, with `checks` complete: every
+    check named, as the verdict states it, else as the kind fixes it, else
+    unknown. `not_checked_by` names who performs a check Molebridge doesn't."""
+    body = verdict.as_json()
+    checks = {**fixed_checks(ex.kind, ex.config.backend), **verdict.checks}
+    body['checks'] = {name: checks.get(name, 'unknown') for name in CHECKS}
+    body['not_checked_by'] = {name: NOT_CHECKED_BY[name] for name, state in body['checks'].items()
+                              if state == 'not-checked' and name in NOT_CHECKED_BY}
+    return body
 
 
-def exit_summary(ex: Exit) -> Dict[str, Any]:
+def legacy_view(verdict: Verdict) -> Dict[str, Any]:
+    """/api/status's `view`, deprecated: kept whole for one release because a
+    0.6 page still open in a browser reads it until it reloads."""
+    return {'state': verdict.state, 'label': verdict.label, 'tier': verdict.tier,
+            'selection_mode': 'configuration' if verdict.configured_server is not None else 'panel',
+            'configured_server': verdict.configured_server}
+
+
+def status_payload(ex: Optional[Exit] = None, status: Optional[ExitStatus] = None) -> Dict[str, Any]:
+    ex = ex or single_exit()
+    status = status or read_status(ex)
+    result = status.result
+    projection = legacy_projection(result, status.verdict)
+    if result is not None and projection:
+        # Deprecated, one release: the 0.6 diagnostic fields a cached 0.6
+        # script reads, derived from the verdict for a schema-2 record (null
+        # where unknown or not applicable). A record's own fields win.
+        result = {**projection, **result}
+    return {'desired': status.desired, 'result': result, 'verdict': verdict_json(ex, status.verdict),
+            'view': legacy_view(status.verdict)}
+
+
+def _text(value: Any, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
+def check_text(name: str, state: str, result: Dict[str, Any], by: Dict[str, str]) -> str:
+    """How Diagnostics shows one check. panel.js checkText says the same."""
+    if state == 'not-checked':
+        return TEXT['not_checked'].replace('{by}', by.get(name) or 'another component')
+    text = TEXT['check_state'].get(state, TEXT['check_state']['unknown'])
+    checks = result.get('checks') if isinstance(result.get('checks'), dict) else {}
+    check = checks.get(name) if isinstance(checks.get(name), dict) else {}
+    if name == 'handshake' and state in ('pass', 'fail') and type(check.get('age_s')) is int:
+        text += TEXT['handshake_age'].replace('{age}', str(check['age_s']))
+    reason = check.get('reason')
+    if state == 'fail' and isinstance(reason, str) and reason in TEXT['reason']:
+        text = TEXT['reason_format'].replace('{text}', text).replace('{reason}', TEXT['reason'][reason])
+    return text
+
+
+def describe(verdict: Dict[str, Any], result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Everything the page says about an exit's status, from /api/status's
+    `verdict` and `result`: plain text, unescaped. panel.js describe is the
+    same function; the JS tests check that they agree."""
+    result = result if isinstance(result, dict) else {}
+    state = verdict['state']
+    kind = verdict.get('kind') if verdict.get('kind') in KINDS else 'overlay'
+    tier = verdict.get('tier') if state == 'ok' and verdict.get('tier') in ('provider', 'tunnel') else None
+    message = _text(verdict.get('message'), '')
+    reasons = verdict.get('reasons') or []
+    note = ''
+    if state == 'failed':
+        note = message or TEXT['failed']
+    elif state == 'unknown':
+        stale = 'status-stale' in reasons or 'no-status' in reasons
+        note = message or (TEXT['stale'] if stale else TEXT['unverified'])
+    upcoming = ''
+    action, at = verdict.get('next_action'), verdict.get('next_action_at')
+    if state in ('failed', 'unknown') and action in TEXT['next'] and isinstance(at, str):
+        upcoming = TEXT['next'][action].replace('{at}', at[11:19])
+    by = verdict.get('not_checked_by') or {}
+    checks = verdict.get('checks') or {}
+    port = result.get('forwarded_port')
+    egress_ip = result.get('egress_ip')
+    return {
+        'state': state, 'label': verdict['label'], 'kind': kind,
+        'connection': TEXT['connection'][kind][state],
+        'tier': tier, 'tunnel_only': tier == 'tunnel',
+        # Only a connected exit's egress address is its own.
+        'ip': egress_ip if state == 'ok' and isinstance(egress_ip, str) and egress_ip else '—',
+        'note': note, 'next': upcoming,
+        'fields': {
+            'status': _text(result.get('status'), '(unknown)'),
+            'message': _text(result.get('message'), ''),
+            'egress': f"{_text(result.get('egress_city'), '(unknown)')}, {_text(result.get('egress_country'), '(unknown)')}",
+            'egress_tier': TEXT['tier'][tier or 'none'],
+            'forwarded_port': str(port) if type(port) is int else 'none',
+            'checked_at': _text(result.get('checked_at'), '(unknown)'),
+        },
+        'checks': [{'name': name, 'label': TEXT['checks'][name], 'state': checks.get(name, 'unknown'),
+                    'text': check_text(name, checks.get(name, 'unknown'), result, by)} for name in CHECKS],
+    }
+
+
+def exit_summary(ex: Exit, status: Optional[ExitStatus] = None) -> Dict[str, Any]:
     """What an exit tab shows: name, provider, state and where it exits."""
-    status = status_payload(ex)
-    result = status['result'] or {}
-    server = result.get('server')
-    info = cached_relays(ex).get(server) if isinstance(server, str) else None
+    status = status or read_status(ex)
+    verdict = status.verdict
+    server = (status.result or {}).get('server')
+    info = cached_relays(ex).get(server) if isinstance(server, str) and verdict.state == 'ok' else None
     place = str(info.get('city', '')) if info else ''
-    return {'id': ex.id, 'label': ex.label, 'provider': ex.provider, 'state': status['view']['state'],
-            'status': status['view']['label'], 'place': place if status['view']['state'] == 'ok' else ''}
+    return {'id': ex.id, 'label': ex.label, 'provider': ex.provider, 'state': verdict.state,
+            'status': verdict.label, 'place': place}
 
 
 def theme_color_meta(provider: Optional[str] = None) -> str:
@@ -870,17 +1061,22 @@ def render_index_html(
     exits: Sequence[Dict[str, Any]] = (),
     user: Optional[str] = None,
     show_home: bool = True,
+    status: Optional[ExitStatus] = None,
 ) -> str:
+    """The page for one exit. Its status is `status` when the caller has
+    judged it already, else the verdict on `desired` and `result`."""
     esc = html.escape
     ex = exit or single_exit()
     provider = ex.provider
     spec = providers.get(provider)
     filters = spec.filters
-    desired = desired if isinstance(desired, dict) else {}
-    result = result if isinstance(result, dict) else {}
-    configured = configured_server(result)
-    if configured is not None:
-        desired = {}
+    status = status or judge(ex, desired, result)
+    verdict = status.verdict
+    view = describe(verdict_json(ex, verdict), status.result)
+    state, sidecar = verdict.state, ex.kind == 'sidecar'
+    desired = status.desired or {}
+    result = status.result or {}
+    configured = status.configured
     query = f'?exit={esc(ex.id)}' if ex.id else ''
 
     relays: Dict[str, Dict[str, Any]] = {}
@@ -892,11 +1088,8 @@ def render_index_html(
         if isinstance(maybe_relays, dict) and relays_data.get('provider', 'mullvad') == provider:
             relays = maybe_relays
 
-    desired_server = configured or str((desired or {}).get('server') or '')
-    result_server = str((result or {}).get('server') or '')
-    state, state_label = status_view(desired, result, provider)
-    tier = egress_tier(result, provider) if result else None
-    tunnel_only = state == 'ok' and tier == 'tunnel'
+    desired_server = configured or str(desired.get('server') or '')
+    result_server = str(result.get('server') or '')
     display_server = desired_server if state == 'applying' else result_server
     current_info = relays.get(display_server) or {}
 
@@ -912,21 +1105,17 @@ def render_index_html(
     else:
         current_place, current_flag = 'Awaiting verified server', ''
 
-    switching_note = ''
+    notes = ''
     if state == 'applying' and result_server and result_server != desired_server:
-        switching_note = f'<p class="note">Leaving {esc(result_server)}. Open connections through the exit will drop.</p>'
-    message = (result or {}).get('message')
-    failure_note = ''
+        notes = f'<p class="note">Leaving {esc(result_server)}. {esc(TEXT["drop"][ex.kind])}</p>'
     retry = ''
     if configured is None and state == 'failed' and desired_server in relays:
         # Explicit form ownership also keeps retry working without JS.
         retry = (f' <button type="submit" form="select-form" name="server" value="{esc(desired_server)}" '
                  f'class="relay-switch" data-retry>Retry</button>')
-    if state == 'failed' and (message or retry):
-        failure_note = f'<p class="note note-negative">{esc(str(message or "Switch failed."))}{retry}</p>'
-
-    if state == 'unknown':
-        failure_note = '<p class="note note-negative">Status is unavailable or stale. Details are from the last check.</p>'
+    if view['note']:
+        upcoming = f'<br><span class="subdue small" data-next>{esc(view["next"])}</span>' if view['next'] else ''
+        notes = f'<p class="note note-negative">{esc(view["note"])}{retry}{upcoming}</p>'
 
     token = esc(csrf_token_value)
     # Each provider's own way of listing locations.
@@ -957,7 +1146,11 @@ def render_index_html(
     # Only a provider with port forwarding (PIA) reports it.
     if result.get('port_forward') is True:
         forward_row = (f'\n        <dt>Forwarded port</dt><dd data-f="forwarded_port">'
-                       f'{_field(result, "forwarded_port", "none")}</dd>')
+                       f'{esc(view["fields"]["forwarded_port"])}</dd>')
+    # Every check, as the verdict states it; only `pass` reads as passed.
+    check_rows = ''.join(
+        f'\n        <dt>{esc(check["label"])}</dt><dd data-check="{esc(check["name"])}" '
+        f'data-check-state="{esc(check["state"])}">{esc(check["text"])}</dd>' for check in view['checks'])
 
     error_html = ''
     if fetch_error:
@@ -983,17 +1176,16 @@ def render_index_html(
         '<header class="page-header"><div class="brand">'
         '<svg class="yard-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">'
         '<path d="M10 34V6M18 34V25L32 11M18 6V14M7 10H21M7 17H15M7 24H15M7 31H21M24 14L30 20"/>'
-        f'</svg><div><span class="brand-kicker">{esc("Molebridge / exit control")}</span>'
+        f'</svg><div><span class="brand-kicker">{esc("Molebridge / tunnel control" if sidecar else "Molebridge / exit control")}</span>'
         f'<h1>{esc(PANEL_TITLE)}</h1></div></div><div class="header-side">{account}{home_link}</div></header>'
     )
     tabs = exit_tabs(exits, ex.id, embed) if len(exits) > 1 else ''
     open_link = (
         f'<a class="subdue small" href="/{query}" target="_blank" rel="noopener">Open panel ↗</a>' if embed else ''
     )
-    current_heading = f'{esc(ex.label)} exit' if ex.id else 'Current exit'
+    noun = 'tunnel' if sidecar else 'exit'
+    current_heading = f'{esc(ex.label)} {noun}' if ex.id else f'Current {noun}'
     title = f'{esc(ex.label)} · {esc(PANEL_TITLE)}' if tabs else esc(PANEL_TITLE)
-    connection_label = {'ok': 'Secure connection', 'applying': 'Switching route',
-                        'failed': 'Connection needs attention', 'unknown': 'Connection unverified'}[state]
 
     form_open = (f'<form method="post" action="/select" id="select-form">'
                  f'<input type="hidden" name="csrf_token" value="{token}">'
@@ -1051,7 +1243,7 @@ def render_index_html(
 <script src="/static/panel.js?v={v['panel.js']}" defer></script>
 </head>
 <body class="{'embed' if embed else 'full'}">
-<main class="page"{configured_attr} data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-switch-timeout="{SWITCH_TIMEOUT_S.get(spec.backend, 60)}" data-checked="{esc(str(result.get('checked_at') or ''))}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
+<main class="page"{configured_attr} data-provider="{esc(spec.css_id)}"{provider_accent(provider)} data-layout="{layout}" data-server-pattern="{esc(spec.server_name_re.pattern)}" data-exit="{esc(ex.id)}" data-kind="{esc(ex.kind)}" data-text="{esc(_TEXT_JSON)}" data-switch-timeout="{SWITCH_TIMEOUT_S.get(spec.backend, 60)}" data-checked="{esc(str(result.get('checked_at') or ''))}" data-multi="{'1' if tabs else ''}" data-desired="{esc(desired_server)}" data-request="{esc(str(desired.get('request_id', '')))}" data-requested="{esc(str(desired.get('requested_at', '')))}" data-actual="{esc(result_server)}" data-state="{state}">
 {heading}
 {tabs}
 {form_open}
@@ -1060,36 +1252,32 @@ def render_index_html(
 <section class="widget current-widget">
   <div class="widget-header"><h2>{current_heading}{provider_note(provider)}</h2>{open_link}</div>
   <div class="widget-content current">
-    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(connection_label)}</span></div>
+    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>{esc(view['connection'])}</span></div>
     <div class="current-row">
       <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>{current_flag}</span></span>
       <div class="current-main">
         <div class="current-place" data-current-place>{current_place}</div>
-        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{'—' if state in ('applying', 'unknown') else _field(result, 'egress_ip', '—')}</span> <button type="button" class="link-button copy-ip" data-copy-ip hidden>Copy</button></span></div>
+        <div class="subdue small"><span data-current-host>{esc(display_server or '—')}</span> <span class="nowrap">· <span data-current-ip>{esc(view['ip'])}</span> <button type="button" class="link-button copy-ip" data-copy-ip hidden>Copy</button></span></div>
       </div>
       {pin}
       <div class="current-side">
-        <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{state_label}</span>
+        <span class="pill pill-{state}" data-state-pill role="status" aria-live="polite">{esc(view['label'])}</span>
         <time class="checked-ago subdue" data-checked-ago hidden></time>
-        <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if tunnel_only else ' hidden'}>{esc(TIER_TEXT['tunnel'])}</span>
+        <span class="tier-note" data-tier-note title="No check by the provider itself; see Diagnostics"{'' if view['tunnel_only'] else ' hidden'}>{esc(TEXT['tier']['tunnel'])}</span>
         <span class="ms" data-current-ms></span>
       </div>
     </div>
     {configuration_note}
-    <div data-notes>{switching_note}{failure_note}</div>
+    <div data-notes>{notes}</div>
     <details class="diagnostics">
       <summary>Diagnostics</summary>
       <dl>
-        <dt>Applier</dt><dd data-f="status">{_field(result, 'status')}</dd>
-        <dt>Message</dt><dd data-f="message">{_field(result, 'message', '')}</dd>
-        <dt>Egress</dt><dd data-f="egress">{_field(result, 'egress_city')}, {_field(result, 'egress_country')}</dd>
-        <dt>{esc(spec.label)} IP</dt><dd data-f="exit_confirmed">{esc(str(exit_confirmed(result))) if result else '(unknown)'}</dd>
-        <dt>Egress check</dt><dd data-f="egress_tier">{esc(TIER_TEXT[tier]) if result else '(unknown)'}</dd>{forward_row}
-        <dt>Handshake</dt><dd data-f="handshake_age_s">{_field(result, 'handshake_age_s')}s at last check</dd>
-        <dt>Fallback routes</dt><dd data-f="unreachable_fallback">{_field(result, 'unreachable_fallback')}</dd>
-        <dt>Routing protection</dt><dd data-f="routing_ok">{_field(result, 'routing_ok')}</dd>
+        <dt>Applier</dt><dd data-f="status">{esc(view['fields']['status'])}</dd>
+        <dt>Message</dt><dd data-f="message">{esc(view['fields']['message'])}</dd>
+        <dt>Egress</dt><dd data-f="egress">{esc(view['fields']['egress'])}</dd>
+        <dt>Egress confirmation</dt><dd data-f="egress_tier">{esc(view['fields']['egress_tier'])}</dd>{forward_row}{check_rows}
         <dt>Server</dt><dd data-current-details>{esc(current_details) or '(unknown)'}</dd>
-        <dt>Checked</dt><dd data-f="checked_at">{_field(result, 'checked_at')}</dd>
+        <dt>Checked</dt><dd data-f="checked_at">{esc(view['fields']['checked_at'])}</dd>
         <dt>Requested</dt><dd data-requested-at>{_field(desired, 'requested_at', '')}</dd>
         <dt>Relay list</dt><dd>{len(relays)} relays, {catalogue_age_text(relays_data, fetched_at)}{SERVER_LIST_UPDATE.get(result.get('server_list_update'), '')}</dd>
       </dl>
@@ -1275,7 +1463,7 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
                 chosen = [ex]
             else:
                 chosen = all_exits()
-            ready = all(status_payload(e)['view']['state'] == 'ok' for e in chosen)
+            ready = all(read_status(e).verdict.state == 'ok' for e in chosen)
             self._send_plain(200 if ready else 503, 'ready' if ready else 'not ready')
         elif parsed.path in ('/', '/embed'):
             embed = parsed.path == '/embed'
@@ -1481,15 +1669,24 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
         if ex is None:
             self._send_plain(400, 'unknown exit')
             return
-        if configured_server(read_json(ex.result_path, 16384)) is not None:
-            self._send_plain(403, 'Exit is set in configuration; change SERVER to choose another server.')
-            return
-        status, message = process_select(
-            server=fields.get('server'),
-            allowlist=load_allowlist(ex),
-            desired_path=ex.desired_path,
-            provider=ex.provider,
-        )
+        # Assess, then write, under this exit's lock, so two requests can't
+        # both pass on the same snapshot. The responses go out after it.
+        with select_lock(ex):
+            verdict = read_status(ex).verdict
+            if verdict.configured_server is not None:
+                status, message = 403, 'Exit is set in configuration; change SERVER to choose another server.'
+            elif verdict.state == 'applying':
+                # D8. Only a switch the panel can see blocks: while the
+                # status is stale or unreadable (unknown) a request goes
+                # through, and the applier admits it or not.
+                status, message = 409, 'A switch is in progress; wait for it to finish.'
+            else:
+                status, message = process_select(
+                    server=fields.get('server'),
+                    allowlist=load_allowlist(ex),
+                    desired_path=ex.desired_path,
+                    provider=ex.provider,
+                )
         if status == 303:
             if session is not None:
                 log_event(f'switch: user={session.name} sub={oidc.log_safe(session.sub)} exit={ex.id or "-"} server={fields.get("server")}')
@@ -1509,12 +1706,12 @@ class PanelHandler(http.server.BaseHTTPRequestHandler):
             nonce = new_csrf_nonce()
         token = csrf_token(nonce, self._csrf_binding(session))
         fetch_error, fetch_error_at = get_fetch_error(ex)
-        result = read_json(ex.result_path, 16384)
-        desired = None if configured_server(result) is not None else read_json(ex.desired_path, 4096)
+        # One verdict on this exit for the page and its own tab.
+        status = read_status(ex)
         body = render_index_html(
-            desired, result, read_snapshot(ex.relays_path, ex.provider),
-            fetch_error, fetch_error_at, token, embed=embed, exit=ex,
-            exits=[exit_summary(e) for e in visible_exits(session)],
+            status.desired, status.result, read_snapshot(ex.relays_path, ex.provider),
+            fetch_error, fetch_error_at, token, embed=embed, exit=ex, status=status,
+            exits=[exit_summary(e, status if e == ex else None) for e in visible_exits(session)],
             user=session.name if session is not None else None,
             # A home dashboard is the operator's; people granted a single exit
             # are not sent there.

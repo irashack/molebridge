@@ -10,9 +10,13 @@ selection only rewrites the fake exit's desired.json, which the preview then
 picks the exits from mullvad, pia, nordvpn, and two on the gluetun backend:
 mullvad-gluetun and surfshark (which has only the tunnel checks). --live fills the
 native catalogues from the providers' public server lists instead of the
-small built-in sample; gluetun's is always the sample. --fail <id> makes that
-exit's switches fail, to see the failed state. --configured <id> pins that exit
-to its starting server as SERVER would, to see the read-only view.
+small built-in sample; gluetun's is always the sample. Two sidecar exits
+(an ordinary gluetun other containers share) are offered too:
+mullvad-sidecar, and surfshark-sidecar, whose egress can't be verified.
+--fail <id> makes that exit's switches fail, to see the failed state.
+--configured <id> pins that exit to its starting server as SERVER would, to
+see the read-only view. The fake appliers write schema-2 records
+(panel/fixtures/records.py).
 """
 from __future__ import annotations
 
@@ -31,6 +35,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from molebridge import providers  # noqa: E402
 from molebridge.state import now_iso, read_json, write_json_atomic  # noqa: E402
+
+sys.path.insert(0, str(ROOT / 'panel' / 'fixtures'))
+import records  # noqa: E402
 
 KEY = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 SAMPLE_MULLVAD = [
@@ -56,10 +63,13 @@ SAMPLE_SURFSHARK = [
     ('ca-tor', 'Canada', 'Toronto'), ('de-fra', 'Germany', 'Frankfurt'),
     ('nl-ams', 'Netherlands', 'Amsterdam'), ('jp-tok', 'Japan', 'Tokyo'),
 ]
-# Exit id -> (provider, the server it starts on).
-EXITS = {'mullvad': ('mullvad', 'us-chi-wg-001'), 'pia': ('pia', 'us_chicago'),
-         'nordvpn': ('nordvpn', 'us9001.nordvpn.com'), 'mullvad-gluetun': ('gluetun-mullvad', 'se-sto-wg-001'),
-         'surfshark': ('gluetun-surfshark', 'us-chi.prod.surfshark.com')}
+# Exit id -> (provider, the server it starts on, kind).
+EXITS = {'mullvad': ('mullvad', 'us-chi-wg-001', 'overlay'), 'pia': ('pia', 'us_chicago', 'overlay'),
+         'nordvpn': ('nordvpn', 'us9001.nordvpn.com', 'overlay'),
+         'mullvad-gluetun': ('gluetun-mullvad', 'se-sto-wg-001', 'overlay'),
+         'surfshark': ('gluetun-surfshark', 'us-chi.prod.surfshark.com', 'overlay'),
+         'mullvad-sidecar': ('gluetun-mullvad', 'se-sto-wg-001', 'sidecar'),
+         'surfshark-sidecar': ('gluetun-surfshark', 'us-chi.prod.surfshark.com', 'sidecar')}
 
 
 def sample(provider):
@@ -107,7 +117,7 @@ def live(provider):
         return spec.parse_catalog(response.read(spec.catalog_max_bytes + 1).decode())
 
 
-def seed(state, exit_id, provider, relays, current, configured=None):
+def seed(state, exit_id, provider, kind, relays, current, configured=None):
     applier = state / exit_id / 'applier'
     snapshot = {'fetched_at': now_iso(), 'provider': provider, 'relays': relays}
     if providers.get(provider).backend == 'gluetun':
@@ -115,31 +125,28 @@ def seed(state, exit_id, provider, relays, current, configured=None):
     write_json_atomic(applier / 'relays.json', snapshot, public=True)
     write_json_atomic(state / exit_id / 'panel' / 'desired.json',
                       {'server': current, 'requested_at': now_iso(), 'request_id': secrets.token_hex(16)})
-    apply(state, exit_id, provider, relays, configured=configured)
+    apply(state, exit_id, provider, kind, relays, configured=configured)
 
 
-def apply(state, exit_id, provider, relays, fail=False, configured=None):
+def apply(state, exit_id, provider, kind, relays, fail=False, configured=None):
     """What an applier would record after a verified (or failed) switch."""
     desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
     previous = read_json(state / exit_id / 'applier' / 'result.json') or {}
-    info = relays.get(desired.get('server'), {})
-    result = {
-        'server': desired.get('server'), 'request_id': desired.get('request_id'), 'status': 'ok',
-        'checked_at': now_iso(), 'routing_ok': True, 'exit_confirmed': True, 'provider': provider,
-        'egress_ip': '203.0.113.7', 'egress_city': info.get('city'), 'egress_country': info.get('country'),
-        'handshake_age_s': 12, 'unreachable_fallback': True, 'message': 'Tunnel verified.',
-        'egress_tier': providers.get(provider).egress_tier}
-    if configured:
-        # SERVER wins over desired.json (molebridge/state.py, configured_server).
-        info = relays.get(configured, {})
-        result.update(server=configured, configured_server=configured, requested_server=configured,
-                      egress_city=info.get('city'), egress_country=info.get('country'))
-    if result['egress_tier'] == 'tunnel':
-        result['exit_confirmed'] = False
+    server = configured or desired.get('server')
+    info = relays.get(server, {})
+    place = {'egress_city': info.get('city'), 'egress_country': info.get('country')}
+    # SERVER wins over desired.json (molebridge/state.py, configured_server).
+    selection = ({'configured': configured, 'source': 'configured', 'request_id': None, 'requested_server': None}
+                 if configured else {'request_id': desired.get('request_id')})
     if fail:
-        result.update(server=previous.get('server'), status='failed', exit_confirmed=False, egress_ip=None,
-                      egress_tier=None,
-                      message='No handshake with the new server; the exit stays closed.')
+        result = records.schema2(provider, kind, status='failed', server=previous.get('server'),
+                                 requested_server=server, checks={'handshake': 'fail', 'egress': 'unknown'},
+                                 outcome='applied-unverified', **selection, **place,
+                                 message='No handshake with the new server; the exit stays closed.')
+    elif kind == 'sidecar' and providers.get(provider).egress_tier == 'tunnel':
+        result = records.unmeasurable_sidecar(provider, server=server, **selection, **place)
+    else:
+        result = records.schema2(provider, kind, server=server, **selection, **place)
     write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
 
 
@@ -148,21 +155,24 @@ def fake_appliers(state, exits, failing='', pinned=None):
     seen = {exit_id: ((read_json(state / exit_id / 'panel' / 'desired.json') or {}).get('request_id'), float('inf'))
             for exit_id in exits}
     while True:
-        for exit_id, (provider, relays) in exits.items():
+        for exit_id, (provider, kind, relays) in exits.items():
             desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
             request = desired.get('request_id')
             if request != seen.get(exit_id, (None,))[0]:
                 seen[exit_id] = (request, time.monotonic())
             elif time.monotonic() - seen[exit_id][1] > 4:
-                apply(state, exit_id, provider, relays, fail=exit_id == failing,
+                apply(state, exit_id, provider, kind, relays, fail=exit_id == failing,
                       configured=(pinned or {}).get(exit_id))
                 seen[exit_id] = (request, float('inf'))
         # Keep results fresh, as the real applier's periodic checks do.
-        for exit_id, (provider, relays) in exits.items():
+        for exit_id in exits:
             result = read_json(state / exit_id / 'applier' / 'result.json') or {}
             desired = read_json(state / exit_id / 'panel' / 'desired.json') or {}
             if result.get('request_id') == desired.get('request_id') or result.get('configured_server'):
-                result['checked_at'] = now_iso()
+                now = result['checked_at'] = now_iso()
+                for check in result.get('checks', {}).values():
+                    if 'at' in check:
+                        check['at'] = now
                 write_json_atomic(state / exit_id / 'applier' / 'result.json', result, public=True)
         time.sleep(1)
 
@@ -185,17 +195,17 @@ def main():
         state = Path(tmp)
         exits, pinned = {}, {}
         for exit_id in chosen:
-            provider, current = EXITS[exit_id]
+            provider, current, kind = EXITS[exit_id]
             native = providers.get(provider).backend == 'native'
             relays = live(provider) if args.live and native else sample(provider)
             if current not in relays:
                 current = sorted(relays)[0]
             if exit_id == args.configured:
                 pinned[exit_id] = current
-            seed(state, exit_id, provider, relays, current, configured=pinned.get(exit_id))
-            exits[exit_id] = (provider, relays)
+            seed(state, exit_id, provider, kind, relays, current, configured=pinned.get(exit_id))
+            exits[exit_id] = (provider, kind, relays)
         threading.Thread(target=fake_appliers, args=(state, exits, args.fail, pinned), daemon=True).start()
-        env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS=','.join(f'{e}={EXITS[e][0]}' for e in chosen),
+        env = dict(os.environ, STATE_DIR=str(state), PANEL_EXITS=','.join(f'{e}={EXITS[e][0]}/{EXITS[e][2]}' for e in chosen),
                    PANEL_THEME=args.theme, PANEL_STYLE=args.style, PANEL_HOST_LABEL='home')
         # The sample relays' addresses answer nothing, so their latency is made
         # up: steady per address, a spread from fast to slow, one timeout.

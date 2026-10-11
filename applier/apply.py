@@ -33,8 +33,8 @@ from molebridge.egress import (ECHO_MAX_BYTES, ECHO_URLS, HOST_LACKS_FAMILY, exi
 from molebridge.relays import REFRESH_INTERVAL_S, RelayCatalog, valid_key
 from molebridge.routing import (RETURN_PATH_SYSCTL, RoutingConfig, family_status, netbird_firewall_present,
                                 overlay_is_kernel_wireguard, return_path_enabled, owner_record_valid, parse_owner_record)
-from molebridge.state import (decode_json, desired_request, now_iso, read_json, recent, request_token,
-                              write_json_atomic)
+from molebridge.state import (SWITCH_TIMEOUTS, decode_json, desired_request, now_iso, read_json, recent,
+                              request_token, write_json_atomic)
 from molebridge.verdict import NOT_CHECKED_BY, SCHEMA, ExitConfig, Target, assess, fixed_checks, required_checks
 
 HANDSHAKE_FRESH_SEC = 180
@@ -48,7 +48,7 @@ HANDSHAKE_FRESH_SEC = 180
 EGRESS_RETRY_SEC = 10
 EGRESS_RETRY_WITHIN_SEC = 15
 EGRESS_RETRY_BUDGET_SEC = 30
-SWITCH_TIMEOUT_SEC = 60
+SWITCH_TIMEOUT_SEC = SWITCH_TIMEOUTS['native']
 REFRESH_SEC = 60
 POLL_SEC = 5
 # A panel request this recent is the operator asking now: it is applied
