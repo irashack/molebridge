@@ -802,8 +802,9 @@ class Applier:
     def admit(self, target):
         """The triggers, in precedence order (docs/architecture.md):
         1-2. a new effective target (a new request id is "Retry now");
-        3. no live peer: at once when the native owner generation is new
-           (once per generation), else as 7;
+        3. no live peer: on the native backend at once from idle or
+           unverified, and once per new owner generation whatever the
+           state; on gluetun as 7;
         4. a due re-apply on the backoff;
         5. a lapsed registration (D15);
         6-7. a live peer that isn't the target, only from idle or unverified;
@@ -831,13 +832,18 @@ class Applier:
             return None
         guard = attempt.guard_passed(now)
         if not keys:
-            # One re-apply when the native exit container started again (its
-            # peer is gone with it). Otherwise no peer is drift like any
-            # other, waited out first: gluetun leaves its interface without a
-            # peer for a moment while it reconnects by itself.
+            # The native tunnel comes back from its config without the peer
+            # (the exit's routing loop recreates a lost interface, NordVPN's
+            # and PIA's configs have none): applied again at once from idle
+            # or unverified, and once per new owner generation even while a
+            # failure backs off. gluetun leaves its interface without a peer
+            # for a moment while it reconnects by itself, so there no peer is
+            # waited out like an unidentified one.
             generation = self.current_generation()
-            if guard and generation is not None and attempt.generation not in (None, generation):
-                print('applier: the exit container started again; applying the selection', flush=True)
+            fresh_owner = generation is not None and attempt.generation not in (None, generation)
+            if guard and (fresh_owner or (self.backend == 'native' and attempt.state in ('idle', 'unverified'))):
+                if fresh_owner:
+                    print('applier: the exit container started again; applying the selection', flush=True)
                 return self.run_pipeline(target, 'reconverge', reinspect=True)
         if attempt.next_action == 'reapply' and attempt.next_action_at is not None and now >= attempt.next_action_at:
             return self.run_pipeline(target, 'retry', reinspect=True)
@@ -1154,15 +1160,16 @@ class Applier:
         """The container health check, operational only (D5): a fresh
         completed check, ok or failed, and an intact namespace for the kind.
         Whether the exit is verified is the verdict's, the doctor's and
-        monitoring's question, never a reason to restart it."""
+        monitoring's question, never a reason to restart it. On the overlay
+        a missing peer is the pipeline's to repair, not the health check's:
+        killing the applier for it would only delay the repair."""
         result = read_json(self.result_path, 16384)
         completed = isinstance(result, dict) and result.get('status') in ('ok', 'failed')
         if not completed or not recent(result.get('checked_at')):
             return False
-        if len(self.peers()) != 1:
-            return False
         if self.kind == 'sidecar':
-            return self.control_answers()
+            return self.control_answers() and len(self.peers()) == 1
+        self.peers()  # the tunnel interface exists
         return self.routing_status()[0] and self.netbird_native()
 
     def control_answers(self):
