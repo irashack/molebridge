@@ -136,8 +136,7 @@ INTERVAL="${ROUTING_RECONCILE_INTERVAL:-2}"
 # gate allows at least FWMARK_GRACE >= 5 seconds between good records.
 STATUS_INTERVAL=2
 # The rule set, its checks and the clock, shared with NetBird's gate.
-# GLUETUN_RULES is the setting's name before 0.6.0.
-CONTRACT_RULES="${CONTRACT_RULES:-${GLUETUN_RULES:-/usr/local/lib/molebridge/contract-rules}}"
+CONTRACT_RULES="${CONTRACT_RULES:-/usr/local/lib/molebridge/contract-rules}"
 
 load_contract() {
     [ -f "$CONTRACT_RULES" ] || fail "the shared rule definitions are missing ($CONTRACT_RULES)"

@@ -204,9 +204,11 @@ traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
 in `.env`. It also refuses settings the guard would refuse (`OVERLAY_CIDR`,
 `EXIT_IF`, the tables and `CONTROL_MARK`, with the guard's own message),
 `the guard's rule definitions are missing (<file>)` when
-`routing/contract-rules` isn't mounted (a deployment that still mounts
-`routing/gluetun-rules` at `/usr/local/bin/molebridge-gluetun-rules` keeps
-working until 0.7.0), `FWMARK_GRACE must be 5..30 seconds`,
+`routing/contract-rules` isn't mounted at
+`/usr/local/bin/molebridge-contract-rules` (since 0.7.0 the gate no longer
+reads `routing/gluetun-rules` at `/usr/local/bin/molebridge-gluetun-rules`;
+see [upgrades](operations.md#upgrades)),
+`FWMARK_GRACE must be 5..30 seconds`,
 and `cannot read the boot clock (/proc/uptime and the boot id)`.
 
 **NetBird exits with `NetBird gate: stopping NetBird: <reason> (see

@@ -12,10 +12,5 @@ RUN install -d -m 0755 -o 0 -g 0 /usr/local/lib/molebridge
 COPY --chown=0:0 --chmod=0755 routing/10-exit-routing /usr/local/lib/molebridge/10-exit-routing
 COPY --chown=0:0 --chmod=0644 routing/contract-rules /usr/local/lib/molebridge/contract-rules
 COPY --chown=0:0 --chmod=0755 routing/molebridge-exit /usr/local/bin/molebridge-exit
-# Until 0.7.0: the paths deployments used before 0.6.0, for the guard's old
-# entrypoint and the old name of the shared rules.
-RUN install -d -m 0755 -o 0 -g 0 /custom-cont-init.d \
- && ln -s /usr/local/lib/molebridge/10-exit-routing /custom-cont-init.d/10-exit-routing \
- && ln -s contract-rules /usr/local/lib/molebridge/gluetun-rules
 
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/molebridge-exit"]
