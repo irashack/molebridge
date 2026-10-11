@@ -865,7 +865,9 @@ def test_recover_waits_for_the_applier_to_verify_the_exit(monkeypatch, tmp_path,
     assert 'PASS configuration' in capsys.readouterr().out
 
 
-def test_recover_names_the_check_that_never_passed(monkeypatch, tmp_path):
+def test_recover_names_the_check_that_never_passed(monkeypatch, tmp_path, capsys):
+    """Everything but verification passes: recovered and operational, not
+    verified, exit status 3 with the reason (it raised before 0.7.0)."""
     now = [0.0]
 
     def run(args, **kwargs):
@@ -877,9 +879,10 @@ def test_recover_names_the_check_that_never_passed(monkeypatch, tmp_path):
         monkeypatch.setattr(host, name, lambda: {})
     for name in ('check_files', 'check_volume', 'namespace_checks', 'ice_blacklist_check'):
         monkeypatch.setattr(host, name, lambda _: None)
-    with pytest.raises(host_tools.CheckError) as error:
-        host.recover()
-    assert str(error.value) == 'The applier reports: verified Mullvad egress (docs/troubleshooting.md).'
+    assert host.recover() == 3
+    out = capsys.readouterr().out
+    assert 'UNVERIFIED Recovered and operational, but not verified: verified Mullvad egress.' in out
+    assert '198.51.100.1' not in out
     assert host_tools.SETTLE_SEC <= now[0] <= host_tools.SETTLE_SEC + host_tools.SETTLE_POLL_SEC
 
 

@@ -36,11 +36,17 @@ jobs:
           docker compose -f compose.yaml -f compose.pia.yaml config --quiet
           docker compose -f compose.yaml -f compose.nordvpn.yaml config --quiet
           docker compose -f compose.gluetun.yaml config --quiet
+          docker compose -f compose.sidecar.yaml --env-file .env.sidecar.example config --quiet
       - name: Python tests
         run: |
           python3 -m venv .venv
           .venv/bin/pip install --quiet pytest==9.1.1 PyYAML==6.0.3
           .venv/bin/python -m pytest -q panel tools
+      - name: Sidecar doctor and recovery against Docker
+        # The doctor's namespace identity probe and recover, with a pinned
+        # busybox owning the namespace in gluetun's place: attachment, a
+        # same-ID owner restart that leaves members behind, and recovery.
+        run: python3 tools/check-sidecar-doctor.py
       - name: Build the privileged applier
         run: docker build --tag molebridge-applier:ci --file applier/Dockerfile .
       - name: Check runtime tools in the applier image

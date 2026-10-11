@@ -1,8 +1,8 @@
 # Operations
 
 Commands assume Docker Compose from the repository root. Rootless Podman has
-its own section below, because the `doctor` and `recover` helpers only work
-with Docker.
+its own section below: the `doctor` and `recover` helpers can run through
+podman-compose, but only the commands given there have been tested.
 
 ## Health
 
@@ -62,8 +62,13 @@ changes nothing. It then stops the namespace users, recreates the containers
 for them to become healthy, then polls for up to about 180 seconds more for
 the applier to verify the exit (with the gluetun backend it may first put
 your last server back), and runs doctor.
-A failure names the step, or the applier's checks that still fail, for
-example `The applier reports: verified Mullvad egress (docs/troubleshooting.md).` With the gluetun
+A failure names the step, or the applier's checks that still fail.
+Its exit status is `0` when the exit is recovered and verified; `3` when it
+is recovered and operational but not verified, that is every check passed but
+the applier's `verified ...` egress check, named in a line such as
+`UNVERIFIED Recovered and operational, but not verified: verified Mullvad egress.`;
+and `1` when recovery failed. The [gluetun sidecar](gluetun-sidecar.md#recovery)
+uses the same three. With the gluetun
 backend it recreates `gluetun`, `guard`, `netbird`, `applier` and the panel.
 It never deletes a volume or enrolls a new peer. If it fails after
 recreating, the exit hasn't passed every check, but the containers it
@@ -372,10 +377,12 @@ are untested.
 ## Rootless Podman
 
 Tested on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64. The
-helpers in `tools/molebridge.py` need `docker compose`'s JSON output, which
-podman-compose doesn't have, so use these commands instead. The gluetun
-backend's `gluetun-post-rules` is the exception: it reads `.env` directly
-and works the same under Podman. Replace
+helpers in `tools/molebridge.py` can run through podman-compose
+(`--engine podman`, or `MOLEBRIDGE_ENGINE=podman`, reading its configuration
+with PyYAML), but that hasn't run on a live Podman host yet, so the commands
+below remain the tested way. The gluetun
+backend's `gluetun-post-rules` doesn't call the engine: it reads `.env`
+directly and works the same under Podman. Replace
 `molebridge` with your `COMPOSE_PROJECT_NAME` if you changed it.
 
 Before the first start, load the kernel module and set `PANEL_USER=0:0`
