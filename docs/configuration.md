@@ -31,7 +31,7 @@ except `PANEL_EXITS`, which you set on a separate Switchyard container.
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | empty, `Home` | Optional back link in the page header. |
 | `PANEL_THEME` | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
 | `PANEL_STYLE` | `provider` | `provider` uses the provider's colors; `dashboard` uses the neutral Catppuccin palette and JetBrains Mono. Any other value means `provider`. Mullvad's tree and PIA's region list keep their layout in either style. |
-| `PANEL_EXITS` | empty | Set on a separate Switchyard container serving several exits. `compose.yaml` does not pass it to the bundled panel. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
+| `PANEL_EXITS` | empty | Set on a separate Switchyard container serving several exits, as `id=provider[/kind][:label]`, where `kind` is `overlay` (the default) or `sidecar`. `compose.yaml` does not pass it to the bundled panel. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. |
 | `GATUS_ENDPOINT` | `molebridge` | Gatus external endpoint key. |
 
@@ -110,8 +110,12 @@ Unknown SERVER "absent.example.test"; not in a fresh trusted relay catalogue; no
 
 These errors do not fall back to a panel request. Fix the setting and apply
 your configuration change with [recovery](operations.md#recovery). A failed
-application of a valid configured server retries on the periodic check;
-Molebridge does not choose another server. Removing `SERVER` returns control
+application of a valid configured server is retried after 1, 2, 4 and 8
+minutes, then every 15 ([retries](operations.md#retries)); Molebridge does
+not choose another server. Whether the exit is on its `SERVER` and verified
+is reported by the panel, `/readyz` and the doctor; since 0.7.0 the
+applier's container health check no longer fails over it
+([health](operations.md#health)). Removing `SERVER` returns control
 to the panel, including any `desired.json` request left there.
 
 `SERVER` goes only to the applier. It publishes `configured_server` in
@@ -216,6 +220,31 @@ Before the first start:
    refuses a `$` reference. Run it again after
    changing `HOST_IF`, `EXIT_IF`, `OVERLAY_IF`, `CONTROL_MARK` or
    `NB_WIREGUARD_PORT`, then run `python3 tools/molebridge.py recover`, which recreates gluetun and everything that shares its namespace (on rootless Podman, the [Podman commands](operations.md#rootless-podman)).
+
+## gluetun sidecar
+
+Experimental; see [the gluetun sidecar](gluetun-sidecar.md) for setup and
+what has been tested. Start from `.env.sidecar.example`, which sets
+`COMPOSE_FILE=compose.sidecar.yaml`. `GLUETUN_PROVIDER`, `EXIT_IF`,
+`GLUETUN_WIREGUARD_ADDRESSES`, `GLUETUN_SERVER_*`, `GLUETUN_UPDATER_PERIOD`,
+`SERVER`, the panel settings and the Gatus settings mean what they mean
+above. The NetBird, overlay, table and mark settings don't apply.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. The doctor fails with `No applications declared` when it is empty, and when a service in gluetun's namespace isn't listed; `recover` recreates them with gluetun. `.env.sidecar.example` sets `example-app`. |
+| `GLUETUN_FIREWALL_INPUT_PORTS` | empty | gluetun's `FIREWALL_INPUT_PORTS`: ports your applications listen on, comma-separated, which you also publish on the `gluetun` service. Never 8000, the control server. |
+| `COMPOSE_PROFILES` | empty | `.env.sidecar.example` sets `example`, which runs the example application, a busybox that only sleeps; remove it once yours are listed. |
+
+`compose.sidecar.yaml` sets `EXIT_KIND=sidecar` on the applier and the panel;
+it isn't read from `.env`. `EXIT_KIND` is `overlay` when unset, as in
+`compose.yaml` and `compose.gluetun.yaml`. The applier refuses to start with
+any other value, or as a sidecar without `TUNNEL_BACKEND=gluetun` and a
+`gluetun-*` provider; the panel refuses a sidecar on a native provider. A
+separate Switchyard names the kind in `PANEL_EXITS` instead, as
+`id=gluetun-<provider>/sidecar`. The applier's and the panel's kind must
+agree, or the panel shows "kind mismatch". The doctor reads the kind from
+the applier's `EXIT_KIND`.
 
 ## Tunnel config helper
 
@@ -354,11 +383,12 @@ Under `state/`, written with temp-file-and-rename. None hold secrets.
 | File | Writer | Reader | Contents |
 |---|---|---|---|
 | `applier/relays.json` | applier | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. A snapshot for another provider is ignored. |
-| `applier/gluetun-selection.json` | gluetun applier | gluetun applier | `desired`, `last_put` and `last_successful`: server hostnames, used to put the last verified server back after gluetun restarts when `SERVER` is unset. With `SERVER`, configuration wins. No secret. |
+| `applier/gluetun-selection.json` | gluetun applier | gluetun applier | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
+| `applier/attempt.json` | applier | applier | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
 | `applier/tunnel.json` | PIA applier | PIA applier | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | applier | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | applier (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | applier | panel (read-only) | Observed `server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), `requested_server`, acknowledged `request_id`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to separately checked addresses), `provider`, `exit_confirmed` (the provider confirmed the egress), `egress_tier` (`provider`, `tunnel` or null; see [status reporting](architecture.md#status-reporting)), `mullvad_exit_ip` (Mullvad only), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), `handshake_age_s`, `unreachable_fallback`, `routing_ok`, `netbird_native` (NetBird runs kernel WireGuard with its kernel firewall), `checked_at`, and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). A result with `netbird_native` false never counts as connected. |
+| `applier/result.json` | applier | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed` or null: the refresh of gluetun's server list the applier starts). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
 
 Routing installs the return-path rule and its backstop (rules 94 and 98)
 from the tunnel config's `Address` line (a PIA config has none; the applier

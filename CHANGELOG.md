@@ -10,11 +10,12 @@ One status record, one judgment of it, and one way to change servers; and
 an experimental second exit kind, the **gluetun sidecar**. Upgrade
 **Switchyard (the panel) first**, then the exits in any order: a 0.6 panel
 reads a 0.7 exit's healthy record as "verification failed"
-([operations](docs/operations.md#upgrades)).
+([operations](docs/operations.md#from-06x-to-070)).
 
 **Status: schema 2 and one verdict.**
 - The applier's `state/applier/result.json` now carries `schema: 2`, the exit
-  `kind` and `backend`, and **named checks** (`routing`, `netbird`,
+  `kind` and `backend`, the `selection` (why the server is what it is, and
+  the next automatic action), and **named checks** (`routing`, `netbird`,
   `owner_record`, `peer`, `handshake`, `egress`, `traffic_protection`,
   `app_attachment`), each `pass`, `fail`, `unknown`, `n/a` or `not-checked`,
   with the time it was measured and, for the peer, handshake and egress, the
@@ -22,45 +23,74 @@ reads a 0.7 exit's healthy record as "verification failed"
   `exit_confirmed`, `egress_tier`, `handshake_age_s` and `mullvad_exit_ip`
   are gone from the record ([architecture](docs/architecture.md#the-status-record)).
 - One function, `molebridge/verdict.py` `assess`, judges a record for the
-  page, `/api/status`, the exit tabs, the browser, `/readyz`, monitoring and
-  the doctor. Only a fresh pass counts as passed. A check's evidence expires
-  after 150 s like the record's, a pass for another server never counts, and
-  the server must be the one asked for: a 0.6 panel could show an
-  acknowledged `ok` on another server as connected.
-- The panel reads 0.6 records too (shown as "not reported individually").
-  Unknown or newer versions, and a record whose kind, provider or backend
-  differs from the panel's configuration, are never connected.
-- The container health check is operational only: a fresh completed check
-  and an intact namespace. Whether the exit is verified, including on its
-  `SERVER`, is the verdict's: the doctor reports it, with reason codes.
+  page, `/api/status`, the exit tabs, the browser, `/readyz`, the switch
+  gate, monitoring and the doctor. Only a fresh pass counts as passed. A
+  check's evidence expires after 150 s like the record's ("evidence
+  expired"), a pass for another server never counts, and the server must be
+  the one asked for: a 0.6 panel could show an acknowledged `ok` on another
+  server as connected.
+- The panel reads 0.6 records too (their checks shown as "not reported
+  individually"). Unknown or newer versions ("unsupported status version"),
+  and a record whose kind, provider or backend differs from the panel's
+  configuration ("kind mismatch", "provider mismatch"), are never connected.
+- The container health check is operational only: a fresh completed check,
+  one tunnel peer and an intact namespace. Whether the exit is verified,
+  including on its `SERVER`, is the verdict's: the doctor reports it, with
+  reason codes, and the health check no longer fails over it.
+- Gatus receives the verdict, never a switch in progress.
 
 **Admission: one pipeline for every change of server.**
 - The panel's request, `SERVER`, gluetun's restore, reconvergence and
-  retries all go through the same gates, mutation and verification, with
+  retries all go through the same gates, change and verification, with
   the source recorded in the record's `selection`. Its state is
   `state/applier/attempt.json`, written before any change, so a restart
-  resumes it and never replays an interrupted change blindly.
+  resumes it and never replays an interrupted change blindly
+  ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
 - **Failures retry on their own**, after 1, 2, 4 and 8 minutes, then every
   15. A switch that is applied but not verified (handshake, egress or the
   check service failing) is **re-checked, never switched again** while the
   live server is the one selected. Re-applying always inspects first, so a
-  change whose answer was lost isn't made twice. Nothing is re-applied
-  within 90 s of the last change. "Choose a server again to retry" is gone;
-  a new request (Retry) still applies at once and resets the backoff.
-- An unlisted or invalid request is refused until the catalogue changes. On
-  gluetun the last verified server is still restored meanwhile, and the
-  panel keeps showing the refusal.
+  change whose answer was lost isn't made twice. Drift back to another
+  server isn't corrected within 90 s of the last change, nor while a failed
+  attempt waits for its retry. "Choose a server again to retry" is gone; a
+  new request (Retry) still applies at once and starts the backoff over
+  ([retries](docs/operations.md#retries)).
+- An unlisted request is refused until the catalogue's server names change,
+  and a malformed one until a new request. On gluetun the last verified
+  server is still restored meanwhile, and the panel keeps showing the
+  refusal.
 - **PIA**: a refused login (HTTP 401/403 from PIA's token service) stops
-  retries until the credential files change or Retry; a refused key
-  registration is asked once more with a fresh token. A handshake stale for
-  180 s re-registers the same region on the backoff; an egress-check
-  failure alone never does.
+  retries until the credential files change or Retry; a key registration
+  refused with a reused token is asked once more with a fresh one. A
+  handshake stale for 180 s re-registers the same region on the backoff; an
+  egress-check failure alone never does. Port forwarding runs only while the
+  verdict is connected.
 - **gluetun**: while a switch is verified, gluetun's reconnection (its
   interface gone with rules 90 and 96 detached, an address before its rule
   94, old and new rule 94 together, the tunnel route not back yet) withholds
   readiness instead of aborting; anything else the guard would refuse aborts
   the switch.
-- The panel refuses a new request with **409** while the exit is switching.
+
+**Panel.**
+- `POST /select` answers **409** "A switch is in progress; wait for it to
+  finish." while the exit is switching, after the CSRF check and the
+  configured lock (403). A stale status doesn't block.
+- `/api/status` adds `verdict`. `view`, and for a schema-2 record the 0.6
+  diagnostic fields in `result` (derived from the verdict, null where
+  unknown or not applicable), are deprecated and kept for one release.
+- A 0.6 page still open in a browser keeps working until it reloads, within
+  limits: its state, label and tier stay right, but a confirmation that
+  wasn't measured shows as `false`, and an unmeasured routing check or
+  fallback shows blank. "Not applicable", "not checked" and the named checks
+  need the reload.
+- Diagnostics lists every check by name, says who checks what Molebridge
+  doesn't, and when the applier will re-check or retry. The tier and the
+  egress address show only for a connected exit.
+- `PANEL_EXITS` takes `id=provider/kind[:label]`; a single-exit panel reads
+  `EXIT_KIND`. A sidecar on a native provider stops the panel at start.
+- The page script has no status rules or wording of its own. Its first
+  tests run under Node's own runner (`node --test panel/js-tests/*.test.js`),
+  including 0.6.1's script against 0.7 answers.
 
 **The gluetun sidecar (experimental).** `EXIT_KIND=sidecar` and
 `compose.sidecar.yaml`: Switchyard and the applier select and verify servers
@@ -68,12 +98,15 @@ for an ordinary gluetun that other containers share, with no routing
 contract and no NetBird ([gluetun sidecar](docs/gluetun-sidecar.md)). The
 applier needs `NET_ADMIN` in gluetun's namespace. Mullvad and NordVPN
 through gluetun can be verified; FastestVPN, IVPN, Surfshark and Windscribe
-are shown as switched, never connected, because a sidecar can't compare the
-egress with the host's own address. Traffic protection is gluetun's
-firewall and is reported as not checked by Molebridge. The doctor checks
-which containers actually share gluetun's namespace, through the engine,
-on Docker and rootless Podman. `recover` now exits 0 when recovered and
-verified, 3 when recovered but not verified, and 1 when it failed.
+are shown as switched, never connected ("switched, egress unverified"),
+because a sidecar can't compare the egress with the host's own address.
+Traffic protection is gluetun's firewall and is reported as not checked by
+Molebridge. The doctor checks which containers actually share gluetun's
+namespace, through the engine, on Docker and rootless Podman, and without
+Compose for Quadlet (`doctor --kind sidecar`). `recover` now exits 0 when
+recovered and verified, 3 when recovered but not verified, and 1 when it
+failed, for both kinds. The host helpers run through podman-compose too
+(`--engine podman`), untested on a live host.
 
 **Removed (as announced for 0.7.0):** the `routing/gluetun-rules` link, the
 image's `/usr/local/lib/molebridge/gluetun-rules` and

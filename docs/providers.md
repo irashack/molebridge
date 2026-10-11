@@ -12,6 +12,10 @@ Compose gives the applier and the panel the registry id
 | `nordvpn` | Experimental: live passes on macOS with OrbStack and on rootless Podman, see [testing](testing.md#nordvpn-pass-at-036e1cc) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
 | `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#gluetun-backend-pass-at-a3bb14f); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
 
+The `gluetun-*` ids also serve the experimental [gluetun
+sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
+be verified.
+
 To offer more than one, run one exit per provider with different
 `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and `PANEL_PORT`, each with its own
 NetBird route. One [Switchyard](switchyard.md#several-exits-in-one-panel) can
@@ -49,6 +53,20 @@ registration needs only the public key.
 The login and token reach `curl` only through mode-0600 files on the
 applier's tmpfs. They never appear in its arguments, logs or state files.
 
+When a registration fails, the applier tells a refused login from other
+failures:
+
+- **PIA refuses the login** (HTTP 401 or 403 from its token service): the
+  attempt is rejected with "PIA refused the login; correct the credentials,
+  or retry." and not retried automatically until `secrets/pia/username` or
+  `secrets/pia/password` changes (the applier compares the files' identity,
+  size and times, never their content), or you press Retry.
+- **A server refuses the key** with a token the applier reused: it is asked
+  once more with a fresh token. A second refusal, a malformed answer or a
+  connection failure fails the attempt with "Peer update failed; retrying
+  automatically.", retried after 1, 2, 4 and 8 minutes, then every 15
+  ([retries](operations.md#retries)).
+
 During a switch, the applier adds rules 94 and 98 for the new address and
 confirms both are there before it changes the address; if that fails, the
 switch stops with the old address and its rules in place. It adds the new
@@ -61,11 +79,13 @@ missing it hits the unreachable fallback.
 
 The `wireguard` container's repair loop leaves priorities 94 and 98 to the
 applier when the config has no address. On every pass of its loop
-(normally every 5 seconds, longer while a switch or health check runs), the
+(normally every 5 seconds, longer while a switch or periodic check runs), the
 applier keeps exactly one pair there, for the tunnel's current
 address: it adds a missing half first, then removes rules for any other
 address and any rule not in the exact form, so the current address never
-loses both. When the `wireguard` container recreates a lost tunnel
+loses both. This repair runs before a switch's gates, outside the admission
+pipeline, so a switch that was interrupted halfway doesn't keep the exit
+from passing them. When the `wireguard` container recreates a lost tunnel
 interface, which then has no address, the applier removes the old pair, and
 applies the saved region again as after any tunnel recreation.
 
@@ -82,13 +102,19 @@ applies the saved region again as after any tunnel recreation.
   `::/0` exit route for this peer. Without it, a device using the PIA exit can
   send its IPv6 over its own network.
 - **Re-registration.** PIA forgets a key after a server restart or long
-  inactivity. When the handshake goes stale, the applier registers again in
-  the same region, at most once every five minutes. It never picks another
-  region by itself. After the `wireguard` container is recreated, it
-  registers the saved region again.
-- **Status.** `result.json` carries `provider: "pia"` and `exit_confirmed`.
-  PIA's check returns no city or country, so the panel shows the region from
-  the server list. `state/applier/tunnel.json` records the current
+  inactivity. When the selected region is live and its handshake has been
+  stale for 180 seconds (or never completed, 180 seconds after the last
+  change), the applier registers again in the same region, after a fresh
+  inspection confirms it, on the retry backoff: 1, 2, 4 and 8 minutes after
+  the last change, then every 15. A failing egress check alone never
+  triggers it, and it never picks another region by itself
+  ([the admission pipeline](architecture.md#the-admission-pipeline)). After
+  the `wireguard` container is recreated, it registers the saved region
+  again.
+- **Status.** `result.json` carries `provider: "pia"`, and the egress
+  check's result in `checks.egress` (IPv4 only). PIA's check returns no city
+  or country, so the panel shows the region from the server list.
+  Port forwarding runs only while the exit's verdict is connected. `state/applier/tunnel.json` records the current
   registration: region, server, server key and tunnel address. It holds no
   secret.
 
@@ -273,21 +299,34 @@ Either way it needs a module under `molebridge/` for its server list, an
 applier subclass, and one entry in the provider registry,
 `molebridge/providers.py`. The entry is the only place that names the
 provider's label, server-name pattern, server-list address and size limit,
-address model, egress tier, IPv6 support, panel layout and the applier class;
-the applier, the panel and the doctor read it from there. The provider needs:
+address model, egress tier, IPv6 support, whether its registration can
+lapse, panel layout and the applier class; the applier, the panel and the
+doctor read it from there. The provider needs:
 
 - a parser that treats the provider's server list as untrusted input, with the
   same size limits, schema checks and last-good fallback;
-- `apply_relay`, `server_for` and `egress`;
+- `apply_relay`, `server_for` and `egress`. `apply_relay` may raise
+  `MutationRefused` (in `applier/apply.py`) when the provider refused the
+  change before it took effect, which records the failure as definite; any
+  other error records an uncertain one. Both are retried on the backoff.
+  `CredentialRejected`, a kind of `MutationRefused`, means the account's
+  login was refused: it stops automatic retries until the credentials change
+  (the applier's `release_signature` says how that is detected) or Retry
+  ([the admission pipeline](architecture.md#the-admission-pipeline));
+- `registration_lapses=True` in its registry entry if the provider can
+  forget a registration while the peer stays the same, as PIA does: a
+  handshake stale for 180 seconds then registers the same server again;
 - an egress tier in its registry entry. `provider` means its applier's
   `egress` asks the provider's own endpoint whether the request arrived over
-  its VPN, and returns `exit_confirmed`; prefer it whenever the provider has
+  its VPN, and returns `exit_confirmed` and `families`, the result per
+  address family it asked (`{"4": "pass"}`, or `"fail"`), which become
+  `checks.egress` in the status record; prefer it whenever the provider has
   such an endpoint. `tunnel` means it has none: the base applier then runs
   the shared tunnel checks instead (two IP echo services through the tunnel
   that agree, an address different from the host's own, a match against any
   exit addresses the catalogue lists as `exit_ips`, and a fresh handshake),
   and the panel shows a connected exit with a "tunnel checks only" label.
-  [Architecture](architecture.md#status-reporting) describes both;
+  [Architecture](architecture.md#egress-tiers) describes both;
 - a generator for its tunnel config, and its case in the routing image's
   check of that config (`routing/molebridge-exit` and
   `routing/10-exit-routing` decide per `PROVIDER` whether a config carries

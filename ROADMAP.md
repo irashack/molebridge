@@ -1,37 +1,42 @@
 # Roadmap
 
-Ideas that are not scheduled. Nothing here is built; each entry says what it
-would take as far as we know today.
+Ideas that are not scheduled. Nothing in the backlog is built; each entry
+says what it would take as far as we know today.
+
+## Done
+
+- **One status record and one verdict** (0.7.0): every reader judges the
+  applier's record the same way ([status reporting](docs/architecture.md#status-reporting)).
+- **One admission pipeline** (0.7.0): every change of server, with retries
+  on a backoff ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
+- **A sidecar mode** (0.7.0, experimental): Switchyard for an ordinary
+  gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It still
+  needs a live pass, recorded in [testing](docs/testing.md), before it
+  stops being experimental.
 
 ## Backlog
 
-### A sidecar mode: Switchyard for an ordinary gluetun container
+### Automatic failover
 
-gluetun's own documentation describes it as a sidecar: other containers
-share its network namespace, so their traffic goes through the tunnel and gluetun's firewall
-blocks anything else. They forward nobody's traffic, so Molebridge's routing
-contract, guard and NetBird gate have nothing to do there. gluetun ships no
-interface for choosing a server; you change its settings and restart it, or
-call its control server.
+Today Molebridge never picks another server: it retries the one you chose.
+A failover would move an exit to a backup server when its own keeps failing,
+and back again. The admission pipeline already separates the operator's
+choice (the primary target) from the server it applies, so a backup would
+go through the same gates and checks. What it takes: rules for when to fail
+over and when to return, which backups are acceptable, how the panel shows
+it, and a live pass.
 
-The parts of Molebridge that are not about forwarding would serve them as
-they are: the provider registry and catalogues, the egress checks that ask the
-provider whether the address is theirs, server switching through gluetun's
-control server, and the panel with sign-in and one tab per gluetun. The
-routing scripts, `molebridge/routing.py` and the NetBird gate would not
-apply.
+### Running without Switchyard
 
-What it takes:
+An exit whose server is set in configuration (`SERVER`) needs the panel
+only to show its status. Running such exits without any panel would need
+another place to read the verdict, such as the doctor or monitoring alone,
+and Compose files without the panel container.
 
-- An applier mode without an exit: no guard, no NetBird, and a health check
-  without the routing and NetBird checks (`routing_ok` and `netbird_native`
-  are required today), keeping the tunnel, handshake and egress checks.
-- A compose example that adds the applier and the panel next to an existing
-  gluetun stack: the applier joins gluetun's namespace, reads its server list
-  read-only and holds the control-server key; the panel holds no key, as now.
-- Docs for that form, and a live pass recorded in [testing](docs/testing.md).
+### Verifying a sidecar's tunnel-tier egress
 
-Not carried over: NetBird and the exit routing, and PIA's port forwarding,
-which gluetun already does for PIA. The DNS-over-TLS leak that rules 102–104
-close was found together with the exit's host table for NetBird's traffic;
-whether a plain gluetun sidecar has it has not been checked.
+A gluetun sidecar with FastestVPN, IVPN, Surfshark or Windscribe is shown as
+switched, never verified, because nothing in plain gluetun's namespace can
+measure the host's own address. The panel could measure it instead, as an
+opt-in, if it can show that it and gluetun leave the host by the same path,
+with fresh bounded measurements, and still work without a panel.

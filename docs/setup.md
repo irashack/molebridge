@@ -149,7 +149,8 @@ installed (1/90/95/96/97, protected table; 94 and 98 come with the address
 the applier sets)`), then `molebridge-exit: bringing the
 tunnel up`, `molebridge-exit: tunnel up` and `molebridge-exit: ready`, and
 `wireguard` and `netbird` should become healthy. With Mullvad, `applier` becomes healthy too, once it
-has verified the starting server. With PIA, `applier` stays unhealthy until
+has finished its first check of the starting server; the panel shows
+whether that check verified it. With PIA, `applier` stays unhealthy until
 you pick a region in step 7, because a fresh PIA tunnel has no peer yet; the
 same goes for NordVPN until you pick a server. If
 `wireguard` refuses to start, its log names the setting or config line it

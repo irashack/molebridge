@@ -6,14 +6,17 @@ podman-compose, but only the commands given there have been tested.
 
 ## Health
 
-The applier rewrites `state/applier/result.json` about once a minute. The exit
-counts as healthy only when all of these hold:
+The applier rewrites `state/applier/result.json` about once a minute. Every
+reader judges it the same way ([the verdict](architecture.md#the-verdict)),
+and the exit counts as connected only when the record is fresh, names the
+server you selected (or `SERVER`), and every check its kind requires has
+passed in the last 150 seconds:
 
 - a recent handshake;
 - egress confirmed by the provider (Mullvad's `am.i.mullvad.net` for each
   address family the tunnel has; PIA's `connected: true`; NordVPN's
   `protected: true`), or, for a provider without such a check, by the
-  [tunnel checks](architecture.md#status-reporting);
+  [tunnel checks](architecture.md#egress-tiers);
 - a server list less than 24 hours old that includes the current server;
 - the NetBird interface present, as a kernel WireGuard link, with NetBird's
   kernel firewall in place;
@@ -23,8 +26,10 @@ counts as healthy only when all of these hold:
   record](architecture.md#the-owner-record) from the `wireguard` container,
   in the applier's own namespace.
 
-A result older than 150 seconds, malformed or dated in the future counts as
-unknown, whatever it says.
+A [gluetun sidecar](gluetun-sidecar.md) has no NetBird or routing checks.
+A record older than 150 seconds, malformed or dated in the future counts as
+unknown, whatever it says, and so does one written for another kind or
+provider than the panel is configured for.
 
 - `/healthz` on the panel only checks that the panel process is up.
 - `/readyz` returns 200 for a fresh, verified connection and 503 otherwise.
@@ -33,9 +38,20 @@ unknown, whatever it says.
   (including the NetBird settings the entrypoint gate refuses), file
   permissions, the identity volume, that every container in the exit's
   namespace shares it (three with the default backend, four with gluetun), the ICE blacklist, the NetBird gate's own checks of its
-  settings and stored profiles, and the applier's own checks. It doesn't
-  prove that client traffic is forwarded; [verification](verification.md)
-  does that.
+  settings and stored profiles, and the applier's own checks. The last of
+  those, `verified <provider> egress`, is the verdict against the applier's
+  own `SERVER` or selection, with the reasons when it fails, such as
+  `FAIL The applier reports: verified Mullvad egress - egress-failed (docs/troubleshooting.md).`
+  The doctor doesn't prove
+  that client traffic is forwarded; [verification](verification.md) does
+  that.
+- The applier's container health check is operational only: a fresh
+  completed check, `ok` or `failed`, one tunnel peer, and an intact
+  namespace (routing protection and NetBird's mode; for a sidecar, gluetun's
+  control server answering). An exit that is up but not verified, or on
+  another server than `SERVER`, stays healthy; the panel, `/readyz` and the
+  doctor report it. Before 0.7.0 the health check also failed when the exit
+  wasn't on its `SERVER`.
 
 ### Gatus
 
@@ -43,6 +59,59 @@ To push health to [Gatus](https://gatus.io), set `GATUS_URL` and
 `GATUS_ENDPOINT`, and put `GATUS_TOKEN=…` in `secrets/applier.env` (mode 0600).
 Use HTTPS unless the connection is local and trusted. In Gatus, treat a
 missing push as a failure: a stopped applier can't report that it's down.
+
+The applier pushes the [verdict](architecture.md#the-verdict) against its
+own target, so it agrees with the panel and `/readyz`; anything but `ok` is
+a failure, with the applier's message or the verdict's label as the error.
+It pushes after each periodic check and each outcome of a switch, never
+while a switch is in progress, so an ordinary switch isn't a failed sample.
+
+## Retries
+
+The applier retries by itself
+([the admission pipeline](architecture.md#the-admission-pipeline)):
+
+- **A change that failed** (the peer update, PIA's registration, gluetun's
+  control server, or a switch that timed out on another server) is applied
+  again after 1, 2, 4 and 8 minutes, then every 15. The panel's note says
+  when: "Retrying at … UTC."
+- **A change that was applied but not verified** (the handshake, the egress
+  check or its service failing while the selected server is live) is
+  re-checked about once a minute, never switched again: "Re-checking at …
+  UTC." A brief outage of the provider's check therefore doesn't move the
+  exit.
+- **A request that waits for a prerequisite** (a fresh server list, routing,
+  NetBird, the WireGuard interface) is tried on every pass, every 5 seconds.
+- **A refused request** (malformed, or a server not in the list) isn't
+  retried until the server list changes. With PIA, a refused login isn't
+  retried until `secrets/pia/username` or `secrets/pia/password` changes.
+
+To retry now, press **Retry** in the panel, or select the same server again.
+Either is a new request: it applies at once and starts the backoff over.
+While a switch runs the panel answers 409, "A switch is in progress; wait
+for it to finish.", so wait for it first.
+
+An exit with `SERVER` set has no Retry. Changing `SERVER` is a new target.
+To retry the same configured server before its backoff is up, stop the
+applier, delete its attempt record and start it again. The applier then
+inspects first: the configured server already live is re-checked, anything
+else is switched at once.
+
+```sh
+docker compose stop applier
+rm state/applier/attempt.json
+docker compose start applier
+```
+
+`state/applier/attempt.json` holds the applier's current attempt: the
+target and why, its state, the backoff step, when to act next, and the last
+refused panel request. It is written before every change, so a restart
+resumes it instead of repeating a change blindly. Deleting it while the
+applier is stopped is safe: a missing or unreadable record starts idle, with
+the backoff from the start, and the applier inspects the live server before
+it changes anything, unless the panel's request is less than 150 seconds
+old. A refused request is then tried once more, and refused again if
+nothing changed. Don't edit it while the applier runs.
 
 ## Recovery
 
@@ -111,6 +180,43 @@ overrides, check them against the new `compose.yaml`. After any change to
 routing, images or the applier, run the [verification](verification.md)
 drills again.
 
+### From 0.6.x to 0.7.0
+
+0.7.0 changes the status record the applier writes
+([the status record](architecture.md#the-status-record)). A 0.7 panel reads
+both the new record and 0.6's; a 0.6 panel can't read the new one.
+
+1. **Upgrade the panel first.** For a [separate
+   Switchyard](switchyard.md#several-exits-in-one-panel), update its
+   checkout and recreate its container. Its exits keep showing correctly
+   while they still run 0.6; their checks show as "not reported
+   individually". An exit's bundled `control-panel` runs from the exit's
+   own checkout, so `recover` upgrades it together with that exit.
+2. **Then the exits, in any order**, each with `recover` as above.
+
+If an exit is upgraded first, a 0.6 panel shows it as failed, "verification
+failed", while it is in fact connected, because the new record lacks the
+fields 0.6 checked; `/readyz` on that panel answers 503. Nothing else goes
+wrong, and upgrading the panel clears it.
+
+A 0.6 page already open in a browser keeps running 0.6's script against the
+upgraded panel until it reloads. For one release the panel keeps what that
+script reads (`view` in `/api/status`, and 0.6's diagnostic fields derived
+from the new checks), so the state, its label and the "tunnel checks only"
+note stay right. Diagnostics are not: a confirmation that wasn't measured
+shows as `false`, and an unmeasured routing check or fallback shows blank.
+"Not applicable", "not checked" and the named checks need a reload, which
+the next page load brings, since the script's address changes with its
+content. `view` and the derived fields go after 0.7.
+
+An exit upgraded in place doesn't switch servers by itself: with no attempt
+record yet, the applier inspects the live server first and only changes it
+if it isn't your selection (or `SERVER`). The applier's container health
+check no longer fails when the exit isn't verified or isn't on `SERVER`
+([health](#health)); monitoring that relied on that should read `/readyz`
+or Gatus instead. A `compose.gluetun.yaml` of your own must drop the names
+0.7.0 removed ([below](#from-05x-to-the-routing-image)).
+
 ### From 0.5.x to the routing image
 
 The `wireguard` container no longer uses LinuxServer's WireGuard image:
@@ -177,10 +283,12 @@ The state worth keeping is small:
 
 The `exit-run` volume holds only the owner record, which the `wireguard`
 container rewrites every 2 seconds; there's nothing in it to back up.
-`state/applier/` rebuilds itself, except one file with the gluetun backend:
-`gluetun-selection.json` remembers the last server the applier put and the
-last one it verified, which it puts back after gluetun restarts when the
-panel's request is absent or was refused. Without it, the request in
+`state/applier/` rebuilds itself, including `attempt.json` ([retries](#retries)),
+except one file with the gluetun backend:
+`gluetun-selection.json` remembers the last server the applier put, the
+last one live after a change and the last one it verified, which it puts
+back after gluetun restarts when the panel's request is absent or was
+refused. Without it, the request in
 `state/panel/desired.json` is still applied again; only that fallback is
 lost. Saved and recent servers in
 the panel live in each browser, not on the exit. The key files, `secrets/` and

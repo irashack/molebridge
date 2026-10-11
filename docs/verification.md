@@ -59,8 +59,8 @@ come from the config, as with Mullvad; IPv6 stays blocked as on PIA.
    cases, 90 when `OVERLAY6_CIDR` is set, and 94 and 98 with `ipproto
    ipv6-icmp` when the tunnel has an IPv6 address. Rules 94 and 98 must carry
    the protocol qualifier: without it every protocol sourced from the tunnel
-   address is forced into the tunnel, or dropped, and the applier reports
-   `routing_ok` false. `ip` may print the protocol as `1` or `58`.
+   address is forced into the tunnel, or dropped, and the applier's
+   `routing` check fails. `ip` may print the protocol as `1` or `58`.
 2. Check the exit table. `ip route show table 51821` shows
    `default dev mullvad` and `unreachable default ... metric 4096`. The same
    holds for `ip -6 route show table 51821` with an IPv6 tunnel config; an
@@ -101,7 +101,8 @@ come from the config, as with Mullvad; IPv6 stays blocked as on PIA.
    check requires both.
 8. On the host, `python3 tools/molebridge.py doctor` should pass.
    It checks actual namespace agreement as well as routing, NetBird's mode,
-   Rosenpass and status freshness.
+   Rosenpass, status freshness and, last, the verdict on the applier's
+   record ("recent provider check" in its `PASS` line).
 
 Run these egress probes inside the namespace:
 
@@ -120,11 +121,14 @@ prove routing blocked the request.
 
 ## Fail-closed drills
 
-For each drill, keep a client on the selected exit probing the provider's
-status endpoint above or pinging a public IP. During the drill, the affected
-path must fail without using your host's own public IP. Test IPv4 and IPv6
-explicitly; a browser check may exercise only one family. With PIA and
-NordVPN, IPv6 must remain blocked before, during and after each drill.
+Run these on every exit you rely on, each provider and backend, with a
+client holding the exit. For each drill, keep that client on the selected
+exit probing the provider's status endpoint above or pinging a public IP.
+During the drill, the affected path must fail without using your host's
+own public IP. Test IPv4 and IPv6 explicitly; a browser check may exercise
+only one family. Where the exit carries both families, drill both. Where it
+carries only IPv4 (PIA, NordVPN, an IPv4-only Mullvad config), check that
+IPv6 is blocked before, during and after each drill.
 
 Also record any client fallback to its own connection: server routing cannot
 enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
@@ -165,13 +169,14 @@ during a rule drill. Follow the exit's log while you run them:
 
 On PIA, rules 94 and 98 belong to the applier, which puts a deleted one back
 within one pass of its loop (normally 5 seconds, longer during a switch or
-health check), without a log line. After each
+periodic check), without a log line. After each
 drill, confirm provider egress returns on the supported families. After the
 tunnel-down drill, the applier reapplies the saved server or region when the
-interface returns. If a request was rejected or failed, select again to
-retry; a failed request whose server is live and verified clears at a later
-check by itself. These drills follow from the code and the isolated drills
-below; [testing](testing.md) records which have run on a live exit.
+interface returns. A failed switch is retried by itself on its backoff, and
+clears at a later check when its server is live and verified
+([retries](operations.md#retries)). These drills follow from the code and
+the isolated drills below; [testing](testing.md) records which have run on
+a live exit.
 
 Confirm the exit host's own unbound traffic stays on its ordinary path while
 the client path is blocked.
@@ -218,12 +223,68 @@ families each covered.
 
 ## Status and recovery
 
+### Reading the status
+
+Read the applier's record on the host. Every check is listed with its state;
+only `pass` counts:
+
+```sh
+python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); print("schema", r.get("schema"), r.get("kind"), r.get("status"), r.get("message")); print("selection", r.get("selection")); [print(" ", n, c.get("state"), c.get("reason", "")) for n, c in r.get("checks", {}).items()]; print("egress tier", r.get("checks", {}).get("egress", {}).get("tier"))' state/applier/result.json
+```
+
+With `jq`: `jq '{schema, kind, status, message, selection, tier: .checks.egress.tier, checks: (.checks | map_values(.state))}' state/applier/result.json`.
+A connected overlay exit shows `schema 2`, `ok`, every required check
+`pass` ([which are required](architecture.md#the-status-record)),
+`app_attachment` `n/a`, and `egress tier provider` (or `tunnel` for a
+provider with only the tunnel checks).
+
+The page, the API, `/readyz`, the doctor and any Gatus push must agree,
+because they all judge the record with the same function. Compare them at
+the same moment:
+
+```sh
+curl -fsS http://127.0.0.1:8095/api/status | python3 -c 'import json, sys; v = json.load(sys.stdin)["verdict"]; print(v["state"], v["label"], v["reasons"], v["tier"])'
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8095/readyz
+docker compose exec applier python -m applier.apply --doctor | tail -n 1
+```
+
+Add `?exit=<id>` on a panel serving several exits. `ok connected` goes with
+`/readyz` 200 and `PASS verified Mullvad egress` (your provider's name);
+anything else goes with 503 and `FAIL verified Mullvad egress - ` followed
+by the same reason codes.
+
+### Status drills
+
 Stop the applier while leaving the tunnel running. Within 150 seconds plus one
 browser poll, the panel must show stale/unknown and `/readyz` must return 503;
 `/healthz` remains 200. Restart the applier and confirm fresh status returns.
 Disconnect an open browser from the panel and confirm its next failed poll
-clears connected status. Test a failed switch followed by selecting the same
-server or region again. Finally, verify the recovery helper, container
+clears connected status. Test a failed switch followed by **Retry**, which
+applies at once, and confirm the panel shows when the applier would have
+retried by itself ("Retrying at … UTC").
+
+Start a switch and, before it finishes, choose another server from a second
+tab: the panel must answer 409, "A switch is in progress; wait for it to
+finish.", and the first switch must complete. Then choose again.
+
+Fail the egress check briefly while the client holds the exit. On the
+default backend, drop the exit's own HTTPS through the tunnel, which only
+the applier's egress check uses, and leave it for one or two checks:
+
+```sh
+docker compose exec applier nft add table inet molebridge_drill
+docker compose exec applier nft add chain inet molebridge_drill out '{ type filter hook output priority 0; }'
+docker compose exec applier nft add rule inet molebridge_drill out oifname mullvad tcp dport 443 drop
+docker compose exec applier nft delete table inet molebridge_drill
+```
+
+Until you delete the table, the panel shows the exit failed with "Tunnel
+inspection or egress check failed.", the record's `selection.outcome` is
+`applied-unverified` with `next_action` `recheck`, the live server stays the
+same (no "Applying the requested server."), and the client's traffic
+continues. After you delete the table, the next check, within about a
+minute, shows it connected again. This drill follows from the code; whether
+it has run live is in [testing](testing.md). Finally, verify the recovery helper, container
 recreation and host reboot preserve the NetBird peer identity and shared namespace.
 After a WireGuard restart outside Compose, confirm an applier stranded without
 the WireGuard interface becomes Docker-unhealthy even if its failure result is
@@ -235,7 +296,9 @@ Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interfac
 Start with a saved desired selection, an expired catalogue and an unavailable
 relay API. Confirm no peer change occurs and the result says the request will
 retry. Restore the API and confirm the same request is applied automatically.
-Malformed/unlisted requests and failed peer updates still require a new selection.
+A malformed or unlisted request is not retried until the server list
+changes or you select again; a failed peer update is retried on its
+backoff.
 
 ## From a client
 

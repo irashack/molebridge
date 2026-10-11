@@ -13,6 +13,30 @@ live checks in [verification](docs/verification.md), because CI can't tell
 you that a real client fails closed. Second, update the docs your change
 affects in the same pull request.
 
+## Where things are
+
+- `applier/`: the applier. `apply.py` holds the admission pipeline, the
+  inspection and the status record; `attempt.py` the persisted attempt
+  (`state/applier/attempt.json`); one module per provider family
+  (`pia.py`, `nordvpn.py`, `gluetun_applier.py`).
+- `molebridge/`: code shared by the applier, the panel and the tools.
+  `verdict.py` judges a status record for every reader; `providers.py` is the
+  provider registry; `routing.py` the routing contract's checks, including
+  gluetun's reconnection states.
+- `panel/`: Switchyard, standard library only. `panel/js-tests/` tests
+  `panel/static/panel.js` with Node's own runner, against the panel's
+  answers for `panel/fixtures/`, and runs 0.6.1's script
+  (`panel/fixtures/panel-0.6.1.js`) against a 0.7 panel.
+- `routing/`: the routing image and the guard scripts.
+- `tools/`: the host helpers (`molebridge.py`), the routing and image
+  drills, `check-sidecar-doctor.py`, and the Python tests (`test_*.py`;
+  `test_verdict.py`, `test_pipeline.py`, `test_gluetun_transition.py`,
+  `test_sidecar_applier.py` and `test_sidecar_tools.py` cover the status,
+  the pipeline and the sidecar).
+- `compose.yaml`, `compose.pia.yaml`, `compose.nordvpn.yaml`,
+  `compose.gluetun.yaml` and `compose.sidecar.yaml`: the supported Compose
+  forms, with `.env.example` and `.env.sidecar.example`.
+
 ## Checks
 
 ```sh
@@ -29,7 +53,12 @@ docker compose --env-file .env.example config --quiet
 docker compose --env-file .env.example -f compose.yaml -f compose.pia.yaml config --quiet
 docker compose --env-file .env.example -f compose.yaml -f compose.nordvpn.yaml config --quiet
 docker compose --env-file .env.example -f compose.gluetun.yaml config --quiet
+docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
+PYTHON=.venv/bin/python node --test panel/js-tests/*.test.js
 ```
+
+The panel script tests need Node 18 or later and nothing from npm; they ask
+Python for the panel's own answers (`PYTHON`, `python3` by default).
 
 On Linux with Docker and kernel WireGuard, two more need root or a privileged
 container: the routing drills in throwaway namespaces, and the routing image's
@@ -50,7 +79,10 @@ GLUETUN_SERVERS_JSON=/path/to/gluetun/internal/storage/servers.json \
   .venv/bin/python -m pytest -q tools/test_gluetun_client.py -k reference_catalogue
 ```
 
-CI also builds both images and checks what they contain; see
+CI also builds both images and checks what they contain, and runs the
+sidecar doctor's namespace probe and recovery against Docker with a busybox
+in gluetun's place (`python3 tools/check-sidecar-doctor.py`, which needs
+Docker with Compose and pulls pinned images); see
 `.github/workflows/ci.yml`.
 
 On a disposable Linux host, `sudo sh tools/check-routing.sh` runs the routing

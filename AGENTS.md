@@ -44,10 +44,12 @@ route in `SECURITY.md`, never in a public issue or commit message.
 - Pin images to exact releases with multi-arch digests; update deliberately.
 - The panel stays Python standard library only; front-end code stays
   dependency-free.
-- Validate in proportion to impact: `pytest -q panel tools`, `sh -n` and
+- Validate in proportion to impact: `pytest -q panel tools`,
+  `node --test panel/js-tests/*.test.js` for the panel script, `sh -n` and
   `shellcheck` on shell scripts, and `docker compose config` against
   `.env.example`, alone and with `compose.pia.yaml`, `compose.nordvpn.yaml`
-  and `compose.gluetun.yaml`. Update the docs a
+  and `compose.gluetun.yaml`, and `compose.sidecar.yaml` against
+  `.env.sidecar.example`. Update the docs a
   change affects in the same commit.
 
 ## Writing docs

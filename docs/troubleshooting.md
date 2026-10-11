@@ -315,11 +315,12 @@ missing, edited, or written by an older version with fewer routes. Run
 check never prints the file, which holds the API key.
 
 **gluetun backend: the panel says "gluetun did not accept the server
-selection; choose a server again to retry."** The applier's request to gluetun's control server failed:
+selection; retrying automatically."** The applier's request to gluetun's control server failed:
 gluetun isn't running, the API key in `secrets/gluetun/api_key` doesn't
 match the one in `secrets/gluetun/auth.toml` (run `python3
 tools/molebridge.py gluetun-auth --rotate`, then run `python3 tools/molebridge.py recover`), or gluetun refused
-the server. `python3 tools/molebridge.py
+the server. The applier tries again after 1, 2, 4 and 8 minutes, then
+every 15 ([retries](operations.md#retries)). `python3 tools/molebridge.py
 doctor` checks that the control server answers with the key.
 
 ## The panel
@@ -354,6 +355,55 @@ proxy's cookie inside the frame.
 usable result from the applier: none in the last 150 seconds, or one that is
 malformed or dated in the future. Check that the `applier` container is
 running and healthy, and that the host's clock is right.
+
+**Other states the panel shows as unknown or failed.** Each is the
+[verdict](architecture.md#the-verdict) on the applier's last record:
+
+- **"evidence expired"**: the record is fresh, but a check in it was
+  measured more than 150 seconds ago, or passed for another server than the
+  one the record reports. An inspection that took very long does this; the next one
+  normally clears it. If it persists, look at how long the egress check
+  takes (the applier's log) and at the host's clock.
+- **"not yet measured"**: a check the exit needs hasn't been measured since
+  the applier started or since the server changed. Wait for the next check,
+  about a minute.
+- **"request not acknowledged"**: the panel's request is more than 150
+  seconds old and the applier hasn't picked it up. Check that the applier
+  runs, and that it can read `state/panel/desired.json` (`PANEL_USER`).
+- **"verification failed"**: every check passed, but on another server than
+  the one you selected or set in `SERVER`. The applier puts the selection
+  back by itself ("The live server is not the selected one; waiting for
+  convergence." below).
+- **"kind mismatch"**: the record was written by an exit of the other kind
+  than the panel is configured for: an overlay exit where the panel expects
+  a sidecar, or the reverse. Make the panel's `EXIT_KIND`, or the `/kind` in
+  that exit's `PANEL_EXITS` entry, match the applier's `EXIT_KIND`
+  ([several exits](switchyard.md#several-exits-in-one-panel)). A 0.6 record
+  under a sidecar configuration shows this too.
+- **"provider mismatch"**: the record names another provider or backend than
+  the panel's `PROVIDER` or `PANEL_EXITS` entry. Fix whichever is wrong; a
+  panel pointed at another exit's state directory shows this.
+- **"unsupported status version"**: the applier is newer than the panel.
+  Upgrade the panel ([upgrades](operations.md#from-06x-to-070)).
+- **"invalid status record"**: the record is missing a check the exit needs,
+  or a check is malformed or contradicts itself, such as an egress pass at a
+  tier the provider can't have. The applier doesn't write such records:
+  check whether something else writes `state/applier/`, and if nothing
+  does, report it as a bug.
+- **"switched, egress unverified"**, with "Switched; the egress couldn't be
+  compared with this host's address.": a [gluetun
+  sidecar](gluetun-sidecar.md#tunnel-tier-providers) with FastestVPN, IVPN,
+  Surfshark or Windscribe. The switch was made; Molebridge has no way to
+  verify its egress there. This is expected and doesn't change by itself.
+
+A 0.6 panel reading a 0.7 exit shows "verification failed" while the exit
+is connected: upgrade the panel ([upgrades](operations.md#from-06x-to-070)).
+
+**`A switch is in progress; wait for it to finish.` (409) when switching.**
+The panel refuses a new request while the exit is switching, including just
+after a request the applier hasn't picked up yet. Wait until the switch
+ends, up to 60 seconds (90 with gluetun), then choose again. A stale status
+doesn't block a request.
 
 ## Sign-in
 
@@ -446,27 +496,69 @@ connectivity."** The provider isn't answering the tunnel. Possible causes:
   [the ports it needs](prerequisites.md#network).
 - The selected server is down. If another server works, that's the cause.
 
-**"Peer update failed; choose a server again to retry."** The applier couldn't
-apply the server. With PIA, a rejected login or registration shows this way
-too: check the files in `secrets/pia/` (one value per file, no extra
-whitespace), then select the region again. If one PIA region keeps failing
-while others work, the problem is on PIA's side.
+**"Peer update failed; retrying automatically."** The applier couldn't
+apply the server: a peer change failed, or with PIA the registration
+failed (a key registration PIA refuses with a reused login is asked once
+more with a fresh one first). The applier applies it again after 1, 2, 4 and 8
+minutes, then every 15, and the panel says when ("Retrying at … UTC");
+**Retry** does it at once ([retries](operations.md#retries)). If one PIA
+region keeps failing while others work, the problem is on PIA's side.
 
-**"Switch verification timed out; choose a server again to retry."** The peer
-changed, but the handshake, the routing checks or the egress check didn't all
-pass in time: 60 seconds with the default backend, 90 with gluetun. Try
-again, or try another server.
+**"PIA refused the login; correct the credentials, or retry."** PIA's login
+service answered 401 or 403. Check the files in `secrets/pia/` (one value
+per file, no extra whitespace). The applier doesn't try again by itself
+until `secrets/pia/username` or `secrets/pia/password` changes; after
+fixing them, it retries within a few seconds, or press **Retry**.
 
-These two messages, and "Routing changed during the switch; choose a server
-again after recovery." and gluetun's "gluetun did not accept the server
-selection; choose a server again to retry.", clear by themselves when a
-later check finds the requested server live and passing every check; the
-applier logs
-`applier: the requested server passed every check; clearing the earlier
-failure`. With PIA that happens when an automatic re-registration was
-refused but the tunnel came back on the existing registration. While
-another server is live, or a check fails, the message stays until you
-choose again.
+**"Switch verification timed out; retrying automatically."** The selected
+server didn't become the live one in time: 60 seconds with the default
+backend, 90 with gluetun. It is applied again on the same backoff. If the
+selected server did become live but a check still failed at the timeout,
+the panel shows that check's own message instead, such as the handshake or
+egress message below, and the applier re-checks it every minute without
+switching again.
+
+**"Routing changed during the switch; retrying after recovery."** A routing
+guard, the owner record or NetBird's kernel mode went missing while a
+switch was being verified ([gluetun's
+reconnection](architecture.md#gluetuns-reconnection-during-a-switch) says
+what gluetun may do without causing this). The switch is tried again on the
+backoff, but only once the gates pass; until then the panel shows "Waiting
+for tunnel and overlay routing; request will retry automatically. Run
+recovery if this persists." Run [recovery](operations.md#recovery) if it
+does.
+
+**"The last switch was interrupted; retrying automatically."** The applier
+stopped during a switch, or lost the answer to its change. At start it
+inspected the tunnel first, found another server live, and applies the
+selection again on the backoff. Its log shows `applier: an interrupted
+switch is inspected before anything else`.
+
+**"The live server is not the selected one; waiting for convergence."** The
+tunnel runs another server than the one you selected; with `SERVER` set the
+message is "The configured SERVER is not the current server; waiting for
+convergence." Usually gluetun restarted on the server in its own settings,
+or someone changed the peer by hand. The applier puts the selection back by
+itself, but not within 90 seconds of its last change and not while a failed
+attempt waits for its retry; a peer the server list can't name is waited
+out for 90 seconds first.
+
+**"Expected exactly one tunnel peer."** The tunnel has no peer, or more than
+one. With PIA and NordVPN a tunnel the `wireguard` container brought back
+has no peer. The applier applies the selection again: at once when the
+container itself restarted since the applier's last change (a new owner
+record), otherwise after 90 seconds, and never within 90 seconds of its
+last change. With gluetun,
+a reconnecting tunnel has no peer for a moment, and the applier waits the
+same 90 seconds before it acts. If it persists, run
+[recovery](operations.md#recovery).
+
+All of these clear by themselves when a later check finds the selected
+server live and passing every check, or a retry succeeds. With PIA, a
+handshake that has been stale for 180 seconds while the selected region is
+live makes the applier register the same region again, on the same
+backoff, and log `applier: the registration lapsed; registering the same
+server again`; an egress-check failure alone doesn't.
 
 **"No PIA region is registered yet; choose one in the panel."** It's a fresh
 PIA install. Pick a region.
@@ -488,18 +580,19 @@ the tunnel's state, or the egress check got no usable answer: a timeout, a
 refused connection, an HTTP error or a malformed reply. Usually that answer
 was missing twice, 10 seconds apart, and the log shows `egress check got no
 answer twice`; a first attempt that took over 15 seconds, or one during a
-switch, is not asked again (see [status
-reporting](architecture.md#status-reporting) for when the applier asks once
+switch, is not asked again (see [egress
+tiers](architecture.md#egress-tiers) for when the applier asks once
 more). An occasional one usually means the provider's check service, or the
 path to it through the tunnel, dropped a connection; the next check a minute
-later normally passes. If it persists, compare the handshake age in
-Diagnostics.
+later normally passes. The selected server stays in place meanwhile: the
+applier re-checks it, it doesn't switch again. If it persists, compare the
+handshake age in Diagnostics.
 
 **"Tunnel egress did not pass the tunnel checks."** Only for a provider
 without its own egress check, which today means FastestVPN, IVPN, Surfshark
 and Windscribe through the gluetun backend: the IP echo services
 disagreed, or answered with the host's own address or one the server list
-doesn't name. See [status reporting](architecture.md#status-reporting).
+doesn't name. See [egress tiers](architecture.md#egress-tiers).
 
 **"Waiting for a fresh trusted relay catalogue; request will retry
 automatically."** The selection is saved and will be applied once the

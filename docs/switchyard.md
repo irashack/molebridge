@@ -25,8 +25,10 @@ The panel learns the setting from the applier's `result.json`, through its
 existing read-only mount. A stale status keeps the exit read-only and shows
 its connection as unknown. A `POST /select` for that exit is refused with
 403 and "Exit is set in configuration; change SERVER to choose another
-server." `/api/status` exposes `view.selection_mode` as `configuration` and
-`view.configured_server` as the configured name; `desired` is null.
+server." `/api/status` gives the configured name as
+`verdict.configured_server`; `desired` is null. (The deprecated `view`
+object still carries `selection_mode: configuration` and `configured_server`
+in 0.7.)
 
 Change or clear `SERVER` in the exit's configuration and apply it with
 [recovery](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
@@ -41,10 +43,13 @@ The page has three parts:
 
   | State | Meaning |
   |---|---|
-  | connected | Verified in the last 150 seconds |
-  | switching | A switch is running |
+  | connected | Every check the exit needs passed in the last 150 seconds, on the server you selected |
+  | switching | A switch is running, or the applier hasn't picked up your request yet |
   | failed | The last switch, or the latest periodic check, failed |
-  | unknown | Status is stale or unavailable |
+  | unknown | The status can't be confirmed: stale or unavailable, not yet measured, or not readable by this panel ([troubleshooting](troubleshooting.md#the-panel)) |
+
+  Every page, `/api/status`, the tabs and `/readyz` show the same
+  [verdict](architecture.md#the-verdict).
 
   Beside the state, "checked 20 s ago" says how old the applier's last check
   is, counting up live; status is polled every 30 seconds, and every 2 while
@@ -91,7 +96,10 @@ as passed. An exit still writing a 0.6 status record shows its checks as
 "not reported individually". When the applier will check or try again by
 itself, the note says when ("Re-checking at …" or "Retrying at …", UTC).
 
-If a switch fails, press **Retry** or pick something else;
+If a switch fails, the applier tries again by itself after 1, 2, 4 and 8
+minutes, then every 15, and a switch that is made but not verified is
+re-checked without switching again ([retries](operations.md#retries)).
+Press **Retry** to try at once, or pick something else;
 [troubleshooting](troubleshooting.md#switching) explains each message. A
 failed check doesn't always mean traffic stopped: the previous or new tunnel
 may still be carrying it. What can't happen is forwarded traffic leaving
@@ -273,8 +281,10 @@ services:
 ```
 
 The panel code comes from one checkout. That checkout must include
-multi-exit support, but the exits themselves can run any revision with the
-same state-file format.
+multi-exit support and be at least as new as the newest exit: a panel reads
+its own release's status records and the previous release's, so a 0.7 panel
+reads 0.6 and 0.7 exits, and a 0.6 panel misreads 0.7 exits
+([upgrades](operations.md#from-06x-to-070)).
 
 Each exit's own panel keeps working. Both write the same `desired.json`, so
 whichever posted last wins. You can stop an exit's own `control-panel`

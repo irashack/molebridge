@@ -4,6 +4,7 @@
 - [Components and trust](#components-and-trust)
 - [Routing contract](#routing-contract)
 - [gluetun backend](#gluetun-backend)
+- [The sidecar kind](#the-sidecar-kind)
 - [Relay catalogue](#relay-catalogue)
 - [Requests and switching](#requests-and-switching)
 - [Status reporting](#status-reporting)
@@ -29,6 +30,12 @@ There are two backends, and the same promise holds for both:
 
 The applier, the panel, the request and status files, and the
 [status reporting](#status-reporting) are shared.
+
+Both backends are the `overlay` kind of exit: a NetBird exit node. A second
+kind, the `sidecar` (`compose.sidecar.yaml`, experimental), selects and
+checks servers for an ordinary gluetun that other containers share, with no
+NetBird and no routing contract; [the sidecar kind](#the-sidecar-kind)
+describes what differs.
 
 This is a property of the exit's namespace, not of the device. What happens
 when a device deselects the exit or NetBird disconnects, and what the device
@@ -367,7 +374,7 @@ With PIA's addressless config, the pass leaves priorities 94 and 98 alone
 entirely: it adds and removes nothing there, and neither its readiness nor
 NetBird's gate compares them. The applier keeps exactly one pair there, for
 the current address, and repairs it on every pass of its loop, normally
-every 5 seconds and longer while a switch or health check runs
+every 5 seconds and longer while a switch or periodic check runs
 ([providers](providers.md#how-pia-differs)); the same single-fault promise
 holds with the applier's pass in place of the interval.
 
@@ -409,9 +416,10 @@ reads it with `owner_valid` in `routing/contract-rules`, the applier with
 - **NetBird's gate** stops NetBird as soon as the record isn't live
   ([below](#netbirds-gate)).
 - **The applier** counts routing protection as intact only with a live
-  record. Without one, `routing_ok` is false, switches wait, the result
-  fails with "Routing protection is incomplete; run the recovery helper.",
-  and `--healthcheck` and the doctor's `routing protection` check fail.
+  record. Without one, the status record's `owner_record` check fails,
+  switches wait, the result fails with "Routing protection is incomplete;
+  run the recovery helper.", and the container health check and the
+  doctor's `routing protection` check fail.
 
 Nothing recovers the stack by itself: a `netbird` or `applier` left in an old
 namespace stays there until you run `python3 tools/molebridge.py recover`
@@ -857,13 +865,14 @@ hostname filter to the selected server and clearing every other server
 filter. gluetun then restarts its VPN in-process: its interface disappears
 and comes back, and the guard puts the exit route back within a couple of
 seconds. The applier reports that as switching, not as a failure, for up to
-90 seconds. Success needs, as with the default backend: exactly one peer
+90 seconds ([gluetun's reconnection](#gluetuns-reconnection-during-a-switch)).
+Success needs, as with the default backend: exactly one peer
 whose endpoint and key identify the selected server in the catalogue (`wg
 show wg0 endpoints`, IPv4 or IPv6, matched against every address the
 server lists, since gluetun connects to any of them at random; an address
 listed for several servers stays unidentified), a fresh handshake, the whole guard in both families
 (including rules 88, 89, 91 and 92 and the host table), and egress
-confirmation at the provider's [tier](#status-reporting): Mullvad's
+confirmation at the provider's [tier](#egress-tiers): Mullvad's
 `am.i.mullvad.net` and NordVPN's `ips/insights` through the tunnel, using
 the same code as those native providers; the tunnel checks for the others.
 
@@ -875,16 +884,52 @@ control mark: rule 88 sends it to the host table, and the post-rules accept
 it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN`, which the applier
 holds.
 
-**gluetun restarting.** With `SERVER` set, the applier returns to it instead
-of a saved selection. Without it, settings put at runtime are lost when gluetun
+**gluetun restarting.** Settings put at runtime are lost when gluetun
 restarts; it starts again from `GLUETUN_SERVER_*`. The applier keeps the
-server it last put and the last one it verified in
-`state/applier/gluetun-selection.json`. A request from the panel that was
-accepted is put again by the usual path whenever the live server differs
-from it. When there is no such request, or the last one was refused, and
-gluetun runs a server other than the one last put, the applier puts the
-last verified one again. It waits until gluetun's peer can be identified,
-and never within 90 seconds of its last selection.
+server it last put, the last one live after a change, and the last one it
+verified in `state/applier/gluetun-selection.json`. Putting the selection
+back is ordinary drift correction in the [admission
+pipeline](#the-admission-pipeline): the target is `SERVER` when set, else
+the panel's request unless it was refused, else the **restore** target, the
+last verified server (for a [tunnel-tier sidecar](#the-sidecar-kind), which
+is never verified, the last one live after a change). When gluetun runs
+another server, the applier puts the target back, but not while a failed
+attempt waits on its backoff, never within 90 seconds of its last change,
+and only once gluetun's peer can be identified or after waiting 90 seconds
+for that.
+
+### gluetun's reconnection during a switch
+
+A PUT makes gluetun drop and recreate its interface, and the guard repairs
+the routing behind it, asynchronously. While the applier verifies a switch
+(at most the 90-second timeout), these reconnection states withhold
+readiness (the `routing` check fails with the reason `reconnecting`)
+without aborting the switch:
+
+- the exit interface absent or down;
+- the exit table's tunnel default route missing; the unreachable fallback
+  must stay, and any other route in the table is still unsafe;
+- rules 90 and 96, which name the exit interface, in the kernel's detached
+  form while that interface is absent: Linux detaches them when the
+  interface goes;
+- the tunnel address present before its rule 94 is back;
+- rule 94 for the previous address and for the current one at once, as the
+  guard adds before it deletes, each at most once and in its exact form.
+
+Anything else the guard's full check would refuse aborts the switch with
+"Routing changed during the switch; retrying after recovery.": any other
+duplicate or extra rule, rule 94 for a third address, a detached rule while
+the interface is present, any other rule of the contract missing or altered
+(1, 88 to 92, 95 to 97, 102 to 104), the fallback gone, an extra route in the
+exit table, the ICMP source sysctl unset, or NetBird no longer in kernel
+mode. This is the
+protective predicate, `gluetun_transition_status` in `molebridge/routing.py`.
+The host table is readiness, not safety. The applier reads the interface,
+its addresses and the rules separately, so it reads them again, up to three
+times, when the interface changed underneath (its presence or index differs
+before and after, or it is present with detached rules); meanwhile the exit
+isn't ready. Outside a switch, the full check applies as on every
+inspection.
 
 ### Startup and recovery
 
@@ -902,6 +947,51 @@ with OrbStack, at `4933360`, NetBird in the namespace resolved names through
 it, so through the tunnel ([testing](testing.md#gluetun-backend-at-4933360-and-the-standalone-form));
 so with the tunnel down it would not reach management by name. Other
 engines haven't been checked.
+
+## The sidecar kind
+
+Experimental, with no live pass yet ([gluetun sidecar](gluetun-sidecar.md)
+says what has been tested). With `EXIT_KIND=sidecar` and
+`compose.sidecar.yaml`, the applier and the panel select and check servers
+for an ordinary gluetun whose namespace other containers share
+(`network_mode: service:gluetun`). Those containers send their own traffic
+through gluetun's tunnel; nothing is forwarded for other devices. There is
+no NetBird, no routing image, no guard and none of the overlay's gluetun
+post-rules; only gluetun's role-file check before every start is shared
+with the gluetun backend.
+
+The applier refuses to start as a sidecar unless `TUNNEL_BACKEND=gluetun`
+and `PROVIDER` is a `gluetun-*` provider. It joins gluetun's namespace with
+`NET_ADMIN` (kernel WireGuard answers `wg show` only with it), and works as
+on the gluetun backend ([the applier with gluetun](#the-applier-with-gluetun))
+with these differences:
+
+- **Checks.** The required checks are `peer`, `handshake` and `egress`.
+  `routing`, `netbird` and `owner_record` are `n/a`. `traffic_protection`
+  is `not-checked`: gluetun's firewall keeps the applications' traffic in
+  the tunnel, and Molebridge doesn't inspect it. `app_attachment` is
+  `not-checked` by the applier: the host doctor checks, through the engine
+  and a namespace probe, that every application in `SIDECAR_APPS` is in
+  gluetun's current namespace ([the doctor](gluetun-sidecar.md#the-doctor)).
+- **Gates.** A switch needs no routing or NetBird gate, only a usable
+  catalogue, a listed target and readable peers.
+- **Egress.** Mullvad's and NordVPN's own checks work as on the gluetun
+  backend. The tunnel tier can't: in plain gluetun's namespace nothing
+  leaves off the tunnel, so the host's own address can't be measured. With
+  FastestVPN, IVPN, Surfshark and Windscribe, `checks.egress` fails with the
+  reason `host-address-not-measurable`, and the verdict is never `ok`: it is
+  `unknown`, "switched, egress unverified", with the message "Switched; the
+  egress couldn't be compared with this host's address." Such a switch is
+  re-checked, never applied again for that reason; a drift away from the
+  target is still put back, and the restore target is the last server live
+  after a change, since none is ever verified.
+- **Health check.** gluetun's control server answers and there is exactly
+  one peer ([readiness and health](#readiness-monitoring-and-the-health-check)).
+
+The panel needs the kind too: `EXIT_KIND` for a single-exit panel, or
+`id=gluetun-<provider>/sidecar` in `PANEL_EXITS`. A record of the other kind
+is never connected ("kind mismatch"). A sidecar's page says "tunnel" where an
+overlay exit's says "exit".
 
 ## Relay catalogue
 
@@ -928,16 +1018,32 @@ working tunnel merely because the API is unavailable.
 
 ## Requests and switching
 
-When `SERVER` is set, the applier uses it instead of reading `desired.json`.
-It validates the name and fresh-catalogue membership through the same
-request path, and retries a failed application on the periodic check.
-The gluetun restore path also targets `SERVER`, ahead of saved selection
-state. `result.json` carries `configured_server` (null when unset); the panel
+Every change of the live server goes through one admission pipeline in the
+applier, whatever asked for it (`Applier.admit` and `Applier.run_pipeline`
+in `applier/apply.py`). The **target** is the first of:
+
+1. `SERVER`, when set (source `configured`);
+2. the panel's request in `desired.json`, unless it stands refused (source
+   `panel`);
+3. with the gluetun backend, the server to restore (source `restore`; see
+   [gluetun restarting](#the-applier-with-gluetun));
+4. none. The applier then only observes the live server (source `seed`).
+
+Automatic retries run as `retry`, drift corrections as `reconverge`, and a
+new panel request for the server the previous attempt was on, after it
+failed, was refused, waited or stayed unverified, as `operator-retry`. The
+source is recorded in `result.json`'s `selection`
+([the status record](#the-status-record)). Molebridge never chooses another
+server by itself.
+
+When `SERVER` is set, the applier ignores `desired.json`. It validates the
+name and fresh-catalogue membership through the same gates.
+`result.json` carries `configured_server` (null when unset); the panel
 uses it to omit switching controls, refuse selection posts and ignore old
 panel requests when interpreting status. Connection freshness is checked
 independently. See [configuration](configuration.md#a-server-set-in-configuration).
 
-Without `SERVER`, the existing request sequence is:
+A panel request goes like this:
 
 ```mermaid
 sequenceDiagram
@@ -950,7 +1056,8 @@ sequenceDiagram
     P->>P: server is in the catalogue
     P->>D: server, requested_at, request_id
     A->>D: read on its next pass, validate
-    A->>A: routing protection intact?
+    A->>A: gates: catalogue, routing protection, NetBird
+    A->>A: attempt.json: attempting
     A->>T: remove old peer, set new key and endpoint
     T-->>A: fresh handshake
     A->>E: egress through the tunnel
@@ -960,61 +1067,294 @@ sequenceDiagram
 ```
 
 1. The panel checks membership in the read-only catalogue and atomically writes
-   `desired.json` with `server`, `requested_at` and a random `request_id`.
+   `desired.json` with `server`, `requested_at` and a random `request_id`. It
+   refuses a new request with 409 while the exit is switching
+   ([panel and access](#panel-and-access)).
 2. On each pass the applier reads a bounded, regular, non-symlink file. It
    waits five seconds between passes; catalogue refreshes, checks and
    switches can delay the next read.
    It validates the entire schema and resolves the name only through its own
    fresh catalogue. The old two-field request schema remains readable.
-3. Before changing a peer it verifies routing protection. It removes old peers
-   and aborts if removal fails, then applies the approved key/endpoint using
-   fixed subprocess argument lists and timeouts.
-4. It probes Mullvad through the tunnel for up to roughly 60 seconds. Success
-   requires a fresh non-future handshake, separate typed Mullvad egress responses
-   from `curl -4` against `ipv4.am.i.mullvad.net` and (for an IPv6 tunnel)
-   `curl -6` against `ipv6.am.i.mullvad.net` (`am.i.mullvad.net` itself has no
-   AAAA record), and intact routing protection.
-   The current server is derived from live peer
-   state, including the initial server from the downloaded configuration.
-5. An unavailable fresh catalogue, overlay interface or tunnel routing leaves
-   the request pending without changing peers. The applier reports the missing
-   prerequisite and retries the same request when prerequisites recover.
-   A malformed or unlisted request, or a switch that fails, is acknowledged
-   as failed and not retried. Selecting the same server again creates a new
-   request. A failed switch whose requested server is nonetheless the live
-   one (PIA's automatic re-registration refused while the tunnel it meant to
-   repair recovers by itself, or a switch whose verification timed out
-   before the tunnel came up) is reported as failed by at least one check,
-   then cleared by the first later check that finds that server live and
-   passing every check. No other server is selected automatically. After normal
-   tunnel recreation, a previously successful desired selection is reapplied.
+3. **Gates.** Before any change: a valid configuration and request, the
+   target listed in a fresh catalogue, for the overlay kind intact routing
+   protection and NetBird in kernel mode, and readable WireGuard peers. A
+   missing prerequisite leaves the request **pending**, without changing
+   peers, with a message saying it will retry automatically; it is tried
+   again on every pass until the prerequisites recover. A malformed request,
+   or a server not in the catalogue, is **rejected**: acknowledged as failed
+   and not tried again until the catalogue's server names change or a new
+   request arrives. A refused panel request is never the target, so with
+   gluetun the restore target still applies meanwhile.
+4. **Record, then change.** The applier writes `attempting` to
+   `state/applier/attempt.json` before any I/O, because a lost response can
+   hide success, then publishes `applying`. It removes old peers and aborts
+   if removal fails, then applies the approved key and endpoint using fixed
+   subprocess argument lists and timeouts. With gluetun, the change is the
+   control server's `PUT`.
+5. **Verify** for up to 60 seconds (90 with gluetun). Success requires a
+   fresh non-future handshake, separate typed Mullvad egress responses from
+   `curl -4` against `ipv4.am.i.mullvad.net` and (for an IPv6 tunnel)
+   `curl -6` against `ipv6.am.i.mullvad.net` (`am.i.mullvad.net` itself has
+   no AAAA record), and intact routing protection. The current server is
+   derived from live peer state, including the initial server from the
+   downloaded configuration. A lost protective guard ends the attempt at
+   once with "Routing changed during the switch; retrying after recovery."
+   (with gluetun, see [its reconnection](#gluetuns-reconnection-during-a-switch)).
+   At the timeout, a target that is live but not verified is **applied but
+   unverified**; any other server live is a failed attempt, "Switch
+   verification timed out; retrying automatically."
 
-A failed health probe does not necessarily mean traffic is blocked: a working
-approved tunnel can carry traffic while the verification endpoint is unavailable.
-A failed switch remains visibly failed until a new request or process
-restart, unless a later check finds the requested server live and verified,
-as above.
-Routing protects against a missing tunnel; probe failure does not install an
-alternate route.
+### The admission pipeline
+
+The attempt's state, in `state/applier/attempt.json` (`applier/attempt.py`):
+
+| State | Meaning |
+|---|---|
+| `idle` | The live server is the target and verified, or there is no target |
+| `pending` | A prerequisite is missing; nothing was changed |
+| `rejected` | The request is invalid or unlisted, or PIA refused the login |
+| `attempting` | A change is in flight; written before its I/O |
+| `unverified` | The target is live, but a check fails: the handshake, the egress check or its service |
+| `failed` | The change itself failed, or verification timed out with another server live |
+
+What happens next, in precedence order on each pass:
+
+1. **A new target**: a new `SERVER`, a new panel request (every selection,
+   including Retry and selecting the same server again, carries a new
+   request id), or a new restore target. It starts a new attempt with the
+   backoff from the start. A panel request made within the last 150 seconds
+   is applied even when its server is already live (a PIA region registers
+   again); an older one, as after a restart or an upgrade, and every other
+   source inspect first.
+2. **Pending** goes through the gates again on every pass. **Rejected** is
+   tried again when what refused it changes: the catalogue's server names,
+   or with PIA the credential files.
+3. **No live peer.** With the default backend, when the `wireguard`
+   container started again (a new owner-record generation), the target is
+   applied once for that generation, but not within 90 seconds of the last
+   change. Otherwise no peer is treated like a peer the catalogue can't
+   name (7): gluetun's interface has no peer for a moment while it
+   reconnects by itself.
+4. **A due re-apply.** A failed change is applied again on a backoff of 1,
+   2, 4 and 8 minutes, then every 15.
+5. **A lapsed registration** (PIA, whose registry entry sets
+   `registration_lapses`): the last inspection, at most two minutes old,
+   found the target live with a handshake 180 seconds old or older, or
+   none 180 seconds after the last change. The same server is registered
+   again, after a fresh inspection confirms it, while the attempt is idle or
+   unverified and the current backoff step has passed since the last
+   change; each one advances the backoff. An egress-check failure alone
+   never triggers it.
+6. **Drift**: the live server is identifiable and isn't the target. It is
+   put back only from `idle` or `unverified`, never while a failed attempt
+   waits on its backoff, and never within 90 seconds of the last change.
+7. **A peer the catalogue can't name** counts as drift after 90 seconds; the
+   wait restarts when it becomes identifiable or the target changes. With
+   no fresh catalogue nothing counts as drift.
+
+Every automatic re-apply first inspects: if the target is live and passes
+every check, the attempt is `idle` and nothing changes; if it is live but a
+check fails, it is `unverified` (except a lapsed PIA registration, which
+registers again); otherwise the change goes ahead. A change whose answer was
+lost is therefore not made twice.
+
+An `unverified` target is re-checked by the periodic check, about once a
+minute, and never switched again while it stays live (`next_action:
+recheck`); a check that passes makes it `idle`. A `failed` attempt keeps its
+message until a later check finds the target live and passing every check,
+or its re-apply succeeds (`next_action: reapply`). The panel shows when
+either happens next. Retry in the panel is a new request, so it applies at
+once and starts the backoff over; with `SERVER` set there is no Retry
+([operations](operations.md#retries)).
+
+At start the applier reads `attempt.json`. A missing or unreadable file is
+`idle`, with every trigger evaluated afresh. An attempt found `attempting`,
+interrupted by a crash or a lost response, is inspected first, never
+replayed: the target live means `idle` or `unverified`; anything else is a
+failed attempt, "The last switch was interrupted; retrying automatically.",
+applied again on its backoff after another inspection. Other states are
+kept. Deadlines are kept on the boot clock with the boot's id: after a
+reboot a due re-check runs at once, a re-apply waits the current backoff
+step, and the 90-second guard has passed.
+
+Some changes stay outside the pipeline because they repair or protect
+rather than select: PIA's repair of an interrupted switch
+([providers](providers.md#how-pia-differs)), which runs on every pass before
+the gates so a damaged exit can pass them; PIA's ingress guard; PIA's port
+forwarding, which runs only while the verdict is `ok`; and gluetun's
+server-list refresh.
+
+A failed check does not necessarily mean traffic is blocked: a working
+approved tunnel can carry traffic while the verification endpoint is
+unavailable. Routing protects against a missing tunnel; a failed check does
+not install an alternate route.
 
 ## Status reporting
 
-Every roughly 60 seconds the applier writes a new `result.json`. The panel and
-API use the same status interpretation. A missing, malformed, future-dated or
-more-than-150-second-old check is unknown, even if the file says `ok`. Requests
-must be acknowledged by ID before their outcome is displayed. Failed browser
-polls immediately clear the connected indication. Last-check diagnostics are
+About every 60 seconds the applier writes a new `result.json`, and after
+each step of a switch. Every reader judges it with one function, so the
+page, the API, the exit tabs, the browser, `/readyz`, monitoring and the
+doctor agree ([the verdict](#the-verdict)). Failed browser polls
+immediately clear the connected indication. Last-check diagnostics are
 explicitly historical.
 
-A result counts as connected only with intact routing protection, NetBird in
-kernel mode, a fresh handshake, the live peer matching a fresh catalogue
-entry, and confirmed egress. Egress is confirmed at one of two tiers, recorded
-in `result.json` as `egress_tier`:
+### The status record
+
+`result.json` is schema 2 since 0.7.0. A connected Mullvad exit's record
+looks like this (`at` values shortened):
+
+```json
+{
+  "schema": 2, "kind": "overlay", "backend": "native", "provider": "mullvad",
+  "status": "ok", "message": "Healthy.", "checked_at": "2026-10-10T18:00:00Z",
+  "server": "se-got-wg-001", "requested_server": "se-got-wg-001",
+  "configured_server": null, "request_id": "0123456789abcdef0123456789abcdef",
+  "selection": {"source": "panel", "outcome": "verified", "attempt": 1,
+                "target": "se-got-wg-001", "next_action": null, "next_action_at": null},
+  "checks": {
+    "routing":            {"state": "pass", "at": "…", "fallback": true},
+    "traffic_protection": {"state": "pass", "at": "…", "from": "routing"},
+    "netbird":            {"state": "pass", "at": "…"},
+    "owner_record":       {"state": "pass", "at": "…"},
+    "peer":               {"state": "pass", "at": "…", "server": "se-got-wg-001"},
+    "handshake":          {"state": "pass", "at": "…", "server": "se-got-wg-001", "age_s": 12},
+    "egress":             {"state": "pass", "at": "…", "server": "se-got-wg-001", "tier": "provider",
+                           "expected_families": ["4", "6"], "families": {"4": "pass", "6": "pass"}},
+    "app_attachment":     {"state": "n/a"}
+  },
+  "egress_ip": "203.0.113.7", "egress_ips": {"4": "203.0.113.7", "6": "2001:db8::7"},
+  "egress_city": "Gothenburg", "egress_country": "Sweden"
+}
+```
+
+`status` is the applier's own summary (`unknown`, `applying`, `ok` or
+`failed`) and `message` its wording. `selection` says why the server is what
+it is: `source` as in [requests and switching](#requests-and-switching),
+`outcome` (`verified`, `applied-unverified`, `pending`, `rejected` or
+`mutation-failed`), the number of changes made for this target, the target,
+and the next automatic action (`recheck` or `reapply`) with its time.
+Provider fields come on top: PIA's `port_forward`, `forwarded_port` and
+`port_forward_error`, and gluetun's `server_list_update`. The 0.6 fields
+`routing_ok`, `netbird_native`, `unreachable_fallback`, `exit_confirmed`,
+`egress_tier`, `handshake_age_s` and `mullvad_exit_ip` are gone; the checks
+replace them.
+
+Every check has a state:
+
+| State | Meaning |
+|---|---|
+| `pass` | Measured at its own `at`, and satisfied |
+| `fail` | Measured at its own `at`, and not satisfied; `reason` may say why |
+| `unknown` | Applies, but not measured in this inspection |
+| `n/a` | Doesn't exist for this kind or backend |
+| `not-checked` | Matters, but Molebridge doesn't perform it; `by` names who does |
+
+Which checks must pass depends on the kind and backend:
+
+| Check | Overlay, native | Overlay, gluetun | Sidecar |
+|---|---|---|---|
+| `routing`: the routing contract, the fallback (`fallback`), and with gluetun the host table | required | required | `n/a` |
+| `traffic_protection` | required, from `routing` | required, from `routing` | `not-checked` (gluetun's firewall) |
+| `netbird`: kernel WireGuard and NetBird's kernel firewall | required | required | `n/a` |
+| `owner_record` | required | `n/a` | `n/a` |
+| `peer`: exactly one peer, the selected server in a fresh catalogue | required | required | required |
+| `handshake`: fresher than 180 seconds (`age_s`) | required | required | required |
+| `egress`: every expected address family, at a tier valid for the provider | required | required | required, never the tunnel tier |
+| `app_attachment` | `n/a` | `n/a` | `not-checked` (the host doctor) |
+
+An inspection starts every check at `unknown`, so evidence never carries
+over from an earlier one. It stops where later checks can't pass: with a
+routing, NetBird or owner-record failure, egress isn't measured, and without
+exactly one peer neither is the handshake. A required check counts as
+passed only when all of these hold:
+
+- its `at` is valid, not in the future and at most 150 seconds old, as for
+  `checked_at`: a slow inspection's early measurements can expire while the
+  record is fresh;
+- for `peer`, `handshake` and `egress`, its `server` is the record's
+  `server`: a pass for another server never counts;
+- `handshake.age_s` is a non-negative integer, or null for a peer that never
+  completed one, and below 180 for a pass;
+- `egress.expected_families` is a non-empty list of `4` and `6`, every one
+  of them passes in `families`, and `egress_ips` covers exactly the passing
+  families;
+- an overlay exit's `traffic_protection` comes from `routing`.
+
+A required check that is missing, malformed, in a state outside these five,
+or recorded as `n/a` or `not-checked` makes the record invalid. A missing `kind`,
+`provider` or `backend` is a mismatch, never a default; the backend follows
+from the provider registry (`gluetun-*` providers are `gluetun`).
+
+**Records without a schema** were written by 0.6 or earlier. They are read as
+overlay records, and their checks show as "not reported individually",
+never as passed. They count as connected only with `status: ok`,
+`routing_ok: true`, `netbird_native` true or absent, provider confirmation
+(`exit_confirmed`, or `mullvad_exit_ip` where that is absent) or the
+`tunnel` tier for a provider that has only that, the server agreeing with
+the target, and `provider` absent or the configured one. Under a sidecar
+configuration such a record is a kind mismatch.
+
+### The verdict
+
+`molebridge/verdict.py` `assess` judges a record for one exit, against the
+reader's own configuration (provider and kind) and target. Its result is a
+state (`ok`, `applying`, `failed` or `unknown`), a label, reason codes, the
+applier's message where it explains a failure, the egress tier, each
+check's state, and the next automatic action. The panel's page, its
+`/api/status` and `/api/exits`, `/readyz` and the switch gate use it, and
+the page script renders the server's verdict with no rules of its own. In
+the applier it decides the Gatus push, the doctor's last line and whether
+PIA's port forwarding runs. The container health check doesn't use it
+([below](#readiness-monitoring-and-the-health-check)).
+
+In order:
+
+1. The configured lock (`configured_server`) is read first. It holds even
+   when the record is stale.
+2. No readable record: `unknown`, "awaiting status".
+3. The schema: none is a 0.6 record (above), `2` is read here, anything else
+   is `unknown`, "unsupported status version".
+4. Another kind is "kind mismatch"; another provider or backend is "provider
+   mismatch". Both are `unknown`.
+5. A `checked_at` more than 150 seconds old or in the future: `unknown`,
+   "status stale".
+6. A panel request the record hasn't acknowledged by its id: `applying`,
+   "switching", while the request is less than 150 seconds old, then
+   `unknown`, "request not acknowledged".
+7. `status: applying`: `applying`, "switching".
+8. Malformed checks: `unknown`, "invalid status record".
+9. A tunnel-tier sidecar whose only failure is the unmeasurable host address:
+   `unknown`, "switched, egress unverified".
+10. A fresh measured failure, or a rejected or failed change: `failed`,
+    "failed", even when checks the inspection didn't reach are `unknown`.
+    Then expired evidence: `unknown`, "evidence expired". Then
+    `status: failed`: `failed`. Then a check never measured: `unknown`,
+    "not yet measured".
+11. `status: ok` with every required check passed: `ok`, "connected", if the
+    target agrees; otherwise `failed`, "verification failed".
+
+**Target agreement.** The panel's target is the configured lock from the
+record, or else its own acknowledged request. The applier's and the
+doctor's is the applier's own resolution: its local `SERVER`, then the
+panel's accepted request, read again at that moment, then the restore
+target.
+
+- With `SERVER`: the record's `server` is that server.
+- For a panel request: `server` and `requested_server` are both the
+  requested server. A 0.6 panel could show an acknowledged `ok` on another
+  server as connected.
+- For any other target: `server` is the target.
+- With no target, the record's own `selection.target` must match for a
+  `restore`, `reconverge`, `retry` or `operator-retry` record; an observed
+  `seed` can be connected with no selection made.
+
+### Egress tiers
+
+Egress is confirmed at one of two tiers, recorded as `checks.egress.tier`:
 
 - **`provider`**: the provider's own endpoint says the request arrived over
-  its VPN (Mullvad's `am.i.mullvad.net`, PIA's status call), for every address
-  family the tunnel carries. `exit_confirmed` is true exactly when this tier
-  is reached, as before tiers existed.
+  its VPN (Mullvad's `am.i.mullvad.net`, PIA's status call, NordVPN's
+  `ips/insights`), for every address family the tunnel carries.
 - **`tunnel`**: for a provider without such an endpoint. Every family the
   tunnel carries needs a fresh handshake; two independent IP echo services,
   asked through the tunnel interface, answering with the same address; that
@@ -1028,22 +1368,22 @@ in `result.json` as `egress_tier`:
   tunnel's, the overlay's, refusing (unreachable and the like), link-local,
   multicast and loopback ones, and no global IPv6 address on any interface
   but the tunnel and the overlay, loopback included. Then
-  there is no host IPv6 address to confuse with the tunnel's. `exit_confirmed`
-  stays false. The panel shows the exit as connected
-  with a "tunnel checks only" label. The checks are in
-  `molebridge/egress.py`.
+  there is no host IPv6 address to confuse with the tunnel's. The panel
+  shows the exit as connected with a "tunnel checks only" label. The checks
+  are in `molebridge/egress.py`.
 
 The tier a provider can reach is fixed in its registry entry
 (`molebridge/providers.py`). A provider with its own check is never accepted
-at the `tunnel` tier, so a result claiming it does not count as connected.
+at the `tunnel` tier, so a record claiming it does not count as connected,
+and a sidecar never is at that tier ([the sidecar kind](#the-sidecar-kind)).
 Every native provider has its own check. With the [gluetun
 backend](#gluetun-backend), Mullvad and NordVPN keep theirs, and FastestVPN,
 IVPN, Surfshark and Windscribe reach only the `tunnel` tier. The `tunnel`
-tier is covered by unit tests only. `egress_tier` is null while egress is
+tier is covered by unit tests only. `tier` is null while egress is
 unconfirmed.
 
 Each egress request goes through the tunnel with a 10-second limit. When a
-health check's egress check gets no usable answer (a timeout, a refused or
+periodic check's egress check gets no usable answer (a timeout, a refused or
 reset connection, an HTTP error, a malformed reply or, at the `tunnel` tier,
 a failed measurement of the host's own address), the applier waits 10
 seconds and asks once more before it reports a failure. An answer that does
@@ -1054,28 +1394,41 @@ check before any further request, so a later timeout can't turn it into a
 retry: asking again would only delay reporting traffic that may be leaving
 the wrong way. There is no second attempt while a switch is verified, because
 the switch keeps asking until its own timeout; when the check fails whatever
-the answer (no fresh handshake, a pending request or a failed one that the
-check can't clear, a peer not in a fresh catalogue); or when the first attempt took longer than 15 seconds.
-The second attempt starts no request more than 30 seconds after it began,
-and NordVPN's cache retry stops waiting then too, so a check that retries
-ends within about 70 seconds. Routing protection, NetBird's mode and the peer
-count are checked before any egress request and fail at once; a missing or
-stale handshake fails the check after the first attempt, without a second.
-Until the check finishes, the previous result stays in `result.json`, and
-readers still treat one older than 150 seconds as unknown; only a check that
-passed writes `ok`. The applier logs `applier: egress check got no answer;
-asking once more`, and `applier: egress check got no answer twice` when the
-second attempt fails too.
+the answer (no fresh handshake, a pending or rejected selection, a peer not
+in a fresh catalogue); or when the first attempt took longer than 15
+seconds. The second attempt starts no request more than 30 seconds after it
+began, and NordVPN's cache retry stops waiting then too, so a check that
+retries ends within about 70 seconds. Routing protection, NetBird's mode
+and the peer count are checked before any egress request and fail at once;
+a missing or stale handshake fails the check after the first attempt,
+without a second. Until the check finishes, the previous record stays in
+`result.json`, and readers still treat one older than 150 seconds as
+unknown. The applier logs `applier: egress check got no answer; asking once
+more`, and `applier: egress check got no answer twice` when the second
+attempt fails too. A failed egress check on the live target leaves the
+attempt `unverified`: re-checked, not switched again.
 
-`/healthz` checks panel liveness. `/readyz` returns 200 only for a fresh,
-verified connected result, at either tier; otherwise 503. Docker's applier healthcheck checks
-freshness, a live WireGuard exit interface with exactly one peer, current
-routing protection (with the default backend, including a live
-[owner record](#the-owner-record)), NetBird on kernel WireGuard with its kernel firewall, and, with `SERVER`
-set, a last result of `ok` on that server, after a completed inspection; startup
-and an in-progress switch do not count as completed checks. It does not restart unhealthy
-containers. The host-side doctor additionally checks the shared namespace and
-recent verified egress.
+### Readiness, monitoring and the health check
+
+- `/healthz` checks panel liveness.
+- `/readyz` returns 200 only when the verdict is `ok` for every exit, or for
+  the one named; otherwise 503.
+- The Gatus push sends the verdict against the applier's own target, never
+  `applying`, so a switch in progress isn't a failure sample.
+- The doctor's last line is `verified <provider> egress`, with the verdict's
+  reason codes when it fails. The host-side doctor also checks the shared
+  namespace.
+- The applier's container health check (`python -m applier.apply
+  --healthcheck`, Compose's `healthcheck`) is operational only: a record
+  less than 150 seconds old from a completed check, `ok` or `failed`
+  (startup and a switch in progress don't count), exactly one tunnel peer,
+  and an intact namespace for the kind. For the overlay kind that is
+  routing protection (with the default backend, including a live
+  [owner record](#the-owner-record)) and NetBird on kernel WireGuard with its
+  kernel firewall; for a sidecar, gluetun's control server answering.
+  Whether the exit is verified, including on its `SERVER`, is the verdict's
+  question, not the health check's. The engine doesn't restart unhealthy
+  containers.
 
 ## Panel and access
 
@@ -1101,6 +1454,17 @@ One panel can serve several exits on the same host (`PANEL_EXITS`; see
 against that exit's own catalogue and written only to that exit's
 `desired.json`. The privilege split is unchanged: each applier alone applies
 what its own request file asks.
+
+Each exit's kind is the panel's own configuration, never the record's:
+`EXIT_KIND` for a single-exit panel, or `id=provider/kind` in `PANEL_EXITS`.
+A sidecar kind on a native provider stops the panel at start. A switch
+request passes the CSRF and origin checks, then the configured lock (403),
+then the exit's verdict: while it is `applying`, including a request the
+applier hasn't acknowledged yet, the panel answers 409 "A switch is in
+progress; wait for it to finish." A per-exit lock in the panel process
+holds from reading the verdict to writing `desired.json`, so two requests
+can't both pass on the same reading. A stale or unreadable status doesn't
+block; the applier's gates decide.
 
 Latency probes remain unprivileged TCP connects to port 443, cached for 15
 minutes, with bounded concurrency. They run only for open pages and measure the
@@ -1228,7 +1592,9 @@ Sign-in has been tried live with Pocket ID v2.16.0, as an admin only; see
 existing identity volume, builds, stops namespace dependents, then recreates
 the containers in dependency order (four with the default backend, five with
 gluetun), waits for health and for the applier to verify the exit, and runs
-the doctor. It refuses to run if the identity
+the doctor. It exits 0 when the exit is recovered and verified, 3 when it is
+recovered and operational but not verified, and 1 when recovery failed
+([operations](operations.md#recovery)). It refuses to run if the identity
 volume is missing, and never deletes a volume. It runs on the host when you
 ask; nothing gives the panel access to the container engine.
 `depends_on.restart` covers explicit Compose dependency updates, but a crash
