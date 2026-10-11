@@ -701,6 +701,12 @@ class Applier:
                 self.save_attempt()
             elif attempt.state == 'unverified':
                 attempt.next_action_at = self.clock() + REFRESH_SEC
+                self.save_attempt()
+        if attempt.generation is None and self.owner_generation is not None:
+            # Known from the start, so the exit container's next start is
+            # seen as one even before this applier changes anything.
+            attempt.generation = self.owner_generation
+            self.save_attempt()
         self.next_health = self.clock() + REFRESH_SEC
         return self.emit(finding)
 
@@ -1194,7 +1200,11 @@ def main():
         if config.backend == 'wireguard':
             applier.owner_path = Path(os.environ.get('OWNER_RECORD', '/run/molebridge/exit-owner'))
         if args.healthcheck:
-            return 0 if applier.healthy() else 1
+            try:
+                return 0 if applier.healthy() else 1
+            except (OSError, ValueError, RuntimeError):
+                # No tunnel interface, or no readable state: unhealthy.
+                return 1
         if args.doctor:
             checks = applier.doctor_checks()
             for label, passed in checks.items():

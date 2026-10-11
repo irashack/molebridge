@@ -374,8 +374,6 @@ class GluetunApplier(Applier):
 
     # -- the provider seam -------------------------------------------------
 
-    def result_defaults(self):
-        return {'mullvad_exit_ip': False} if self.spec.egress_check == 'mullvad' else {}
 
     def server_for(self, keys):
         if len(keys) != 1:
