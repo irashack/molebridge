@@ -8,10 +8,12 @@ import json
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
 import time
+from collections import namedtuple
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -122,13 +124,102 @@ SETTLE_SEC = 180
 SETTLE_POLL_SEC = 5
 
 
+# The Compose command of each supported engine.
+COMPOSE = {'docker': ('docker', 'compose'), 'podman': ('podman-compose',)}
+# The two exit kinds, from the applier's EXIT_KIND: the NetBird exit
+# (compose.yaml or compose.gluetun.yaml) and the gluetun sidecar
+# (compose.sidecar.yaml).
+KINDS = ('overlay', 'sidecar')
+# compose.sidecar.yaml copies SIDECAR_APPS into this label on the applier, so
+# the doctor reads it from the configuration Compose resolves.
+SIDECAR_APPS_LABEL = 'io.molebridge.sidecar-apps'
+SIDECAR_SERVICES = ('gluetun', 'applier', 'control-panel')
+SERVICE_NAME = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}')
+CONTAINER_ID = re.compile(r'[0-9a-f]{64}')
+NAMESPACE_ID = re.compile(r'net:\[[0-9]{1,20}\]')
+PREFLIGHT_ENTRYPOINT = ['/bin/sh', '/usr/local/bin/molebridge-gluetun-preflight', '/gluetun-entrypoint']
+CONTROL_ADDRESS, CONTROL_PORT = '127.0.0.1:8000', 8000
+# The namespace probe: the routing image routing/Dockerfile builds, tagged
+# here by the doctor. Only its readlink is used, so any build of it will do.
+PROBE_IMAGE = 'localhost/molebridge-netns-probe:local'
+# What the doctor needs from a container's inspect output.
+Member = namedtuple('Member', 'id started network_mode control_published')
+
+
+def detect_engine(environ=None, which=shutil.which):
+    """docker or podman: MOLEBRIDGE_ENGINE when set, otherwise Docker when its
+    CLI is installed, otherwise podman-compose when it is."""
+    environ = os.environ if environ is None else environ
+    chosen = environ.get('MOLEBRIDGE_ENGINE', '')
+    if chosen:
+        if chosen not in COMPOSE:
+            raise CheckError('MOLEBRIDGE_ENGINE must be docker or podman.')
+        return chosen
+    if not which('docker') and which('podman-compose') and which('podman'):
+        return 'podman'
+    return 'docker'
+
+
+def port_targets(entry):
+    """The container ports a Compose `ports` entry publishes, in the long form
+    Docker resolves or the short form podman-compose prints."""
+    if isinstance(entry, dict):
+        spec = str(entry.get('target', ''))
+    else:
+        spec = str(entry).partition('/')[0].rsplit(':', 1)[-1]
+    low, _, high = spec.partition('-')
+    if not low.isdigit() or (high and not high.isdigit()):
+        raise ValueError('port')
+    return range(int(low), int(high or low) + 1)
+
+
+def long_volume(entry):
+    """A short-form volume (`source:target[:options]`, as podman-compose
+    prints it) in the long form Docker resolves."""
+    if isinstance(entry, dict):
+        return entry
+    parts = str(entry).split(':')
+    if len(parts) == 1:
+        return {'type': 'volume', 'target': parts[0]}
+    kind = 'bind' if parts[0].startswith(('.', '/', '~')) else 'volume'
+    volume = {'type': kind, 'source': parts[0], 'target': parts[1]}
+    if len(parts) > 2 and 'ro' in parts[2].split(','):
+        volume['read_only'] = True
+    return volume
+
+
+def as_dict(value):
+    """Compose's list form of environment or labels (`KEY=value`) as a dict."""
+    if isinstance(value, list):
+        return dict(str(item).partition('=')[::2] for item in value)
+    return value
+
+
+def control_published(info):
+    """Whether the engine publishes the control server's port on the host."""
+    for ports in ((info.get('HostConfig') or {}).get('PortBindings'), (info.get('NetworkSettings') or {}).get('Ports')):
+        if isinstance(ports, dict) and any(str(key).partition('/')[0] == str(CONTROL_PORT) and value
+                                           for key, value in ports.items()):
+            return True
+    return False
+
+
 class Host:
-    def __init__(self, root=ROOT, run=execute, *, sleep=time.sleep, clock=time.monotonic):
+    def __init__(self, root=ROOT, run=execute, *, sleep=time.sleep, clock=time.monotonic, engine='docker'):
         self.root, self.run, self.sleep, self.clock = Path(root), run, sleep, clock
+        if engine not in COMPOSE:
+            raise CheckError('The engine must be docker or podman.')
+        self.engine = engine
+        # The configuration config() last resolved; the engine checks name
+        # containers from it.
+        self.loaded = None
+        # recover sets this: the doctor then returns the applier's failing
+        # `verified ...` checks instead of failing on them.
+        self.accept_unverified = False
 
     def compose(self, *args, timeout=30, step=None):
         try:
-            return self.run(['docker', 'compose', *args], cwd=self.root, timeout=timeout)
+            return self.run([*COMPOSE[self.engine], *args], cwd=self.root, timeout=timeout)
         except CheckError as exc:
             if step is None:
                 raise
@@ -137,7 +228,7 @@ class Host:
     def applier_checks(self):
         """The applier's own checks as [(passed, label)], from its --doctor.
         Fixed labels only; any other output is dropped."""
-        result = self.run(['docker', 'compose', 'exec', '-T', 'applier', 'python', '-m', 'applier.apply',
+        result = self.run([*COMPOSE[self.engine], 'exec', '-T', 'applier', 'python', '-m', 'applier.apply',
                            '--doctor'], cwd=self.root, timeout=30, allow_failure=True)
         status, output = result if isinstance(result, tuple) else (0, result)
         checks = [(line[:4] == 'PASS', line[5:]) for line in output.splitlines()
@@ -149,6 +240,8 @@ class Host:
     def compose_config(self):
         if not (self.root / '.env').is_file():
             raise CheckError('Missing .env; follow docs/setup.md.')
+        if self.engine == 'podman':
+            return self.podman_config()
         try:
             data = json.loads(self.compose('config', '--format', 'json'))
         except ValueError as exc:
@@ -156,6 +249,50 @@ class Host:
         if not isinstance(data, dict) or not isinstance(data.get('services'), dict):
             raise CheckError('Invalid Compose or routing configuration.')
         return data
+
+    def podman_config(self):
+        """podman-compose's resolved configuration, which it prints only as
+        YAML, in the shape `docker compose config --format json` gives: long
+        volumes and environment and labels as mappings."""
+        try:
+            import yaml
+        except ImportError:
+            raise CheckError('Reading the podman-compose configuration needs PyYAML (python3-yaml), '
+                             'which podman-compose itself uses.') from None
+        try:
+            data = yaml.safe_load(self.compose('config'))
+            for service in data['services'].values():
+                for key in ('environment', 'labels'):
+                    if key in service:
+                        service[key] = as_dict(service[key])
+                if 'volumes' in service:
+                    service['volumes'] = [long_volume(v) for v in service['volumes']]
+        except (yaml.YAMLError, AttributeError, KeyError, TypeError) as exc:
+            raise CheckError('Invalid Compose or routing configuration.') from exc
+        return data
+
+    def project(self, config):
+        """The Compose project name. Docker resolves it into the
+        configuration; podman-compose takes COMPOSE_PROJECT_NAME from the
+        environment or .env, then the file's name, then the directory's."""
+        if self.engine == 'docker' and config.get('name'):
+            return config['name']
+        return (os.environ.get('COMPOSE_PROJECT_NAME')
+                or read_env_file(self.root / '.env', {'COMPOSE_PROJECT_NAME'}).get('COMPOSE_PROJECT_NAME')
+                or config.get('name') or self.root.name)
+
+    @staticmethod
+    def kind(config):
+        """The exit kind: the applier's EXIT_KIND, overlay when unset."""
+        services = config.get('services') if isinstance(config, dict) else None
+        applier = services.get('applier') if isinstance(services, dict) else None
+        env = applier.get('environment') if isinstance(applier, dict) else None
+        value = env.get('EXIT_KIND') if isinstance(env, dict) else None
+        if value in (None, ''):
+            return 'overlay'
+        if value not in KINDS:
+            raise CheckError('EXIT_KIND must be overlay or sidecar.')
+        return value
 
     @staticmethod
     def owner(config):
@@ -171,8 +308,14 @@ class Host:
 
     def config(self):
         data = self.compose_config()
+        self.loaded = data
         try:
             services = data['services']
+            if self.kind(data) == 'sidecar':
+                self.sidecar_compose_checks(services)
+                self.sidecar_apps(data)
+                self.panel_checks(services)
+                return data
             if self.owner(data) == 'gluetun':
                 self.gluetun_compose_checks(services)
             else:
@@ -182,16 +325,7 @@ class Host:
                     raise CheckError('The wireguard service must set net.ipv4.icmp_errors_use_inbound_ifaddr=1 (compose.yaml).')
                 if any(v['target'].startswith('/config') for v in services['applier']['volumes']):
                     raise CheckError('The applier must not mount the tunnel configuration.')
-            panel = services['control-panel']
-            mounts = {v['target']: v for v in panel['volumes']}
-            if not mounts['/state/applier'].get('read_only'):
-                raise CheckError('The panel must mount applier state read-only.')
-            if mounts['/state/panel'].get('read_only'):
-                raise CheckError('The panel request directory must be writable.')
-            if panel.get('cap_drop') != ['ALL'] or panel.get('cap_add'):
-                raise CheckError('The panel must have no capabilities.')
-            if any('secrets' in Path(str(v.get('source', ''))).parts for v in panel['volumes']):
-                raise CheckError('The panel must not mount any secret.')
+            self.panel_checks(services)
             netbird = services['netbird'].get('environment') or {}
             if str(netbird.get('NB_DISABLE_USERSPACE_ROUTING')) not in TRUE_VALUES:
                 raise CheckError('The netbird service must set NB_DISABLE_USERSPACE_ROUTING=true (compose.yaml).')
@@ -213,6 +347,99 @@ class Host:
             return data
         except (KeyError, TypeError, ValueError) as exc:
             raise CheckError('Invalid Compose or routing configuration.') from exc
+
+    @staticmethod
+    def panel_checks(services):
+        panel = services['control-panel']
+        mounts = {v['target']: v for v in panel['volumes']}
+        if not mounts['/state/applier'].get('read_only'):
+            raise CheckError('The panel must mount applier state read-only.')
+        if mounts['/state/panel'].get('read_only'):
+            raise CheckError('The panel request directory must be writable.')
+        if panel.get('cap_drop') != ['ALL'] or panel.get('cap_add'):
+            raise CheckError('The panel must have no capabilities.')
+        if any('secrets' in Path(str(v.get('source', ''))).parts for v in panel['volumes']):
+            raise CheckError('The panel must not mount any secret.')
+
+    def sidecar_compose_checks(self, services):
+        """compose.sidecar.yaml's own invariants, on the resolved file."""
+        if {'wireguard', 'guard', 'netbird'} & set(services):
+            raise CheckError('The sidecar has no NetBird or routing service; use compose.sidecar.yaml on its own.')
+        gluetun, applier = services['gluetun'], services['applier']
+        genv, env = gluetun.get('environment') or {}, applier.get('environment') or {}
+        if env.get('TUNNEL_BACKEND') != 'gluetun':
+            raise CheckError('The sidecar applier must set TUNNEL_BACKEND=gluetun (compose.sidecar.yaml).')
+        try:
+            provider = providers.get(env.get('PROVIDER'))
+        except ValueError:
+            provider = None
+        if provider is None or provider.backend != 'gluetun' or provider.gluetun_provider != genv.get(
+                'VPN_SERVICE_PROVIDER'):
+            raise CheckError("The applier's PROVIDER must be gluetun-<GLUETUN_PROVIDER> (compose.sidecar.yaml).")
+        if applier.get('network_mode') != 'service:gluetun':
+            raise CheckError('The applier must use network_mode: service:gluetun (compose.sidecar.yaml).')
+        if (applier.get('cap_drop') != ['ALL'] or not applier.get('read_only')
+                or set(applier.get('cap_add') or ()) - {'NET_ADMIN', 'NET_RAW', 'DAC_OVERRIDE'}):
+            raise CheckError('The applier must drop every capability but the three compose.sidecar.yaml adds, '
+                             'and run read-only.')
+        if gluetun.get('entrypoint') != PREFLIGHT_ENTRYPOINT:
+            raise CheckError("The gluetun service must start through Molebridge's role-file check (compose.sidecar.yaml).")
+        if not default_role_allowed(genv.get('HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE')):
+            raise CheckError('The gluetun service must not set a default control-server role '
+                             '(HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE); the role file alone decides.')
+        if genv.get('HTTP_CONTROL_SERVER_ADDRESS') != CONTROL_ADDRESS:
+            raise CheckError(f'The gluetun control server must listen on {CONTROL_ADDRESS} only '
+                             '(HTTP_CONTROL_SERVER_ADDRESS, compose.sidecar.yaml).')
+        if any(CONTROL_PORT in port_targets(port) for port in gluetun.get('ports') or ()):
+            raise CheckError(f'The gluetun service must not publish port {CONTROL_PORT}; '
+                             'its control server stays in the namespace.')
+        volumes = gluetun.get('volumes') or []
+        targets = {v['target'] for v in volumes}
+        names = {Path(str(v.get('source', ''))).name for v in volumes}
+        if '/gluetun/auth/config.toml' not in targets:
+            raise CheckError('The gluetun service must mount its role file (compose.sidecar.yaml).')
+        if '/iptables/post-rules.txt' in targets or 'post-rules.txt' in names:
+            raise CheckError("The sidecar's gluetun must not mount the overlay's post-rules; "
+                             "they are safe only behind the overlay's guard.")
+        if 'api_key' in names:
+            raise CheckError('The gluetun service must not mount the API key; only the applier does.')
+        key = False
+        for volume in applier.get('volumes') or []:
+            source = Path(str(volume.get('source', '')))
+            if source.name in ('wireguard_private_key', 'auth.toml') or volume['target'].startswith('/config'):
+                raise CheckError("The applier must not mount the tunnel key or gluetun's role file.")
+            if volume['target'] != '/state/applier' and not volume.get('read_only'):
+                raise CheckError('The applier must mount everything but its state read-only.')
+            key = key or source.name == 'api_key'
+        if not key:
+            raise CheckError('The applier must mount secrets/gluetun/api_key read-only (compose.sidecar.yaml).')
+
+    @staticmethod
+    def sidecar_apps(config):
+        """SIDECAR_APPS: the Compose services of the applications in
+        gluetun's namespace. Every service that joins gluetun must be listed,
+        so recover recreates it with gluetun."""
+        services = config['services']
+        labels = as_dict(services['applier'].get('labels')) or {}
+        raw = labels.get(SIDECAR_APPS_LABEL) if isinstance(labels, dict) else None
+        names = [name.strip() for name in str(raw or '').split(',') if name.strip()]
+        if not names:
+            raise CheckError('No applications declared: set SIDECAR_APPS in .env to the Compose services that use '
+                             'the tunnel (docs/gluetun-sidecar.md).')
+        for name in names:
+            if not SERVICE_NAME.fullmatch(name) or name in SIDECAR_SERVICES or names.count(name) > 1:
+                raise CheckError('SIDECAR_APPS must list distinct Compose services of your applications, '
+                                 'comma-separated (docs/gluetun-sidecar.md).')
+            if not isinstance(services.get(name), dict):
+                raise CheckError(f'SIDECAR_APPS names {name}, which is not a service in the Compose configuration.')
+            if services[name].get('network_mode') != 'service:gluetun':
+                raise CheckError(f'The {name} service must use network_mode: service:gluetun.')
+        for name, service in services.items():
+            if (name != 'applier' and name not in names and isinstance(service, dict)
+                    and service.get('network_mode') == 'service:gluetun'):
+                raise CheckError(f"The {name} service joins gluetun's namespace but isn't in SIDECAR_APPS; "
+                                 'add it, so recover recreates it with gluetun.')
+        return names
 
     def gluetun_compose_checks(self, services):
         """compose.gluetun.yaml's own invariants, on the resolved file."""
@@ -297,11 +524,21 @@ class Host:
                 raise CheckError('Secret files must be regular files with mode 0600.')
 
     def check_gluetun_files(self):
+        self.check_gluetun_secrets('docs/configuration.md#gluetun-backend')
+        post_rules = self.root / 'tunnel' / 'gluetun' / 'post-rules.txt'
+        if post_rules.is_symlink() or not post_rules.is_file():
+            raise CheckError('Missing tunnel/gluetun/post-rules.txt; run python3 tools/molebridge.py gluetun-post-rules.')
+
+    def check_sidecar_files(self):
+        """The sidecar's secrets; it has no post-rules."""
+        self.check_gluetun_secrets('docs/gluetun-sidecar.md')
+
+    def check_gluetun_secrets(self, guide):
         for relative in ('secrets/gluetun/wireguard_private_key', 'secrets/gluetun/auth.toml',
                          'secrets/gluetun/api_key'):
             path = self.root / relative
             if path.is_symlink() or not path.is_file():
-                raise CheckError(f'Missing {relative}; see docs/configuration.md#gluetun-backend.')
+                raise CheckError(f'Missing {relative}; see {guide}.')
             if os.name == 'posix' and stat.S_IMODE(path.stat().st_mode) != 0o600:
                 raise CheckError('Secret files must be regular files with mode 0600.')
         try:
@@ -312,9 +549,6 @@ class Host:
         if not valid_auth_file(auth):
             raise CheckError('secrets/gluetun/auth.toml is not the role file Molebridge generates; '
                              'run python3 tools/molebridge.py gluetun-auth --rotate.')
-        post_rules = self.root / 'tunnel' / 'gluetun' / 'post-rules.txt'
-        if post_rules.is_symlink() or not post_rules.is_file():
-            raise CheckError('Missing tunnel/gluetun/post-rules.txt; run python3 tools/molebridge.py gluetun-post-rules.')
         for relative in ('secrets/netbird.env', 'secrets/applier.env'):
             path = self.root / relative
             if path.exists() and (path.is_symlink() or (os.name == 'posix' and stat.S_IMODE(path.stat().st_mode) != 0o600)):
@@ -346,18 +580,144 @@ class Host:
         return True
 
     def check_volume(self, config):
-        name = config['volumes']['netbird-data']['name']
+        if self.engine == 'podman':
+            # podman-compose doesn't resolve volume names: <project>_<volume>.
+            volume = config['volumes']['netbird-data'] or {}
+            name = volume.get('name') or f'{self.project(config)}_netbird-data'
+        else:
+            name = config['volumes']['netbird-data']['name']
         try:
-            self.run(['docker', 'volume', 'inspect', name, '--format', '{{.Name}}'], cwd=self.root, timeout=10)
+            self.run([self.engine, 'volume', 'inspect', name, '--format', '{{.Name}}'], cwd=self.root, timeout=10)
         except CheckError as exc:
             raise CheckError('Existing NetBird identity volume not found. Check COMPOSE_PROJECT_NAME; recovery will not enroll a new peer.') from exc
 
     def namespace_checks(self, owner='wireguard'):
         members = ('gluetun', 'guard', 'netbird', 'applier') if owner == 'gluetun' else ('wireguard', 'netbird', 'applier')
+        if self.loaded is not None:
+            # The engine's record first, from the configuration doctor and
+            # recover load: every member is attached to the owner's current
+            # container.
+            self.membership(self.loaded, owner, members[1:])
         namespaces = [self.compose('exec', '-T', service, 'readlink', '/proc/self/ns/net').strip()
                       for service in members]
         if not namespaces[0] or len(set(namespaces)) != 1:
             raise CheckError('Containers do not share the current network namespace; run recover.')
+
+    def container_ref(self, config, service):
+        """The service's container: its container_name, or the one container
+        Compose's labels give it."""
+        entry = config['services'].get(service)
+        if not isinstance(entry, dict):
+            raise CheckError(f'The Compose configuration has no {service} service.')
+        name = entry.get('container_name')
+        if isinstance(name, str) and name:
+            return name
+        try:
+            output = self.run([self.engine, 'ps', '-a', '-q', '--no-trunc',
+                               '--filter', f'label=com.docker.compose.project={self.project(config)}',
+                               '--filter', f'label=com.docker.compose.service={service}'],
+                              cwd=self.root, timeout=15)
+        except CheckError:
+            raise CheckError(f'Unable to list the {service} container; check {self.engine}.') from None
+        found = output.split()
+        if not found:
+            raise CheckError(f'The {service} container is missing; run recover.')
+        if len(found) > 1:
+            raise CheckError(f'More than one {service} container exists; run recover.')
+        return found[0]
+
+    def inspect_container(self, config, service):
+        """The fields the doctor needs from the engine's inspect output, for
+        a running container; never the output itself, which holds the
+        container's environment."""
+        reference = self.container_ref(config, service)
+        try:
+            output = self.run([self.engine, 'inspect', '--type', 'container', reference], cwd=self.root, timeout=15)
+        except CheckError:
+            raise CheckError(f'The {service} container is missing or cannot be inspected; run recover.') from None
+        try:
+            data = json.loads(output)
+            if not isinstance(data, list) or len(data) != 1:
+                raise ValueError('inspect')
+            info = data[0]
+            state, host = info['State'], info['HostConfig']
+            member = Member(info['Id'], state['StartedAt'], host['NetworkMode'], control_published(info))
+            if not CONTAINER_ID.fullmatch(member.id) or not all(isinstance(v, str) for v in member[1:3]):
+                raise ValueError('inspect')
+            running = state['Running'] is True
+        except (ValueError, KeyError, TypeError, AttributeError):
+            raise CheckError(f"The {service} container's inspect output was not understood; "
+                             f'is it a {self.engine} container?') from None
+        if not running:
+            raise CheckError(f'The {service} container is not running; run recover.')
+        return member
+
+    def membership(self, config, owner, members):
+        """{service: Member} for the owner and its members, each running and
+        attached by the engine to the owner's current container. The control
+        server's port must not be published on a gluetun owner."""
+        lead = self.inspect_container(config, owner)
+        if owner == 'gluetun' and lead.control_published:
+            raise CheckError(f'The gluetun container publishes port {CONTROL_PORT}; '
+                             'its control server must stay in the namespace.')
+        snapshot = {owner: lead}
+        for service in members:
+            member = self.inspect_container(config, service)
+            if member.network_mode != 'container:' + lead.id:
+                raise CheckError(f"The {service} container is not attached to {owner}'s current container; "
+                                 'run recover.')
+            snapshot[service] = member
+        return snapshot
+
+    def build_probe_image(self):
+        """Build the routing image from this checkout as the namespace probe."""
+        try:
+            self.run([self.engine, 'build', '--tag', PROBE_IMAGE, '--file', str(ROOT / 'routing' / 'Dockerfile'),
+                      str(ROOT)], cwd=self.root, timeout=600)
+        except CheckError as exc:
+            raise CheckError(f'Building the namespace probe image failed: {exc}') from None
+
+    def probe_image(self):
+        """The namespace probe's image, built once when missing."""
+        try:
+            self.run([self.engine, 'image', 'inspect', '--format', '{{.Id}}', PROBE_IMAGE], cwd=self.root, timeout=15)
+        except CheckError:
+            self.build_probe_image()
+        return PROBE_IMAGE
+
+    def namespace_of(self, image, container_id, service):
+        """The network namespace the engine joins for this container now, read
+        by a throwaway probe that needs nothing from the container's image:
+        joined by the resolved ID, no capabilities, read-only."""
+        try:
+            output = self.run([self.engine, 'run', '--rm', '--pull', 'never', '--network', f'container:{container_id}',
+                               '--entrypoint', 'readlink', '--cap-drop', 'ALL', '--read-only',
+                               '--security-opt', 'no-new-privileges', image, '/proc/self/ns/net'],
+                              cwd=self.root, timeout=60)
+        except CheckError:
+            raise CheckError(f'The namespace probe could not join the {service} container; run recover.') from None
+        namespace = output.strip()
+        if not NAMESPACE_ID.fullmatch(namespace):
+            raise CheckError('The namespace probe printed no namespace; recover rebuilds it.')
+        return namespace
+
+    def sidecar_namespace_checks(self, config):
+        """The applier and every declared application share gluetun's
+        current namespace: the engine attaches each to gluetun's current
+        container, and a probe joined to each finds the same namespace as one
+        joined to gluetun. A container ID survives a restart that changes the
+        namespace, so the probe is the proof. Nothing may restart meanwhile."""
+        members = ('applier', *self.sidecar_apps(config))
+        image = self.probe_image()
+        before = self.membership(config, 'gluetun', members)
+        namespaces = {service: self.namespace_of(image, member.id, service) for service, member in before.items()}
+        after = self.membership(config, 'gluetun', members)
+        if any(after[service][:2] != before[service][:2] for service in before):
+            raise CheckError('A container restarted or was replaced during the check; run doctor again.')
+        for service in members:
+            if namespaces[service] != namespaces['gluetun']:
+                raise CheckError(f"The {service} container is not in gluetun's current network namespace; "
+                                 'run recover.')
 
     def ice_blacklist_check(self, config):
         """The exit interface must be in the peer's stored ICE interface blacklist.
@@ -399,19 +759,34 @@ class Host:
         raise CheckError(refusal or 'The NetBird gate did not accept the configuration (docs/troubleshooting.md).')
 
     def doctor(self):
+        """Every check, or CheckError. Returns the applier's failing
+        `verified ...` checks, which only recover accepts."""
         config = self.config()
-        self.check_files(config)
-        self.check_volume(config)
-        self.namespace_checks(self.owner(config))
-        self.ice_blacklist_check(config)
-        self.netbird_config_check()
+        sidecar = self.kind(config) == 'sidecar'
+        if sidecar:
+            self.check_sidecar_files()
+            self.sidecar_namespace_checks(config)
+        else:
+            self.check_files(config)
+            self.check_volume(config)
+            self.namespace_checks(self.owner(config))
+            self.ice_blacklist_check(config)
+            self.netbird_config_check()
         # The applier prints only fixed check labels, no addresses.
         failed = [label for passed, label in self.applier_checks() if not passed]
-        if failed:
+        unverified = bool(failed) and all(label.startswith('verified ') for label in failed)
+        if failed and not (self.accept_unverified and unverified):
             raise CheckError('The applier reports: ' + '; '.join(failed) + ' (docs/troubleshooting.md).')
-        print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, NetBird settings '
-              'and profiles, NetBird kernel mode, routing and recent provider check')
-        print('Client DNS, IPv6 and failure drills still require docs/verification.md.')
+        if sidecar:
+            print('PASS configuration, permissions, namespace membership of the applier and every declared '
+                  'application, unpublished control server' + ('' if failed else ' and recent provider check'))
+            print("Traffic protection is gluetun's firewall, which Molebridge doesn't check; "
+                  "check your applications' egress and DNS (docs/gluetun-sidecar.md).")
+        else:
+            print('PASS configuration, permissions, identity volume, namespace, ICE blacklist, NetBird settings '
+                  'and profiles, NetBird kernel mode, routing' + ('' if failed else ' and recent provider check'))
+            print('Client DNS, IPv6 and failure drills still require docs/verification.md.')
+        return failed
 
     def gluetun_settings(self):
         """The gluetun backend's settings as Compose resolves them, without
@@ -445,8 +820,17 @@ class Host:
         os.replace(temporary, path)
         return path
 
+    def wait_args(self):
+        # podman-compose has no --wait; the applier wait that follows covers it.
+        return ('--wait', '--wait-timeout', '180') if self.engine == 'docker' else ()
+
     def recover(self):
+        """Recreate the namespace owner and everything in its namespace, then
+        wait for the doctor. 0: recovered and verified; 3: recovered and
+        operational, not verified; a CheckError (exit status 1): failed."""
         config = self.config()
+        if self.kind(config) == 'sidecar':
+            return self.recover_sidecar(config)
         self.check_files(config)
         self.check_volume(config)
         owner = self.owner(config)
@@ -457,23 +841,74 @@ class Host:
         self.compose('build', *built, timeout=600, step='Building the images')
         print('Recreating the exit namespace and its dependents; clients will be interrupted.', flush=True)
         self.compose('stop', *dependents, timeout=60, step='Stopping ' + ', '.join(dependents))
-        self.compose('up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180',
-                     *order, 'control-panel', timeout=240,
-                     step='Recreating the containers (a container did not become healthy within 180 s; '
-                          'see docker compose ps)')
-        self.wait_for_applier()
-        self.doctor()
+        self.compose('up', '-d', '--force-recreate', *self.wait_args(),
+                     *order, 'control-panel', timeout=240, step=self.recreate_step())
+        return self.settle()
 
-    def wait_for_applier(self):
+    def recreate_step(self):
+        if self.engine == 'podman':
+            return 'Recreating the containers (see podman ps)'
+        return 'Recreating the containers (a container did not become healthy within 180 s; see docker compose ps)'
+
+    def recover_sidecar(self, config):
+        """gluetun, the applier and every declared application, recreated
+        together: a new gluetun container is a new namespace."""
+        self.check_sidecar_files()
+        apps = self.sidecar_apps(config)
+        print('Building the applier and namespace probe images before interrupting the applications.', flush=True)
+        self.compose('build', 'applier', timeout=600, step='Building the images')
+        self.build_probe_image()
+        print('Recreating gluetun, the applier and every declared application together; '
+              "the applications' connections will be interrupted.", flush=True)
+        self.compose('stop', 'applier', *apps, timeout=120, step='Stopping the applier and the applications')
+        self.compose('up', '-d', '--force-recreate', *self.wait_args(), 'gluetun', 'applier', *apps,
+                     timeout=240, step=self.recreate_step())
+        # A tunnel-tier provider is never verified in a sidecar: its egress
+        # can't be compared with this host's address there.
+        return self.settle(verify=self.egress_tier(config) != 'tunnel', sidecar=True)
+
+    @staticmethod
+    def egress_tier(config):
+        services = config.get('services') or {}
+        env = (services.get('applier') or {}).get('environment') or {}
+        try:
+            return providers.get(env.get('PROVIDER')).egress_tier
+        except ValueError:
+            return 'provider'
+
+    def settle(self, *, verify=True, sidecar=False):
+        """Wait for the applier, then run the doctor, accepting only a missing
+        verification: 0 verified, 3 operational and unverified."""
+        self.wait_for_applier(verify=verify)
+        self.accept_unverified = True
+        try:
+            unverified = self.doctor()
+        finally:
+            self.accept_unverified = False
+        if not unverified:
+            return 0
+        print('UNVERIFIED Recovered and operational, but not verified: ' + '; '.join(unverified) + '.')
+        if sidecar and not verify:
+            print("A sidecar with a tunnel-tier provider is never verified: its egress can't be compared with "
+                  "this host's address (docs/gluetun-sidecar.md).")
+        else:
+            print('See docs/troubleshooting.md.')
+        return 3
+
+    def wait_for_applier(self, *, verify=True):
         """Give the recreated applier time to verify the exit: right after a
         recreation it has no verified result yet, and with gluetun it may
         first put the last verified server back. Bounded by SETTLE_SEC; the
-        doctor afterwards names any check still failing."""
-        print(f'Waiting up to {SETTLE_SEC} s for the applier to verify the exit.', flush=True)
+        doctor afterwards names any check still failing. Without verify, the
+        `verified ...` check is not waited for."""
+        if verify:
+            print(f'Waiting up to {SETTLE_SEC} s for the applier to verify the exit.', flush=True)
+        else:
+            print(f"Waiting up to {SETTLE_SEC} s for the applier's checks; this exit can't be verified.", flush=True)
         deadline = self.clock() + SETTLE_SEC
         while True:
             try:
-                if all(passed for passed, _ in self.applier_checks()):
+                if all(passed for passed, label in self.applier_checks() if verify or not label.startswith('verified ')):
                     return True
             except CheckError:
                 pass
@@ -489,6 +924,9 @@ def main(argv=None):
                         help='gluetun-post-rules: leave out ip6tables lines, for a host where gluetun finds no ip6tables')
     parser.add_argument('--rotate', action='store_true',
                         help='gluetun-auth: replace an existing key and role file')
+    parser.add_argument('--engine', choices=tuple(COMPOSE),
+                        help='doctor and recover: docker (docker compose) or podman (podman-compose); by default '
+                             'MOLEBRIDGE_ENGINE, else docker when installed, else podman')
     args = parser.parse_args(argv)
     try:
         if args.action == 'gluetun-post-rules':
@@ -501,7 +939,11 @@ def main(argv=None):
             else:
                 print('secrets/gluetun/auth.toml and api_key already exist; --rotate replaces them.')
         else:
-            getattr(Host(), args.action)()
+            status = getattr(Host(engine=args.engine or detect_engine()), args.action)()
+            if args.action == 'recover' and isinstance(status, int):
+                # 0 recovered and verified, 3 recovered and operational but
+                # not verified; failures end below with 1.
+                return status
     except (CheckError, OSError, ValueError):
         # Show the fixed CheckError messages, never OS exception text containing
         # potentially sensitive paths or expanded Compose values.
