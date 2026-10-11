@@ -14,8 +14,9 @@ provider, on Docker or on rootless Podman. Unit tests cover the host doctor
 and recovery against canned Docker and Podman inspect output
 (`tools/test_sidecar_tools.py`). CI runs the doctor's namespace probe and
 recovery against Docker, with a busybox container owning the namespace in
-gluetun's place (`tools/check-sidecar-doctor.py`); that script also passed
-on Docker Desktop 29 on macOS. podman-compose, Quadlet and every provider
+gluetun's place (`tools/check-sidecar-doctor.py`), with Compose and with
+the container names given directly as [under Quadlet](#rootless-podman);
+that script also passed on Docker Desktop 29 on macOS. podman-compose, Quadlet and every provider
 are untested. See [testing](testing.md) for the project's other records.
 
 ## What is checked, and by whom
@@ -219,12 +220,42 @@ None of this has run on a live Podman host yet; `COMPOSE_PROFILES` support
 varies between podman-compose versions, so with Podman remove the example
 profile and list your own applications.
 
-**Quadlet.** Without Compose, the doctor and `recover` have no configuration
-to read. Give each application `Network=container:<gluetun's container
-name>` and make its unit `BindsTo=` and `After=` gluetun's unit, so systemd
-stops and starts it with gluetun; do the same for the applier. To check
-membership by hand, run the probe above with `podman run`, once with
-gluetun's ID and once with each member's, and compare the outputs.
+**Quadlet.** Without Compose there is no configuration to read, so name the
+containers instead. This runs the same membership check, identity probe,
+start-time check, published-port check and the applier's own checks (through
+`podman exec <applier> python -m applier.apply --doctor`); it doesn't check
+the configuration or the secret files:
+
+```sh
+python3 tools/molebridge.py doctor --kind sidecar --engine podman \
+  --gluetun <gluetun container> --applier <applier container> \
+  --apps <app container>,<app container> \
+  --probe-image <an image with readlink>
+```
+
+`--probe-image` can name an image already on the host, such as the applier's
+or the routing image; without it, or when the engine doesn't have that image,
+the doctor builds the routing image from this checkout as with Compose. On
+success it prints:
+
+```
+PASS namespace membership of the applier and every named application, unpublished control server, the applier's checks and recent provider check
+Without Compose the configuration and secret files aren't checked; traffic protection is gluetun's firewall, which Molebridge doesn't check (docs/gluetun-sidecar.md).
+```
+
+It exits `0` when every check passes and `1` with one `FAIL` line otherwise,
+where a namespace failure ends `restart gluetun, the applier and every
+application together.` `recover` has no Quadlet mode. Give each application
+and the applier `Network=container:<gluetun container>`, with `After=` and
+`BindsTo=` on gluetun's unit, and recover by restarting the units together,
+which recreates the containers, gluetun's first:
+
+```sh
+systemctl --user restart gluetun.service applier.service <app>.service
+```
+
+Then run the doctor above. A restart of gluetun's unit alone gives gluetun a
+new namespace and leaves the others in the old one.
 
 ## Removing
 

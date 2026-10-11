@@ -116,7 +116,7 @@ def execute(args, *, cwd, timeout=30, allow_failure=False):
 
 # The applier's --doctor prints one fixed label per check (applier/apply.py,
 # doctor_checks); only lines of that shape are shown.
-APPLIER_CHECK_LINE = re.compile(r"(PASS|FAIL) [A-Za-z0-9 ',./-]{1,100}")
+APPLIER_CHECK_LINE = re.compile(r"(PASS|FAIL) [A-Za-z0-9 ',./_-]{1,100}")
 # recover waits this long for the applier to verify the recreated exit: with
 # gluetun it may first put the last verified server back, about 20 s, up to
 # its 90 s switch timeout.
@@ -135,6 +135,9 @@ KINDS = ('overlay', 'sidecar')
 SIDECAR_APPS_LABEL = 'io.molebridge.sidecar-apps'
 SIDECAR_SERVICES = ('gluetun', 'applier', 'control-panel')
 SERVICE_NAME = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}')
+# A container name or ID, and an image reference, given on the command line.
+CONTAINER_NAME = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}')
+IMAGE_REF = re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.:/@-]{0,254}')
 CONTAINER_ID = re.compile(r'[0-9a-f]{64}')
 NAMESPACE_ID = re.compile(r'net:\[[0-9]{1,20}\]')
 PREFLIGHT_ENTRYPOINT = ['/bin/sh', '/usr/local/bin/molebridge-gluetun-preflight', '/gluetun-entrypoint']
@@ -216,6 +219,12 @@ class Host:
         # recover sets this: the doctor then returns the applier's failing
         # `verified ...` checks instead of failing on them.
         self.accept_unverified = False
+        # Without Compose (container_doctor): the applier's container, the
+        # probe image named on the command line, and the advice that replaces
+        # `run recover`.
+        self.applier_container = None
+        self.probe_ref = None
+        self.remedy = 'run recover'
 
     def compose(self, *args, timeout=30, step=None):
         try:
@@ -228,8 +237,12 @@ class Host:
     def applier_checks(self):
         """The applier's own checks as [(passed, label)], from its --doctor.
         Fixed labels only; any other output is dropped."""
-        result = self.run([*COMPOSE[self.engine], 'exec', '-T', 'applier', 'python', '-m', 'applier.apply',
-                           '--doctor'], cwd=self.root, timeout=30, allow_failure=True)
+        if self.applier_container:
+            target = [self.engine, 'exec', self.applier_container]
+        else:
+            target = [*COMPOSE[self.engine], 'exec', '-T', 'applier']
+        result = self.run([*target, 'python', '-m', 'applier.apply', '--doctor'],
+                          cwd=self.root, timeout=30, allow_failure=True)
         status, output = result if isinstance(result, tuple) else (0, result)
         checks = [(line[:4] == 'PASS', line[5:]) for line in output.splitlines()
                   if APPLIER_CHECK_LINE.fullmatch(line)]
@@ -621,9 +634,9 @@ class Host:
             raise CheckError(f'Unable to list the {service} container; check {self.engine}.') from None
         found = output.split()
         if not found:
-            raise CheckError(f'The {service} container is missing; run recover.')
+            raise CheckError(f'The {service} container is missing; {self.remedy}.')
         if len(found) > 1:
-            raise CheckError(f'More than one {service} container exists; run recover.')
+            raise CheckError(f'More than one {service} container exists; {self.remedy}.')
         return found[0]
 
     def inspect_container(self, config, service):
@@ -634,7 +647,7 @@ class Host:
         try:
             output = self.run([self.engine, 'inspect', '--type', 'container', reference], cwd=self.root, timeout=15)
         except CheckError:
-            raise CheckError(f'The {service} container is missing or cannot be inspected; run recover.') from None
+            raise CheckError(f'The {service} container is missing or cannot be inspected; {self.remedy}.') from None
         try:
             data = json.loads(output)
             if not isinstance(data, list) or len(data) != 1:
@@ -649,7 +662,7 @@ class Host:
             raise CheckError(f"The {service} container's inspect output was not understood; "
                              f'is it a {self.engine} container?') from None
         if not running:
-            raise CheckError(f'The {service} container is not running; run recover.')
+            raise CheckError(f'The {service} container is not running; {self.remedy}.')
         return member
 
     def membership(self, config, owner, members):
@@ -665,7 +678,7 @@ class Host:
             member = self.inspect_container(config, service)
             if member.network_mode != 'container:' + lead.id:
                 raise CheckError(f"The {service} container is not attached to {owner}'s current container; "
-                                 'run recover.')
+                                 f'{self.remedy}.')
             snapshot[service] = member
         return snapshot
 
@@ -678,7 +691,15 @@ class Host:
             raise CheckError(f'Building the namespace probe image failed: {exc}') from None
 
     def probe_image(self):
-        """The namespace probe's image, built once when missing."""
+        """The namespace probe's image: the one named with --probe-image when
+        the engine has it, otherwise PROBE_IMAGE, built once when missing."""
+        if self.probe_ref:
+            try:
+                self.run([self.engine, 'image', 'inspect', '--format', '{{.Id}}', self.probe_ref],
+                         cwd=self.root, timeout=15)
+                return self.probe_ref
+            except CheckError:
+                pass
         try:
             self.run([self.engine, 'image', 'inspect', '--format', '{{.Id}}', PROBE_IMAGE], cwd=self.root, timeout=15)
         except CheckError:
@@ -695,7 +716,7 @@ class Host:
                                '--security-opt', 'no-new-privileges', image, '/proc/self/ns/net'],
                               cwd=self.root, timeout=60)
         except CheckError:
-            raise CheckError(f'The namespace probe could not join the {service} container; run recover.') from None
+            raise CheckError(f'The namespace probe could not join the {service} container; {self.remedy}.') from None
         namespace = output.strip()
         if not NAMESPACE_ID.fullmatch(namespace):
             raise CheckError('The namespace probe printed no namespace; recover rebuilds it.')
@@ -707,7 +728,9 @@ class Host:
         container, and a probe joined to each finds the same namespace as one
         joined to gluetun. A container ID survives a restart that changes the
         namespace, so the probe is the proof. Nothing may restart meanwhile."""
-        members = ('applier', *self.sidecar_apps(config))
+        self.namespace_identity(config, ('applier', *self.sidecar_apps(config)))
+
+    def namespace_identity(self, config, members):
         image = self.probe_image()
         before = self.membership(config, 'gluetun', members)
         namespaces = {service: self.namespace_of(image, member.id, service) for service, member in before.items()}
@@ -717,7 +740,37 @@ class Host:
         for service in members:
             if namespaces[service] != namespaces['gluetun']:
                 raise CheckError(f"The {service} container is not in gluetun's current network namespace; "
-                                 'run recover.')
+                                 f'{self.remedy}.')
+
+    def container_doctor(self, gluetun, applier, apps, probe_image=None):
+        """The sidecar doctor without Compose, as under Quadlet: the engine
+        membership, the identity probe and the applier's own checks, for
+        containers named on the command line. There is no configuration to
+        read, so the configuration and the secret files aren't checked."""
+        apps = [name.strip() for name in (apps or '').split(',') if name.strip()]
+        if not apps:
+            raise CheckError('No applications declared: name the application containers with --apps '
+                             '(docs/gluetun-sidecar.md).')
+        names = [gluetun, applier, *apps]
+        if not all(isinstance(name, str) and CONTAINER_NAME.fullmatch(name) for name in names):
+            raise CheckError('--gluetun, --applier and --apps take container names or IDs (docs/gluetun-sidecar.md).')
+        if len(set(names)) != len(names) or {'gluetun', 'applier'} & set(apps):
+            raise CheckError('--gluetun, --applier and --apps must name distinct containers.')
+        if probe_image is not None and not IMAGE_REF.fullmatch(probe_image):
+            raise CheckError('--probe-image takes an image reference.')
+        self.applier_container, self.probe_ref = applier, probe_image
+        self.remedy = 'restart gluetun, the applier and every application together'
+        config = {'services': {'gluetun': {'container_name': gluetun}, 'applier': {'container_name': applier},
+                               **{app: {'container_name': app} for app in apps}}}
+        self.namespace_identity(config, ('applier', *apps))
+        failed = [label for passed, label in self.applier_checks() if not passed]
+        if failed:
+            raise CheckError('The applier reports: ' + '; '.join(failed) + ' (docs/troubleshooting.md).')
+        print('PASS namespace membership of the applier and every named application, unpublished control server, '
+              "the applier's checks and recent provider check")
+        print("Without Compose the configuration and secret files aren't checked; traffic protection is gluetun's "
+              "firewall, which Molebridge doesn't check (docs/gluetun-sidecar.md).")
+        return []
 
     def ice_blacklist_check(self, config):
         """The exit interface must be in the peer's stored ICE interface blacklist.
@@ -927,7 +980,16 @@ def main(argv=None):
     parser.add_argument('--engine', choices=tuple(COMPOSE),
                         help='doctor and recover: docker (docker compose) or podman (podman-compose); by default '
                              'MOLEBRIDGE_ENGINE, else docker when installed, else podman')
+    without = parser.add_argument_group('doctor without Compose (a sidecar run by Quadlet or by hand)')
+    without.add_argument('--kind', choices=('sidecar',), help='the exit kind; only sidecar has this mode')
+    without.add_argument('--gluetun', metavar='CONTAINER', help="gluetun's container name or ID")
+    without.add_argument('--applier', metavar='CONTAINER', help="the applier's container name or ID")
+    without.add_argument('--apps', metavar='C1,C2', help="the applications' containers, comma-separated")
+    without.add_argument('--probe-image', metavar='IMAGE',
+                         help='an image with readlink for the namespace probe, such as the routing or applier '
+                              "image; by default the routing image, built from this checkout")
     args = parser.parse_args(argv)
+    standalone = (args.kind, args.gluetun, args.applier, args.apps, args.probe_image)
     try:
         if args.action == 'gluetun-post-rules':
             path = Host().gluetun_post_rules(ipv6=not args.ipv4_only)
@@ -938,6 +1000,12 @@ def main(argv=None):
                       'recreate gluetun and the applier to use them.')
             else:
                 print('secrets/gluetun/auth.toml and api_key already exist; --rotate replaces them.')
+        elif any(value is not None for value in standalone):
+            if args.action != 'doctor' or args.kind != 'sidecar' or not (args.gluetun and args.applier):
+                raise CheckError('Without Compose only the sidecar doctor runs: doctor --kind sidecar --gluetun '
+                                 '<container> --applier <container> --apps <containers> (docs/gluetun-sidecar.md).')
+            Host(engine=args.engine or detect_engine()).container_doctor(
+                args.gluetun, args.applier, args.apps, args.probe_image)
         else:
             status = getattr(Host(engine=args.engine or detect_engine()), args.action)()
             if args.action == 'recover' and isinstance(status, int):

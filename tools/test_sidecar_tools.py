@@ -181,6 +181,12 @@ class Engine:
                 for service in [a for a in rest if a in self.containers]:
                     self.create(service)
             return ''
+        if args[:2] == [self.engine, 'exec']:
+            # Without Compose: `<engine> exec <applier container> python ...`.
+            if args[2] != self.containers['applier']['name']:
+                raise host_tools.CheckError('Command failed; check Docker/Compose locally.')
+            status, output = self.applier_output.pop(0) if len(self.applier_output) > 1 else self.applier_output[0]
+            return (status, output) if kwargs.get('allow_failure') else output
         if args[:2] == [self.engine, 'ps']:
             service = args[-1].rpartition('=')[2]
             c = self.containers.get(service)
@@ -776,3 +782,159 @@ def test_port_targets():
     assert list(host_tools.port_targets({'target': 8000, 'published': '18000'})) == [8000]
     with pytest.raises(ValueError):
         host_tools.port_targets('${PORT}')
+
+
+# The doctor without Compose (a sidecar run by Quadlet): containers named on
+# the command line, Podman-shaped inspect output.
+
+QUADLET_APPS = ('downloader', 'indexer')
+
+
+def quadlet_engine(tmp_path, engine='podman'):
+    config = resolved_sidecar_config(tmp_path, apps=QUADLET_APPS)
+    config['services']['gluetun']['container_name'] = 'systemd-gluetun'
+    config['services']['applier']['container_name'] = 'systemd-switchyard-applier'
+    for app in QUADLET_APPS:
+        config['services'][app]['container_name'] = app
+    fake = Engine(tmp_path, engine, apps=QUADLET_APPS, config=config)
+    host = host_tools.Host(tmp_path, run=fake, engine=engine)
+    return host, fake
+
+
+def quadlet_doctor(host, probe_image=None):
+    return host.container_doctor('systemd-gluetun', 'systemd-switchyard-applier', 'downloader,indexer',
+                                 probe_image)
+
+
+@pytest.mark.parametrize('engine', ['podman', 'docker'])
+def test_the_doctor_without_compose_passes(tmp_path, engine, capsys):
+    host, fake = quadlet_engine(tmp_path, engine)
+    assert quadlet_doctor(host) == []
+    gluetun = fake.containers['gluetun']['id']
+    assert probes(fake)[0] == [engine, 'run', '--rm', '--pull', 'never', '--network', f'container:{gluetun}',
+                               '--entrypoint', 'readlink', '--cap-drop', 'ALL', '--read-only',
+                               '--security-opt', 'no-new-privileges', PROBE, '/proc/self/ns/net']
+    assert [c[c.index('--network') + 1] for c in probes(fake)] == [
+        'container:' + fake.containers[s]['id'] for s in ('gluetun', 'applier', *QUADLET_APPS)]
+    # Inspected by name, twice each, and no Compose at all.
+    inspected = [c[-1] for c in fake.calls if c[1] == 'inspect']
+    assert sorted(set(inspected)) == sorted(['systemd-gluetun', 'systemd-switchyard-applier', *QUADLET_APPS])
+    assert all(inspected.count(name) == 2 for name in set(inspected))
+    assert not any(c[0] in ('podman-compose',) or c[:2] == ['docker', 'compose'] for c in fake.calls)
+    assert fake.calls[-1] == [engine, 'exec', 'systemd-switchyard-applier', 'python', '-m', 'applier.apply',
+                              '--doctor']
+    out = capsys.readouterr().out
+    assert out.startswith('PASS namespace membership of the applier and every named application')
+    assert "configuration and secret files aren't checked" in out
+
+
+def test_the_doctor_without_compose_from_the_command_line(tmp_path, monkeypatch, capsys):
+    host, fake = quadlet_engine(tmp_path)
+    original = host_tools.Host
+    seen = {}
+
+    def make(*args, **kwargs):
+        seen.update(kwargs)
+        return host
+    monkeypatch.setattr(host_tools, 'Host', make)
+    argv = ['doctor', '--kind', 'sidecar', '--engine', 'podman', '--gluetun', 'systemd-gluetun',
+            '--applier', 'systemd-switchyard-applier', '--apps', 'downloader,indexer']
+    assert host_tools.main(argv) == 0 and seen == {'engine': 'podman'}
+    assert capsys.readouterr().out.startswith('PASS namespace membership')
+    fake.restart_owner()
+    assert host_tools.main(argv) == 1
+    err = capsys.readouterr().err
+    assert err == ("FAIL The applier container is not in gluetun's current network namespace; "
+                   'restart gluetun, the applier and every application together.\n')
+    monkeypatch.setattr(host_tools, 'Host', original)
+
+
+@pytest.mark.parametrize('argv', [
+    ['doctor', '--gluetun', 'g', '--applier', 'a', '--apps', 'x'],
+    ['doctor', '--kind', 'sidecar', '--applier', 'a', '--apps', 'x'],
+    ['doctor', '--kind', 'sidecar'],
+    ['recover', '--kind', 'sidecar', '--gluetun', 'g', '--applier', 'a', '--apps', 'x'],
+    ['doctor', '--probe-image', 'localhost/x:1'],
+])
+def test_the_doctor_without_compose_needs_its_containers(argv, capsys):
+    assert host_tools.main([*argv, '--engine', 'podman']) == 1
+    assert capsys.readouterr().err.startswith('FAIL Without Compose only the sidecar doctor runs')
+
+
+@pytest.mark.parametrize('gluetun,applier,apps,message', [
+    ('g', 'a', '', '^No applications declared: name the application containers with --apps'),
+    ('g', 'a', ' , ', '^No applications declared'),
+    ('g', 'a', 'x;id', 'take container names or IDs'),
+    ('-g', 'a', 'x', 'take container names or IDs'),
+    ('g', 'a', 'x,x', 'distinct containers'),
+    ('g', 'a', 'g', 'distinct containers'),
+    ('g', 'a', 'applier', 'distinct containers'),
+])
+def test_the_doctor_without_compose_refuses_bad_arguments(tmp_path, gluetun, applier, apps, message):
+    calls = []
+    host = host_tools.Host(tmp_path, run=lambda args, **kw: calls.append(args) or '', engine='podman')
+    with pytest.raises(host_tools.CheckError, match=message):
+        host.container_doctor(gluetun, applier, apps)
+    assert calls == []
+
+
+@pytest.mark.parametrize('fault,message', [
+    (lambda f: f.restart_owner(), "^The applier container is not in gluetun's current network"),
+    (lambda f: f.containers['indexer'].update(mode='container:' + cid(999)),
+     "^The indexer container is not attached to gluetun's current container; restart gluetun, the applier and "
+     'every application together.$'),
+    (lambda f: f.containers['downloader'].update(running=False), '^The downloader container is not running'),
+    (lambda f: f.containers.pop('indexer'), '^The indexer container is missing or cannot be inspected'),
+    (lambda f: f.containers['gluetun'].update(ports={'8000/tcp': [{'HostIp': '', 'HostPort': '8000'}]}),
+     '^The gluetun container publishes port 8000'),
+    (lambda f: f.__setattr__('applier_output', [(1, APPLIER_UNVERIFIED.replace(
+        'egress', 'egress - host-address-not-measurable, app_attachment-failed'))]),
+     '^The applier reports: verified IVPN egress - host-address-not-measurable, app_attachment-failed'),
+])
+def test_the_doctor_without_compose_fails(tmp_path, fault, message):
+    host, fake = quadlet_engine(tmp_path)
+    fault(fake)
+    with pytest.raises(host_tools.CheckError, match=message) as error:
+        quadlet_doctor(host)
+    assert SENTINEL not in str(error.value)
+
+
+def test_the_doctor_without_compose_catches_a_restart_during_the_probes(tmp_path):
+    host, fake = quadlet_engine(tmp_path)
+
+    def restart(container):
+        if container and container['service'] == 'indexer':
+            container['started'] = container['started'].replace(':05:', ':07:')
+    fake.on_probe = restart
+    with pytest.raises(host_tools.CheckError, match='^A container restarted or was replaced during the check'):
+        quadlet_doctor(host)
+
+
+def test_the_probe_image_can_be_named(tmp_path):
+    host, fake = quadlet_engine(tmp_path)
+    quadlet_doctor(host, 'localhost/molebridge-wireguard:0.7.0')
+    assert {c[c.index('--security-opt') + 2] for c in probes(fake)} == {'localhost/molebridge-wireguard:0.7.0'}
+    assert not any(c[1] == 'build' for c in fake.calls)
+
+    # A named image the engine doesn't have: the routing image from this checkout.
+    host, fake = quadlet_engine(tmp_path)
+    original = fake.__call__
+
+    def run(args, **kwargs):
+        if args[:3] == ['podman', 'image', 'inspect']:
+            fake.calls.append(list(args))
+            raise host_tools.CheckError('absent')
+        return original(args, **kwargs)
+    host.run = run
+    quadlet_doctor(host, 'localhost/absent:1')
+    assert {c[c.index('--security-opt') + 2] for c in probes(fake)} == {PROBE}
+    assert [c for c in fake.calls if c[1] == 'build'] == [
+        ['podman', 'build', '--tag', PROBE, '--file', str(ROOT / 'routing' / 'Dockerfile'), str(ROOT)]]
+    with pytest.raises(host_tools.CheckError, match='image reference'):
+        quadlet_doctor(host, 'bad image')
+
+
+def test_applier_lines_with_reason_codes_are_read():
+    for line in ('FAIL verified IVPN egress - host-address-not-measurable',
+                 'FAIL verified NordVPN egress - egress-failed, app_attachment-failed, rejected'):
+        assert host_tools.APPLIER_CHECK_LINE.fullmatch(line)
