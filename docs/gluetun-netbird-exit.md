@@ -162,8 +162,8 @@ fall through to later rules instead of the fallback.
 
 [Architecture](architecture.md#gluetun-backend) explains each rule in more
 detail. `routing/10-exit-routing` is the guard, and `routing/contract-rules`
-(called `routing/gluetun-rules` before 0.6.0; that name stays as a link until
-0.7.0) defines the expected set for both the guard and the gate. Typing the rules by
+(called `routing/gluetun-rules` before 0.6.0; 0.7.0 removed that name)
+defines the expected set for both the guard and the gate. Typing the rules by
 hand is not a substitute: the tunnel route has to come back every time gluetun
 recreates its interface, and that is the guard's loop.
 

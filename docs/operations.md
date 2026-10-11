@@ -142,9 +142,13 @@ changes:
   longer applies.
 - **The gluetun backend**: `guard` runs the image's own entrypoint, and
   `netbird` mounts `routing/contract-rules`, the new name of
-  `routing/gluetun-rules`. The old name and `/custom-cont-init.d/10-exit-routing`
-  in the image stay as links until 0.7.0, so an older `compose.gluetun.yaml`
-  of your own keeps working until then.
+  `routing/gluetun-rules`. 0.6.x kept the old name,
+  `/custom-cont-init.d/10-exit-routing` in the image and the `GLUETUN_RULES`
+  setting as aliases; 0.7.0 removed them. A `compose.gluetun.yaml` of your own
+  that still uses them must mount `routing/contract-rules` at
+  `/usr/local/bin/molebridge-contract-rules`, run the image's entrypoint and
+  rename any `GLUETUN_RULES` to `CONTRACT_RULES`, or NetBird's gate refuses to
+  start with `the guard's rule definitions are missing (<file>)`.
 
 The routing image has had one live pass, on rootless Podman, and none on
 Docker; [testing](testing.md#the-routing-image-on-rootless-podman-at-0086fac)

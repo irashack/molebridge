@@ -341,7 +341,7 @@ class Namespace:
     def env(self, **changes):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('NB_', 'WT_'))}
         env.update(ENV, PATH=f'{self.bin}:{os.environ["PATH"]}', FAKE_IP_STATE=str(self.state_file),
-                   GLUETUN_RULES=str(RULES), **CLOCK_ENV,
+                   CONTRACT_RULES=str(RULES), **CLOCK_ENV,
                    FAKE_IP_LOG=str(self.log), ROUTING_READY_FILE=str(self.ready),
                    GUARD_STATUS_FILE=str(self.status))
         env.update(changes)
@@ -805,7 +805,7 @@ def fresh_status(gate, value='0x1bd00', ahead=0, boot=BOOT_ID):
     ('NB_LOG_FILE', 'console'), ('HOST_TABLE', '0'), ('HOST_IF', 'lo'), ('FWMARK_GRACE', '31'), ('FWMARK_GRACE', '4'), ('FWMARK_GRACE', '0'),
     ('OVERLAY_CIDR', ''), ('OVERLAY_CIDR', '192.0.2.1/24'), ('OVERLAY6_CIDR', '2001:db8::1::/64'),
     ('EXIT_IF', 'wg-0'), ('EXIT_TABLE', '51820'), ('HOST_TABLE', '51821'),
-    ('GLUETUN_RULES', '/nonexistent/gluetun-rules'),
+    ('CONTRACT_RULES', '/nonexistent/contract-rules'),
 ])
 def test_gluetun_gate_refuses_bad_settings(gate, name, value):
     result = gate.run('touch "$GATE_DIR/started"', **{name: value})
@@ -1028,7 +1028,7 @@ def test_gluetun_gate_passes_on_netbird_exit_status(gate):
 def test_wireguard_gate_needs_the_native_contract(gate):
     # The native gate checks the whole contract too, from the definitions
     # compose.yaml mounts; tools/test_host_and_routing.py covers it in full.
-    result = gate.run('echo started', TUNNEL_BACKEND='wireguard', GLUETUN_RULES='')
+    result = gate.run('echo started', TUNNEL_BACKEND='wireguard', CONTRACT_RULES='')
     assert result.returncode == 1 and 'routing contract definitions are missing' in result.stderr
     assert 'started' not in result.stdout
 

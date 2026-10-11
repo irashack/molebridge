@@ -44,13 +44,12 @@ docker run --rm --network none --entrypoint sh "$image" -c '
     test "$(stat -c %u:%a /usr/local/lib/molebridge/10-exit-routing)" = 0:755
     test "$(stat -c %u:%a /usr/local/lib/molebridge/contract-rules)" = 0:644
     test "$(stat -c %u:%a /usr/local/lib/molebridge)" = 0:755
-    test "$(readlink -f /custom-cont-init.d/10-exit-routing)" = /usr/local/lib/molebridge/10-exit-routing
-    test "$(readlink -f /usr/local/lib/molebridge/gluetun-rules)" = /usr/local/lib/molebridge/contract-rules
+    test ! -e /custom-cont-init.d && test ! -L /usr/local/lib/molebridge/gluetun-rules
     sleep 0.1
     apk info -v 2>/dev/null | grep -E "^(alpine-baselayout|bash|busybox|iproute2|tini|wireguard-tools)-[0-9]" | sort
 ' > "$work/versions" || fail 'the image is missing a tool or a script has the wrong owner or mode'
 echo "Installed: $(tr '\n' ' ' < "$work/versions")"
-pass 'image tools, script ownership and the compatibility links'
+pass 'image tools and script ownership, no pre-0.6.0 paths'
 
 # A Mullvad-shaped config (dual stack) in a fresh volume, owned by $2:$3.
 make_conf() {

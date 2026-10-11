@@ -387,15 +387,11 @@ if [ "$backend" = gluetun ]; then
     HOST_TABLE=${HOST_TABLE:-51822}
     CONTROL_MARK=$control_mark
     host_table=$HOST_TABLE
-    # Until 0.7.0 deployments may still mount the definitions by their old name.
-    GLUETUN_RULES=${CONTRACT_RULES:-${GLUETUN_RULES:-/usr/local/bin/molebridge-contract-rules}}
-    if [ ! -f "$GLUETUN_RULES" ] && [ -z "${CONTRACT_RULES:-}" ] && [ -f /usr/local/bin/molebridge-gluetun-rules ]; then
-        GLUETUN_RULES=/usr/local/bin/molebridge-gluetun-rules
-    fi
-    [ -f "$GLUETUN_RULES" ] || refuse "the guard's rule definitions are missing ($GLUETUN_RULES)"
+    CONTRACT_RULES=${CONTRACT_RULES:-/usr/local/bin/molebridge-contract-rules}
+    [ -f "$CONTRACT_RULES" ] || refuse "the guard's rule definitions are missing ($CONTRACT_RULES)"
     fail() { refuse "$1"; }
     # shellcheck source=routing/contract-rules
-    . "$GLUETUN_RULES"
+    . "$CONTRACT_RULES"
     gr_validate
     # NetBird writes its log to the files in NB_LOG_FILE as well as the console
     # (the image's entrypoint sets this default).

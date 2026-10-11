@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -899,3 +900,38 @@ def test_recover_names_the_compose_step_that_failed(monkeypatch, tmp_path):
 def test_applier_checks_report_a_dead_applier(tmp_path):
     host = host_tools.Host(tmp_path, run=lambda args, **kw: (1, ''))
     assert host.applier_checks() == [(False, 'the applier check itself (is the applier container running?)')]
+
+
+def dockerignore_admits(path):
+    # Docker's rules: the last pattern matching the path or one of its parent
+    # directories decides, '!' admits, and '**' crosses directories.
+    admitted = True
+    parts = path.split('/')
+    for line in (ROOT / '.dockerignore').read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        pattern = line.lstrip('!').strip('/')
+        regex = ''.join('.*' if token == '**' else '[^/]*' if token == '*' else '[^/]' if token == '?'
+                        else re.escape(token) for token in re.split(r'(\*\*|\*|\?)', pattern) if token)
+        if any(re.fullmatch(regex, '/'.join(parts[:i])) for i in range(1, len(parts) + 1)):
+            admitted = line.startswith('!')
+    return admitted
+
+
+@pytest.mark.parametrize('dockerfile', ['routing/Dockerfile', 'applier/Dockerfile'])
+def test_dockerignore_admits_every_file_the_images_copy(dockerfile):
+    sources = []
+    for line in (ROOT / dockerfile).read_text().splitlines():
+        words = line.split()
+        if words[:1] == ['COPY'] and not any(word.startswith('--from') for word in words):
+            sources += [word for word in words[1:-1] if not word.startswith('--')]
+    assert sources
+    for source in sources:
+        if (ROOT / source).is_file():
+            assert dockerignore_admits(source), source
+        else:
+            files = [path.relative_to(ROOT).as_posix() for path in (ROOT / source).rglob('*') if path.is_file()]
+            assert any(dockerignore_admits(path) for path in files), source
+    assert dockerignore_admits(dockerfile)
+    assert not dockerignore_admits('panel/app.py') and not dockerignore_admits('tunnel/wg_confs/mullvad.conf')

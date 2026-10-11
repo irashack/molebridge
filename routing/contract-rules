@@ -4,8 +4,7 @@
 # NetBird's gate (routing/wait-for-guards), so all of them judge the namespace
 # by the same code. Sourced, never run; the including script defines fail()
 # and sets the settings below. Nothing here changes routing: the routing
-# script does that with its own commands. (Until 0.7.0, routing/gluetun-rules
-# is a link to this file, for deployments that still mount it by that name.)
+# script does that with its own commands.
 #
 # Settings: OVERLAY_CIDR, OVERLAY6_CIDR, OVERLAY_IF, EXIT_IF, EXIT_TABLE, and
 # for the gluetun backend HOST_IF, HOST_TABLE, CONTROL_MARK. gr_validate_common

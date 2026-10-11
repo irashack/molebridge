@@ -867,7 +867,7 @@ gl_env() {
     env TUNNEL_BACKEND=gluetun OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 \
         OVERLAY_IF="$overlay_if" EXIT_IF=wg0 EXIT_TABLE=51821 HOST_IF=eth0 HOST_TABLE=51822 \
         CONTROL_MARK=0x1bd00 ROUTING_READY_FILE="$gl/ready" GUARD_STATUS_FILE="$gl/status" \
-        GLUETUN_RULES="$root/routing/gluetun-rules" "$@"
+        CONTRACT_RULES="$root/routing/contract-rules" "$@"
 }
 gl_guard() {
     gl_env ip netns exec "$gl_exit" "$work/rsh" "$root/routing/10-exit-routing" "$@" > "$gl/guard.log" 2>&1 || {
@@ -1193,7 +1193,7 @@ gl_gate() {
         NB_DISABLE_USERSPACE_ROUTING=true NB_STATE_DIR="$gl/nbstate" NB_LOG_FILE="console,$gl/client.log" \
         GUARD_STATUS_FILE="$gl/status" CONTROL_MARK=0x1bd00 NB_FWMARK_BASE=0x1bd00 HOST_IF=eth0 \
         HOST_TABLE=51822 OVERLAY_CIDR=192.0.2.0/24 OVERLAY6_CIDR=2001:db8:1::/64 EXIT_IF=wg0 EXIT_TABLE=51821 \
-        GLUETUN_RULES="$root/routing/gluetun-rules" "$@"
+        CONTRACT_RULES="$root/routing/contract-rules" "$@"
 }
 # A fwmark record as the guard writes it: boot id, boot-clock seconds, value.
 gl_record() {
