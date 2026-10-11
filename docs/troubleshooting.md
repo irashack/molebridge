@@ -401,8 +401,10 @@ is connected: upgrade the panel ([upgrades](operations.md#from-06x-to-070)).
 
 **`A switch is in progress; wait for it to finish.` (409) when switching.**
 The panel refuses a new request while the exit is switching, including just
-after a request the applier hasn't picked up yet. Wait until the switch
-ends, up to 60 seconds (90 with gluetun), then choose again. A stale status
+after a request the applier hasn't picked up yet. Wait until switching
+clears, then choose again. Verification waits up to 60 seconds after the
+change (90 with gluetun); making the change and an inspection under way
+come on top. A stale status
 doesn't block a request.
 
 ## Sign-in

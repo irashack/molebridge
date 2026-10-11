@@ -221,9 +221,9 @@ the applier inspects the live server before it applies `SERVER`, gluetun's
 restore target or a panel request older than 150 seconds, and changes it
 only if it isn't that server. A panel request newer than 150 seconds is
 applied even when its server is already live. Recovery recreates the
-tunnel from its config (Mullvad on the config's server, PIA and NordVPN
-without a peer), so on a native exit the applier applies the selection
-again once. The applier's container health
+tunnel from its config: PIA and NordVPN start without a peer and get the
+selection applied again; Mullvad starts on its config's server and is
+changed only when that isn't the selection. The applier's container health
 check no longer fails when the exit isn't verified or isn't on `SERVER`
 ([health](#health)); monitoring that relied on that should read `/readyz`
 or Gatus instead. A `compose.gluetun.yaml` of your own must drop the names
@@ -273,9 +273,9 @@ changes:
   rename any `GLUETUN_RULES` to `CONTRACT_RULES`, or NetBird's gate refuses to
   start with `the guard's rule definitions are missing (<file>)`.
 
-The routing image has had one live pass, on rootless Podman, and none on
-Docker; [testing](testing.md#the-routing-image-on-rootless-podman-at-0086fac)
-records what ran.
+The routing image has had live passes on rootless Podman, at
+[`0086fac`](testing.md#the-routing-image-on-rootless-podman-at-0086fac) and
+[0.7.0](testing.md#070-on-rootless-podman-at-d5a234a), and none on Docker.
 
 To roll back, check out the previous release and run `recover` the same way.
 State files have stayed readable across releases so far, but take the

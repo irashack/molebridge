@@ -10,9 +10,9 @@ says what it would take as far as we know today.
 - **One admission pipeline** (0.7.0): every change of server, with retries
   on a backoff ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
 - **A sidecar mode** (0.7.0, experimental): Switchyard for an ordinary
-  gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It still
-  needs a live pass, recorded in [testing](docs/testing.md), before it
-  stops being experimental.
+  gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
+  had one live pass, NordVPN on rootless Podman; [testing](docs/testing.md)
+  records the gaps that keep it experimental.
 
 ## Backlog
 

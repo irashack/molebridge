@@ -266,7 +266,7 @@ read it before you start.
    ```sh
    git clone https://github.com/irashack/molebridge.git
    cd molebridge
-   git checkout v0.6.1
+   git checkout v0.7.0
    ls compose.gluetun.yaml routing/contract-rules
    cp .env.example .env
    mkdir -p secrets/gluetun
@@ -741,7 +741,7 @@ port in `FIREWALL_INPUT_PORTS`, and set `HOST_IF` to the interface name inside
 the namespace (`eth0` with the option string there, which sets `-I eth0`).
 Gluetun's control server stays unpublished. `gluetun-auth` and
 `gluetun-post-rules` do not call the container engine, so they work as
-written. The helpers `doctor` and `recover` need `docker compose`.
+written.
 
 ## DNS inside the namespace
 

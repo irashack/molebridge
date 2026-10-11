@@ -59,9 +59,10 @@ Two things differ from Docker:
    user, so that's the user that can read the state directory. The panel still
    runs with no capabilities.
 
-`tools/molebridge.py doctor` and `recover` drive `docker compose` and don't
-work with podman-compose. [Operations](operations.md#rootless-podman) gives
-the Podman commands that replace them. For containers to start at boot you
+`tools/molebridge.py doctor` and `recover` can run through podman-compose
+(`--engine podman`, with PyYAML), but that path hasn't had a live pass;
+[operations](operations.md#rootless-podman) gives the tested Podman
+commands. For containers to start at boot you
 also need a lingering systemd user unit, shown there too.
 
 ## Network

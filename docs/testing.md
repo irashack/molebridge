@@ -508,8 +508,9 @@ through the new verdict. After the upgrade:
   request once after its container restarted, and changed nothing else.
 
 A temporary Linux NetBird client (a container on another machine, in the
-exit-users group) held each exit in turn and probed its public address once a
-second through every drill below. It never left from the host's own
+exit-users group) held the NordVPN, PIA and gluetun exits and one Mullvad
+exit in turn (not the three other Mullvad exits, see below) and probed its
+public address once a second through every drill below. It never left from the host's own
 address except where noted.
 
 **NordVPN exit (the canary).**
@@ -637,7 +638,8 @@ Not done:
   through gluetun use it, and none of them has had a live pass.
   `tools/test_egress.py` and the gluetun tests cover it.
 - The gluetun sidecar beyond the [0.7.0 pass](#070-on-rootless-podman-at-d5a234a): Docker, podman-compose,
-  any provider but NordVPN (the `tunnel` tier), and an application left in
+  Mullvad, the four `tunnel`-tier providers (FastestVPN, IVPN, Surfshark and
+  Windscribe), and an application left in
   gluetun's old namespace. `tools/check-sidecar-doctor.py` covers the doctor
   and recovery on Docker in CI.
 - A PIA registration lapsing on its own, and a refused PIA login, live.

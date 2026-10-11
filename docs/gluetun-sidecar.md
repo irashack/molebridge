@@ -22,8 +22,8 @@ recovery against Docker, with a busybox container owning the namespace in
 gluetun's place (`tools/check-sidecar-doctor.py`), with Compose and with
 the container names given directly as [under Quadlet](#rootless-podman);
 that script also passed on Docker Desktop 29 on macOS. Docker with a VPN
-provider, podman-compose, every provider but NordVPN (so the
-[tunnel tier](#tunnel-tier-providers)), and an application left in gluetun's
+provider, podman-compose, Mullvad, the four
+[tunnel-tier providers](#tunnel-tier-providers), and an application left in gluetun's
 old namespace on a live host are untested.
 
 ## What is checked, and by whom
