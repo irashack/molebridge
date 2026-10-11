@@ -42,6 +42,12 @@ jobs:
           python3 -m venv .venv
           .venv/bin/pip install --quiet pytest==9.1.1 PyYAML==6.0.3
           .venv/bin/python -m pytest -q panel tools
+      - name: Panel script tests
+        # Node's own test runner, no dependencies: the runner image's Node.
+        # The tests read the real panel's answers through Python.
+        run: |
+          node --version
+          PYTHON=.venv/bin/python node --test panel/js-tests/describe.test.js panel/js-tests/cached-0.6.test.js
       - name: Sidecar doctor and recovery against Docker
         # The doctor's namespace identity probe and recover, with a pinned
         # busybox owning the namespace in gluetun's place: attachment, a

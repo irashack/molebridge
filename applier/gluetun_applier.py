@@ -59,14 +59,14 @@ from molebridge.egress import ECHO_MAX_BYTES, ECHO_URLS, parse_echo
 from molebridge.relays import RelayCatalog, snapshot_limit
 from molebridge.routing import (RETURN_PATH_SYSCTL, control_mark_value, family_status, gluetun_transition_status,
                                 host_table_status, return_path_enabled)
-from molebridge.state import decode_json, now_iso, read_json, write_json_atomic
+from molebridge.state import SWITCH_TIMEOUTS, decode_json, now_iso, read_json, write_json_atomic
 
 DEFAULT_CONTROL_URL = 'http://127.0.0.1:8000'
 DEFAULT_API_KEY_FILE = '/run/secrets/gluetun/api_key'
 DEFAULT_SERVERS_FILE = '/gluetun-servers/servers.json'
 # gluetun restarts its VPN loop on a settings change: the interface goes and
 # comes back, then the handshake and the egress checks follow.
-GLUETUN_SWITCH_TIMEOUT_SEC = 90
+GLUETUN_SWITCH_TIMEOUT_SEC = SWITCH_TIMEOUTS['gluetun']
 # The server list is checked for changes this often and read again at least
 # every CATALOG_REREAD_SEC, so a fresh read never ages past the 24-hour rule.
 CATALOG_POLL_SEC = 60

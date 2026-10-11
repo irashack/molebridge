@@ -41,8 +41,9 @@ Mullvad and NordVPN confirm that traffic leaves through their network. For
 FastestVPN, IVPN, Surfshark and Windscribe, Molebridge's check compares the
 tunnel's egress address with this host's own address, measured outside the
 tunnel. A sidecar has no way to take that measurement, so with these four the
-panel shows a switch as made with its egress unverified, never as connected,
-and `recover` ends with exit status `3` ([recovery](#recovery)). This is
+panel shows a switch as made with its egress unverified, never as connected
+("switched, egress unverified", with the note "Switched; the egress couldn't
+be compared with this host's address."), and `recover` ends with exit status `3` ([recovery](#recovery)). This is
 covered by unit tests only.
 
 ### The applier's privileges

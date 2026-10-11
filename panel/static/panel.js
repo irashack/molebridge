@@ -3,10 +3,93 @@
 (() => {
   'use strict';
 
+  // -- the status, as text ----------------------------------------------------
+  // Pure: what the page says about an exit, from /api/status's `verdict` and
+  // `result`, in the server's words (TEXT, the page's data-text). The server
+  // paints the first page with the same function (panel/app.py describe);
+  // panel/js-tests checks that the two agree. No judgment happens here.
+
+  const KINDS = ['overlay', 'sidecar'];
+  const isText = (value) => typeof value === 'string';
+
+  // How Diagnostics shows one check. Only `pass` reads as passed.
+  function checkText(name, state, result, by, TEXT) {
+    if (state === 'not-checked') return TEXT.not_checked.replace('{by}', by[name] || 'another component');
+    let text = Object.hasOwn(TEXT.check_state, state) ? TEXT.check_state[state] : TEXT.check_state.unknown;
+    const checks = result.checks && typeof result.checks === 'object' ? result.checks : {};
+    const check = checks[name] && typeof checks[name] === 'object' ? checks[name] : {};
+    if (name === 'handshake' && (state === 'pass' || state === 'fail') && Number.isInteger(check.age_s)) {
+      text += TEXT.handshake_age.replace('{age}', String(check.age_s));
+    }
+    if (state === 'fail' && isText(check.reason) && Object.hasOwn(TEXT.reason, check.reason)) {
+      text = TEXT.reason_format.replace('{text}', text).replace('{reason}', TEXT.reason[check.reason]);
+    }
+    return text;
+  }
+
+  function describe(data, TEXT) {
+    const verdict = data.verdict;
+    const result = data.result && typeof data.result === 'object' ? data.result : {};
+    const state = verdict.state;
+    const kind = KINDS.includes(verdict.kind) ? verdict.kind : 'overlay';
+    const tier = state === 'ok' && ['provider', 'tunnel'].includes(verdict.tier) ? verdict.tier : null;
+    const message = isText(verdict.message) ? verdict.message : '';
+    const reasons = Array.isArray(verdict.reasons) ? verdict.reasons : [];
+    let note = '';
+    if (state === 'failed') note = message || TEXT.failed;
+    else if (state === 'unknown') {
+      const stale = reasons.includes('status-stale') || reasons.includes('no-status');
+      note = message || (stale ? TEXT.stale : TEXT.unverified);
+    }
+    let next = '';
+    const action = verdict.next_action;
+    if (['failed', 'unknown'].includes(state) && Object.hasOwn(TEXT.next, action ?? '') && isText(verdict.next_action_at)) {
+      next = TEXT.next[action].replace('{at}', verdict.next_action_at.slice(11, 19));
+    }
+    const by = verdict.not_checked_by || {};
+    const checks = verdict.checks || {};
+    const port = result.forwarded_port;
+    const ip = result.egress_ip;
+    return {
+      state, label: verdict.label, kind,
+      connection: TEXT.connection[kind][state],
+      tier, tunnel_only: tier === 'tunnel',
+      // Only a connected exit's egress address is its own.
+      ip: state === 'ok' && isText(ip) && ip ? ip : '—',
+      note, next,
+      fields: {
+        status: isText(result.status) ? result.status : '(unknown)',
+        message: isText(result.message) ? result.message : '',
+        egress: `${isText(result.egress_city) ? result.egress_city : '(unknown)'}, ${isText(result.egress_country) ? result.egress_country : '(unknown)'}`,
+        egress_tier: TEXT.tier[tier || 'none'],
+        forwarded_port: Number.isInteger(port) ? String(port) : 'none',
+        checked_at: isText(result.checked_at) ? result.checked_at : '(unknown)',
+      },
+      checks: Object.keys(checks).map((name) => ({
+        name, label: TEXT.checks[name], state: checks[name],
+        text: checkText(name, checks[name], result, by, TEXT),
+      })),
+    };
+  }
+
+  // Under Node (panel/js-tests), only the helpers above load.
+  if (typeof module === 'object' && module?.exports) {
+    module.exports = { describe, checkText };
+    return;
+  }
+
   const page = document.querySelector('.page');
   const form = document.getElementById('select-form');
   if (!page) return;
   const configured = page.dataset.configured || '';
+  const kind = KINDS.includes(page.dataset.kind) ? page.dataset.kind : 'overlay';
+  // The server's wording; see describe above.
+  let TEXT;
+  try {
+    TEXT = JSON.parse(page.dataset.text || '');
+  } catch {
+    return;
+  }
 
   const embed = document.body.classList.contains('embed');
   // Set when this panel serves several exits: every request names the exit.
@@ -634,7 +717,7 @@
     progress.firstChild.textContent = seconds === null ? route : `${route} · ${seconds} s`;
   }
 
-  function paintNotes(state, message) {
+  function paintNotes(state, message, next = '') {
     if (!notes) return;
     progress = null;
     const children = [];
@@ -644,7 +727,7 @@
       progress.append('');
       const hint = document.createElement('span');
       hint.className = 'subdue small';
-      hint.textContent = ` Open connections through the exit will drop. Verification gives up after ${switchTimeout} seconds.`;
+      hint.textContent = ` ${TEXT.drop[kind]} ${TEXT.gives_up.replace('{s}', String(switchTimeout))}`;
       progress.append(document.createElement('br'), hint);
       children.push(progress);
     }
@@ -652,7 +735,7 @@
       const note = document.createElement('p');
       note.className = 'note note-negative';
       note.textContent = message;
-      if (state === 'failed' && chipByHost.has(desired)) {
+      if (state === 'failed' && !configured && chipByHost.has(desired)) {
         const retry = document.createElement('button');
         retry.type = 'submit';
         retry.name = 'server';
@@ -662,6 +745,14 @@
         retry.setAttribute('form', 'select-form');
         retry.textContent = 'Retry';
         note.append(' ', retry);
+      }
+      if (next) {
+        // When the applier checks or tries again by itself.
+        const when = document.createElement('span');
+        when.className = 'subdue small';
+        when.dataset.next = '';
+        when.textContent = next;
+        note.append(document.createElement('br'), when);
       }
       children.push(note);
     }
@@ -757,29 +848,20 @@
   });
   paintCopy();
 
-  function paintStatus(state, label, message = '') {
+  // `view` is describe's answer, or the stand-in when the panel is unreachable.
+  function paintStatus(view) {
+    const { state } = view;
     if (pill) {
       pill.className = `pill pill-${state}`;
-      pill.textContent = label;
+      pill.textContent = view.label;
     }
     page.dataset.state = state;
     const connectionLabel = page.querySelector('[data-connection-label]');
-    if (connectionLabel) connectionLabel.textContent = {
-      ok: 'Secure connection', applying: 'Switching route',
-      failed: 'Connection needs attention', unknown: 'Connection unverified',
-    }[state];
+    if (connectionLabel) connectionLabel.textContent = view.connection;
     if (state === 'applying') rememberSwitch(state);
-    paintNotes(state, message);
+    paintNotes(state, view.note, view.next);
     paintPin();
     paintCopy();
-  }
-
-  // How the egress was confirmed, worded as the server renders it. The
-  // server decides which tiers count for this provider (view.tier).
-  const TIER_TEXT = { provider: 'provider-confirmed', tunnel: 'tunnel checks only', none: 'not confirmed' };
-  function egressTier(result) {
-    if ((result.exit_confirmed ?? result.mullvad_exit_ip) === true) return 'provider';
-    return result.egress_tier === 'tunnel' ? 'tunnel' : 'none';
   }
 
   let polling = false;
@@ -798,11 +880,12 @@
       }
       if (!res.ok) throw new Error('status unavailable');
       data = await res.json();
-      if (!data.view || !['ok', 'failed', 'applying', 'unknown'].includes(data.view.state)) {
+      if (!data.verdict || !['ok', 'failed', 'applying', 'unknown'].includes(data.verdict.state)) {
         throw new Error('invalid status');
       }
     } catch {
-      paintStatus('unknown', 'status unavailable', 'Cannot reach the panel. Connection status is unknown.');
+      paintStatus({ state: 'unknown', label: 'status unavailable', connection: TEXT.connection[kind].unknown,
+        note: TEXT.unreachable, next: '' });
       const ip = page.querySelector('[data-current-ip]');
       if (ip) ip.textContent = '—';
       return 30000;
@@ -810,14 +893,16 @@
       clearTimeout(timeout);
       polling = false;
     }
-    if ((data.view.configured_server || '') !== configured) {
+    // Another lock or another kind is another page: the server renders it.
+    if ((data.verdict.configured_server || '') !== configured || data.verdict.kind !== kind) {
       location.reload();
       return 0;
     }
     const want = configured || data.desired?.server || '';
     const request = data.desired?.request_id || '';
     const result = data.result || {};
-    const state = data.view.state;
+    const view = describe(data, TEXT);
+    const { state } = view;
     const actual = result.server || '';
     const previousState = page.dataset.state;
     // Read-only pages have no relay chips to paint location details from.
@@ -835,20 +920,19 @@
     page.dataset.checked = result.checked_at || '';
     paintChecked();
     for (const el of page.querySelectorAll('[data-f]')) {
-      const key = el.dataset.f;
-      if (key === 'egress') el.textContent = `${result.egress_city ?? '(unknown)'}, ${result.egress_country ?? '(unknown)'}`;
-      else if (key === 'handshake_age_s') el.textContent = `${result.handshake_age_s ?? '(unknown)'}s at last check`;
-      else if (key === 'exit_confirmed') el.textContent = String((result.exit_confirmed ?? result.mullvad_exit_ip) === true);
-      else if (key === 'egress_tier') el.textContent = TIER_TEXT[egressTier(result)];
-      else if (key === 'forwarded_port') el.textContent = result.forwarded_port ?? 'none';
-      else el.textContent = result[key] ?? '';
+      if (Object.hasOwn(view.fields, el.dataset.f)) el.textContent = view.fields[el.dataset.f];
+    }
+    const checks = new Map(view.checks.map((c) => [c.name, c]));
+    for (const el of page.querySelectorAll('[data-check]')) {
+      const check = checks.get(el.dataset.check);
+      if (!check) continue;
+      el.textContent = check.text;
+      el.dataset.checkState = check.state;
     }
     const ip = page.querySelector('[data-current-ip]');
-    if (ip) ip.textContent = state === 'ok' ? (result.egress_ip || '—') : '—';
+    if (ip) ip.textContent = view.ip;
     const tierNote = page.querySelector('[data-tier-note]');
-    if (tierNote) tierNote.hidden = !(state === 'ok' && data.view.tier === 'tunnel');
-    const message = state === 'unknown' ? 'Status is stale or unavailable. Details are from the last check.' :
-      state === 'failed' ? (result.message || 'Tunnel verification failed.') : '';
+    if (tierNote) tierNote.hidden = !view.tunnel_only;
     const requested = page.querySelector('[data-requested-at]');
     if (requested) requested.textContent = data.desired?.requested_at || '';
     const update = () => {
@@ -860,7 +944,7 @@
       page.dataset.request = request;
       page.dataset.requested = data.desired?.requested_at || '';
       page.dataset.actual = actual;
-      paintStatus(state, data.view.label, message);
+      paintStatus(view);
       if (!configured) paintCurrent();
       if (previousState === 'applying' && state !== 'applying') {
         // The success moment, only for the request this tab saw applying.

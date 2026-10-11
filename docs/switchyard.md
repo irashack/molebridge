@@ -79,6 +79,18 @@ in another tab or by another person shows up the same way at the next status
 check. Every device using the exit moves together,
 and connections open through the exit drop.
 
+While a switch runs, the panel refuses another one for the same exit with
+"A switch is in progress; wait for it to finish." (409). If the status is
+stale, it doesn't refuse; the applier decides.
+
+**Diagnostics** lists every check the applier reports, by name: passed,
+failed (with the reason when the applier gives one), unknown, "not
+applicable" for a check that doesn't exist for this kind of exit, and "not
+checked by Molebridge" with who checks it instead. Only a passed check reads
+as passed. An exit still writing a 0.6 status record shows its checks as
+"not reported individually". When the applier will check or try again by
+itself, the note says when ("Re-checking at …" or "Retrying at …", UTC).
+
 If a switch fails, press **Retry** or pick something else;
 [troubleshooting](troubleshooting.md#switching) explains each message. A
 failed check doesn't always mean traffic stopped: the previous or new tunnel
@@ -203,7 +215,7 @@ that exit's `state/panel/desired.json`. A selection is checked against the
 server list of the exit it names, so one provider's server can't be sent to
 another exit.
 
-List the exits in `PANEL_EXITS`, comma-separated, as `id=provider[:label]`:
+List the exits in `PANEL_EXITS`, comma-separated, as `id=provider[/kind][:label]`:
 
 ```sh
 PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
@@ -215,10 +227,16 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
 - `provider` is `mullvad`, `pia`, `nordvpn`, or for an exit on the gluetun
   backend `gluetun-<provider>`, such as `gluetun-surfshark`
   ([the ids](providers.md)).
+- `kind` is optional: `overlay`, the default, for a NetBird exit, or
+  `sidecar` for a [gluetun sidecar](gluetun-sidecar.md), which needs a
+  `gluetun-<provider>`. It must match the exit applier's `EXIT_KIND`; a
+  status record of the other kind shows as "kind mismatch", never as
+  connected. A single-exit panel reads `EXIT_KIND` instead.
 - `label` is optional (40 characters at most). It defaults to the provider's
   name.
 
-The panel refuses to start if an entry is malformed. Without `PANEL_EXITS` it
+The panel refuses to start if an entry is malformed, or names a sidecar on a
+native provider. Without `PANEL_EXITS` it
 serves a single exit from `$STATE_DIR/panel` and `$STATE_DIR/applier`.
 
 Run it as one more container beside the exits, mounting each exit's state

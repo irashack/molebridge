@@ -18,6 +18,10 @@ HOSTNAME_RE = providers.get('mullvad').server_name_re
 SERVER_NAME_RE = {p.id: p.server_name_re for p in providers.REGISTRY.values()}
 PROVIDER_LABEL = {p.id: p.label for p in providers.REGISTRY.values()}
 STATUS_MAX_AGE = 150
+# How long an applier gives a switch before it fails it, by backend
+# (applier/apply.py, applier/gluetun_applier.py); the panel says so while a
+# switch runs.
+SWITCH_TIMEOUTS = {'native': 60, 'gluetun': 90}
 CATALOG_MAX_AGE = 24 * 60 * 60
 # The default download cap and the bound on reading a validated snapshot back.
 # A provider's download cap is its registry entry's catalog_max_bytes.
