@@ -11,6 +11,9 @@ and an application that only sleep, and an application image with no shell
 3. recover recreates the owner and every member together: exit status 0
    and the check passes again; with a tunnel-tier provider, 3.
 
+Steps 1 and 2 also run the doctor without Compose (container names given
+directly, as under Quadlet).
+
 gluetun, the real applier's checks and the configuration checks are not part
 of this; tools/test_sidecar_tools.py covers them. Builds the namespace probe
 image from routing/Dockerfile. Needs Docker with Compose and network access
@@ -99,6 +102,9 @@ def main():
 
             host.sidecar_namespace_checks(config)
             print('PASS attachment: the applier and both applications share the owner\'s namespace')
+            members = (f'{project}-gluetun', f'{project}-applier', f'{project}-app-1,{project}-shell-less-1')
+            StandIn(root, engine='docker').container_doctor(*members)
+            print('PASS attachment, checked without Compose')
 
             owner = host.inspect_container(config, 'gluetun')
             subprocess.run(['docker', 'restart', '--time', '1', owner.id], check=True, capture_output=True, timeout=60)
@@ -110,6 +116,12 @@ def main():
                     raise SystemExit('FAIL the engine no longer records the members as attached to the owner')
             message = expect_failure(host, config, "is not in gluetun's current network namespace")
             print(f'PASS same-ID owner restart: the doctor fails ({message})')
+            try:
+                StandIn(root, engine='docker').container_doctor(*members)
+            except host_tools.CheckError as exc:
+                print(f'PASS same-ID owner restart: the doctor without Compose fails ({exc})')
+            else:
+                raise SystemExit('FAIL the doctor without Compose passed a member left in the old namespace')
 
             status = host.recover()
             if status != 0:
