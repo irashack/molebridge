@@ -12,9 +12,9 @@ Commands use the defaults: tunnel interface `mullvad`, exit table `51821`,
 and overlay interface `wt0`. For PIA, substitute `pia` for `mullvad` in
 interface names and config paths, and `nordvpn` for NordVPN; the table stays
 `51821`. NordVPN is experimental: its live passes covered the egress and IPv6
-checks, the local-delivery refusal and v0.6.0's repair drills, not the
-client-held fail-closed drills
-([testing](testing.md#nordvpn-pass-at-036e1cc)). If you changed
+checks, the local-delivery refusal, v0.6.0's repair drills and, at 0.7.0,
+the client-held fail-closed drills
+([testing](testing.md#070-on-rootless-podman-at-d5a234a)). If you changed
 `EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use your values. For rootless Podman,
 use the [Podman commands](operations.md#rootless-podman).
 

@@ -36,8 +36,8 @@ path you choose, the devices using the exit are NetBird peers.
 
 Separately, an experimental [gluetun sidecar](docs/gluetun-sidecar.md) lets
 Switchyard choose and check the server of an ordinary gluetun container
-that your other containers share, with no NetBird involved. It hasn't had a
-live pass yet.
+that your other containers share, with no NetBird involved. It has had one
+live pass, with NordVPN on rootless Podman.
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
 (PIA) in a small web panel called Switchyard. Every device using the exit follows the switch without any client
@@ -158,7 +158,7 @@ Podman details, is in [requirements](docs/prerequisites.md).
   by Mullvad. PIA and NordVPN are untested. See [DNS](docs/operations.md#dns).
 - **Mullvad, PIA and NordVPN natively, plus the gluetun backend.** NordVPN
   is experimental: it has had live passes on macOS with OrbStack and on
-  rootless Podman, without the client-held fail-closed drills. The
+  rootless Podman, the client-held fail-closed drills among them. The
   experimental [gluetun backend](docs/providers.md#the-gluetun-backend)
   selects servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
   Windscribe through gluetun; only NordVPN has been tried live. Other gluetun
@@ -190,8 +190,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
 Molebridge is experimental, with one maintainer. Run a release or a pinned
 commit, and verify it on your own host before you rely on it. The latest
 release is
-[v0.6.1](https://github.com/irashack/molebridge/releases/tag/v0.6.1), which
-fixes the tunnel config check on top of v0.6.0. v0.6.0 replaced LinuxServer's
+[v0.7.0](https://github.com/irashack/molebridge/releases/tag/v0.7.0). It
+gives every exit one status record with named checks and one judgment of it,
+puts every change of server through one pipeline that retries on its own,
+and adds the experimental gluetun sidecar. v0.6.0 replaced LinuxServer's
 WireGuard image with Molebridge's own routing image (a supervised tunnel, a
 2-second repair loop, an owner record and NetBird's gate kept in front of
 NetBird) and added the optional `SERVER` setting; see the
@@ -210,7 +212,8 @@ NetBird) and added the optional `SERVER` setting; see the
 | Debian, rootless Podman 5.8 as Quadlet units: NordVPN | Healthy start with NordVPN-confirmed egress, the namespace checks with a deleted tunnel route, and a phone using the exit on cellular over a direct path. |
 | The same host: gluetun v3.41.3 with NordVPN | Healthy start with NordVPN-confirmed egress. No client traffic or switch from the panel yet. |
 | The same host at v0.6.0's code: the routing image | In-place upgrade of four Mullvad, one PIA and one NordVPN exit and a gluetun exit, all healthy with only `NET_ADMIN`. On the NordVPN exit: rule deletions repaired in 1–2 s, a deleted tunnel interface back in about 2 s, a stale owner record stopping NetBird, and `SERVER` overriding the panel. No client traffic during these drills. Docker: CI only. |
-| Not yet tested | The routing image on a live Docker host, the v0.6.0 drills on Mullvad, PIA or gluetun exits, a PIA region switch with the applier's rules 94/98, Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, the client-held fail-closed drills for NordVPN, and the gluetun backend with other providers, with client traffic on rootless Podman, or through podman-compose; the gluetun sidecar on a live host. |
+| The same host at 0.7.0's code (`d5a234a`) | Upgrade with Switchyard first; every exit's verdict connected. A Linux client held each exit: NordVPN and Mullvad through rule and route deletions and tunnel loss; NordVPN also through an inserted bypass (one probe left from the host's address before the repair), a stale owner record and a 4-minute egress-check outage; PIA through tunnel loss and a region switch; gluetun through a switch and a gluetun restart. A gluetun sidecar with NordVPN verified and passed the Compose-less doctor. |
+| Not yet tested | The routing image on a live Docker host, Docker Engine on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, a PIA registration lapsing or a refused PIA login, the gluetun backend with other providers or through podman-compose, and the gluetun sidecar on Docker, through podman-compose or with another provider. |
 
 The dated record of each pass is in [testing](docs/testing.md). Report
 vulnerabilities privately; see [SECURITY.md](SECURITY.md).
@@ -233,7 +236,7 @@ vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 - [Providers](docs/providers.md): how PIA and NordVPN differ from Mullvad, port forwarding, adding a provider.
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
 - [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): gluetun and NetBird with only Molebridge's routing guard, no panel or applier; that form has had one live pass, with NordVPN on Docker.
-- [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that other containers share; experimental, no live pass yet.
+- [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that other containers share; experimental; one live pass, with NordVPN on rootless Podman.
 - [Architecture](docs/architecture.md): routing, trust boundaries and the switching sequence.
 - [Testing](docs/testing.md): what has been tested, where and at which revision.
 - [Roadmap](ROADMAP.md): ideas that aren't scheduled or built.

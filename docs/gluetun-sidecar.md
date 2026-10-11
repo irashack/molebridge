@@ -9,15 +9,22 @@ the `overlay` kind (`compose.yaml` or
 [`compose.gluetun.yaml`](gluetun-netbird-exit.md)). The sidecar is the
 `sidecar` kind, `EXIT_KIND=sidecar`.
 
-**What has been tested.** The sidecar has had no live pass with a VPN
-provider, on Docker or on rootless Podman. Unit tests cover the host doctor
-and recovery against canned Docker and Podman inspect output
+**What has been tested.** One live pass, at `d5a234a` on rootless Podman 5.8
+with Quadlet units and gluetun with NordVPN
+([testing](testing.md#070-on-rootless-podman-at-d5a234a)): a selection
+verified by NordVPN's own check, the Compose-less doctor, the control server
+on loopback refusing requests without the key, the preflight refusing a
+malformed role file without printing the key, and the selection restored
+after gluetun restarted. Unit tests cover the host doctor and recovery
+against canned Docker and Podman inspect output
 (`tools/test_sidecar_tools.py`). CI runs the doctor's namespace probe and
 recovery against Docker, with a busybox container owning the namespace in
 gluetun's place (`tools/check-sidecar-doctor.py`), with Compose and with
 the container names given directly as [under Quadlet](#rootless-podman);
-that script also passed on Docker Desktop 29 on macOS. podman-compose, Quadlet and every provider
-are untested. See [testing](testing.md) for the project's other records.
+that script also passed on Docker Desktop 29 on macOS. Docker with a VPN
+provider, podman-compose, every provider but NordVPN (so the
+[tunnel tier](#tunnel-tier-providers)), and an application left in gluetun's
+old namespace on a live host are untested.
 
 ## What is checked, and by whom
 

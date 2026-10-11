@@ -184,9 +184,10 @@ country, NordVPN's confirmation, a client's egress, and IPv6 staying blocked
 ([testing](testing.md#nordvpn-pass-at-036e1cc)). On rootless Podman, a
 NordVPN exit ran with a phone on it ([v0.5.0](testing.md#nordvpn-on-rootless-podman-at-v050))
 and ran v0.6.0's repair, tunnel-loss and owner-record drills without a client
-([0086fac](testing.md#the-routing-image-on-rootless-podman-at-0086fac)). The
-insights cache retry is covered by unit tests; the client-held fail-closed
-drills have not been run.
+([0086fac](testing.md#the-routing-image-on-rootless-podman-at-0086fac)), and
+at 0.7.0 a client held it through the fail-closed drills
+([d5a234a](testing.md#070-on-rootless-podman-at-d5a234a)). The insights cache retry is covered by unit
+tests only.
 
 ## Port forwarding
 
@@ -243,8 +244,9 @@ v3.41.3 owns the tunnel instead of Molebridge's WireGuard container, and
 brings its own provider support. Molebridge keeps its routing guard, NetBird
 gate, applier and panel; [architecture](architecture.md#gluetun-backend)
 describes how. Its live passes used NordVPN, on Docker and on rootless
-Podman; other providers, and client traffic through it on rootless Podman,
-are untested ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). To run gluetun and
+Podman, where at 0.7.0 a client held it through a switch and a gluetun
+restart; other providers are untested
+([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). To run gluetun and
 NetBird with only Molebridge's routing guard and no panel, see
 [gluetun as a NetBird exit](gluetun-netbird-exit.md).
 

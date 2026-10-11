@@ -950,8 +950,8 @@ engines haven't been checked.
 
 ## The sidecar kind
 
-Experimental, with no live pass yet ([gluetun sidecar](gluetun-sidecar.md)
-says what has been tested). With `EXIT_KIND=sidecar` and
+Experimental, with one live pass, NordVPN on rootless Podman
+([gluetun sidecar](gluetun-sidecar.md) says what has been tested). With `EXIT_KIND=sidecar` and
 `compose.sidecar.yaml`, the applier and the panel select and check servers
 for an ordinary gluetun whose namespace other containers share
 (`network_mode: service:gluetun`). Those containers send their own traffic

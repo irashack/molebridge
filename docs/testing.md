@@ -602,8 +602,9 @@ Not done:
 - The [gluetun backend](architecture.md#gluetun-backend) beyond the passes
   [on Docker](#gluetun-backend-pass-at-a3bb14f) and
   [on rootless Podman](#gluetun-backend-on-rootless-podman-at-v050): other
-  providers than NordVPN, client traffic and the drills on rootless Podman,
-  podman-compose, IPv6 through gluetun, and gluetun restarting into a new
+  providers than NordVPN, the repair drills with a client on rootless Podman
+  (the [0.7.0 pass](#070-on-rootless-podman-at-d5a234a) held a client through a switch and a gluetun
+  restart), podman-compose, IPv6 through gluetun, and gluetun restarting into a new
   namespace outside a drill. `tools/check-routing.sh`
   exercises the guard and gate in isolated namespaces with gluetun's rules
   98–101 and NetBird's 105/110 simulated; unit tests cover the scripts
@@ -624,8 +625,8 @@ Not done:
   [above](#the-routing-image-on-rootless-podman-at-0086fac) for what CI covers.
 - NordVPN beyond the passes [at `036e1cc`](#nordvpn-pass-at-036e1cc) and
   [on rootless Podman](#nordvpn-on-rootless-podman-at-v050): the insights
-  cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with
-  NordVPN's catalogue, and the client-held fail-closed drills.
+  cache retry (covered by `tools/test_nordvpn_applier.py`) and the panel with
+  NordVPN's catalogue. The client-held drills ran in the [0.7.0 pass](#070-on-rootless-podman-at-d5a234a).
 - The egress check's one retry (0.5.2) on a live exit before its release.
   `tools/test_runtime.py`, `tools/test_egress.py` and the PIA, NordVPN and
   gluetun applier tests cover it.
@@ -635,6 +636,12 @@ Not done:
 - The `tunnel` egress tier, live: FastestVPN, IVPN, Surfshark and Windscribe
   through gluetun use it, and none of them has had a live pass.
   `tools/test_egress.py` and the gluetun tests cover it.
+- The gluetun sidecar beyond the [0.7.0 pass](#070-on-rootless-podman-at-d5a234a): Docker, podman-compose,
+  any provider but NordVPN (the `tunnel` tier), and an application left in
+  gluetun's old namespace. `tools/check-sidecar-doctor.py` covers the doctor
+  and recovery on Docker in CI.
+- A PIA registration lapsing on its own, and a refused PIA login, live.
+  `tools/test_pia.py` covers both.
 - The panel's [OpenID Connect sign-in](access.md#sign-in-with-openid-connect)
   for someone granted only some exits (`PANEL_ACCESS`), live; any provider but
   Pocket ID; a confidential client; the userinfo fallback against a real
