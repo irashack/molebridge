@@ -119,6 +119,14 @@ image's `/usr/local/lib/molebridge/gluetun-rules` and
 `/custom-cont-init.d/10-exit-routing`, and the `GLUETUN_RULES` setting. Use
 `contract-rules` and `CONTRACT_RULES`.
 
+Tested with `pytest -q panel tools`, the Node panel tests and CI's container
+and namespace drills, and live on rootless Podman: every exit of the
+[0.7.0 pass](docs/testing.md#070-on-rootless-podman-at-d5a234a) (Mullvad,
+PIA, NordVPN, gluetun and a gluetun sidecar), with client-held drills on the
+NordVPN, Mullvad, PIA and gluetun exits. The pass found two defects, fixed
+before release: a native tunnel that came back without its peer waited
+90 seconds, and the health check still required a peer.
+
 ## 0.6.1 (2026-10-10)
 
 A tunnel config check fix in the routing image and `tools/molebridge.py

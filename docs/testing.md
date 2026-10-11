@@ -488,6 +488,109 @@ Not done:
   (`tools/check-exit-image.sh`: start, repair, tunnel loss, bring-up
   failures and every stop case) and the namespace drills under busybox sh.
 
+## 0.7.0 on rootless Podman at `d5a234a`
+
+2026-10-11, the same host as [the routing image pass](#the-routing-image-on-rootless-podman-at-0086fac):
+Debian testing, kernel 7.2, rootless Podman 5.8.6 with Quadlet units, a
+self-hosted NetBird server and NetBird 0.80.0 in the exits. The exits ran
+0.6.0's code before.
+
+The upgrade followed [the order](operations.md#upgrades): Switchyard first,
+then the NordVPN exit as the canary at `25a8bcd`, then every exit. With the
+0.7.0 panel and the exits still on 0.6.0, every 0.6 record read as connected
+through the new verdict. After the upgrade:
+- every exit wrote schema-2 records, and every verdict was `ok`: four
+  Mullvad, one PIA and one NordVPN native exit, the gluetun exit with
+  NordVPN, and a new gluetun sidecar with NordVPN;
+- the homelab's own health bridge, reading the new record, reported every
+  exit healthy;
+- a fresh upgrade without `attempt.json` re-applied each exit's saved
+  request once after its container restarted, and changed nothing else.
+
+A temporary Linux NetBird client (a container on another machine, in the
+exit-users group) held each exit in turn and probed its public address once a
+second through every drill below. It never left from the host's own
+address except where noted.
+
+**NordVPN exit (the canary).**
+- The client's egress was NordVPN's, confirmed by NordVPN's own check, and
+  its IPv6 stayed blocked before, during and after every drill.
+- **Rule and route deletions** (rules 94, 95 in both families, 97, the IPv4
+  tunnel route, both families' fallbacks) were each back at the next
+  repair pass. The client lost at most a few probes.
+- **Inserted bypass** (`ip rule add lookup main priority 50`): the client
+  left from the host's own address for one probe before the next repair
+  pass removed the rule. This is what the drill table says; nothing is
+  promised before that pass.
+- **Tunnel loss** found two defects at `25a8bcd`, both fixed in `b85f3d7`.
+  The tunnel came back from its config without a peer. The applier waited
+  90 seconds to apply it again, as it waits out gluetun's own reconnects.
+  Meanwhile its container health check, which still required a peer, had the
+  homelab kill it. At `b85f3d7` the client lost about 5 seconds of probes.
+- **Stale owner record** (the entrypoint frozen): the client lost egress 9
+  seconds after the freeze, as NetBird's gate stopped NetBird. The applier
+  reported routing, NetBird and the owner record failed, and the verdict
+  and the health bridge agreed. It was resumed after 80 seconds, and the
+  client's egress was back 20 seconds later.
+- **The egress check unreachable** (the applier's own HTTPS through the
+  tunnel dropped for 4 minutes): each check reported `failed`, egress
+  "unanswered", as `applied-unverified` with `recheck`. Nothing was applied
+  again, and all of the client's 222 probes left through NordVPN. The
+  health bridge kept its five-minute grace. The first check after the drop
+  was removed verified, still on the same attempt.
+
+**Mullvad.** Egress was Mullvad's in both families, by Mullvad's own check.
+After tunnel loss the tunnel came back with its config's own peer: the
+client left through that Mullvad server for 2 seconds until the applier
+reconverged. The route and rule drills behaved as on NordVPN.
+
+**PIA.**
+- Egress was confirmed by PIA, and IPv6 stayed blocked throughout.
+- After tunnel loss PIA registered again within 3 seconds.
+- An interrupted registration's leftovers were removed at the next pass: a
+  second address with its rules 94 and 98. The registered address kept its
+  pair.
+- **Live region switch** to another region and back: the client's egress
+  moved without a failed probe. The record read `source: panel`,
+  `outcome: verified`.
+
+**gluetun exit.**
+- **Live switch:** the client lost one probe while gluetun reconnected. The
+  switch verified on its first attempt.
+- **gluetun restarted:** gluetun came back on its environment's server, and
+  the client left from that NordVPN server meanwhile. The pipeline put the
+  selected server back once the 90-second guard had passed since the last
+  change (`source: reconverge`, verified). The client was never on the
+  host's address.
+
+**gluetun sidecar** (Quadlet: gluetun, the applier and a test app sharing
+gluetun's network and user namespaces; no NetBird):
+- A selection verified, confirmed by NordVPN's own check, with traffic
+  protection and app attachment reported as not checked.
+- The [Compose-less doctor](gluetun-sidecar.md) passed.
+- gluetun's control server listened on loopback only and was not published.
+  It refused a request without the key, and routes outside the role even
+  with it. The preflight refused a malformed role file without printing the
+  key it held.
+- **gluetun restarted outside systemd** (`podman restart`): the applier and
+  the app were stopped with it rather than left in the old namespace, and
+  the doctor failed until systemd started them again. The pipeline then
+  restored the selection, and the doctor passed.
+- The panel's own code, run against the live state, rendered the sidecar's
+  wording.
+
+Not done:
+- the 409 from a signed-in panel, live. It is tested in `panel/test_status.py`
+  and was seen once in a local preview;
+- the drills with a client on the three friend exits, which only their
+  owners' devices receive;
+- a PIA registration lapsing on its own (D15) or a refused PIA login. The
+  unit tests cover both;
+- a tunnel-tier sidecar provider, Docker, and podman-compose. CI runs the
+  doctor's identity probe and recovery on Docker with a stand-in owner;
+- an app left in gluetun's old namespace, live. On Podman a restart took
+  the dependents with it; CI's Docker drill covers the case.
+
 ## Not yet tested
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
@@ -519,8 +622,6 @@ Not done:
 - Docker Engine on Linux, Docker Desktop, and NetBird Cloud, end to end. The
   routing image has no live Docker pass; see
   [above](#the-routing-image-on-rootless-podman-at-0086fac) for what CI covers.
-- The v0.6.0 drills on Mullvad, PIA and gluetun exits, with a client on the
-  exit, and the applier moving PIA's rules 94 and 98 on a live region switch.
 - NordVPN beyond the passes [at `036e1cc`](#nordvpn-pass-at-036e1cc) and
   [on rootless Podman](#nordvpn-on-rootless-podman-at-v050): the insights
   cache retry (covered by `tools/test_nordvpn_applier.py`), the panel with
