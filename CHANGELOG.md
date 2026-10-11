@@ -4,6 +4,82 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.7.0 (unreleased)
+
+One status record, one judgment of it, and one way to change servers; and
+an experimental second exit kind, the **gluetun sidecar**. Upgrade
+**Switchyard (the panel) first**, then the exits in any order: a 0.6 panel
+reads a 0.7 exit's healthy record as "verification failed"
+([operations](docs/operations.md#upgrades)).
+
+**Status: schema 2 and one verdict.**
+- The applier's `state/applier/result.json` now carries `schema: 2`, the exit
+  `kind` and `backend`, and **named checks** (`routing`, `netbird`,
+  `owner_record`, `peer`, `handshake`, `egress`, `traffic_protection`,
+  `app_attachment`), each `pass`, `fail`, `unknown`, `n/a` or `not-checked`,
+  with the time it was measured and, for the peer, handshake and egress, the
+  server it measured. `routing_ok`, `netbird_native`, `unreachable_fallback`,
+  `exit_confirmed`, `egress_tier`, `handshake_age_s` and `mullvad_exit_ip`
+  are gone from the record ([architecture](docs/architecture.md#the-status-record)).
+- One function, `molebridge/verdict.py` `assess`, judges a record for the
+  page, `/api/status`, the exit tabs, the browser, `/readyz`, monitoring and
+  the doctor. Only a fresh pass counts as passed. A check's evidence expires
+  after 150 s like the record's, a pass for another server never counts, and
+  the server must be the one asked for: a 0.6 panel could show an
+  acknowledged `ok` on another server as connected.
+- The panel reads 0.6 records too (shown as "not reported individually").
+  Unknown or newer versions, and a record whose kind, provider or backend
+  differs from the panel's configuration, are never connected.
+- The container health check is operational only: a fresh completed check
+  and an intact namespace. Whether the exit is verified, including on its
+  `SERVER`, is the verdict's: the doctor reports it, with reason codes.
+
+**Admission: one pipeline for every change of server.**
+- The panel's request, `SERVER`, gluetun's restore, reconvergence and
+  retries all go through the same gates, mutation and verification, with
+  the source recorded in the record's `selection`. Its state is
+  `state/applier/attempt.json`, written before any change, so a restart
+  resumes it and never replays an interrupted change blindly.
+- **Failures retry on their own**, after 1, 2, 4 and 8 minutes, then every
+  15. A switch that is applied but not verified (handshake, egress or the
+  check service failing) is **re-checked, never switched again** while the
+  live server is the one selected. Re-applying always inspects first, so a
+  change whose answer was lost isn't made twice. Nothing is re-applied
+  within 90 s of the last change. "Choose a server again to retry" is gone;
+  a new request (Retry) still applies at once and resets the backoff.
+- An unlisted or invalid request is refused until the catalogue changes. On
+  gluetun the last verified server is still restored meanwhile, and the
+  panel keeps showing the refusal.
+- **PIA**: a refused login (HTTP 401/403 from PIA's token service) stops
+  retries until the credential files change or Retry; a refused key
+  registration is asked once more with a fresh token. A handshake stale for
+  180 s re-registers the same region on the backoff; an egress-check
+  failure alone never does.
+- **gluetun**: while a switch is verified, gluetun's reconnection (its
+  interface gone with rules 90 and 96 detached, an address before its rule
+  94, old and new rule 94 together, the tunnel route not back yet) withholds
+  readiness instead of aborting; anything else the guard would refuse aborts
+  the switch.
+- The panel refuses a new request with **409** while the exit is switching.
+
+**The gluetun sidecar (experimental).** `EXIT_KIND=sidecar` and
+`compose.sidecar.yaml`: Switchyard and the applier select and verify servers
+for an ordinary gluetun that other containers share, with no routing
+contract and no NetBird ([gluetun sidecar](docs/gluetun-sidecar.md)). The
+applier needs `NET_ADMIN` in gluetun's namespace. Mullvad and NordVPN
+through gluetun can be verified; FastestVPN, IVPN, Surfshark and Windscribe
+are shown as switched, never connected, because a sidecar can't compare the
+egress with the host's own address. Traffic protection is gluetun's
+firewall and is reported as not checked by Molebridge. The doctor checks
+which containers actually share gluetun's namespace, through the engine,
+on Docker and rootless Podman. `recover` now exits 0 when recovered and
+verified, 3 when recovered but not verified, and 1 when it failed.
+
+**Removed (as announced for 0.7.0):** the `routing/gluetun-rules` link, the
+image's `/usr/local/lib/molebridge/gluetun-rules` and
+`/custom-cont-init.d/10-exit-routing`, and the `GLUETUN_RULES` setting. Use
+`contract-rules` and `CONTRACT_RULES`.
+
 ## 0.6.1 (2026-10-10)
 
 A tunnel config check fix in the routing image and `tools/molebridge.py

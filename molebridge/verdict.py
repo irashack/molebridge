@@ -313,8 +313,10 @@ def _read_checks(exit_config: ExitConfig, result, now):
         display[name] = state
     if 'traffic_protection' in required_checks(kind, backend) and display.get('traffic_protection') == 'pass':
         # Overlay traffic protection is the routing contract itself.
-        if raw['traffic_protection'].get('from') != 'routing' or display.get('routing') != 'pass':
+        if raw['traffic_protection'].get('from') != 'routing' or display.get('routing') == 'fail':
             return display, None
+    if display.get('egress') == 'pass' and not egress_ips_consistent(result):
+        return display, None
     return display, (failed, expired, unmeasured)
 
 
