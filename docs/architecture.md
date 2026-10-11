@@ -1043,7 +1043,8 @@ uses it to omit switching controls, refuse selection posts and ignore old
 panel requests when interpreting status. Connection freshness is checked
 independently. See [configuration](configuration.md#a-server-set-in-configuration).
 
-A panel request goes like this:
+A panel request on a native overlay exit, switched and confirmed by the
+provider's own check, goes like this:
 
 ```mermaid
 sequenceDiagram
@@ -1082,8 +1083,8 @@ sequenceDiagram
    peers, with a message saying it will retry automatically; it is tried
    again on every pass until the prerequisites recover. A malformed request,
    or a server not in the catalogue, is **rejected**: acknowledged as failed
-   and not tried again until the catalogue's server names change or a new
-   request arrives. A refused panel request is never the target, so with
+   and not tried again until a new request arrives or, for an unlisted
+   server, the catalogue's server names change. A refused panel request is never the target, so with
    gluetun the restore target still applies meanwhile.
 4. **Record, then change.** The applier writes `attempting` to
    `state/applier/attempt.json` before any I/O, because a lost response can
@@ -1162,8 +1163,10 @@ registers again); otherwise the change goes ahead. A change whose answer was
 lost is therefore not made twice.
 
 An `unverified` target is re-checked by the periodic check, about once a
-minute, and never switched again while it stays live (`next_action:
-recheck`); a check that passes makes it `idle`. A `failed` attempt keeps its
+minute, and not switched again while it stays live (`next_action:
+recheck`), except that a PIA handshake stale for 180 seconds registers the
+same region again on the backoff, as above; a check that passes
+makes it `idle`. A `failed` attempt keeps its
 message until a later check finds the target live and passing every check,
 or its re-apply succeeds (`next_action: reapply`). The panel shows when
 either happens next. Retry in the panel is a new request, so it applies at
@@ -1233,7 +1236,8 @@ looks like this (`at` values shortened):
 `status` is the applier's own summary (`unknown`, `applying`, `ok` or
 `failed`) and `message` its wording. `selection` says why the server is what
 it is: `source` as in [requests and switching](#requests-and-switching),
-`outcome` (`verified`, `applied-unverified`, `pending`, `rejected` or
+`outcome` (null while a change is being made or before there is one,
+otherwise `verified`, `applied-unverified`, `pending`, `rejected` or
 `mutation-failed`), the number of changes made for this target, the target,
 and the next automatic action (`recheck` or `reapply`) with its time.
 Provider fields come on top: PIA's `port_forward`, `forwarded_port` and

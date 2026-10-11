@@ -511,12 +511,13 @@ until `secrets/pia/username` or `secrets/pia/password` changes; after
 fixing them, it retries within a few seconds, or press **Retry**.
 
 **"Switch verification timed out; retrying automatically."** The selected
-server didn't become the live one in time: 60 seconds with the default
-backend, 90 with gluetun. It is applied again on the same backoff. If the
+server didn't become the live one in time: 60 seconds after the change
+with the default backend, 90 with gluetun. It is applied again on the same backoff. If the
 selected server did become live but a check still failed at the timeout,
 the panel shows that check's own message instead, such as the handshake or
 egress message below, and the applier re-checks it every minute without
-switching again.
+switching again (with PIA, a handshake stale for 180 seconds registers the
+same region again, as below).
 
 **"Routing changed during the switch; retrying after recovery."** A routing
 guard, the owner record or NetBird's kernel mode went missing while a
@@ -553,8 +554,9 @@ waits 90 seconds before it acts. The applier's container stays healthy
 meanwhile. If it persists, run
 [recovery](operations.md#recovery).
 
-All of these clear by themselves when a later check finds the selected
-server live and passing every check, or a retry succeeds. With PIA, a
+All of these but PIA's refused login clear by themselves when a later
+check finds the selected server live and passing every check, or a retry
+succeeds; the refused login waits for changed credential files or Retry. With PIA, a
 handshake that has been stale for 180 seconds while the selected region is
 live makes the applier register the same region again, on the same
 backoff, and log `applier: the registration lapsed; registering the same

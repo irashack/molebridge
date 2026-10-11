@@ -54,7 +54,7 @@ reads a 0.7 exit's healthy record as "verification failed"
   ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
 - **Failures retry on their own**, after 1, 2, 4 and 8 minutes, then every
   15. A switch that is applied but not verified (handshake, egress or the
-  check service failing) is **re-checked, never switched again** while the
+  check service failing) is **re-checked, not switched again** while the
   live server is the one selected. Re-applying always inspects first, so a
   change whose answer was lost isn't made twice. Drift back to another
   server isn't corrected within 90 s of the last change, nor while a failed

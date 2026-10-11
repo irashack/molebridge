@@ -166,8 +166,8 @@ and cut throughput by more than half.
 
 ### NordVPN (experimental)
 
-Live passes on macOS with OrbStack and on rootless Podman, without the
-client-held fail-closed drills; see [testing](testing.md#nordvpn-pass-at-036e1cc).
+Live passes on macOS with OrbStack and on rootless Podman, including the
+client-held fail-closed drills at 0.7.0; see [testing](testing.md#070-on-rootless-podman-at-d5a234a).
 
 - **An active account** with NordVPN's VPN service.
 - **An access token**, from your Nord Account: NordVPN, then Advanced

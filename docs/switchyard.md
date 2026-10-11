@@ -78,7 +78,9 @@ The applier then changes the tunnel and waits for a fresh handshake, intact
 routing and the egress check: the provider's own, or the tunnel checks for a
 provider without one. That normally takes a few seconds. The page shows which
 server it is leaving and for how long it has been switching. The applier
-gives up after 60 seconds with the default backend and 90 with gluetun. When
+stops waiting for verification 60 seconds after making the change with the
+default backend, and 90 with gluetun; making the change, and an inspection
+already under way, come on top. When
 it finishes, the page updates in place, without reloading; a switch started
 in another tab or by another person shows up the same way at the next status
 check. Every device using the exit moves together,
@@ -98,7 +100,8 @@ itself, the note says when ("Re-checking at …" or "Retrying at …", UTC).
 
 If a switch fails, the applier tries again by itself after 1, 2, 4 and 8
 minutes, then every 15, and a switch that is made but not verified is
-re-checked without switching again ([retries](operations.md#retries)).
+re-checked without switching again (with PIA, a handshake stale for 180
+seconds registers the same region again; [retries](operations.md#retries)).
 Press **Retry** to try at once, or pick something else;
 [troubleshooting](troubleshooting.md#switching) explains each message. A
 failed check doesn't always mean traffic stopped: the previous or new tunnel

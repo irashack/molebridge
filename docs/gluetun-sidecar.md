@@ -224,7 +224,8 @@ configuration with PyYAML (`python3-yaml`), which podman-compose itself
 uses. podman-compose has no `--wait`, so `recover` relies on its wait for the
 applier. Podman reports a joined container's network mode as
 `container:<ID>`, as Docker does, and the probe joins by ID the same way.
-None of this has run on a live Podman host yet; `COMPOSE_PROFILES` support
+The podman-compose path hasn't run on a live host; the Quadlet form below,
+which uses the same probe, passed on rootless Podman; `COMPOSE_PROFILES` support
 varies between podman-compose versions, so with Podman remove the example
 profile and list your own applications.
 
@@ -262,8 +263,12 @@ which recreates the containers, gluetun's first:
 systemctl --user restart gluetun.service applier.service <app>.service
 ```
 
-Then run the doctor above. A restart of gluetun's unit alone gives gluetun a
-new namespace and leaves the others in the old one.
+Then run the doctor above. A restart of gluetun alone gives it a new
+namespace and doesn't recover the others: with `BindsTo=` systemd stops
+them, as the [0.7.0 pass](testing.md#070-on-rootless-podman-at-d5a234a)
+saw after a `podman restart`, and without it they stay in the old
+namespace. Either way the doctor fails until all of them are restarted
+together.
 
 ## Removing
 

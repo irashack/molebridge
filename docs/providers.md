@@ -221,8 +221,8 @@ no port translation. You also need a NetBird policy that lets the exit peer
 reach that port on the target.
 
 A healthy exit doesn't mean forwarding works. Forwarding errors appear as
-`port_forward_error` in `result.json` and in the panel's Diagnostics, without
-changing the exit's connected state.
+`port_forward_error` in `result.json`, without changing the exit's connected
+state; the panel's Diagnostics shows only the forwarded port, or `none`.
 
 To turn forwarding off, set `PIA_PORT_FORWARD=off`, clear
 `PIA_PORT_FORWARD_TARGET` (the applier refuses to start with a target and

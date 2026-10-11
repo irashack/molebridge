@@ -296,9 +296,9 @@ Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interfac
 Start with a saved desired selection, an expired catalogue and an unavailable
 relay API. Confirm no peer change occurs and the result says the request will
 retry. Restore the API and confirm the same request is applied automatically.
-A malformed or unlisted request is not retried until the server list
-changes or you select again; a failed peer update is retried on its
-backoff.
+An unlisted request is not retried until the server list's names change
+or you select again, and a malformed one until you select again; a failed
+peer update is retried on its backoff.
 
 ## From a client
 

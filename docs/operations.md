@@ -79,14 +79,19 @@ The applier retries by itself
   when: "Retrying at … UTC."
 - **A change that was applied but not verified** (the handshake, the egress
   check or its service failing while the selected server is live) is
-  re-checked about once a minute, never switched again: "Re-checking at …
+  re-checked about once a minute, not switched again: "Re-checking at …
   UTC." A brief outage of the provider's check therefore doesn't move the
-  exit.
+  exit. The one exception is PIA: a handshake stale for 180 seconds while
+  the selected region is live registers the same region again, after a fresh
+  inspection and on the backoff above. An egress-check failure alone never
+  does.
 - **A request that waits for a prerequisite** (a fresh server list, routing,
   NetBird, the WireGuard interface) is tried on every pass, every 5 seconds.
-- **A refused request** (malformed, or a server not in the list) isn't
-  retried until the server list changes. With PIA, a refused login isn't
-  retried until `secrets/pia/username` or `secrets/pia/password` changes.
+- **A refused request** isn't retried by itself. A server not in the list
+  is tried again when the list's server names change; a malformed request
+  needs a new request. With PIA, a refused login isn't retried until
+  `secrets/pia/username` or `secrets/pia/password` changes. A passing
+  check doesn't clear a refusal; a new request (**Retry**) always does.
 
 To retry now, press **Retry** in the panel, or select the same server again.
 Either is a new request: it applies at once and starts the backoff over.
@@ -211,9 +216,14 @@ shows as `false`, and an unmeasured routing check or fallback shows blank.
 the next page load brings, since the script's address changes with its
 content. `view` and the derived fields go after 0.7.
 
-An exit upgraded in place doesn't switch servers by itself: with no attempt
-record yet, the applier inspects the live server first and only changes it
-if it isn't your selection (or `SERVER`). The applier's container health
+An exit upgraded in place keeps your selection: with no attempt record yet,
+the applier inspects the live server before it applies `SERVER`, gluetun's
+restore target or a panel request older than 150 seconds, and changes it
+only if it isn't that server. A panel request newer than 150 seconds is
+applied even when its server is already live. Recovery recreates the
+tunnel from its config (Mullvad on the config's server, PIA and NordVPN
+without a peer), so on a native exit the applier applies the selection
+again once. The applier's container health
 check no longer fails when the exit isn't verified or isn't on `SERVER`
 ([health](#health)); monitoring that relied on that should read `/readyz`
 or Gatus instead. A `compose.gluetun.yaml` of your own must drop the names

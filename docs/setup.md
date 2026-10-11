@@ -197,8 +197,10 @@ volume. It survives restarts and recreation, and environment variables can't
 change it afterwards. [Architecture](architecture.md#routing-contract) explains
 the failure in more detail.
 
-On rootless Podman, doctor isn't available. Read the one field by hand, as
-shown in [operations](operations.md#rootless-podman).
+On rootless Podman, doctor can run through podman-compose
+(`--engine podman`, with PyYAML), but that path hasn't run on a live host;
+the tested way is to read the one field by hand, as shown in
+[operations](operations.md#rootless-podman).
 
 ## 6. Check the namespace
 
