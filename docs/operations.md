@@ -46,11 +46,13 @@ provider than the panel is configured for.
   that client traffic is forwarded; [verification](verification.md) does
   that.
 - The applier's container health check is operational only: a fresh
-  completed check, `ok` or `failed`, one tunnel peer, and an intact
-  namespace (routing protection and NetBird's mode; for a sidecar, gluetun's
-  control server answering). An exit that is up but not verified, or on
-  another server than `SERVER`, stays healthy; the panel, `/readyz` and the
-  doctor report it. Before 0.7.0 the health check also failed when the exit
+  completed check, `ok` or `failed`, and an intact namespace (the tunnel
+  interface, routing protection and NetBird's mode; for a sidecar, gluetun's
+  control server answering and exactly one peer). An exit that is up but
+  not verified, on another server than `SERVER`, or without a peer stays
+  healthy; the panel, `/readyz` and the doctor report it, and the applier
+  repairs a missing peer itself. If your engine or a supervisor kills
+  unhealthy containers, killing the applier would only delay that repair. Before 0.7.0 the health check also failed when the exit
   wasn't on its `SERVER`.
 
 ### Gatus

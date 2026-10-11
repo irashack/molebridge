@@ -33,10 +33,16 @@ reads a 0.7 exit's healthy record as "verification failed"
   individually"). Unknown or newer versions ("unsupported status version"),
   and a record whose kind, provider or backend differs from the panel's
   configuration ("kind mismatch", "provider mismatch"), are never connected.
-- The container health check is operational only: a fresh completed check,
-  one tunnel peer and an intact namespace. Whether the exit is verified,
-  including on its `SERVER`, is the verdict's: the doctor reports it, with
-  reason codes, and the health check no longer fails over it.
+- The container health check is operational only: a fresh completed check
+  and an intact namespace (on the overlay the tunnel interface, routing and
+  NetBird, but no longer the peer, which the applier puts back itself).
+  Whether the exit is verified, including on its `SERVER`, is the verdict's:
+  the doctor reports it, with reason codes, and the health check no longer
+  fails over it.
+- A native tunnel that comes back without its peer gets the selection again
+  at once (not within 90 s of the last change); with gluetun, whose own
+  reconnects leave it peerless briefly, a missing peer is waited out for
+  90 s.
 - Gatus receives the verdict, never a switch in progress.
 
 **Admission: one pipeline for every change of server.**

@@ -151,8 +151,9 @@ tunnel up`, `molebridge-exit: tunnel up` and `molebridge-exit: ready`, and
 `wireguard` and `netbird` should become healthy. With Mullvad, `applier` becomes healthy too, once it
 has finished its first check of the starting server; the panel shows
 whether that check verified it. With PIA, `applier` stays unhealthy until
-you pick a region in step 7, because a fresh PIA tunnel has no peer yet; the
-same goes for NordVPN until you pick a server. If
+you pick a region in step 7, because a fresh PIA tunnel has no address yet.
+NordVPN's applier can be healthy before you pick a server; until then the
+panel shows "No NordVPN server is selected yet; choose one in the panel." If
 `wireguard` refuses to start, its log names the setting or config line it
 rejected ([troubleshooting](troubleshooting.md#startup)); if the tunnel
 won't come up, it keeps retrying and stays unhealthy.

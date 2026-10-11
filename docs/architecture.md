@@ -1129,12 +1129,15 @@ What happens next, in precedence order on each pass:
 2. **Pending** goes through the gates again on every pass. **Rejected** is
    tried again when what refused it changes: the catalogue's server names,
    or with PIA the credential files.
-3. **No live peer.** With the default backend, when the `wireguard`
-   container started again (a new owner-record generation), the target is
-   applied once for that generation, but not within 90 seconds of the last
-   change. Otherwise no peer is treated like a peer the catalogue can't
-   name (7): gluetun's interface has no peer for a moment while it
-   reconnects by itself.
+3. **No live peer.** With the default backend the tunnel comes back from
+   its config without the selected peer (the `wireguard` container brings a
+   lost interface back, and PIA's and NordVPN's configs have no peer), so
+   the target is applied again at once from `idle` or `unverified`, and once
+   per new owner-record generation (the `wireguard` container started
+   again) whatever the state, even while a failure backs off; never within
+   90 seconds of the last change. With gluetun, no peer is treated like a
+   peer the catalogue can't name (7): gluetun's interface has no peer for a
+   moment while it reconnects by itself.
 4. **A due re-apply.** A failed change is applied again on a backoff of 1,
    2, 4 and 8 minutes, then every 15.
 5. **A lapsed registration** (PIA, whose registry entry sets
@@ -1421,14 +1424,16 @@ attempt `unverified`: re-checked, not switched again.
 - The applier's container health check (`python -m applier.apply
   --healthcheck`, Compose's `healthcheck`) is operational only: a record
   less than 150 seconds old from a completed check, `ok` or `failed`
-  (startup and a switch in progress don't count), exactly one tunnel peer,
-  and an intact namespace for the kind. For the overlay kind that is
+  (startup and a switch in progress don't count), and an intact namespace
+  for the kind. For the overlay kind that is the tunnel interface present,
   routing protection (with the default backend, including a live
   [owner record](#the-owner-record)) and NetBird on kernel WireGuard with its
-  kernel firewall; for a sidecar, gluetun's control server answering.
-  Whether the exit is verified, including on its `SERVER`, is the verdict's
-  question, not the health check's. The engine doesn't restart unhealthy
-  containers.
+  kernel firewall; a missing peer doesn't count, because the pipeline puts
+  it back, and an engine or supervisor that kills unhealthy containers would
+  only delay that. For a sidecar it is gluetun's control server answering
+  and exactly one peer. Whether the exit is verified, including on its
+  `SERVER`, is the verdict's question, not the health check's. Docker and
+  Podman don't restart unhealthy containers by themselves.
 
 ## Panel and access
 

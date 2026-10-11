@@ -545,12 +545,12 @@ out for 90 seconds first.
 
 **"Expected exactly one tunnel peer."** The tunnel has no peer, or more than
 one. With PIA and NordVPN a tunnel the `wireguard` container brought back
-has no peer. The applier applies the selection again: at once when the
-container itself restarted since the applier's last change (a new owner
-record), otherwise after 90 seconds, and never within 90 seconds of its
-last change. With gluetun,
-a reconnecting tunnel has no peer for a moment, and the applier waits the
-same 90 seconds before it acts. If it persists, run
+has no peer. The applier applies the selection again at once, but never
+within 90 seconds of its last change, and after a failed change only when
+its retry is due or the `wireguard` container itself restarted. With
+gluetun, a reconnecting tunnel has no peer for a moment, and the applier
+waits 90 seconds before it acts. The applier's container stays healthy
+meanwhile. If it persists, run
 [recovery](operations.md#recovery).
 
 All of these clear by themselves when a later check finds the selected
