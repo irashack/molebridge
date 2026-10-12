@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"github.com/irashack/molebridge/internal/netx"
+	"github.com/irashack/molebridge/internal/rtnl"
 )
 
 // System is everything the applier needs from the machine. The applier never
@@ -170,4 +171,56 @@ type PIAKernel interface {
 	// ReplaceExitDefaultRoute is `ip -4 route replace default dev <exit> table
 	// <table>`.
 	ReplaceExitDefaultRoute(ctx context.Context) error
+}
+
+// GluetunKernel is what the gluetun backend reads of the namespace beyond
+// System: the tunnel interface's flags and index, the host interface's index,
+// and the rules and the exit, host and main tables as typed values. The Python
+// applier read them with `ip -j link/rule/route show`; the exit worker
+// implements this over its netlink connection, and the applier never executes
+// anything for it. A System that serves the gluetun backend implements it too
+// (CheckSystem refuses a provider on one that does not).
+//
+// The mapping from the Python calls:
+//
+//	ip -j link show dev <exit>                          GluetunLinks (Tunnel)
+//	ip -j -N rule show                                  GluetunTables (Rules)
+//	ip -j -N route show table <exit, host, main>        GluetunTables (Exit, Host, Main)
+type GluetunKernel interface {
+	// GluetunLinks reads the tunnel interface (EXIT_IF) and the host
+	// interface (HOST_IF). gluetun's interface coming and going is routine: a
+	// missing tunnel is Present false with no error. An error is a failure to
+	// read, or an answer that makes no sense (the Python "invalid tunnel
+	// interface").
+	GluetunLinks(ctx context.Context) (GluetunLinks, error)
+	// GluetunTables reads one family's (4 or 6) rules and routes.
+	GluetunTables(ctx context.Context, family int) (GluetunTables, error)
+}
+
+// GluetunSystem is a System that also serves the gluetun backend.
+type GluetunSystem interface {
+	System
+	GluetunKernel
+}
+
+// TunnelLink is the tunnel interface as the gluetun backend sees it.
+type TunnelLink struct {
+	Present, Up bool
+	// Index is the interface index, 0 when it is absent. gluetun makes a new
+	// interface on every settings change, so a changed index is a new one.
+	Index uint32
+}
+
+// GluetunLinks are the interfaces the gluetun predicates read.
+type GluetunLinks struct {
+	Tunnel TunnelLink
+	// HostIndex is the host interface's index, 0 when it is absent.
+	HostIndex uint32
+}
+
+// GluetunTables are one family's rules and the routes of the exit table, the
+// host table and the main table.
+type GluetunTables struct {
+	Rules            []rtnl.Rule
+	Exit, Host, Main []rtnl.Route
 }

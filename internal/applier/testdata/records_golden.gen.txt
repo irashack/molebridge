@@ -10,6 +10,9 @@ import test_runtime as tr
 import test_pia as tp
 import test_nordvpn_applier as tn
 import test_egress as te
+import test_gluetun_applier as tg
+import test_gluetun_transition as tt
+import test_sidecar_applier as ts
 from applier.apply import Applier
 from molebridge import providers
 from molebridge.state import now_iso, write_json_atomic
@@ -71,6 +74,45 @@ write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'provid
 kernel = te.EchoKernel()
 a = te.TunnelApplier(tmp, tr.CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, boot_id='00000000-0000-4000-8000-0000000000aa')
 a.next_catalog = float('inf'); out['tunnel_tier'] = a.inspect()
+
+# The gluetun backend (applier/gluetun_applier.py): the overlay exit and the sidecar kind.
+def gl(provider='ivpn', **kw):
+    return tg.make(Path(tempfile.mkdtemp()), provider, **kw)
+
+a, k, g = gl(); out['gluetun_inspect'] = a.inspect()
+a, k, g = gl(); out['gluetun_switch'] = a.switch(tg.request(tg.HOST_B))
+a, k, g = gl('mullvad'); out['gluetun_mullvad'] = a.inspect()
+a, k, g = gl('nordvpn'); out['gluetun_nordvpn'] = a.inspect()
+a, k, g = gl(); k.tunnel = None; out['gluetun_no_tunnel'] = a.inspect()
+a, k, g = gl(); g.fail = True; out['gluetun_refused'] = a.switch(tg.request(tg.HOST_B))
+a, k, g = gl(); g.connect_to = tg.HOST_C; out['gluetun_elsewhere'] = a.switch(tg.request(tg.HOST_B))
+a, k, g = gl(); k.egress = tg.HOST4; out['gluetun_host_address'] = a.inspect()
+a, k, g = gl(); k.rules[6] = [r for r in k.rules[6] if r['priority'] != 88]; out['gluetun_guard_missing'] = a.switch(tg.request(tg.HOST_B))
+a, k, g = gl(server=tg.HOST_B); out['gluetun_configured'] = a.tick()
+a, k, g = gl(); write_json_atomic(a.desired_path, tg.request('four.example.test')); out['gluetun_rejected'] = a.tick()
+a, k, g = gl(); a.save_selection(desired=tg.HOST_B, last_put=tg.HOST_B, last_successful=tg.HOST_B); k.tunnel = tg.HOST_A; a.next_health = float('inf'); out['gluetun_restore'] = a.tick()
+a, k, g = tg.stale(Path(tempfile.mkdtemp())); a.update_servers(); out['gluetun_updating'] = a.inspect()
+a, k, g = tg.stale(Path(tempfile.mkdtemp())); a.update_servers(); k.now += 99999; g.updater = 'crashed'
+for _ in range(3):
+    a.update_servers(); k.now += 400; a.update_servers(); k.now += 400; a.update_servers(); g.updater = 'crashed'
+out['gluetun_update_failed'] = a.inspect()
+
+a, k, g = tt.reconnecting(Path(tempfile.mkdtemp())); seen = []; real = a.publish
+def record(status, message, **fields):
+    result = real(status, message, **fields); seen.append(result); return result
+a.publish = record
+final = a.switch(tg.request(tg.HOST_B))
+out['gluetun_reconnecting'] = next(r for r in seen if r['checks'].get('routing', {}).get('reason') == 'reconnecting')
+out['gluetun_reconnecting_first'] = seen[0]
+out['gluetun_reconnecting_final'] = final
+out['gluetun_reconnecting_count'] = {'count': len(seen), 'statuses': [r['status'] for r in seen]}
+
+def side(provider):
+    return ts.make(Path(tempfile.mkdtemp()), provider)
+a, k, g = side('nordvpn'); write_json_atomic(a.desired_path, tg.request(tg.HOST_B)); out['sidecar_provider'] = a.tick()
+a, k, g = side('ivpn'); write_json_atomic(a.desired_path, tg.request(tg.HOST_B)); out['sidecar_tunnel'] = a.tick()
+a, k, g = side('ivpn'); out['sidecar_fresh'] = a.inspect()
+a, k, g = side('nordvpn'); k.tunnel = None; out['sidecar_no_tunnel'] = a.inspect()
 
 Path('internal/applier/testdata/records_golden.json').write_text(json.dumps({k: json.dumps(v) for k, v in out.items()}, indent=1))
 print(len(out), 'records')
