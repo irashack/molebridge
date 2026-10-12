@@ -379,7 +379,7 @@ func TestUnreadableOrOddFilesAreRefused(t *testing.T) { // test_unreadable_or_od
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
-	if _, err := Load(t.TempDir()+"/absent", "mullvad", Mullvad, table); err == nil || !strings.Contains(err.Error(), "is missing; regenerate it with tools/prepare-tunnel-config.py (docs/setup.md)") {
+	if _, err := Load(t.TempDir()+"/absent", "mullvad", Mullvad, table); err == nil || !strings.Contains(err.Error(), "is missing; regenerate it with prepare-config (docs/setup.md)") {
 		t.Errorf("a missing directory: %v", err)
 	}
 }
@@ -409,8 +409,8 @@ func TestUnreadableFile(t *testing.T) {
 
 func TestMessagesNameTheProviderSpecificHint(t *testing.T) {
 	for p, want := range map[Provider]string{
-		Mullvad: "tools/prepare-tunnel-config.py (docs/setup.md)", PIA: "tools/prepare-tunnel-config.py --pia (docs/setup.md)",
-		NordVPN: "tools/nordvpn-key.py (docs/setup.md)",
+		Mullvad: "prepare-config (docs/setup.md)", PIA: "prepare-config --pia (docs/setup.md)",
+		NordVPN: "nordvpn-key (docs/setup.md)",
 	} {
 		_, msg := check(t, "[Interface]\n", p)
 		if !strings.HasSuffix(msg, "; regenerate it with "+want) {

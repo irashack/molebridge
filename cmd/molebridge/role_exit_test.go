@@ -1,0 +1,158 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/irashack/molebridge/internal/exit"
+)
+
+const testKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+func writeConf(t *testing.T, dir string) {
+	t.Helper()
+	conf := `[Interface]
+PrivateKey = ` + testKey + `
+Address = 203.0.113.2/32
+MTU = 1420
+Table = off
+PostUp = ip route replace default dev %i table 51821
+PreDown = ip route del default dev %i table 51821
+
+[Peer]
+PublicKey = ` + testKey + `
+Endpoint = 198.51.100.10:51820
+AllowedIPs = 0.0.0.0/0
+`
+	if err := os.WriteFile(filepath.Join(dir, "mullvad.conf"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func roleEnv(t *testing.T) (map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	confDir := filepath.Join(dir, "wg_confs")
+	for _, d := range []string{confDir, filepath.Join(dir, "state", "applier"), filepath.Join(dir, "nb")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConf(t, confDir)
+	return map[string]string{
+		"TUNNEL_BACKEND": "native", "PROVIDER": "mullvad", "EXIT_IF": "mullvad", "OVERLAY_CIDR": "192.0.2.0/24",
+		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_STATE_DIR": filepath.Join(dir, "nb"),
+		"STATE_DIR": filepath.Join(dir, "state"), "TUNNEL_CONF_DIR": confDir, "MOLEBRIDGE_RUN_DIR": filepath.Join(dir, "run"),
+	}, dir
+}
+
+func TestExitRoleRefusesUnknownArguments(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := exitMain([]string{"--bogus"}, nil, &stderr); code != 2 || !strings.Contains(stderr.String(), "--worker and --cleanup") {
+		t.Fatalf("%d %q", code, stderr.String())
+	}
+}
+
+func TestExitRoleRefusalPrintsOneFixedLine(t *testing.T) {
+	var stderr bytes.Buffer
+	code := exitMain(nil, []string{"TUNNEL_BACKEND=native", "PROVIDER=mullvad", "OVERLAY_CIDR=bogus", "STATE_DIR=/nonexistent"}, &stderr)
+	if code != 1 || stderr.String() != "molebridge-exit: OVERLAY_CIDR must be an IPv4 CIDR\n" {
+		t.Fatalf("%d %q", code, stderr.String())
+	}
+}
+
+func TestCheckConfig(t *testing.T) {
+	env, _ := roleEnv(t)
+	var stdout, stderr bytes.Buffer
+	if code := checkConfigMain(nil, env, &stdout, &stderr); code != 0 {
+		t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())
+	}
+	want := "molebridge-exit: configuration accepted (" + env["TUNNEL_CONF_DIR"] + "/mullvad.conf: an IPv4 address)\nNetBird gate: configuration accepted\n"
+	if stdout.String() != want {
+		t.Fatalf("%q\nwant %q", stdout.String(), want)
+	}
+	// It changes nothing: the state directory is read, never written.
+	entries, _ := os.ReadDir(filepath.Join(env["STATE_DIR"], "applier"))
+	if len(entries) != 0 {
+		t.Errorf("check-config wrote %v", entries)
+	}
+	env["GUARD_GRACE"] = "99"
+	stdout.Reset()
+	stderr.Reset()
+	if code := checkConfigMain(nil, env, &stdout, &stderr); code != 1 || stderr.String() != "molebridge-exit: GUARD_GRACE must be 5..30 seconds\n" || stdout.Len() != 0 {
+		t.Fatalf("%d %q %q", code, stdout.String(), stderr.String())
+	}
+	if code := checkConfigMain([]string{"x"}, env, &stdout, &stderr); code != 2 {
+		t.Errorf("usage: %d", code)
+	}
+}
+
+func TestHealthRole(t *testing.T) {
+	env, _ := roleEnv(t)
+	var stdout, stderr bytes.Buffer
+	if code := healthMain(nil, env, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "unhealthy") {
+		t.Fatalf("%d %q", code, stdout.String())
+	}
+	if code := healthMain([]string{"x"}, env, &stdout, &stderr); code != 2 {
+		t.Errorf("usage: %d", code)
+	}
+}
+
+func TestStatusRoleWithNothingPublishedYet(t *testing.T) {
+	env, _ := roleEnv(t)
+	var stdout, stderr bytes.Buffer
+	clock := func() time.Duration { return time.Hour }
+	code := statusMain(nil, env, clock, time.Now, &stdout, &stderr)
+	out := stdout.String()
+	if code != 1 || !strings.Contains(out, "state: unknown (awaiting status)") || !strings.Contains(out, "reasons: no-status") ||
+		!strings.Contains(out, "heartbeat: none") || !strings.Contains(out, "lease: unknown (no lease file") {
+		t.Fatalf("%d\n%s", code, out)
+	}
+}
+
+func TestStatusRoleReadsTheRecordAndTheLease(t *testing.T) {
+	env, dir := roleEnv(t)
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	record := `{"schema": 2, "kind": "overlay", "backend": "native", "provider": "mullvad", "status": "failed", "message": "exit owner stopped responding", ` +
+		`"checked_at": "2026-10-12T12:00:00Z", "server": null, "requested_server": null, "configured_server": null, "request_id": null, ` +
+		`"selection": {"source": "seed", "outcome": null, "attempt": 0, "target": null, "next_action": null, "next_action_at": null}, ` +
+		`"checks": {"routing": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, "netbird": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, ` +
+		`"owner_record": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, "peer": {"state": "unknown"}, "handshake": {"state": "unknown"}, ` +
+		`"egress": {"state": "unknown"}, "traffic_protection": {"state": "fail", "at": "2026-10-12T12:00:00Z", "from": "routing"}, "app_attachment": {"state": "n/a"}}, ` +
+		`"egress_ip": null, "egress_ips": {}, "egress_city": null, "egress_country": null}`
+	if err := os.WriteFile(filepath.Join(dir, "state", "applier", "result.json"), []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "run", "molebridge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lease := `{"state": "held", "generation": "x", "expiry_boot_ns": 1017000000000, "updated_boot_ns": 1000000000000, "grace_s": 30}`
+	if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "lease.json"), []byte(lease), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	clock := func() time.Duration { return 1003 * time.Second }
+	code := statusMain(nil, env, clock, func() time.Time { return now.Add(time.Second) }, &stdout, &stderr)
+	out := stdout.String()
+	for _, want := range []string{
+		"state: failed (failed)",
+		"reasons: routing-failed, netbird-failed, owner_record-failed, traffic_protection-failed",
+		"message: exit owner stopped responding",
+		"lease: held, 14 s to expiry",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if code != 1 {
+		t.Errorf("exit %d", code)
+	}
+	if strings.Contains(out, testKey) {
+		t.Error("status printed key material")
+	}
+	_ = exit.DefaultStateDir
+}

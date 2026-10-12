@@ -108,6 +108,19 @@ func (s *Settings) BackendName() string {
 	return "native"
 }
 
+// RunDirOf is the runtime directory an environment names.
+func RunDirOf(env map[string]string) string { return orDefault(env["MOLEBRIDGE_RUN_DIR"], DefaultRunDir) }
+
+// HeartbeatPathOf is the heartbeat file of an environment's runtime directory.
+func HeartbeatPathOf(env map[string]string) string {
+	return filepath.Join(RunDirOf(env), "molebridge", "heartbeat")
+}
+
+// LeasePathOf is the lease state file of an environment's runtime directory.
+func LeasePathOf(env map[string]string) string {
+	return filepath.Join(RunDirOf(env), "molebridge", "lease.json")
+}
+
 // PathHeartbeat is the worker's heartbeat file on the tmpfs.
 func (s *Settings) PathHeartbeat() string { return filepath.Join(s.RunDir, "molebridge", "heartbeat") }
 
