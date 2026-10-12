@@ -1,0 +1,7 @@
+{
+  "version": "1",
+  "platforms": ["docker-engine-linux", "podman-rootless-quadlet", "netbird-cloud"],
+  "providers": ["mullvad", "pia", "nordvpn"],
+  "kinds": ["native", "gluetun", "sidecar"],
+  "drills": ["clean-install-from-bundle", "client-held", "upgrade-from-0.7"]
+}
