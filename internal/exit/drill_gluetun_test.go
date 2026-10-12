@@ -131,18 +131,28 @@ func TestDrillGluetunStopsNetBirdWithoutTheControlMark(t *testing.T) {
 	started := time.Now()
 	l.waitFor(30*time.Second, "NetBird to be stopped for the missing mark", func() bool { return l.traceHas("terminated") })
 	took := time.Since(started)
-	t.Logf("NetBird stopped %v after `netbird up` (FWMARK_GRACE=5)", took)
+	t.Logf("NetBird stopped %v after the launch (FWMARK_GRACE=5)", took)
 	if took > 5*time.Second+4*time.Second {
 		t.Errorf("stopped %v after the launch, grace is 5 s", took)
 	}
 	if !strings.Contains(p.out.String(), "has not carried the control mark 0x1bd00 for 5 seconds (last reported: 0x2a00)") {
 		t.Errorf("the reason is not in the log:\n%s", p.out.String())
 	}
-	if !p.running() {
-		t.Error("the exit itself keeps running; only NetBird is stopped")
+	// The condemnation is fatal to the generation, as it was in the gate: the
+	// stop sequence runs, the failure record is published and the exit ends
+	// non-zero. NetBird is not started again.
+	if code := p.wait(30 * time.Second); code == 0 {
+		t.Error("a condemned NetBird must end the exit non-zero")
 	}
-	_ = p.cmd.Process.Signal(syscall.SIGTERM)
-	p.wait(20 * time.Second)
+	if n := l.traceCount("service run"); n != 1 {
+		t.Errorf("NetBird was started %d times", n)
+	}
+	if r := l.result(); r["status"] != "failed" || r["message"] != OwnerStoppedMessage {
+		t.Errorf("the failure record: %v", r)
+	}
+	if l.linkExists(l.exit, dOverlay) || !l.linkExists(l.exit, dGluetunIf) {
+		t.Error("the cleanup removes NetBird's interface and never gluetun's")
+	}
 }
 
 func TestDrillGluetunStopsNetBirdThatFellBackFromAdvancedRouting(t *testing.T) {
@@ -154,11 +164,15 @@ func TestDrillGluetunStopsNetBirdThatFellBackFromAdvancedRouting(t *testing.T) {
 	started := time.Now()
 	l.waitFor(20*time.Second, "NetBird to be stopped for the log line", func() bool { return l.traceHas("terminated") })
 	t.Logf("NetBird stopped %v after `netbird up`", time.Since(started))
+	if code := p.wait(30 * time.Second); code == 0 {
+		t.Error("a condemned NetBird must end the exit non-zero")
+	}
 	if !strings.Contains(p.out.String(), FallbackMessage) {
 		t.Errorf("the reason is not in the log:\n%s", p.out.String())
 	}
-	_ = p.cmd.Process.Signal(syscall.SIGTERM)
-	p.wait(20 * time.Second)
+	if n := l.traceCount("service run"); n != 1 {
+		t.Errorf("NetBird was started %d times", n)
+	}
 }
 
 func TestDrillGluetunRefusesAControlServerOnAnyAddress(t *testing.T) {
