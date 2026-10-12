@@ -219,3 +219,35 @@ func TestUnsetSuppressorsAreAbsent(t *testing.T) {
 		t.Fatalf("suppress_prefixlength 0 must be present: %+v", got)
 	}
 }
+
+func TestEveryNonBookkeepingFlagIsSemantic(t *testing.T) {
+	plain := Rule{Family: V6, Priority: 94, Action: FRActToTbl, Table: 100, Src: pfx("2001:db8::1/128")}
+	for _, bit := range []uint32{FIBRuleFindSaddr, FIBRuleUnresolved, 0x20, 0x100, 0x80000000} {
+		flagged := plain
+		flagged.Flags |= bit
+		if reflect.DeepEqual(flagged.Items(), plain.Items()) {
+			t.Errorf("flag %#x compares equal to the rule without it", bit)
+		}
+		// And it is preserved when the rule is sent back (INVERT excepted: it
+		// has its own item).
+		got, err := DecodeRule(flagged.Marshal())
+		if err != nil || got.Flags&bit != bit {
+			t.Errorf("flag %#x lost on re-encoding: %#x %v", bit, got.Flags, err)
+		}
+	}
+	for _, bit := range []uint32{FIBRulePermanent, FIBRuleIifDetached, FIBRuleOifDetached} {
+		flagged := plain
+		flagged.Flags |= bit
+		if !reflect.DeepEqual(flagged.Items(), plain.Items()) {
+			t.Errorf("bookkeeping flag %#x changes the comparison", bit)
+		}
+		if got, _ := DecodeRule(flagged.Marshal()); got.Flags&bit != 0 {
+			t.Errorf("bookkeeping flag %#x is sent", bit)
+		}
+	}
+	inv := plain
+	inv.Flags |= FIBRuleInvert
+	if reflect.DeepEqual(inv.Items(), plain.Items()) {
+		t.Error("invert")
+	}
+}

@@ -4,6 +4,7 @@ package rtnl_test
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"reflect"
@@ -311,4 +312,69 @@ func TestLiveFloodReportsOverrun(t *testing.T) {
 	if !overrun {
 		t.Fatal("a flood into a 2 KiB buffer produced no ENOBUFS")
 	}
+}
+
+// Dumps taken while rules change under them: a snapshot is never a mixture.
+// 1,500 stable rules stay put while another process adds and deletes rules as
+// fast as it can; every snapshot has each stable rule exactly once, and the
+// kernel's interruption marks were seen and acted on.
+func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
+	ns := nstest.New(t, "concurrent")
+	var stable strings.Builder
+	for i := 1; i <= 1500; i++ {
+		fmt.Fprintf(&stable, "rule add lookup main priority %d\n", 1000+i)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/stable", []byte(stable.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ns.IP("-batch", dir+"/stable")
+	var churn strings.Builder
+	for i := 0; i < 100000; i++ {
+		churn.WriteString("rule add lookup main priority 500\nrule del priority 500\n")
+	}
+	if err := os.WriteFile(dir+"/churn", []byte(churn.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := dial(t, ns)
+	done := make(chan struct{})
+	go func() { defer close(done); _, _ = ns.TryIP("-batch", dir+"/churn") }()
+	var taken, unstable int
+	for running := true; running; {
+		select {
+		case <-done:
+			running = false
+		default:
+		}
+		s, err := c.Take(rtnl.Interest{Tables: []uint32{254}})
+		if err != nil {
+			if errors.Is(err, rtnl.ErrInconsistent) || strings.Contains(err.Error(), "no consistent snapshot") {
+				continue // honest: the kernel never held still long enough
+			}
+			t.Fatal(err)
+		}
+		if s.Unstable {
+			unstable++
+			continue
+		}
+		taken++
+		seen := map[uint32]int{}
+		for _, r := range s.Rules[rtnl.V4] {
+			if r.Priority > 1000 && r.Priority <= 2500 {
+				seen[r.Priority]++
+			}
+		}
+		for p := uint32(1001); p <= 2500; p++ {
+			if seen[p] != 1 {
+				t.Fatalf("a snapshot has rule %d %d times", p, seen[p])
+			}
+		}
+	}
+	if taken == 0 {
+		t.Fatal("no snapshot completed")
+	}
+	if c.Interrupts() == 0 {
+		t.Log("the kernel never marked a dump interrupted in this run; the scripted tests cover the retry")
+	}
+	t.Logf("%d stable snapshots, %d marked unstable, %d interrupted dumps discarded, %d stream resets", taken, unstable, c.Interrupts(), c.Resets())
 }

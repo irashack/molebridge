@@ -32,7 +32,10 @@ func (tx *Tx) SetSpec(s contract.Spec) { tx.m.setSpec(s) }
 // Logf writes a log line.
 func (tx *Tx) Logf(format string, args ...any) { tx.m.o.Logf(format, args...) }
 
-// budget checks the operation's context and narrows the kernel's deadline.
+// budget checks the operation's context and gives the kernel the operation's
+// one absolute deadline. A kernel that takes a deadline gets it as such, so
+// every request, dump and retry of the operation ends by that instant; one
+// that only takes a per-request timeout gets what is left.
 func (tx *Tx) budget() error {
 	if err := tx.ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -40,24 +43,32 @@ func (tx *Tx) budget() error {
 		}
 		return err
 	}
-	if t, ok := tx.m.o.Kernel.(timeouter); ok {
-		if dl, ok := tx.ctx.Deadline(); ok {
+	if dl, ok := tx.ctx.Deadline(); ok {
+		switch k := tx.m.o.Kernel.(type) {
+		case deadliner:
+			k.SetDeadline(dl)
+		case timeouter:
 			left := time.Until(dl)
 			if left < time.Millisecond {
 				left = time.Millisecond
 			}
-			t.SetTimeout(left)
+			k.SetTimeout(left)
 		}
 	}
 	return nil
 }
 
-// Snapshot dumps the state the contract is judged on.
+// Snapshot dumps the state the contract is judged on, within the operation's
+// deadline and cancellation.
 func (tx *Tx) Snapshot() (*rtnl.Snapshot, error) {
 	if err := tx.budget(); err != nil {
 		return nil, err
 	}
-	return tx.m.o.Kernel.Take(tx.m.spec.Interest())
+	in := tx.m.spec.Interest()
+	if k, ok := tx.m.o.Kernel.(contextTaker); ok {
+		return k.TakeContext(tx.ctx, in)
+	}
+	return tx.m.o.Kernel.Take(in)
 }
 
 // AddRule installs a rule; an identical rule already there is not an error.

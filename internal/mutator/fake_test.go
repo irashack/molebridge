@@ -42,6 +42,13 @@ type fakeKernel struct {
 
 	timeouts []time.Duration
 	dumps    int
+	// takeFail returns an error for the n-th snapshot (1-based).
+	takeFail func(n int) error
+	takes    int
+	// unstable marks every snapshot as taken while the kernel kept changing.
+	unstable bool
+	// mutations counts requests that change something, in order.
+	mutations int
 }
 
 func newFakeKernel() *fakeKernel {
@@ -66,6 +73,7 @@ func (k *fakeKernel) SetTimeout(d time.Duration) {
 
 func (k *fakeKernel) record(op string) error {
 	k.log = append(k.log, op)
+	k.mutations++
 	if k.fail != nil {
 		if err := k.fail(op); err != nil {
 			return err
@@ -91,7 +99,14 @@ func (k *fakeKernel) Take(in rtnl.Interest) (*rtnl.Snapshot, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.dumps++
+	k.takes++
+	if k.takeFail != nil {
+		if err := k.takeFail(k.takes); err != nil {
+			return nil, err
+		}
+	}
 	s := rtnl.NewSnapshot()
+	s.Unstable = k.unstable
 	for _, f := range families {
 		s.Rules[f] = append([]rtnl.Rule(nil), k.rules[f]...)
 		for _, r := range k.routes[f] {
@@ -514,4 +529,111 @@ func (k *fakeKernel) linkIndex(name string) uint32 {
 		}
 	}
 	return 0
+}
+
+// ---- the exit's own ICMP errors ----
+
+// icmpWhere follows an ICMP error the exit sends from a tunnel address: a
+// locally generated packet (input interface lo), source the address, protocol
+// ICMP, destined outside. It must never reach the main table, where the
+// host's default route is.
+func (k *fakeKernel) icmpWhere(f rtnl.Family, from netip.Addr, exitTable uint32) verdict {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	proto := uint8(1)
+	if f == rtnl.V6 {
+		proto = 58
+	}
+	for _, r := range k.rules[f] {
+		match := true
+		if r.IifName != "" && r.IifName != "lo" {
+			match = false
+		}
+		if r.OifName != "" {
+			match = false
+		}
+		if r.Src.IsValid() && !r.Src.Contains(from) {
+			match = false
+		}
+		if r.Dst.IsValid() && !r.Dst.Contains(probeDst(f, forwarded)) {
+			match = false
+		}
+		if r.IPProto.OK && r.IPProto.V != proto {
+			match = false
+		}
+		if r.FwMark.OK && r.FwMark.V != 0 || r.Tos != 0 || len(r.Unknown) > 0 {
+			match = false
+		}
+		if r.Invert() {
+			match = !match
+		}
+		if !match {
+			continue
+		}
+		switch r.Action {
+		case rtnl.FRActUnreachable, rtnl.FRActProhibit, rtnl.FRActBlackhole:
+			return stopped
+		case rtnl.FRActToTbl:
+			switch r.Table {
+			case exitTable:
+				var best *rtnl.Route
+				for i, rt := range k.routes[f] {
+					if rt.Table == exitTable && rt.IsDefault() && (best == nil || rt.Metric < best.Metric) {
+						best = &k.routes[f][i]
+					}
+				}
+				if best != nil {
+					if best.Type == rtnl.RTNUnreachable {
+						return stopped
+					}
+					return viaExitTable
+				}
+			case rtnl.TableMain:
+				if !r.SuppressPrefixLen.OK {
+					return escaped
+				}
+			}
+		}
+	}
+	return stopped
+}
+
+// liveAddrs are the global addresses on the tunnel interface.
+func (k *fakeKernel) liveAddrs(f rtnl.Family, ifName string) []netip.Addr {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	idx := uint32(0)
+	for _, l := range k.links {
+		if l.Name == ifName {
+			idx = l.Index
+		}
+	}
+	var out []netip.Addr
+	for _, a := range k.addrs[f] {
+		if a.Index == idx && a.Global() {
+			out = append(out, a.Local.Addr())
+		}
+	}
+	return out
+}
+
+func (k *fakeKernel) setAddr(f rtnl.Family, ifName string, a netip.Addr, present bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	idx := uint32(0)
+	for _, l := range k.links {
+		if l.Name == ifName {
+			idx = l.Index
+		}
+	}
+	var kept []rtnl.Addr
+	for _, x := range k.addrs[f] {
+		if !(x.Index == idx && x.Local.Addr() == a) {
+			kept = append(kept, x)
+		}
+	}
+	if present {
+		kept = append(kept, rtnl.Addr{Family: f, Index: idx, Local: netip.PrefixFrom(a, a.BitLen())})
+	}
+	k.addrs[f] = kept
 }
