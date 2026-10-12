@@ -16,6 +16,8 @@ import (
 const fakeNetBird = `#!/bin/sh
 # A stand-in for the netbird client: it records what it was asked to do.
 t=${NB_TRACE_FILE:?}
+# Which commands were given the enrollment secret.
+echo "netbird $1 setup-key=${NB_SETUP_KEY:+yes}${WT_SETUP_KEY:+yes}" >> "$t"
 case "$1" in
 service)
     echo "netbird service run" >> "$t"
@@ -69,12 +71,13 @@ func newHarness(t *testing.T, workerMode, cleanupMode string) *harness {
 	s.Grace = time.Second
 	s.StateDir = filepath.Join(dir, "state")
 	s.RunDir = filepath.Join(dir, "run")
-	s.Env = map[string]string{"PATH": bin + ":/usr/bin:/bin", "NB_TRACE_FILE": h.trace, "MB_TRACE_FILE": h.trace}
+	s.Env = map[string]string{"PATH": bin + ":/usr/bin:/bin", "NB_TRACE_FILE": h.trace, "MB_TRACE_FILE": h.trace,
+		"NB_SETUP_KEY": "SETUPVALUE", "GATUS_TOKEN": "TOKENVALUE"}
 	h.s = s
 	h.cfg = Config{
 		Settings: s, Reaper: testReaper, Self: self,
 		WorkerArgs:  []string{"fake-worker", workerMode},
-		CleanupArgs: []string{"fake-cleanup", cleanupMode},
+		CleanupArgs: []string{"fake-cleanup", cleanupMode, h.trace},
 		Signals:     h.sigs, Stderr: os.Stderr,
 		Timing: Timing{Tick: 50 * time.Millisecond, PublishEvery: 100 * time.Millisecond,
 			StopKill: time.Second, StopReaped: 1500 * time.Millisecond, CleanupEnd: 3 * time.Second, ExitBy: 3500 * time.Millisecond,
@@ -363,5 +366,130 @@ func TestPublicationRules(t *testing.T) {
 	// A requested stop writes no failure record.
 	if last := h.lastRecord(); last["message"] == OwnerStoppedMessage {
 		t.Error("a requested stop must not publish the failure record")
+	}
+}
+
+func TestSecretsReachOnlyWhatNeedsThem(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	done := h.run()
+	if !h.waitTrace("netbird up", 10*time.Second) {
+		t.Fatal("not up")
+	}
+	h.sigs <- syscall.SIGTERM
+	h.wait(done, 10*time.Second)
+	lines := h.traceLines()
+	for _, l := range lines {
+		switch {
+		case strings.HasPrefix(l, "netbird up setup-key="):
+			if l != "netbird up setup-key=yes" {
+				t.Errorf("`netbird up` enrolls and needs the key: %q", l)
+			}
+		case strings.HasPrefix(l, "netbird ") && strings.Contains(l, " setup-key="):
+			if !strings.HasSuffix(l, "setup-key=") {
+				t.Errorf("only `netbird up` gets the setup key: %q", l)
+			}
+		case strings.Contains(l, "worker has the setup key"):
+			t.Error("the worker has the setup key")
+		case strings.HasPrefix(l, "cleanup env "):
+			for _, bad := range []string{"NB_SETUP_KEY", "GATUS_TOKEN", "STATE_DIR", "NB_TRACE_FILE", "MB_TRACE_FILE"} {
+				if strings.Contains(l, bad) {
+					t.Errorf("the cleanup child got %s: %s", bad, l)
+				}
+			}
+		}
+	}
+	if index(lines, "netbird status setup-key=") < 0 || index(lines, "netbird service setup-key=") < 0 {
+		t.Errorf("the probes and the daemon ran: %v", lines)
+	}
+}
+
+// A blocked log sink and a stalled state volume must not delay the signals:
+// the lease lapses, NetBird gets TERM at once, and the supervisor still leaves
+// within its budget.
+func TestStalledSinksNeverDelayTheStop(t *testing.T) {
+	h := newHarness(t, "freeze", "ok")
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h.cfg.Stderr = blockingWriter{release}
+	h.cfg.Write = func(path string, v any) error {
+		<-release // the volume is stuck
+		return nil
+	}
+	done := h.run()
+	if !h.waitTrace("worker frozen", 10*time.Second) {
+		t.Fatal("never froze")
+	}
+	frozen := time.Now()
+	if !h.waitTrace("netbird terminated", 10*time.Second) {
+		t.Fatal("NetBird was not terminated: the deadline path waited on a sink")
+	}
+	if took := time.Since(frozen); took > h.s.Grace+1500*time.Millisecond {
+		t.Errorf("NetBird got TERM %v after the freeze, grace is %v", took, h.s.Grace)
+	}
+	code := h.wait(done, 15*time.Second)
+	if total := time.Since(frozen); total > h.s.Grace+h.cfg.Timing.ExitBy+2*time.Second {
+		t.Errorf("the exit took %v", total)
+	}
+	if code == 0 {
+		t.Error("a lapsed lease exits non-zero")
+	}
+	if index(h.traceLines(), "cleanup ok") < 0 {
+		t.Error("the cleanup did not run")
+	}
+}
+
+type blockingWriter struct{ release chan struct{} }
+
+func (b blockingWriter) Write(p []byte) (int, error) { <-b.release; return len(p), nil }
+
+func TestACleanupIsNeverRunBesideASurvivingNetBird(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	sup := New(h.cfg)
+	sup.testFinal = func() (bool, bool) { return false, true }
+	done := make(chan int, 1)
+	go func() { done <- sup.Run() }()
+	if !h.waitTrace("netbird up", 10*time.Second) {
+		t.Fatal("not up")
+	}
+	h.sigs <- syscall.SIGTERM
+	if code := h.wait(done, 10*time.Second); code != 1 {
+		t.Fatalf("a requested stop with a surviving NetBird must exit non-zero, got %d", code)
+	}
+	if index(h.traceLines(), "cleanup ok") >= 0 {
+		t.Fatal("the cleanup ran beside a NetBird that survived")
+	}
+}
+
+func TestMessagesAfterTheExpiryStopTheExit(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	clock := &fakeClock{now: 500 * time.Second}
+	h.cfg.Clock = clock.read
+	sup := New(h.cfg)
+	gen, err := sup.lease.NewGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.gen = gen
+	loops := func() map[string]int64 {
+		return map[string]int64{LoopMutator: int64(clock.now), LoopWatcher: int64(clock.now)}
+	}
+	if reason, _ := sup.handle(evWorkerMsg{Msg{Type: TypeRenew, Gen: gen, Seq: 1, Loops: loops()}}); reason != "" {
+		t.Fatalf("a renewal inside the lease: %q", reason)
+	}
+	clock.now += 2 * time.Second // past the 1-second grace
+	// A worker that resumes after the deadline and renews before the
+	// supervisor's timer fires does not revive the lease.
+	reason, _ := sup.handle(evWorkerMsg{Msg{Type: TypeRenew, Gen: gen, Seq: 2, Loops: loops()}})
+	if reason != ReasonLapsed {
+		t.Fatalf("a late renewal: reason %q", reason)
+	}
+	// Nor does a queued record.
+	rec := okRecord(h.s, time.Now())
+	reason, _ = sup.handle(evWorkerMsg{Msg{Type: TypeStatus, Gen: gen, Seq: 3, Record: rec}})
+	if reason != ReasonLapsed {
+		t.Fatalf("a late record: reason %q", reason)
+	}
+	if sup.lease.Held() {
+		t.Fatal("held")
 	}
 }

@@ -83,6 +83,10 @@ type Supervisor struct {
 	toWFile *os.File
 	gen     string
 
+	// testFinal, when set (tests), replaces the stop sequence's last look at
+	// what survived the reaping deadline.
+	testFinal func() (worker, netbird bool)
+
 	wantNB      bool
 	stopping    bool
 	lastPublish time.Time
@@ -536,7 +540,11 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	}
 	wait(at(tm.StopReaped))
 	var left []string
-	workerLeft, nbLeft := alive()
+	final := alive
+	if s.testFinal != nil {
+		final = s.testFinal
+	}
+	workerLeft, nbLeft := final()
 	if workerLeft {
 		left = append(left, "the worker")
 	}
