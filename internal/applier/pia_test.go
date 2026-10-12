@@ -229,6 +229,12 @@ func piaEntries(t testing.TB) *providers.Entries {
 // piaSetup is the Python `make`: a PIA applier, its fake kernel and API.
 func piaSetup(t testing.TB, forward bool) (*Applier, *kernel, *piaAPI, string, string) {
 	t.Helper()
+	return piaSetupFor(t, forward, "")
+}
+
+// piaSetupFor is piaSetup with the SERVER setting.
+func piaSetupFor(t testing.TB, forward bool, server string) (*Applier, *kernel, *piaAPI, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	secrets := filepath.Join(dir, "secrets")
 	writeFile(t, filepath.Join(secrets, "username"), piaUsername+"\n", 0o600)
@@ -247,7 +253,7 @@ func piaSetup(t testing.TB, forward bool) (*Applier, *kernel, *piaAPI, string, s
 	if forward {
 		cfg.ForwardTarget = "192.0.2.10"
 	}
-	a := newApplier(t, k, dir, NewPIA(cfg), "")
+	a := newApplier(t, k, dir, NewPIA(cfg), server)
 	return a, k, api, dir, secrets
 }
 

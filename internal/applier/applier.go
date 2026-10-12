@@ -78,6 +78,7 @@ type Applier struct {
 	attemptPath      string
 	desiredPath      string
 	readJSON         func(path string, limit int64) any
+	exists           func(path string) bool
 
 	catalog Catalog
 	bootID  string
@@ -111,9 +112,13 @@ func New(cfg Config) (*Applier, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Refuses a sidecar with a native provider, at start.
+	if _, err := verdict.NewExitConfig(spec.ID, cfg.Exit.Kind, ""); err != nil {
+		return nil, err
+	}
 	a := &Applier{sys: cfg.System, hooks: cfg.Provider, spec: spec, exit: cfg.Exit, gatus: cfg.Gatus,
 		publish: cfg.Publish, ownerCheck: cfg.OwnerCheck, logf: cfg.Log, clock: cfg.Monotonic, wallNow: cfg.Wall, sleeper: cfg.Sleep,
-		readJSON: state.ReadJSON}
+		readJSON: state.ReadJSON, exists: fileExists}
 	if a.exit.Kind == "" {
 		a.exit.Kind = "overlay"
 	}
@@ -901,7 +906,7 @@ func (a *Applier) resolve(peek bool) *Selection {
 	}
 	raw := a.readJSON(a.desiredPath, 4096)
 	request, ok := state.DesiredRequest(raw, a.hooks.ID())
-	invalid := !ok && (raw != nil || fileExists(a.desiredPath))
+	invalid := !ok && (raw != nil || a.exists(a.desiredPath))
 	if !peek {
 		if ok {
 			a.request = &request

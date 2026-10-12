@@ -90,3 +90,13 @@ func isURL(substr string) func(r netx.Request) bool {
 }
 
 func readTestFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+func symlink(target, link string) error { return os.Symlink(target, link) }
+
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}

@@ -2,6 +2,7 @@ package applier
 
 import (
 	"context"
+	"errors"
 
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/validate"
@@ -225,3 +226,22 @@ func (BaseProvider) ReleaseSignature(*Applier, string) (string, bool) { return "
 
 // Published implements Provider.
 func (BaseProvider) Published(*Record) {}
+
+// ProviderFor is the provider for the PROVIDER setting: the registry id, with
+// the provider's own settings read through getenv (PIA's). The gluetun
+// providers are not part of this package.
+func ProviderFor(id string, exit Exit, getenv func(string) string) (Provider, error) {
+	spec, err := providers.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	switch spec.ID {
+	case "mullvad":
+		return NewMullvad(), nil
+	case "nordvpn":
+		return NewNordVPN(), nil
+	case "pia":
+		return NewPIAFromEnv(exit, getenv)
+	}
+	return nil, errors.New("no provider implementation for " + spec.ID)
+}
