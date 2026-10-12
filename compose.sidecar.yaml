@@ -6,21 +6,23 @@
 #
 # An ordinary gluetun that other containers share: your applications join its
 # network namespace (`network_mode: service:gluetun`) and send their own
-# traffic through its tunnel. The applier selects and verifies gluetun's
-# server through its control server; the panel shows and requests it. There
+# traffic through its tunnel. The exit container selects and verifies
+# gluetun's server through its control server; Switchyard shows and requests
+# it. There
 # is no NetBird and no Molebridge routing contract here: gluetun's own
 # firewall is what keeps the applications' traffic in the tunnel, and
 # Molebridge doesn't check it.
 #
-# Namespace ownership: `gluetun` creates the namespace. `applier` and every
+# Namespace ownership: `gluetun` creates the namespace. `exit` and every
 # application listed in SIDECAR_APPS join it. If `gluetun` is recreated, the
 # others can remain in its old namespace: recreate them together
-# (`python3 tools/molebridge.py recover`).
+# (`docker compose up -d --force-recreate`, then the attachment check in
+# docs/operations.md).
 #
 # Secrets live in mode-0600 files under ./secrets/gluetun; never print them
 # or paste `docker compose config` output anywhere. The control server's API
 # key is full gluetun administration: gluetun reads only its role file and the
-# applier only the key, each from its own mount, and the panel neither.
+# exit only the key, each from its own mount, and the panel neither.
 name: molebridge-sidecar
 
 services:
@@ -30,24 +32,26 @@ services:
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-gluetun"
     # Checks the control-server role file on every start, then runs gluetun's
     # own entrypoint: gluetun would log an excerpt of a malformed role file,
-    # API key included (routing/gluetun-preflight).
+    # API key included (routing/gluetun-preflight). MOLEBRIDGE_KIND below
+    # makes it refuse to start gluetun if the overlay's post-rules are
+    # mounted: a sidecar's protection has no overlay guard behind them.
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
     restart: unless-stopped
     cap_add: [NET_ADMIN]
     devices:
       - /dev/net/tun:/dev/net/tun
     # Publish your applications' ports here, and open them in gluetun's
-    # firewall with FIREWALL_INPUT_PORTS. Never publish 8000: the doctor fails
-    # when the control server's port is published.
+    # firewall with FIREWALL_INPUT_PORTS. Never publish 8000: the control
+    # server's port is full gluetun administration (docs/gluetun-sidecar.md).
     environment:
       TZ: "${TZ:-Etc/UTC}"
       VPN_SERVICE_PROVIDER: "${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
       VPN_TYPE: wireguard
       # gluetun's values are auto, userspace and kernelspace; kernelspace
       # fails instead of falling back to a userspace tunnel, which the
-      # applier can't inspect.
+      # exit can't inspect.
       WIREGUARD_IMPLEMENTATION: kernelspace
-      # gluetun's image defaults this to tun0; the applier reads EXIT_IF.
+      # gluetun's image defaults this to tun0; the exit reads EXIT_IF.
       VPN_INTERFACE: "${EXIT_IF:-wg0}"
       WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/wireguard_private_key
       WIREGUARD_ADDRESSES: "${GLUETUN_WIREGUARD_ADDRESSES:-}"
@@ -55,7 +59,7 @@ services:
       SERVER_CITIES: "${GLUETUN_SERVER_CITIES:-}"
       SERVER_HOSTNAMES: "${GLUETUN_SERVER_HOSTNAMES:-}"
       FIREWALL_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS:-}"
-      # gluetun's server list, in a directory of its own so the applier can
+      # gluetun's server list, in a directory of its own so the exit can
       # mount only that, read-only.
       STORAGE_FILEPATH: /gluetun/servers/servers.json
       UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
@@ -64,6 +68,7 @@ services:
       # Your applications share this loopback: keep the key out of their mounts.
       HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
       HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      MOLEBRIDGE_KIND: sidecar
     volumes:
       - gluetun-data:/gluetun
       - gluetun-servers:/gluetun/servers
@@ -73,6 +78,7 @@ services:
       # several routes with no authentication, including PUT /v1/vpn/status.
       # There are deliberately no post-rules: compose.gluetun.yaml's accept
       # output on the host interface, safe only behind the overlay's guard.
+      # The preflight refuses to start gluetun if you mount them anyway.
       # secrets/gluetun/wireguard_private_key: the provider key, one line, mode 0600.
       - type: bind
         source: ./secrets/gluetun/wireguard_private_key
@@ -81,7 +87,7 @@ services:
         bind:
           create_host_path: false
       # secrets/gluetun/auth.toml: control-server roles, mode 0600, written
-      # by `python3 tools/molebridge.py gluetun-auth`.
+      # by the `gluetun-auth` tool (docs/operations.md).
       - type: bind
         source: ./secrets/gluetun/auth.toml
         target: /gluetun/auth/config.toml
@@ -103,25 +109,31 @@ services:
         limits:
           memory: 256m
 
-  applier:
-    # The applier from compose.gluetun.yaml, as a sidecar: it reads gluetun's
-    # server list (read-only, never downloaded), selects servers through
-    # gluetun's control server on the namespace's loopback, then verifies the
-    # peer, the handshake and egress. It installs no routes or firewall rules.
+  exit:
+    # The image from compose.yaml, as a sidecar (EXIT_KIND=sidecar): it
+    # reads gluetun's server list (read-only, never downloaded), selects
+    # servers through gluetun's control server on the namespace's loopback,
+    # then verifies the peer, the handshake and egress. It runs no NetBird,
+    # installs no routes or firewall rules and has no routing contract, so its
+    # supervisor has nothing to clean up when it stops.
+    image: ghcr.io/irashack/molebridge:0.8.0
+    # Only for people who build from a checkout (`docker compose build`);
+    # the release bundle has no Dockerfile and pulls the image instead.
     build:
       context: .
-      dockerfile: applier/Dockerfile
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-applier"
+      dockerfile: Dockerfile
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-exit"
     restart: unless-stopped
     network_mode: service:gluetun
     cap_drop: [ALL]
-    # NET_ADMIN: `wg show` reads peers, handshake and endpoint through kernel
-    # WireGuard's WG_CMD_GET_DEVICE, which requires CAP_NET_ADMIN over the
-    # namespace. In gluetun's namespace it could equally change gluetun's
-    # routes and firewall and read the live WireGuard private key
+    # NET_ADMIN: reading peers, handshake and endpoint through kernel
+    # WireGuard's WG_CMD_GET_DEVICE requires CAP_NET_ADMIN over the namespace.
+    # In gluetun's namespace it could equally change gluetun's routes and
+    # firewall and read the live WireGuard private key
     # (docs/gluetun-sidecar.md).
-    # NET_RAW: curl --interface binds to the tunnel for egress checks, which
-    # needs it on kernels before 5.7.
+    # NET_RAW: binding to the tunnel for egress checks needs it on kernels
+    # before 5.7.
     # DAC_OVERRIDE: reads the mode-0600 API key and panel requests owned by
     # your host user, and writes host-user-owned state directories (rootful
     # Docker; a rootless engine's container root is that user already).
@@ -129,13 +141,17 @@ services:
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
-      - /tmp:size=8m,mode=1777,noexec,nosuid,nodev
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    stop_grace_period: 15s
     # The Compose services of the applications that use the tunnel,
-    # comma-separated. tools/molebridge.py doctor checks that each one is in
-    # gluetun's current namespace, and recover recreates them with gluetun.
+    # comma-separated, for the attachment procedure in docs/operations.md:
+    # each one must be in gluetun's current namespace, and
+    # `docker compose up -d --force-recreate` must cover them with gluetun.
     labels:
       io.molebridge.sidecar-apps: "${SIDECAR_APPS:-}"
     environment:
+      TZ: "${TZ:-Etc/UTC}"
       EXIT_KIND: sidecar
       TUNNEL_BACKEND: gluetun
       PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
@@ -144,11 +160,15 @@ services:
       GLUETUN_CONTROL_URL: http://127.0.0.1:8000
       GLUETUN_API_KEY_FILE: /run/secrets/gluetun/api_key
       GLUETUN_SERVERS_FILE: /gluetun-servers/servers.json
-      # The applier starts one refresh of the list at start when the data is
+      # The exit starts one refresh of the list at start when the data is
       # older than this period or than 7 days; 0 means never.
       GLUETUN_UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
       GATUS_URL: "${GATUS_URL:-}"
       GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Seconds without an accepted lease renewal before the supervisor
+      # declares the exit stopped (5 to 30; docs/configuration.md).
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
     env_file:
       # Optional GATUS_TOKEN for health pushes.
       - path: ./secrets/applier.env
@@ -158,8 +178,8 @@ services:
       - ./state/applier:/state/applier
       # Only the directory of gluetun's server list, read-only.
       - gluetun-servers:/gluetun-servers:ro
-      # The API key from `tools/molebridge.py gluetun-auth`, mode 0600. Never
-      # the role file, which only gluetun mounts.
+      # The API key from the `gluetun-auth` tool, mode 0600. Never the role
+      # file, which only gluetun mounts.
       - type: bind
         source: ./secrets/gluetun/api_key
         target: /run/secrets/gluetun/api_key
@@ -171,9 +191,9 @@ services:
         condition: service_started
         restart: true
     healthcheck:
-      test: ["CMD", "python", "-m", "applier.apply", "--healthcheck"]
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
       interval: 30s
-      timeout: 25s
+      timeout: 5s
       retries: 3
       start_period: 30s
     logging: *logging
@@ -212,27 +232,31 @@ services:
         limits:
           memory: 16m
 
-  control-panel:
+  switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: docker.io/library/python:3.14.7-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-control-panel"
+    image: ghcr.io/irashack/molebridge:0.8.0
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-switchyard"
     restart: unless-stopped
     # The user that owns ./state/panel, as the container sees it: your host
-    # user's uid:gid on Docker; 0:0 under a rootless engine that remaps uids
-    # (docs/configuration.md).
+    # user's uid:gid on Docker. Under a rootless engine that remaps uids, set
+    # PANEL_USER=0:0 and PANEL_ALLOW_ROOT=1 beside it, because the panel
+    # refuses to run as uid 0 unless you say so (docs/configuration.md).
     user: "${PANEL_USER:-1000:1000}"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
-    working_dir: /app
-    command: ["python", "/app/panel/app.py"]
     environment:
       STATE_DIR: /state
       PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
       # A single-exit panel reads the kind from here.
       EXIT_KIND: sidecar
-      PYTHONDONTWRITEBYTECODE: "1"
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The panel treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      PANEL_EXITS: "${PANEL_EXITS:-}"
       PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
       PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
       PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
@@ -253,13 +277,12 @@ services:
       # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
       - "127.0.0.1:${PANEL_PORT:-8095}:8080"
     volumes:
-      - ./panel:/app/panel:ro
-      - ./molebridge:/app/molebridge:ro
+      # Only `panel/`, where requests are written, is writable here.
       - ./state/panel:/state/panel
       - ./state/applier:/state/applier:ro
     networks: [panel]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -268,7 +291,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 128m
 
 networks:
   panel:

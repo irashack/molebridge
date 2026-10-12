@@ -27,26 +27,37 @@ services:
     image: ghcr.io/irashack/molebridge:0.8
     environment:
       PROVIDER: ${PROVIDER:-mullvad}
+  switchyard:
+    image: ghcr.io/irashack/molebridge:0.8
 EOM
 cat > "$src/compose.gluetun.yaml" <<'EOM'
 services:
   gluetun:
     image: docker.io/example/gluetun:1
+    environment:
+      MOLEBRIDGE_KIND: overlay
     volumes:
       - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
   exit:
+    image: ghcr.io/irashack/molebridge:0.8
+  switchyard:
     image: ghcr.io/irashack/molebridge:0.8
 EOM
 cat > "$src/compose.sidecar.yaml" <<'EOM'
 services:
   gluetun:
     image: docker.io/example/gluetun:1
+    environment:
+      MOLEBRIDGE_KIND: sidecar
     volumes:
       - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
   exit:
     image: ghcr.io/irashack/molebridge:0.8
+  switchyard:
+    image: ghcr.io/irashack/molebridge:0.8
 EOM
 echo 'PROVIDER=mullvad' > "$src/.env.example"
+echo 'GLUETUN_PROVIDER=nordvpn' > "$src/.env.gluetun.example"
 echo 'X=1' > "$src/.env.sidecar.example"
 echo MIT > "$src/LICENSE"; echo notices > "$src/THIRD_PARTY.md"
 
@@ -68,6 +79,23 @@ sed 's#image: ghcr.io/irashack/molebridge:.*#image: ghcr.io/irashack/molebridge:
 tar -czf "$work/bad/unpinned.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1
 sh "$here/check-bundle.sh" "$work/bad/unpinned.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted an unpinned image"
 pass "refuses an unpinned image"
+
+# A gluetun form that tells its preflight the wrong kind, and a form missing a service.
+mkdir -p "$work/bad/k"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/k"
+sed 's/MOLEBRIDGE_KIND: overlay/MOLEBRIDGE_KIND: sidecar/' "$work/bad/k/molebridge-v0.8.0-rc.1/compose.gluetun.yaml" > "$work/bad/c" &&
+    cp "$work/bad/c" "$work/bad/k/molebridge-v0.8.0-rc.1/compose.gluetun.yaml"
+tar -czf "$work/bad/kind.tar.gz" -C "$work/bad/k" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/kind.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a gluetun form with the wrong kind"
+pass "refuses a gluetun form that tells its preflight the wrong kind"
+mkdir -p "$work/bad/s"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/s"
+grep -v 'switchyard:\|image: ghcr.io/irashack/molebridge' "$work/bad/s/molebridge-v0.8.0-rc.1/compose.yaml" > "$work/bad/c"
+printf '  switchyard:\n    image: %s\n' "$ref" >> "$work/bad/c"
+cp "$work/bad/c" "$work/bad/s/molebridge-v0.8.0-rc.1/compose.yaml"
+tar -czf "$work/bad/noexit.tar.gz" -C "$work/bad/s" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/noexit.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native form without its exit service"
+pass "refuses a native form without its exit service"
 
 rm "$work/bad/x/molebridge-v0.8.0-rc.1/routing/gluetun-preflight"
 tar -czf "$work/bad/nopreflight.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1

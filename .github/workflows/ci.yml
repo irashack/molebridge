@@ -26,18 +26,31 @@ jobs:
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Shell scripts
         run: |
-          scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh"
+          scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh tools/check-compose.sh tools/test-gluetun-preflight.sh"
           for script in $scripts; do sh -n "$script"; done
           # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
-      - name: Compose file
+      - name: Compose files
+        # Each form against its own example environment, the native form for
+        # every provider, then the trust boundary as Compose resolves it
+        # (tools/check-compose.sh). No .env is written: the examples are read
+        # with --env-file.
         run: |
-          cp .env.example .env
-          docker compose config --quiet
-          docker compose -f compose.yaml -f compose.pia.yaml config --quiet
-          docker compose -f compose.yaml -f compose.nordvpn.yaml config --quiet
-          docker compose -f compose.gluetun.yaml config --quiet
-          docker compose -f compose.sidecar.yaml --env-file .env.sidecar.example config --quiet
+          docker compose --env-file .env.example -f compose.yaml config --quiet
+          for provider in mullvad pia nordvpn; do
+            PROVIDER=$provider EXIT_IF=$provider docker compose --env-file .env.example -f compose.yaml config --quiet
+          done
+          docker compose --env-file .env.gluetun.example -f compose.gluetun.yaml config --quiet
+          docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
+          sh tools/check-compose.sh
+      - name: gluetun preflight
+        # The wrapper runs inside gluetun's Alpine image: test it under the
+        # runner's shell and under busybox, the shell and awk it runs with.
+        run: |
+          sh tools/test-gluetun-preflight.sh
+          docker run --rm -v "$PWD:/repo:ro" -w /repo \
+            docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e \
+            sh tools/test-gluetun-preflight.sh
       - name: Python tests
         run: |
           python3 -m venv .venv
@@ -203,13 +216,9 @@ jobs:
           sh tools/test-make-acceptance-predicate.sh
           sh tools/test-release-notes.sh
       - name: Bundle from the repository's Compose files
-        # Once the Compose files reference the image, the bundle built from
-        # them installs without a checkout. Until then there is nothing to pin.
+        # The bundle built from the Compose files installs all three forms
+        # without a checkout.
         run: |
-          if ! grep -q 'ghcr.io/irashack/molebridge' compose.yaml; then
-            echo "compose.yaml does not reference ghcr.io/irashack/molebridge yet; skipped."
-            exit 0
-          fi
           digest=sha256:$(printf '0%.0s' $(seq 1 64))
           mkdir -p "$RUNNER_TEMP/bundle"
           SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$digest" "$RUNNER_TEMP/bundle"
