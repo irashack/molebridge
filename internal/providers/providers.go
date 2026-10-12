@@ -1,3 +1,23 @@
+// Package providers is the provider registry and the catalogue parsers: what
+// Molebridge knows per VPN provider, in one place. It ports
+// molebridge/providers.py (the registry, without the applier class names),
+// mullvad.py, pia.py, nordvpn.py, gluetun_catalog.py and relays.py.
+//
+// It offers:
+//
+//   - Registry: Get, Lookup, IDs, FromEnv, and Provider with its fields,
+//     methods (ValidServerName, CSSID) and the per-provider hooks (ParseCatalog,
+//     ValidateEntry, ChipLabel, Details).
+//   - Relay and Entries: a catalogue entry and an insertion-ordered catalogue,
+//     both knowing the member order of relays.json.
+//   - Per-provider parsing: ParseMullvadResponse, ParsePIAResponse,
+//     ParseNordCatalog, ParseInsights, ParseGluetunCatalog and the file reader
+//     ReadGluetunSnapshot, ServerForEndpoint, ServerForPeer, EndpointAddress.
+//   - The relay snapshot: RelayCatalog (read, refresh, usable), ReadSnapshot,
+//     SnapshotRelays, SnapshotLimit.
+//
+// Everything parsed here is untrusted input; the parsers validate it exactly
+// as the Python did and return errors that never carry any of it.
 package providers
 
 import (
