@@ -191,7 +191,7 @@ func TestACancelledContextSendsNothing(t *testing.T) {
 	}
 }
 
-func TestKernelRefusalsKeepTheConnection(t *testing.T) {
+func TestOnlyANoSuchDeviceReplyKeepsTheConnection(t *testing.T) {
 	s := newStall()
 	s.answer = func(cmd uint8, _ netlink.HeaderFlags, _ []byte) ([]genetlink.Message, error) {
 		return nil, &netlink.OpError{Op: "receive", Err: unix.ENODEV}
@@ -201,12 +201,76 @@ func TestKernelRefusalsKeepTheConnection(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 	if c.Broken() {
-		t.Error("a refusal replaced the connection")
+		t.Error("a missing device replaced the connection")
 	}
+}
+
+// Everything else is a reset: the library wraps transport and validation
+// failures in the same OpError as a kernel refusal, and ENOBUFS is both.
+func TestAnyOtherFailureResetsTheConnectionAndTheNextRequestUsesANewSocket(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"receive buffer overrun", &netlink.OpError{Op: "receive", Err: unix.ENOBUFS}},
+		{"mismatched sequence", &netlink.OpError{Op: "validate", Err: errors.New("mismatched sequence in netlink reply")}},
+		{"mismatched pid", &netlink.OpError{Op: "validate", Err: errors.New("mismatched PID in netlink reply")}},
+		{"short error message", &netlink.OpError{Op: "receive", Err: errors.New("received a short netlink error message")}},
+		{"a refusal that is not a missing device", &netlink.OpError{Op: "receive", Err: unix.EPERM}},
+		{"a send failure", &netlink.OpError{Op: "send", Err: unix.EPIPE}},
+		{"not an OpError", errors.New("garbage")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sockets []*stall
+			dial := func() *stall {
+				s := newStall()
+				s.familyAnswer = true
+				sockets = append(sockets, s)
+				return s
+			}
+			first := dial()
+			first.answer = func(uint8, netlink.HeaderFlags, []byte) ([]genetlink.Message, error) { return nil, tc.err }
+			c, err := dialOn(context.Background(), first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Device(context.Background(), "wg0"); err == nil {
+				t.Fatal("no error")
+			}
+			if !c.Broken() {
+				t.Fatal("the connection stayed reusable")
+			}
+			select {
+			case <-first.closed:
+			default:
+				t.Error("the socket was not closed")
+			}
+			// The next request is refused on this connection; the owner
+			// dials a new one, which works.
+			if _, err := c.Device(context.Background(), "wg0"); !errors.Is(err, ErrBroken) {
+				t.Errorf("the broken connection was used: %v", err)
+			}
+			second := dial()
+			second.answer = func(uint8, netlink.HeaderFlags, []byte) ([]genetlink.Message, error) { return nil, nil }
+			c2, err := dialOn(context.Background(), second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c2.Configure(context.Background(), "wg0", wgtypes.Config{}); err != nil || c2.Broken() || len(sockets) != 2 {
+				t.Fatalf("%v broken=%v sockets=%d", err, c2.Broken(), len(sockets))
+			}
+		})
+	}
+}
+
+func TestAReplyThatDoesNotDecodeResetsTheConnection(t *testing.T) {
+	s := newStall()
 	s.answer = func(uint8, netlink.HeaderFlags, []byte) ([]genetlink.Message, error) {
-		return nil, &netlink.OpError{Op: "receive", Err: unix.EPERM}
+		return []genetlink.Message{{Data: []byte{1, 2, 3}}}, nil // a truncated attribute
 	}
-	if err := c.Configure(context.Background(), "x", wgtypes.Config{}); !errors.Is(err, unix.EPERM) || c.Broken() {
+	c := connected(t, s)
+	if _, err := c.Device(context.Background(), "wg0"); err == nil || !c.Broken() {
 		t.Fatalf("%v broken=%v", err, c.Broken())
 	}
 }

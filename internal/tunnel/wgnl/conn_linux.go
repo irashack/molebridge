@@ -150,21 +150,23 @@ func (c *Conn) execute(ctx context.Context, command uint8, flags netlink.HeaderF
 		_ = c.s.Close()
 		return nil, deadlineErr(ctx)
 	}
+	// Only a kernel's "no such device" reply leaves the stream usable. Every
+	// other failure resets the connection: the library reports transport
+	// errors (ENOBUFS, a lost reply), validation failures (mismatched
+	// sequence or PID) and malformed messages as the same *OpError type as a
+	// kernel refusal, and a genuine errno reply cannot be told from an
+	// errno the socket itself raised (ENOBUFS is both). A reset costs one
+	// redial; reusing a desynchronized stream could answer a request with
+	// the previous one's reply.
 	var oerr *netlink.OpError
-	if errors.As(err, &oerr) {
+	if errors.As(err, &oerr) && oerr.Op == "receive" {
 		switch oerr.Err {
 		// "No such device" and "not a wireguard device" are os.ErrNotExist
 		// for easy checking, as wgctrl reports them.
 		case unix.ENODEV, unix.ENOTSUP:
 			return nil, os.ErrNotExist
 		}
-		if errors.Is(oerr.Err, os.ErrDeadlineExceeded) {
-			c.markBroken()
-			_ = c.s.Close()
-		}
-		return nil, oerr.Err
 	}
-	// Anything that is not the kernel's refusal leaves the stream in doubt.
 	c.markBroken()
 	_ = c.s.Close()
 	return nil, err
@@ -183,7 +185,14 @@ func (c *Conn) Device(ctx context.Context, name string) (*wgtypes.Device, error)
 	if err != nil {
 		return nil, err
 	}
-	return parseDevice(msgs)
+	d, err := parseDevice(msgs)
+	if err != nil {
+		// A reply that does not decode means the stream cannot be trusted.
+		c.markBroken()
+		_ = c.s.Close()
+		return nil, err
+	}
+	return d, nil
 }
 
 // Configure sets a WireGuard device (wgctrl's Client.ConfigureDevice),
