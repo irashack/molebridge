@@ -30,6 +30,11 @@ const (
 	ProblemHost Problem = "host"
 	// ProblemNoDefault: IPv4 has no default route through the host interface.
 	ProblemNoDefault Problem = "nodefault"
+	// ProblemUnprotected: a global address on the tunnel interface has no
+	// return-path rule pair (rules 94 and 98, or 94 with gluetun) in the
+	// snapshot. Natively the repair adds the pair; where the pair is left to a
+	// transaction (an addressless config) only a transaction can.
+	ProblemUnprotected Problem = "unprotected"
 )
 
 // PlanInput is what a pass knows beyond the snapshot.
@@ -60,6 +65,8 @@ type Plan struct {
 	HoldKillSwitch bool
 	Rules          []Action
 	Routes         []RouteAction
+	// Unprotected: a live tunnel address lacks its return-path pair.
+	Unprotected bool
 	// Problems are what is still wrong if the plan is not applied; with
 	// gluetun, Problems also carries the conditions no action can fix
 	// (ProblemNoDefault) and a held kill switch is reported by HoldKillSwitch,
@@ -75,9 +82,10 @@ func (p Plan) Clean() bool {
 	return len(p.Rules) == 0 && len(p.Routes) == 0 && !p.HostRefresh
 }
 
-// Healthy is Clean and nothing is wrong that no action can repair.
+// Healthy is Clean and nothing is wrong that no action can repair, and no live
+// tunnel address is without its pair.
 func (p Plan) Healthy() bool {
-	if !p.Clean() {
+	if !p.Clean() || p.Unprotected {
 		return false
 	}
 	for _, pr := range p.Problems {
@@ -108,10 +116,23 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 			p.Tunnel = TunnelRequired
 		}
 	} else {
+		// Every global address live on the tunnel interface is protected, in
+		// addition to the addresses the expected state names: a pair is added
+		// for a live address that lacks one, and the expected state's own
+		// entries (kept after a failed change) are never dropped here. Only an
+		// address that is neither expected nor live loses its pair.
+		spec = s.Clone()
+		if !s.LeaveReturnPath[f] {
+			for _, a := range liveGlobals(snap, c.ExitIf, f) {
+				if !containsAddr(spec.ReturnPath[f], a) {
+					spec.ReturnPath[f] = append(spec.ReturnPath[f], a)
+				}
+			}
+		}
 		switch {
 		case in.TunnelStarting:
 			p.Tunnel = TunnelMaybe
-		case up && (f == rtnl.V4 || len(s.ReturnPath[rtnl.V6]) > 0):
+		case up && (f == rtnl.V4 || len(spec.ReturnPath[rtnl.V6]) > 0):
 			p.Tunnel = TunnelRequired
 		}
 	}
@@ -137,8 +158,44 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 	if len(p.Rules) > 0 {
 		p.Problems = append(p.Problems, ProblemRules)
 	}
+	if unprotected(snap, c, f) {
+		p.Problems = append(p.Problems, ProblemUnprotected)
+		p.Unprotected = true
+	}
 	if len(p.Routes) > 0 {
 		p.Problems = append(p.Problems, ProblemExit)
 	}
 	return p
+}
+
+func liveGlobals(snap *rtnl.Snapshot, ifName string, f rtnl.Family) []netip.Addr {
+	link, ok := snap.Link(ifName)
+	if !ok {
+		return nil
+	}
+	var out []netip.Addr
+	for _, a := range snap.Addrs[f] {
+		if a.Index == link.Index && a.Global() && !containsAddr(out, a.Local.Addr()) {
+			out = append(out, a.Local.Addr())
+		}
+	}
+	return out
+}
+
+// unprotected: some live global address on the tunnel interface lacks a rule
+// 94 (and, natively, a rule 98) for it in the snapshot.
+func unprotected(snap *rtnl.Snapshot, c Config, f rtnl.Family) bool {
+	for _, a := range liveGlobals(snap, c.ExitIf, f) {
+		var has94, has98 bool
+		for _, r := range snap.Rules[f] {
+			if r.Src.IsValid() && r.Src.Addr() == a {
+				has94 = has94 || r.Priority == PrioReturnPath
+				has98 = has98 || r.Priority == PrioBackstop
+			}
+		}
+		if !has94 || (!c.IsGluetun() && !has98) {
+			return true
+		}
+	}
+	return false
 }

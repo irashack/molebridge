@@ -42,6 +42,10 @@ type fakeKernel struct {
 
 	timeouts []time.Duration
 	dumps    int
+	// unstableFn marks the n-th snapshot (1-based) as one taken while the
+	// kernel kept changing: it is flagged Unstable and, like a real one can,
+	// leaves out the interface addresses.
+	unstableFn func(n int) bool
 	// takeFail returns an error for the n-th snapshot (1-based).
 	takeFail func(n int) error
 	takes    int
@@ -107,6 +111,10 @@ func (k *fakeKernel) Take(in rtnl.Interest) (*rtnl.Snapshot, error) {
 	}
 	s := rtnl.NewSnapshot()
 	s.Unstable = k.unstable
+	omitAddrs := false
+	if k.unstableFn != nil && k.unstableFn(k.takes) {
+		s.Unstable, omitAddrs = true, true
+	}
 	for _, f := range families {
 		s.Rules[f] = append([]rtnl.Rule(nil), k.rules[f]...)
 		for _, r := range k.routes[f] {
@@ -116,7 +124,9 @@ func (k *fakeKernel) Take(in rtnl.Interest) (*rtnl.Snapshot, error) {
 				}
 			}
 		}
-		s.Addrs[f] = append([]rtnl.Addr(nil), k.addrs[f]...)
+		if !omitAddrs {
+			s.Addrs[f] = append([]rtnl.Addr(nil), k.addrs[f]...)
+		}
 	}
 	s.Links = append([]rtnl.Link(nil), k.links...)
 	return s, nil
