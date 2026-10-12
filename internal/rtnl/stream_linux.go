@@ -145,7 +145,11 @@ type Conn struct {
 
 	// churn is a private multicast subscription that tells a snapshot whether
 	// anything changed while it was being taken. Optional.
-	churn churnSource
+	churn  churnSource
+	reopen func() (churnSource, error)
+	// takeMu serializes snapshots, which use the subscription.
+	takeMu  sync.Mutex
+	churnMu sync.Mutex
 
 	tmu    sync.Mutex // guards t and closed
 	t      transport
@@ -161,6 +165,7 @@ func Dial(o Options) (*Conn, error) {
 	}
 	c.t = t
 	// Best effort: without it a snapshot is judged by two looks that agree.
+	c.reopen = func() (churnSource, error) { return Subscribe(o) }
 	if sub, err := Subscribe(o); err == nil {
 		c.churn = sub
 	}
@@ -175,8 +180,8 @@ type churnSource interface {
 
 // Close closes the socket and unblocks a request in flight.
 func (c *Conn) Close() error {
-	if c.churn != nil {
-		_ = c.churn.Close()
+	if ch := c.swapChurn(nil); ch != nil {
+		_ = ch.Close()
 	}
 	c.tmu.Lock()
 	defer c.tmu.Unlock()
@@ -488,4 +493,19 @@ func (c *Conn) dumpRetry(ctx context.Context, typ, want uint16, data []byte) ([]
 func (c *Conn) request(ctx context.Context, typ, flags uint16, data []byte) error {
 	_, _, err := c.exchange(ctx, typ, flags, data)
 	return err
+}
+
+// getChurn and swapChurn guard the pointer: Close may run while a snapshot does.
+func (c *Conn) getChurn() churnSource {
+	c.churnMu.Lock()
+	defer c.churnMu.Unlock()
+	return c.churn
+}
+
+func (c *Conn) swapChurn(n churnSource) churnSource {
+	c.churnMu.Lock()
+	defer c.churnMu.Unlock()
+	old := c.churn
+	c.churn = n
+	return old
 }

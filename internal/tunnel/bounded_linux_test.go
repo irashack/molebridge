@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	vnetlink "github.com/vishvananda/netlink"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/irashack/molebridge/internal/contract"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnelconf"
 )
@@ -73,7 +75,9 @@ func (f *factory) open() (wgClient, error) {
 	return c, nil
 }
 
-func newStalled(f *factory) *Manager { return &Manager{open: f.open} }
+func newStalled(f *factory) *Manager {
+	return &Manager{openWG: func(context.Context) (wgClient, error) { return f.open() }}
+}
 
 func TestAStalledFwmarkReadEndsAtTheDeadlineAndTheConnectionIsReplaced(t *testing.T) { // finding: the fwmark monitor's next sample
 	f := &factory{stalled: func(n int) (bool, bool) { return n == 0, false }}
@@ -207,4 +211,177 @@ func testConf(t *testing.T) *tunnelconf.Conf {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// ---- the link handle ----
+
+// A link handle whose calls each take a while and whose receives block until
+// the handle is closed once stalled.
+type fakeLinks struct {
+	per     time.Duration
+	stall   bool
+	calls   atomic.Int32
+	closed  chan struct{}
+	once    sync.Once
+	missing bool
+}
+
+func (f *fakeLinks) wait() error {
+	f.calls.Add(1)
+	if f.stall {
+		<-f.closed
+		return errors.New("use of a closed handle")
+	}
+	select {
+	case <-time.After(f.per):
+		return nil
+	case <-f.closed:
+		return errors.New("use of a closed handle")
+	}
+}
+func (f *fakeLinks) LinkByName(name string) (vnetlink.Link, error) {
+	if err := f.wait(); err != nil {
+		return nil, err
+	}
+	if f.missing {
+		return nil, vnetlink.LinkNotFoundError{}
+	}
+	return &vnetlink.Wireguard{LinkAttrs: vnetlink.LinkAttrs{Name: name, Index: 7}}, nil
+}
+func (f *fakeLinks) LinkAdd(vnetlink.Link) error                 { return f.wait() }
+func (f *fakeLinks) LinkDel(vnetlink.Link) error                 { return f.wait() }
+func (f *fakeLinks) LinkSetMTU(vnetlink.Link, int) error         { return f.wait() }
+func (f *fakeLinks) LinkSetUp(vnetlink.Link) error               { return f.wait() }
+func (f *fakeLinks) AddrAdd(vnetlink.Link, *vnetlink.Addr) error { return f.wait() }
+func (f *fakeLinks) Close()                                      { f.once.Do(func() { close(f.closed) }) }
+
+func newLinkManager(open func() (linkAPI, error)) *Manager { return &Manager{openLK: open} }
+
+func TestAGroupOfLinkCallsSharesOneAbsoluteDeadline(t *testing.T) { // finding: each receive restarted a relative timeout
+	var all []*fakeLinks
+	var mu sync.Mutex
+	m := newLinkManager(func() (linkAPI, error) {
+		f := &fakeLinks{per: 40 * time.Millisecond, closed: make(chan struct{})}
+		mu.Lock()
+		all = append(all, f)
+		mu.Unlock()
+		return f, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := m.linkDo(ctx, func(h linkAPI) error {
+		// Three calls of 40 ms each: 120 ms against a 70 ms deadline.
+		for i := 0; i < 3; i++ {
+			if _, err := h.LinkByName("x"); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%v", err)
+	}
+	if took := time.Since(start); took > 110*time.Millisecond {
+		t.Errorf("took %v for a 70 ms deadline", took)
+	}
+	select {
+	case <-all[0].closed:
+	default:
+		t.Error("the handle was not closed at the deadline")
+	}
+	// The next group opens a new handle.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	if err := m.linkDo(ctx2, func(h linkAPI) error { _, err := h.LinkByName("x"); return err }); err != nil || len(all) != 2 {
+		t.Fatalf("%v (%d handles)", err, len(all))
+	}
+}
+
+func TestAStalledReceiveIsInterruptedByClosingTheHandle(t *testing.T) {
+	m := newLinkManager(func() (linkAPI, error) { return &fakeLinks{stall: true, closed: make(chan struct{})}, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := m.CleanupContext(ctx, contract.Native, "wg0", "wt0")
+	if err == nil {
+		t.Fatal("no error")
+	}
+	// Both links are tried, each under the same absolute deadline: the second
+	// gets a handle that is cut off at once.
+	if took := time.Since(start); took > 400*time.Millisecond {
+		t.Errorf("took %v", took)
+	}
+}
+
+func TestDownBoundsItsLookupAndItsDelete(t *testing.T) {
+	m := newLinkManager(func() (linkAPI, error) {
+		return &fakeLinks{per: 35 * time.Millisecond, closed: make(chan struct{})}, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := m.DownContext(ctx, Params{ExitIf: "wg0"})
+	if err == nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%v", err)
+	}
+	if time.Since(start) > 120*time.Millisecond {
+		t.Errorf("took %v", time.Since(start))
+	}
+}
+
+func TestALinkHandleDeliveredAfterTheDeadlineIsClosed(t *testing.T) {
+	late := &fakeLinks{closed: make(chan struct{})}
+	release := make(chan struct{})
+	m := newLinkManager(func() (linkAPI, error) { <-release; return late, nil })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := m.linkDo(ctx, func(linkAPI) error { return nil }); err == nil {
+		t.Fatal("no error")
+	}
+	close(release)
+	select {
+	case <-late.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the handle delivered after cancellation was left open")
+	}
+	m.cmu.Lock()
+	kept := m.lk
+	m.cmu.Unlock()
+	if kept != nil {
+		t.Error("the late handle was kept")
+	}
+}
+
+func TestAWireGuardClientDeliveredAfterTheDeadlineIsClosed(t *testing.T) { // finding: a late client leaked
+	late := &stallClient{closed: make(chan struct{})}
+	release := make(chan struct{})
+	m := &Manager{openWG: func(context.Context) (wgClient, error) { <-release; return late, nil }}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := m.FwmarkContext(ctx, "wt0")
+	if !errors.Is(err, os.ErrDeadlineExceeded) || time.Since(start) > 400*time.Millisecond {
+		t.Fatalf("%v after %v", err, time.Since(start))
+	}
+	close(release)
+	select {
+	case <-late.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the client delivered after cancellation was left open")
+	}
+}
+
+func TestTheWireGuardOpenIsGivenTheDeadline(t *testing.T) {
+	var got time.Time
+	m := &Manager{openWG: func(ctx context.Context) (wgClient, error) {
+		got, _ = ctx.Deadline()
+		return &stallClient{closed: make(chan struct{})}, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	if _, err := m.FwmarkContext(ctx, "wt0"); err != nil || !got.Equal(want) {
+		t.Fatalf("%v: the open was given %v, want %v", err, got, want)
+	}
 }

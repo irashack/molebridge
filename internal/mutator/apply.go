@@ -48,7 +48,12 @@ func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 // (missing ones first, terminal rules first, then the removals), the exit
 // table. It never stops at a failure; every failure is returned and the pass's
 // verification decides what it meant.
-func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []error) {
+//
+// With removals=false (the snapshot was Unstable: the kernel kept changing
+// while it was taken) only additions are made: no rule, route or host-table
+// entry is removed or rebuilt on evidence that may show a gap or a repeat
+// that is not there. A phantom absence must never cost a protection.
+func (tx *Tx) apply(spec contract.Spec, p contract.Plan, removals bool) (mutations int, errs []error) {
 	f := p.Family
 	note := func(changed bool, err error, what string) {
 		if changed {
@@ -59,7 +64,7 @@ func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []
 		}
 	}
 	c := spec.Config
-	if p.HostRefresh {
+	if p.HostRefresh && removals {
 		changedAny := false
 		for _, r := range p.HostFlush {
 			ch, err := tx.delRoute(clearSource(r))
@@ -84,6 +89,9 @@ func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []
 	// rebuild); it is not removed as a stray until the expected rule is back.
 	failedAdd := map[string]bool{}
 	for _, a := range p.Rules {
+		if !removals && a.Kind != contract.Add {
+			continue
+		}
 		switch a.Kind {
 		case contract.Add:
 			ch, err := tx.addRule(a.Rule)
@@ -143,6 +151,9 @@ func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []
 				tx.Logf("molebridge: %s tunnel route through %s restored", f, c.ExitIf)
 			}
 		case contract.DelRoute:
+			if !removals {
+				continue
+			}
 			ch, err := tx.delRoute(clearSource(ra.Route))
 			note(ch, err, fmt.Sprintf("remove a %s route from table %d", f, c.Table))
 		}
