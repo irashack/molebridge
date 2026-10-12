@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"math/big"
 	"net/netip"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -57,6 +58,10 @@ func RuneCount(s string) int {
 
 // IsSurrogate reports whether r is a UTF-16 surrogate code point.
 func IsSurrogate(r rune) bool { return r >= 0xD800 && r < 0xE000 }
+
+// IsSpace is Python's str.isspace() for one character: Unicode white space
+// plus the four ASCII separators U+001C to U+001F.
+func IsSpace(r rune) bool { return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f) }
 
 // -- decoded-JSON type predicates ---------------------------------------------
 //
