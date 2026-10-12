@@ -1,0 +1,2211 @@
+{
+"now": "2026-10-11T12:00:00Z",
+"now_nanos": 500000000,
+"cases": [
+{
+"value": "2026-10-11T11:59:50Z",
+"age": 10.5,
+"strict_age": 10.5
+},
+{
+"value": "2026-10-11T12:00:00Z",
+"age": 0.5,
+"strict_age": 0.5
+},
+{
+"value": "2026-10-11T12:00:01Z",
+"age": -0.5,
+"strict_age": -0.5
+},
+{
+"value": "2026-1-5T1:2:3Z",
+"age": 24145077.5,
+"strict_age": null
+},
+{
+"value": "2026-01-01t00:00:00z",
+"age": 24494400.5,
+"strict_age": null
+},
+{
+"value": "2026-02-30T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2024-02-29T00:00:00Z",
+"age": 82555200.5,
+"strict_age": 82555200.5
+},
+{
+"value": "2023-02-29T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1900-02-29T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2000-02-29T00:00:00Z",
+"age": 839937600.5,
+"strict_age": 839937600.5
+},
+{
+"value": "2026-01-01T00:00:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-01T00:00:59Z",
+"age": 24494341.5,
+"strict_age": 24494341.5
+},
+{
+"value": "0000-01-01T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0001-01-01T00:00:00Z",
+"age": 63927316800.5,
+"strict_age": 63927316800.5
+},
+{
+"value": "9999-12-31T23:59:59Z",
+"age": -251610580798.5,
+"strict_age": -251610580798.5
+},
+{
+"value": "2026-01-01T24:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-01T23:59:59Z",
+"age": 24408001.5,
+"strict_age": 24408001.5
+},
+{
+"value": " 2026-01-01T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-01T00:00:00Z ",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-01T00:00:00Z\n",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01- 1T00:00:00Z",
+"age": 24494400.5,
+"strict_age": null
+},
+{
+"value": "2026-01-01T00:00:00",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-01 00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-13-01T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-00-01T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-00T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-32T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-01-31T00:00:00Z",
+"age": 21902400.5,
+"strict_age": 21902400.5
+},
+{
+"value": "2026-04-31T00:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "",
+"age": null,
+"strict_age": null
+},
+{
+"value": "x",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-10-11T12:00:00+00:00",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-10-11T12:00:00.5Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "26-10-11T12:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-10-1T12:00:00Z",
+"age": 864000.5,
+"strict_age": null
+},
+{
+"value": "2026-10-11T1:00:00Z",
+"age": 39600.5,
+"strict_age": null
+},
+{
+"value": "2026-10-11T12:0:0Z",
+"age": 0.5,
+"strict_age": null
+},
+{
+"value": "2026-10-11T12:00:5Z",
+"age": -4.5,
+"strict_age": null
+},
+{
+"value": "2026-10-11T12:00:005Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-010-11T12:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2026-10-011T12:00:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9436-5-11T24:21:58Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1726-01-24T11:31:5Z",
+"age": 9489572935.5,
+"strict_age": null
+},
+{
+"value": "8854-05-16T21:19:45Z",
+"age": -215458132784.5,
+"strict_age": -215458132784.5
+},
+{
+"value": "4856-7-23T21:24:4Z",
+"age": -89299358643.5,
+"strict_age": null
+},
+{
+"value": "1555-07-9T24:20:03Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1202-11-30T04:42:19Z",
+"age": 25998650261.5,
+"strict_age": 25998650261.5
+},
+{
+"value": "9047-10-01T21:22:24Z",
+"age": -221560478543.5,
+"strict_age": -221560478543.5
+},
+{
+"value": "4636-07-7T20:10:38Z",
+"age": -82355386237.5,
+"strict_age": null
+},
+{
+"value": "3654-04-00T13:23:23Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7361-1-03T11:04:43Z",
+"age": -168332079882.5,
+"strict_age": null
+},
+{
+"value": "0370-14-21T08:38:32Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3975-5-17T01:46:54Z",
+"age": -61491707213.5,
+"strict_age": null
+},
+{
+"value": "5085-09-23T16:50:55Z",
+"age": -96531195054.5,
+"strict_age": -96531195054.5
+},
+{
+"value": "9522-01-31T2:12:57Z",
+"age": -236528950376.5,
+"strict_age": null
+},
+{
+"value": "5217-08-32T23:33:10Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3078-08-29T25:61:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3276-4-30T17:3:3Z",
+"age": -39432114182.5,
+"strict_age": null
+},
+{
+"value": "1133-08-13T20:56:28Z",
+"age": 28185462212.5,
+"strict_age": 28185462212.5
+},
+{
+"value": "3372-2-33T16:05:51Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9009-2-16T16:26:6Z",
+"age": -220341702365.5,
+"strict_age": null
+},
+{
+"value": "8414-03-8T24:35:59Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4917-14-27T6:20:34Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7480-9-22T22:39:41Z",
+"age": -172110047980.5,
+"strict_age": null
+},
+{
+"value": "5584-3-14T25:15:53Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8081-06-28T23:5:54Z",
+"age": -191068369553.5,
+"strict_age": null
+},
+{
+"value": "6113-4-23T16:16:01Z",
+"age": -128958495360.5,
+"strict_age": null
+},
+{
+"value": "7468-2-27T0:54:8Z",
+"age": -171713307247.5,
+"strict_age": null
+},
+{
+"value": "9520-2-31T08:12:07Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0682-13-4T6:53:41Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3328-6-11T16:19:12Z",
+"age": -41076649151.5,
+"strict_age": null
+},
+{
+"value": "8141-5-07T16:30:20Z",
+"age": -192957222619.5,
+"strict_age": null
+},
+{
+"value": "9496-14-22T1:18:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3280-08-2T4:47:54Z",
+"age": -39566422073.5,
+"strict_age": null
+},
+{
+"value": "1845-08-27T16:11:00Z",
+"age": 5715690540.5,
+"strict_age": 5715690540.5
+},
+{
+"value": "1356-3-7T12:50:4Z",
+"age": 21161948996.5,
+"strict_age": null
+},
+{
+"value": "1355-11-27T18:18:29Z",
+"age": 21170655691.5,
+"strict_age": 21170655691.5
+},
+{
+"value": "4284-07-03T03:60:9Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6474-4-27T20:53:34Z",
+"age": -140350956813.5,
+"strict_age": null
+},
+{
+"value": "2089-01-02T18:14:05Z",
+"age": -1963808044.5,
+"strict_age": -1963808044.5
+},
+{
+"value": "8315-01-26T14:11:26Z",
+"age": -198439294285.5,
+"strict_age": -198439294285.5
+},
+{
+"value": "7934-05-23T03:39:5Z",
+"age": -186426200344.5,
+"strict_age": null
+},
+{
+"value": "3310-07-09T15:11:13Z",
+"age": -40510984272.5,
+"strict_age": -40510984272.5
+},
+{
+"value": "6421-00-26T12:14:56Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5709-4-18T05:13:59Z",
+"age": -116209012438.5,
+"strict_age": null
+},
+{
+"value": "4450-14-32T10:11:42Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8519-00-05T25:35:28Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3039-01-09T02:33:26Z",
+"age": -31943342005.5,
+"strict_age": -31943342005.5
+},
+{
+"value": "8652-4-04T19:51:24Z",
+"age": -209079993083.5,
+"strict_age": null
+},
+{
+"value": "0183-5-23T17:2:51Z",
+"age": 58171633029.5,
+"strict_age": null
+},
+{
+"value": "0115-11-7T06:22:20Z",
+"age": 60303073060.5,
+"strict_age": null
+},
+{
+"value": "1186-02-31T2:57:15Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0396-5-4T24:23:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6652-09-16T04:14:19Z",
+"age": -145980288858.5,
+"strict_age": -145980288858.5
+},
+{
+"value": "0105-07-32T15:35:47Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2645-03-29T19:23:47Z",
+"age": -19516836226.5,
+"strict_age": -19516836226.5
+},
+{
+"value": "1844-11-33T15:30:42Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2141-4-16T22:7:55Z",
+"age": -3613716474.5,
+"strict_age": null
+},
+{
+"value": "3194-07-25T25:58:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8320-8-13T8:31:54Z",
+"age": -198614320313.5,
+"strict_age": null
+},
+{
+"value": "8495-0-28T9:62:27Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9772-12-26T04:16:32Z",
+"age": -244446740191.5,
+"strict_age": -244446740191.5
+},
+{
+"value": "1808-01-0T23:16:26Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5210-13-33T02:46:53Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7184-9-11T4:05:15Z",
+"age": -162768153914.5,
+"strict_age": null
+},
+{
+"value": "2109-05-20T24:34:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5078-10-26T10:62:41Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1757-04-23T25:46:49Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5343-7-8T17:51:37Z",
+"age": -104666190696.5,
+"strict_age": null
+},
+{
+"value": "0456-14-15T4:45:23Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4090-03-32T00:38:16Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2249-01-6T25:56:56Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6570-1-30T01:07:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2392-12-18T21:31:14Z",
+"age": -11555775073.5,
+"strict_age": -11555775073.5
+},
+{
+"value": "2823-00-21T19:49:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8458-12-13T14:00:25Z",
+"age": -202979786424.5,
+"strict_age": -202979786424.5
+},
+{
+"value": "9492-0-29T16:61:44Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6722-5-18T11:13:31Z",
+"age": -148178762010.5,
+"strict_age": null
+},
+{
+"value": "5191-02-18T12:33:56Z",
+"age": -99857406835.5,
+"strict_age": -99857406835.5
+},
+{
+"value": "5934-7-26T12:58:32Z",
+"age": -123317859511.5,
+"strict_age": null
+},
+{
+"value": "2904-10-30T15:8:45Z",
+"age": -27708664124.5,
+"strict_age": null
+},
+{
+"value": "3431-12-18T8:15:44Z",
+"age": -44343317743.5,
+"strict_age": null
+},
+{
+"value": "6936-10-09T19:37:41Z",
+"age": -154944517060.5,
+"strict_age": -154944517060.5
+},
+{
+"value": "3952-01-2T17:46:5Z",
+"age": -60754254364.5,
+"strict_age": null
+},
+{
+"value": "1098-2-08T02:24:39Z",
+"age": 29306050521.5,
+"strict_age": null
+},
+{
+"value": "0690-00-6T17:46:08Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1872-02-8T23:49:2Z",
+"age": 4880952658.5,
+"strict_age": null
+},
+{
+"value": "4157-0-30T20:23:44Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6835-14-33T14:49:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5110-12-13T21:29:14Z",
+"age": -97327042153.5,
+"strict_age": -97327042153.5
+},
+{
+"value": "2751-14-31T20:5:22Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9050-9-08T25:09:37Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9813-04-31T24:19:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1214-4-26T23:42:05Z",
+"age": 25638725875.5,
+"strict_age": null
+},
+{
+"value": "8928-05-33T6:51:9Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6251-6-00T2:26:03Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8606-3-1T16:7:12Z",
+"age": -207625349231.5,
+"strict_age": null
+},
+{
+"value": "0785-09-11T2:04:37Z",
+"age": 39164810123.5,
+"strict_age": null
+},
+{
+"value": "4128-11-01T19:29:16Z",
+"age": -66334577355.5,
+"strict_age": -66334577355.5
+},
+{
+"value": "2148-1-25T16:36:48Z",
+"age": -3827536607.5,
+"strict_age": null
+},
+{
+"value": "3784-0-12T05:19:22Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1102-09-28T0:2:12Z",
+"age": 29159870268.5,
+"strict_age": null
+},
+{
+"value": "9935-8-26T5:62:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6853-7-07T7:04:36Z",
+"age": -152317134275.5,
+"strict_age": null
+},
+{
+"value": "7347-07-15T00:36:57Z",
+"age": -167906867816.5,
+"strict_age": -167906867816.5
+},
+{
+"value": "8886-2-33T11:26:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5481-12-26T19:21:44Z",
+"age": -109035876103.5,
+"strict_age": -109035876103.5
+},
+{
+"value": "6229-11-08T13:23:03Z",
+"age": -132636273782.5,
+"strict_age": -132636273782.5
+},
+{
+"value": "8931-11-6T15:48:26Z",
+"age": -217902973705.5,
+"strict_age": null
+},
+{
+"value": "2968-12-14T25:20:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1903-07-25T17:31:4Z",
+"age": 3888325736.5,
+"strict_age": null
+},
+{
+"value": "3154-04-30T11:11:08Z",
+"age": -35582022667.5,
+"strict_age": -35582022667.5
+},
+{
+"value": "1440-04-20T03:12:43Z",
+"age": 18507430037.5,
+"strict_age": 18507430037.5
+},
+{
+"value": "2972-01-28T7:26:47Z",
+"age": -29830706806.5,
+"strict_age": null
+},
+{
+"value": "7738-0-09T14:13:44Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8677-00-20T21:60:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0987-10-16T6:37:59Z",
+"age": 32787264121.5,
+"strict_age": null
+},
+{
+"value": "1043-8-3T21:45:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4749-7-30T3:00:35Z",
+"age": -85923212434.5,
+"strict_age": null
+},
+{
+"value": "9006-6-16T14:45:27Z",
+"age": -220257369926.5,
+"strict_age": null
+},
+{
+"value": "3299-0-11T21:17:49Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2298-07-8T13:62:17Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9150-11-05T12:56:54Z",
+"age": -224813840213.5,
+"strict_age": -224813840213.5
+},
+{
+"value": "8610-07-0T15:02:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2350-10-27T03:09:52Z",
+"age": -10225753791.5,
+"strict_age": -10225753791.5
+},
+{
+"value": "0902-08-14T25:40:03Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5201-6-19T21:44:57Z",
+"age": -100183513496.5,
+"strict_age": null
+},
+{
+"value": "6461-6-30T04:21:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1480-4-13T18:56:29Z",
+"age": 17245674211.5,
+"strict_age": null
+},
+{
+"value": "2230-4-20T22:20:33Z",
+"age": -6422581232.5,
+"strict_age": null
+},
+{
+"value": "5086-14-24T11:41:54Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8153-5-7T7:29:44Z",
+"age": -193335881383.5,
+"strict_age": null
+},
+{
+"value": "1155-9-2T11:37:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9577-10-33T2:43:1Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1158-06-8T15:39:09Z",
+"age": 27402265251.5,
+"strict_age": null
+},
+{
+"value": "1102-11-18T0:6:47Z",
+"age": 29155463593.5,
+"strict_age": null
+},
+{
+"value": "4840-5-21T07:51:51Z",
+"age": -88788945110.5,
+"strict_age": null
+},
+{
+"value": "5092-12-09T15:14:54Z",
+"age": -96758766893.5,
+"strict_age": -96758766893.5
+},
+{
+"value": "2318-14-24T05:0:21Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0257-11-23T25:50:00Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7827-12-10T25:27:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3447-06-24T0:57:44Z",
+"age": -44832920263.5,
+"strict_age": null
+},
+{
+"value": "0553-12-18T16:04:59Z",
+"age": 46477482901.5,
+"strict_age": 46477482901.5
+},
+{
+"value": "6900-09-7T6:54:34Z",
+"age": -153805632873.5,
+"strict_age": null
+},
+{
+"value": "8019-12-29T13:62:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9787-12-20T09:38:43Z",
+"age": -244919540322.5,
+"strict_age": -244919540322.5
+},
+{
+"value": "3766-00-19T0:33:4Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4010-5-26T9:23:58Z",
+"age": -62597049837.5,
+"strict_age": null
+},
+{
+"value": "9166-08-19T24:8:55Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8202-7-11T0:48:22Z",
+"age": -194887687701.5,
+"strict_age": null
+},
+{
+"value": "5911-11-12T23:41:24Z",
+"age": -122601469283.5,
+"strict_age": -122601469283.5
+},
+{
+"value": "6943-00-33T13:39:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6752-9-8T15:54:13Z",
+"age": -149135313252.5,
+"strict_age": null
+},
+{
+"value": "2817-7-18T2:23:04Z",
+"age": -24954186183.5,
+"strict_age": null
+},
+{
+"value": "1719-02-03T10:42:21Z",
+"age": 9709636659.5,
+"strict_age": 9709636659.5
+},
+{
+"value": "1437-13-22T01:58:59Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6515-14-19T12:36:43Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3077-10-30T7:18:07Z",
+"age": -33167992686.5,
+"strict_age": null
+},
+{
+"value": "3624-07-14T17:19:59Z",
+"age": -50420380798.5,
+"strict_age": -50420380798.5
+},
+{
+"value": "3296-11-29T20:60:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0852-03-32T12:51:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4088-7-23T02:60:35Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7473-06-6T19:20:13Z",
+"age": -171879780012.5,
+"strict_age": null
+},
+{
+"value": "4143-7-32T1:34:42Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9117-09-7T23:13:39Z",
+"age": -223767400418.5,
+"strict_age": null
+},
+{
+"value": "0463-1-08T05:62:34Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0928-00-9T12:60:10Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1378-2-30T04:38:46Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2173-06-03T8:6:02Z",
+"age": -4627656361.5,
+"strict_age": null
+},
+{
+"value": "3761-11-05T13:33:06Z",
+"age": -54753499985.5,
+"strict_age": -54753499985.5
+},
+{
+"value": "9767-0-18T02:43:50Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4624-01-24T17:44:7Z",
+"age": -81962430246.5,
+"strict_age": null
+},
+{
+"value": "1559-06-4T09:34:53Z",
+"age": 14748315907.5,
+"strict_age": null
+},
+{
+"value": "2991-14-27T19:35:55Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2533-10-17T04:33:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4570-6-31T19:32:29Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3316-11-02T7:2:41Z",
+"age": -40710366160.5,
+"strict_age": null
+},
+{
+"value": "1267-07-32T17:7:43Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5919-03-29T21:07:10Z",
+"age": -122834221629.5,
+"strict_age": -122834221629.5
+},
+{
+"value": "8782-6-5T16:23:26Z",
+"age": -213187695805.5,
+"strict_age": null
+},
+{
+"value": "1622-5-02T6:27:59Z",
+"age": 12763027921.5,
+"strict_age": null
+},
+{
+"value": "6400-09-11T19:30:25Z",
+"age": -138027569424.5,
+"strict_age": -138027569424.5
+},
+{
+"value": "7832-08-32T13:0:59Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1331-14-25T24:20:12Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3190-13-20T23:36:50Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0907-12-17T13:11:35Z",
+"age": 35306491705.5,
+"strict_age": 35306491705.5
+},
+{
+"value": "5444-11-6T05:58:29Z",
+"age": -107863898308.5,
+"strict_age": null
+},
+{
+"value": "6025-11-29T3:33:58Z",
+"age": -126200475237.5,
+"strict_age": null
+},
+{
+"value": "6812-13-09T24:48:58Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4356-11-20T21:61:54Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9620-04-26T4:57:11Z",
+"age": -239628992230.5,
+"strict_age": null
+},
+{
+"value": "9335-13-31T12:41:51Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9077-13-22T04:6:38Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3265-6-22T15:48:24Z",
+"age": -39089533703.5,
+"strict_age": null
+},
+{
+"value": "1778-09-0T13:43:24Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0307-5-19T6:9:52Z",
+"age": 54259048208.5,
+"strict_age": null
+},
+{
+"value": "2467-0-18T6:56:57Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5818-07-32T22:15:48Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3796-13-24T15:35:2Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9076-08-12T13:51:40Z",
+"age": -222471366699.5,
+"strict_age": -222471366699.5
+},
+{
+"value": "5724-6-29T10:36:44Z",
+"age": -116688638203.5,
+"strict_age": null
+},
+{
+"value": "7645-8-29T3:52:40Z",
+"age": -177314802759.5,
+"strict_age": null
+},
+{
+"value": "6547-11-30T13:26:43Z",
+"age": -142673275602.5,
+"strict_age": -142673275602.5
+},
+{
+"value": "0503-03-01T23:25:29Z",
+"age": 48080608471.5,
+"strict_age": 48080608471.5
+},
+{
+"value": "9298-8-28T01:02:55Z",
+"age": -229478360574.5,
+"strict_age": null
+},
+{
+"value": "7213-2-28T21:53:40Z",
+"age": -163666518819.5,
+"strict_age": null
+},
+{
+"value": "8033-14-22T3:6:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1628-7-17T02:13:22Z",
+"age": 12567087998.5,
+"strict_age": null
+},
+{
+"value": "2091-10-07T6:26:42Z",
+"age": -2050856801.5,
+"strict_age": null
+},
+{
+"value": "5638-03-28T10:10:29Z",
+"age": -113966691028.5,
+"strict_age": -113966691028.5
+},
+{
+"value": "7296-4-23T16:60:10Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9280-06-8T4:5:53Z",
+"age": -228903379552.5,
+"strict_age": null
+},
+{
+"value": "6046-08-07T24:44:03Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0748-05-13T11:38:40Z",
+"age": 40342839680.5,
+"strict_age": 40342839680.5
+},
+{
+"value": "5802-4-25T13:0:07Z",
+"age": -119144394006.5,
+"strict_age": null
+},
+{
+"value": "0009-07-3T15:20:44Z",
+"age": 63658989556.5,
+"strict_age": null
+},
+{
+"value": "1533-4-06T13:18:14Z",
+"age": 15573854506.5,
+"strict_age": null
+},
+{
+"value": "0408-10-03T14:40:59Z",
+"age": 51059798341.5,
+"strict_age": 51059798341.5
+},
+{
+"value": "7723-9-11T21:5:53Z",
+"age": -179777351152.5,
+"strict_age": null
+},
+{
+"value": "7562-10-27T10:9:01Z",
+"age": -174700620540.5,
+"strict_age": null
+},
+{
+"value": "8257-0-21T5:55:46Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1905-7-06T22:52:09Z",
+"age": 3826789671.5,
+"strict_age": null
+},
+{
+"value": "7185-03-12T14:7:12Z",
+"age": -162783914831.5,
+"strict_age": null
+},
+{
+"value": "1334-2-17T17:27:59Z",
+"age": 21857797921.5,
+"strict_age": null
+},
+{
+"value": "7429-11-32T03:29:22Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8935-06-33T4:41:31Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3408-4-26T20:14:19Z",
+"age": -43597210458.5,
+"strict_age": null
+},
+{
+"value": "6090-14-18T05:28:1Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4280-08-25T7:04:59Z",
+"age": -71125326298.5,
+"strict_age": null
+},
+{
+"value": "1802-9-27T08:14:9Z",
+"age": 7070039151.5,
+"strict_age": null
+},
+{
+"value": "1751-4-33T17:02:41Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9390-9-24T06:09:20Z",
+"age": -232383924559.5,
+"strict_age": null
+},
+{
+"value": "0337-01-08T18:45:34Z",
+"age": 53323550066.5,
+"strict_age": 53323550066.5
+},
+{
+"value": "5630-08-27T11:49:13Z",
+"age": -113727368952.5,
+"strict_age": -113727368952.5
+},
+{
+"value": "8093-09-14T13:29:59Z",
+"age": -191453765398.5,
+"strict_age": -191453765398.5
+},
+{
+"value": "3970-12-14T08:42:45Z",
+"age": -61352196164.5,
+"strict_age": -61352196164.5
+},
+{
+"value": "9815-03-19T9:52:35Z",
+"age": -245779221154.5,
+"strict_age": null
+},
+{
+"value": "1446-12-18T23:48:23Z",
+"age": 18297144697.5,
+"strict_age": 18297144697.5
+},
+{
+"value": "3920-02-0T17:35:10Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9099-10-13T22:61:50Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3998-02-31T14:9:18Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4239-06-30T15:13:9Z",
+"age": -69826590788.5,
+"strict_age": null
+},
+{
+"value": "8864-03-08T02:26:51Z",
+"age": -215767722410.5,
+"strict_age": -215767722410.5
+},
+{
+"value": "2132-06-33T11:14:45Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2798-12-27T14:3:13Z",
+"age": -24368608992.5,
+"strict_age": null
+},
+{
+"value": "6749-2-07T24:26:27Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7656-12-8T00:11:59Z",
+"age": -177670671118.5,
+"strict_age": null
+},
+{
+"value": "3540-4-17T01:53:40Z",
+"age": -47761883619.5,
+"strict_age": null
+},
+{
+"value": "0336-8-6T6:26:16Z",
+"age": 53336986424.5,
+"strict_age": null
+},
+{
+"value": "8015-09-18T22:06:05Z",
+"age": -188992605964.5,
+"strict_age": -188992605964.5
+},
+{
+"value": "5762-09-14T14:61:37Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2420-11-31T18:58:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9887-9-25T08:35:19Z",
+"age": -248067779718.5,
+"strict_age": null
+},
+{
+"value": "8488-05-23T22:1:36Z",
+"age": -203908960895.5,
+"strict_age": null
+},
+{
+"value": "3132-10-11T18:20:8Z",
+"age": -34901994007.5,
+"strict_age": null
+},
+{
+"value": "4038-09-24T19:11:59Z",
+"age": -63491152318.5,
+"strict_age": -63491152318.5
+},
+{
+"value": "5858-4-23T9:58:58Z",
+"age": -120911435937.5,
+"strict_age": null
+},
+{
+"value": "1927-01-33T10:46:35Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3654-10-27T15:53:04Z",
+"age": -51376132383.5,
+"strict_age": -51376132383.5
+},
+{
+"value": "7334-11-33T11:22:15Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6414-7-21T13:21:28Z",
+"age": -138464817687.5,
+"strict_age": null
+},
+{
+"value": "1185-09-27T9:20:00Z",
+"age": 26540620800.5,
+"strict_age": null
+},
+{
+"value": "7213-08-23T21:58:18Z",
+"age": -163681725497.5,
+"strict_age": -163681725497.5
+},
+{
+"value": "3144-09-25T10:59:13Z",
+"age": -35279276352.5,
+"strict_age": -35279276352.5
+},
+{
+"value": "2995-8-26T0:12:30Z",
+"age": -30574671149.5,
+"strict_age": null
+},
+{
+"value": "0683-14-30T11:5:34Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3127-13-21T10:00:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5361-8-24T04:62:60Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6303-1-27T11:23:14Z",
+"age": -134946775393.5,
+"strict_age": null
+},
+{
+"value": "8721-6-31T16:62:35Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1567-2-13T04:5:04Z",
+"age": 14505465296.5,
+"strict_age": null
+},
+{
+"value": "7401-04-01T13:60:50Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3670-05-2T21:28:7Z",
+"age": -51865694886.5,
+"strict_age": null
+},
+{
+"value": "4088-7-20T24:05:14Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4391-05-26T12:35:04Z",
+"age": -74620226103.5,
+"strict_age": -74620226103.5
+},
+{
+"value": "9977-0-18T9:1:26Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4113-7-33T02:37:30Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5001-05-31T20:62:52Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7083-2-16T25:30:35Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0626-02-30T1:43:32Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5782-11-28T22:16:21Z",
+"age": -118532110580.5,
+"strict_age": -118532110580.5
+},
+{
+"value": "6910-12-0T12:15:56Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6599-4-25T15:21:01Z",
+"age": -144295356060.5,
+"strict_age": null
+},
+{
+"value": "8784-13-32T21:42:3Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5478-10-19T8:30:44Z",
+"age": -108935267443.5,
+"strict_age": null
+},
+{
+"value": "5119-06-32T06:20:24Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8206-14-27T03:58:17Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3173-01-06T20:58:18Z",
+"age": -36171824297.5,
+"strict_age": -36171824297.5
+},
+{
+"value": "8526-8-08T11:15:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1162-14-11T24:33:12Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0181-8-15T12:47:40Z",
+"age": 58227462740.5,
+"strict_age": null
+},
+{
+"value": "6872-12-19T13:33:49Z",
+"age": -152931029628.5,
+"strict_age": -152931029628.5
+},
+{
+"value": "7409-14-6T18:58:05Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5859-04-27T23:51:11Z",
+"age": -120943367470.5,
+"strict_age": -120943367470.5
+},
+{
+"value": "8529-7-28T18:36:55Z",
+"age": -205208404614.5,
+"strict_age": null
+},
+{
+"value": "8270-06-25T25:45:49Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5438-06-1T12:9:03Z",
+"age": -107660880542.5,
+"strict_age": null
+},
+{
+"value": "6151-09-10T7:8:43Z",
+"age": -130169704122.5,
+"strict_age": null
+},
+{
+"value": "1461-05-07T20:26:09Z",
+"age": 17843211231.5,
+"strict_age": 17843211231.5
+},
+{
+"value": "3885-12-26T19:55:25Z",
+"age": -58670985324.5,
+"strict_age": -58670985324.5
+},
+{
+"value": "9933-06-28T8:25:24Z",
+"age": -249511695923.5,
+"strict_age": null
+},
+{
+"value": "2499-7-30T07:40:32Z",
+"age": -14920141231.5,
+"strict_age": null
+},
+{
+"value": "6627-05-24T19:05:28Z",
+"age": -145181401527.5,
+"strict_age": -145181401527.5
+},
+{
+"value": "5991-6-21T21:23:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4824-09-10T02:33:42Z",
+"age": -88293681221.5,
+"strict_age": -88293681221.5
+},
+{
+"value": "3507-3-0T23:36:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0659-04-25T18:27:29Z",
+"age": 43152975151.5,
+"strict_age": 43152975151.5
+},
+{
+"value": "4289-05-7T10:51:5Z",
+"age": -71399832664.5,
+"strict_age": null
+},
+{
+"value": "4971-08-13T14:47:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3720-05-19T11:17:59Z",
+"age": -53444963878.5,
+"strict_age": -53444963878.5
+},
+{
+"value": "2565-08-28T10:39:53Z",
+"age": -17005415992.5,
+"strict_age": -17005415992.5
+},
+{
+"value": "0990-13-04T11:21:21Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1176-10-28T25:27:14Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4522-02-18T09:28:38Z",
+"age": -78745814917.5,
+"strict_age": -78745814917.5
+},
+{
+"value": "6094-11-26T4:62:02Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9325-9-17T21:18:18Z",
+"age": -230332151897.5,
+"strict_age": null
+},
+{
+"value": "3428-06-16T6:33:28Z",
+"age": -44232719607.5,
+"strict_age": null
+},
+{
+"value": "9002-06-22T16:18:56Z",
+"age": -220131663535.5,
+"strict_age": -220131663535.5
+},
+{
+"value": "4350-11-05T15:62:19Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0887-00-13T10:61:51Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9632-10-08T5:26:14Z",
+"age": -240021941173.5,
+"strict_age": null
+},
+{
+"value": "2669-10-7T19:57:46Z",
+"age": -20290809465.5,
+"strict_age": null
+},
+{
+"value": "6634-9-25T21:58:40Z",
+"age": -145413050319.5,
+"strict_age": null
+},
+{
+"value": "2435-7-14T7:16:51Z",
+"age": -12899071010.5,
+"strict_age": null
+},
+{
+"value": "4994-4-08T25:27:37Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3993-3-27T05:43:23Z",
+"age": -62055395002.5,
+"strict_age": null
+},
+{
+"value": "7915-2-0T3:41:02Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6016-5-04T02:17:50Z",
+"age": -125898416269.5,
+"strict_age": null
+},
+{
+"value": "8000-8-31T17:19:57Z",
+"age": -188517734396.5,
+"strict_age": null
+},
+{
+"value": "7520-13-16T11:34:54Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6470-6-14T04:01:53Z",
+"age": -140228812912.5,
+"strict_age": null
+},
+{
+"value": "0015-05-9T11:10:28Z",
+"age": 63474454172.5,
+"strict_age": null
+},
+{
+"value": "1657-10-33T05:22:29Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6204-9-8T19:40:31Z",
+"age": -131842107630.5,
+"strict_age": null
+},
+{
+"value": "1974-14-12T4:13:43Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1275-01-09T15:20:11Z",
+"age": 23723008789.5,
+"strict_age": 23723008789.5
+},
+{
+"value": "4578-8-25T24:09:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9510-08-21T05:00:42Z",
+"age": -236167722041.5,
+"strict_age": -236167722041.5
+},
+{
+"value": "2062-9-10T01:39:57Z",
+"age": -1133357996.5,
+"strict_age": null
+},
+{
+"value": "1799-0-1T2:45:35Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2138-1-12T20:13:28Z",
+"age": -3510893607.5,
+"strict_age": null
+},
+{
+"value": "2291-6-1T17:26:7Z",
+"age": -8351184366.5,
+"strict_age": null
+},
+{
+"value": "3634-13-33T23:09:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3352-12-28T06:54:48Z",
+"age": -41851277687.5,
+"strict_age": -41851277687.5
+},
+{
+"value": "8928-14-9T9:11:42Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3150-12-33T10:62:16Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6546-03-21T24:62:21Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4219-14-21T17:42:49Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7270-6-12T00:56:58Z",
+"age": -165474190617.5,
+"strict_age": null
+},
+{
+"value": "0792-2-8T23:35:17Z",
+"age": 38962470283.5,
+"strict_age": null
+},
+{
+"value": "5956-2-33T19:11:16Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0567-11-21T9:29:1Z",
+"age": 46038076259.5,
+"strict_age": null
+},
+{
+"value": "0520-00-11T10:56:62Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3174-10-4T04:37:54Z",
+"age": -36226715873.5,
+"strict_age": null
+},
+{
+"value": "3141-5-30T25:9:21Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6915-09-06T04:45:11Z",
+"age": -154278837910.5,
+"strict_age": -154278837910.5
+},
+{
+"value": "8136-11-00T23:22:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "3632-09-25T25:03:50Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4614-13-10T10:15:38Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4405-13-17T06:57:37Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9526-12-22T24:55:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8694-01-21T1:9:19Z",
+"age": -210398994558.5,
+"strict_age": null
+},
+{
+"value": "4365-0-31T10:32:28Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9346-11-22T1:59:18Z",
+"age": -231000472757.5,
+"strict_age": null
+},
+{
+"value": "9829-8-32T7:57:32Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9096-04-24T14:60:33Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "0476-7-27T18:52:33Z",
+"age": 48919741647.5,
+"strict_age": null
+},
+{
+"value": "5720-03-19T03:7:61Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5381-12-10T14:03:09Z",
+"age": -105878800988.5,
+"strict_age": -105878800988.5
+},
+{
+"value": "4061-14-1T8:20:15Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "2991-0-23T9:15:13Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "9364-4-14T14:8:11Z",
+"age": -231549415690.5,
+"strict_age": null
+},
+{
+"value": "0489-10-32T3:12:07Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6655-7-0T3:45:38Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1521-13-9T0:54:40Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8561-1-25T07:47:42Z",
+"age": -206202311261.5,
+"strict_age": null
+},
+{
+"value": "7135-3-26T24:60:53Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7540-0-21T10:32:07Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8092-09-1T1:43:36Z",
+"age": -191421063815.5,
+"strict_age": null
+},
+{
+"value": "2092-09-10T18:41:45Z",
+"age": -2080190504.5,
+"strict_age": -2080190504.5
+},
+{
+"value": "4455-7-29T02:49:30Z",
+"age": -76645406969.5,
+"strict_age": null
+},
+{
+"value": "2241-14-20T20:34:01Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "4871-3-10T12:40:23Z",
+"age": -89760962422.5,
+"strict_age": null
+},
+{
+"value": "8691-14-13T7:34:9Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "7844-4-27T13:13:10Z",
+"age": -183583933989.5,
+"strict_age": null
+},
+{
+"value": "3266-14-19T25:25:34Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "5421-6-06T19:10:12Z",
+"age": -107124880211.5,
+"strict_age": null
+},
+{
+"value": "5261-03-17T1:10:44Z",
+"age": -102068773843.5,
+"strict_age": null
+},
+{
+"value": "3827-13-2T14:15:11Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "6958-1-26T20:45:17Z",
+"age": -155616626716.5,
+"strict_age": null
+},
+{
+"value": "3888-10-25T08:50:11Z",
+"age": -58760283010.5,
+"strict_age": -58760283010.5
+},
+{
+"value": "3043-12-30T17:23:48Z",
+"age": -32100297827.5,
+"strict_age": -32100297827.5
+},
+{
+"value": "8311-3-14T18:22:50Z",
+"age": -198317139769.5,
+"strict_age": null
+},
+{
+"value": "6194-04-23T22:43:52Z",
+"age": -131514662631.5,
+"strict_age": -131514662631.5
+},
+{
+"value": "8883-0-16T3:49:9Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "1192-06-28T8:56:22Z",
+"age": 26327559818.5,
+"strict_age": null
+},
+{
+"value": "4841-4-0T14:58:36Z",
+"age": null,
+"strict_age": null
+},
+{
+"value": "8005-9-09T12:53:09Z",
+"age": -188676262388.5,
+"strict_age": null
+},
+{
+"value": "9854-6-20T09:6:48Z",
+"age": -247018021607.5,
+"strict_age": null
+},
+{
+"value": "0400-2-27T18:41:50Z",
+"age": 51331166290.5,
+"strict_age": null
+},
+{
+"value": "8857-13-11T25:39:61Z",
+"age": null,
+"strict_age": null
+}
+]
+}
