@@ -231,21 +231,15 @@ Podman details, is in [requirements](docs/prerequisites.md).
 
 ## Tested
 
-Nothing in 0.8.0 has run on a real exit yet. The unit, fuzz and namespace
-drill suites that run in CI, and the live passes still to do, are listed in
-[testing](docs/testing.md#080). What the 0.7.0 code did on real hosts:
-
-| Setup | Tested at 0.7.0 and earlier |
-| :--- | :--- |
-| Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64, self-hosted NetBird 0.79: Mullvad | A client held on the exit through all six failure drills, a host reboot with unattended recovery, LAN isolation, and a clean install from the published files |
-| The same host: PIA | First start, recreation, a client held on the exit through a tunnel-down drill, IPv6 and LAN isolation, and region switches |
-| The same host: Switchyard, and its sign-in | One panel serving the Mullvad and PIA exits; Pocket ID v2.16.0: an admin sign-in and a verified switch through it |
-| Debian, rootless Podman 5.8 as Quadlet units, at 0.7.0's code | A Linux client held one native exit per provider and the gluetun exit: NordVPN and Mullvad through rule and route deletions and tunnel loss; NordVPN also through an inserted bypass; PIA through tunnel loss and a region switch; gluetun through a switch and a gluetun restart; a gluetun sidecar with NordVPN |
-| macOS, OrbStack, Docker, self-hosted NetBird 0.79: Mullvad, NordVPN, gluetun v3.41.3 with NordVPN | Live passes at earlier revisions: key setup, switches, provider-confirmed egress from a client, IPv6 blocked, tunnel down with no client traffic on the host interface |
-| Not yet tested, at any version | The routing on a live Docker host on Linux, Docker Desktop, NetBird Cloud, phones during failure drills, PIA port forwarding against PIA itself, the gluetun backend with other providers or through podman-compose, the sidecar on Docker |
-
-The dated record of each pass is in [testing](docs/testing.md). Report
-vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+Nothing in 0.8.0 has run on a real exit yet. [Testing](docs/testing.md#080) lists what
+the CI suites cover and what is still to do. At 0.7.0, whose routing and status logic
+0.8.0 ports, native Mullvad, PIA and NordVPN exits and a gluetun exit were run on rootless
+Podman with a Linux client held through rule and route deletions, tunnel loss, switches
+and a gluetun restart, and earlier passes ran on macOS with OrbStack. Not tested at any
+version: the routing on a live Docker host on Linux, Docker Desktop, NetBird Cloud, phones
+during failure drills, PIA port forwarding against PIA itself, and the gluetun backend with
+providers other than NordVPN. The dated record of each pass is in
+[testing](docs/testing.md). Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## Documentation
 
