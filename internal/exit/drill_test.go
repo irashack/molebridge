@@ -199,10 +199,15 @@ type exitProc struct {
 // start runs `molebridge exit` in the exit namespace.
 func (l *lab) start(extra ...string) *exitProc {
 	l.t.Helper()
+	return l.startEnv(l.env(extra...))
+}
+
+func (l *lab) startEnv(env []string) *exitProc {
+	l.t.Helper()
 	drillBinaries(l.t)
 	p := &exitProc{l: l, out: &syncBuf{}, done: make(chan int, 1), at: time.Now()}
 	p.cmd = exec.Command("ip", "netns", "exec", l.exit.Name, filepath.Join(binDir, "molebridge"), "exit")
-	p.cmd.Env = l.env(extra...)
+	p.cmd.Env = env
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	if err := p.cmd.Start(); err != nil {
 		l.t.Fatal(err)
