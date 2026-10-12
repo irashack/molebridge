@@ -311,6 +311,7 @@ func (k *kernel) PublicKey(context.Context) (string, error) {
 }
 
 func (k *kernel) ReplacePeer(_ context.Context, remove []string, add PeerConfig) error {
+	k.record("ReplacePeer")
 	for _, key := range remove {
 		k.mutations = append(k.mutations, "remove "+key)
 		if k.failSet {
@@ -318,6 +319,9 @@ func (k *kernel) ReplacePeer(_ context.Context, remove []string, add PeerConfig)
 		}
 		k.keys = removeString(k.keys, key)
 		delete(k.endpoints, key)
+	}
+	if add.PublicKey == "" { // only removals
+		return nil
 	}
 	k.mutations = append(k.mutations, fmt.Sprintf("set %s endpoint %s allowed-ips %s keepalive %d", add.PublicKey,
 		add.Endpoint, strings.Join(add.AllowedIPs, ","), add.KeepaliveSec))
@@ -346,6 +350,7 @@ func removeString(list []string, value string) []string {
 
 func (k *kernel) Fetch(_ context.Context, req netx.Request) (netx.Response, error) {
 	k.reqs = append(k.reqs, req)
+	k.record("Fetch %s", req.URL)
 	for _, hook := range k.hooks {
 		if err := hook(req); err != nil {
 			return netx.Response{}, err

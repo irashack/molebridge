@@ -83,7 +83,8 @@ type System interface {
 	// read.
 	PublicKey(ctx context.Context) (string, error)
 	// ReplacePeer removes the peers in remove, one after another (a failure
-	// stops before anything else changes), then sets add.
+	// stops before anything else changes), then sets add; an add with no
+	// public key sets nothing.
 	ReplacePeer(ctx context.Context, remove []string, add PeerConfig) error
 
 	// NamespaceIPv4Prefixes are the IPv4 prefixes on every interface but
