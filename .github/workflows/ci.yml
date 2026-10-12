@@ -28,6 +28,7 @@ jobs:
         run: |
           scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh"
           for script in $scripts; do sh -n "$script"; done
+          # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
       - name: Compose file
         run: |
@@ -76,3 +77,143 @@ jobs:
           sudo apt-get install -y --no-install-recommends nftables busybox mawk gawk >/dev/null
           # busybox sh: the shell the routing image and NetBird's image use.
           sudo env ROUTING_SH="busybox sh" sh tools/check-routing.sh
+
+  go:
+    name: Go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain the Dockerfile builds with (golang:1.27.1-alpine).
+          go-version: "1.27.1"
+          cache: false
+      - name: gofmt
+        run: |
+          files=$(git ls-files '*.go' ':(exclude)vendor')
+          [ -z "$files" ] || {
+            # shellcheck disable=SC2086
+            unformatted=$(gofmt -l $files)
+            [ -z "$unformatted" ] || { echo "Not gofmt-formatted:"; echo "$unformatted"; exit 1; }
+          }
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Unit tests
+        run: go test -count=1 ./...
+      - name: Namespace drills
+        # The runner is a VM: root network namespaces are disposable here.
+        # Only packages with `drill`-tagged tests build anything extra.
+        run: |
+          if [ -d internal ]; then
+            sudo apt-get install -y --no-install-recommends nftables iproute2 >/dev/null
+            sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
+              go test -count=1 -tags drill ./internal/...
+          else
+            echo "No internal/ packages yet."
+          fi
+      - name: Reproducible binary
+        # Two builds from separate trees, linux/amd64 and linux/arm64, equal
+        # SHA-256. The OCI image is not claimed reproducible.
+        run: sh tools/check-reproducible.sh
+      - name: Third-party notices are current
+        run: |
+          sh tools/test-gen-third-party.sh
+          sh tools/gen-third-party.sh --check
+
+  image:
+    name: Image (amd64 and arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build both architectures (not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+      - name: Load the amd64 image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: molebridge:ci-amd64
+          provenance: false
+          sbom: false
+      - name: Load the arm64 image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: molebridge:ci-arm64
+          provenance: false
+          sbom: false
+      - name: Check the amd64 image
+        run: sh tools/check-image.sh molebridge:ci-amd64 linux/amd64
+      - name: Check the arm64 image
+        run: sh tools/check-image.sh molebridge:ci-arm64 linux/arm64
+
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Shell scripts
+        run: |
+          scripts="tools/make-bundle.sh tools/check-bundle.sh tools/check-image.sh tools/check-reproducible.sh tools/gen-third-party.sh tools/verify-acceptance.sh tools/make-acceptance-predicate.sh tools/release-notes.sh tools/test-make-bundle.sh tools/test-check-bundle.sh tools/test-gen-third-party.sh tools/test-verify-acceptance.sh tools/test-make-acceptance-predicate.sh tools/test-release-notes.sh"
+          for script in $scripts; do sh -n "$script"; done
+          # shellcheck disable=SC2086
+          shellcheck -x -S warning $scripts
+      - name: Bundle generator
+        run: sh tools/test-make-bundle.sh
+      - name: Bundle install check
+        run: sh tools/test-check-bundle.sh
+      - name: Promotion policy and acceptance predicate
+        run: |
+          sh tools/test-verify-acceptance.sh
+          sh tools/test-make-acceptance-predicate.sh
+          sh tools/test-release-notes.sh
+      - name: Bundle from the repository's Compose files
+        # Once the Compose files reference the image, the bundle built from
+        # them installs without a checkout. Until then there is nothing to pin.
+        run: |
+          if ! grep -q 'ghcr.io/irashack/molebridge' compose.yaml; then
+            echo "compose.yaml does not reference ghcr.io/irashack/molebridge yet; skipped."
+            exit 0
+          fi
+          digest=sha256:$(printf '0%.0s' $(seq 1 64))
+          mkdir -p "$RUNNER_TEMP/bundle"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$digest" "$RUNNER_TEMP/bundle"
+          sh tools/check-bundle.sh "$RUNNER_TEMP/bundle/molebridge-v0.0.0-rc.0.tar.gz" "ghcr.io/irashack/molebridge:v0.0.0-rc.0@$digest"
+      - name: Workflows
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
