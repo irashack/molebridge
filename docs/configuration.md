@@ -75,7 +75,7 @@ defaults suit most exits. To change one, set it on the named service in a
 
 | Setting | Service | Default | Purpose |
 |---|---|---|---|
-| `ROUTING_RECONCILE_INTERVAL` | `wireguard` | `2` | Seconds between repair passes ([drift and repair](architecture.md#drift-and-repair)): an even number, 2 to 60. The tunnel interface is checked every 2 seconds whatever this is. |
+| `ROUTING_RECONCILE_INTERVAL` | `wireguard` | `2` | Seconds between repair passes ([drift and repair](architecture.md#drift-and-repair)): an even number, 2 to 60. The tunnel interface is checked every 2 seconds whatever this is. A pass costs about 50 to 70 ms of CPU on the tested host, 2.5 to 3.6 % of one core at the default ([resources](prerequisites.md#host)). |
 | `GUARD_GRACE` | `netbird` | `30` | Seconds the routing guards may be seen incomplete before the gate stops NetBird, 5 to 30. The owner record has no grace. |
 | `OWNER_RECORD` | `wireguard`, `netbird`, `applier` | `/run/molebridge/exit-owner` | Where the [owner record](architecture.md#the-owner-record) is written and read, on the `exit-run` volume. Leave it unless you move the volume; it must be the same path in all three. |
 

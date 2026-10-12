@@ -118,9 +118,13 @@ Details: [architecture](docs/architecture.md).
   5.6 or later). Rootless Podman with podman-compose is tested, and so is macOS
   with OrbStack. Docker Engine with Compose 2.24 or later should work but
   hasn't been tested end to end. Windows hosts are not supported.
-- **Resources:** on the tested host, a Mullvad exit's four containers use
-  about 100 MB of RAM between them, and the images take about 500 MB of
-  disk, measured before the routing image moved to Alpine; NordVPN and the gluetun backend haven't been measured. Every byte your
+- **Resources:** on the tested rootless Podman host, idle, a Mullvad exit's
+  four containers use about 100 MB of RAM and 6 to 8 % of one CPU core, most
+  of it the routing container's repair pass every 2 seconds and NetBird;
+  their images take about 260 MB of disk. NordVPN's applier holds about
+  80 MB more for its server list, and a gluetun exit uses about 215 MB of
+  RAM, 330 MB of disk and 9 to 12 % of a core. Measured at 0.7.0's code; the
+  breakdown is in [requirements](docs/prerequisites.md#host). Every byte your
   devices send crosses the host twice, so the host's upload speed caps
   throughput.
 - **A NetBird network**, either NetBird Cloud or self-hosted, with admin

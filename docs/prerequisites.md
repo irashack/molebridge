@@ -29,12 +29,32 @@ been tested in one configuration, this page says so.
   pinned bases. The routing image installs `bash`, `iproute2`,
   `wireguard-tools` and `tini` from Alpine's signed repositories, and the
   applier installs `wg`, `ip`, `curl` and `nft` from Debian's.
-- **Resources.** Measured on the tested Debian host while idle, with a
-  Mullvad exit and the earlier LinuxServer-based routing image: about 100 MB
-  of RAM across the four containers, and about 500 MB of disk for images. The Compose memory limits add up to 896 MiB for
-  that stack, 1,280 MiB with NordVPN's larger applier limit, and 1,216 MiB
-  with the gluetun backend; NordVPN and gluetun weren't measured. CPU use is mostly WireGuard
-  encryption and scales with traffic.
+- **Resources.** Measured at 0.7.0's code (`d5a234a`) on the tested rootless
+  Podman host while idle, from the containers' cgroup counters over two
+  minutes and over the 34 hours since they started
+  ([testing](testing.md#resources-at-070-on-rootless-podman)):
+  - A Mullvad exit's four containers use about 100 MB of RAM: NetBird about
+    54 MB, the applier and the panel about 22 MB each, the routing container
+    about 2 MB. Their peaks over the 34 hours were 83, 60, 48 and 14 MB.
+  - The same stack uses 6 to 8 % of one CPU core. The routing container's
+    repair pass, every `ROUTING_RECONCILE_INTERVAL` seconds, is 2.5 to 3.6 %
+    at the default 2: about 50 to 70 ms of CPU per pass, mostly system time
+    for the commands it starts. A longer interval runs the same pass less
+    often and repairs later. NetBird is 1.5 to 2.2 %, the applier 1.3 to
+    1.4 % and the panel under 1 %. WireGuard encryption comes on top and
+    scales with traffic.
+  - An exit without its own panel (three containers) uses about 70 MB and
+    5 to 7 % of a core. NordVPN's applier holds about 80 MB more (103 MB,
+    peak 155 MB) for its server list. A gluetun exit uses about 215 MB
+    (gluetun 100, the applier 59, NetBird 54, the guard 3) and 9 to 12 %,
+    the guard's pass being 4.7 to 6.5 %.
+  - Images: the routing image 14 MB, the applier 145 MB (124 MB of it the
+    `python:3.14.7-slim` base the panel also runs from, so shared), NetBird
+    0.80.0 102 MB; about 260 MB in all, 330 MB with gluetun v3.41.3's 68 MB.
+  - The Compose memory limits add up to 896 MiB for the Mullvad stack,
+    1,280 MiB with NordVPN's larger applier limit, and 1,216 MiB with the
+    gluetun backend. No peak reached a limit; gluetun's 157 MB of 256 MiB
+    came closest.
 - **Upload bandwidth.** Every device's traffic crosses the host twice, in from
   the device and out to the provider. The host's upload speed is the ceiling
   for everyone using the exit.

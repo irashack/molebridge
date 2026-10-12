@@ -592,6 +592,34 @@ Not done:
 - an app left in gluetun's old namespace, live. On Podman a restart took
   the dependents with it; CI's Docker drill covers the case.
 
+## Resources at 0.7.0 on rootless Podman
+
+2026-10-12, the host of [the 0.7.0 pass](#070-on-rootless-podman-at-d5a234a),
+24 cores, every exit at `d5a234a` and idle. Read from each container's
+cgroup v2 `cpu.stat` and `memory.current`: a 120-second window sampled every
+5 seconds, and the totals since the containers started 34 hours earlier.
+Where two CPU figures are given, the window is the lower and since start the
+higher; `memory.peak` is since start. Percentages are of one core.
+
+| Container | CPU, % of one core | Memory, average | Memory, peak |
+| :--- | :--- | :--- | :--- |
+| Routing container (`wireguard`), six native exits | 2.5 to 3.6, 70 % of it system time | 1.6 to 2.0 MB | 12 to 15 MB |
+| gluetun backend's `guard` | 4.7 to 6.5 | 3 MB | 16 MB |
+| `netbird` | 1.3 to 3.6 | 49 to 56 MB | 81 to 91 MB |
+| `applier`, Mullvad and PIA | 1.2 to 1.8 | 17 to 22 MB | 53 to 60 MB |
+| `applier`, NordVPN | 1.5 to 1.6 | 103 MB | 155 MB |
+| `applier`, gluetun backend and sidecar | 1.8 to 2.0 | 59 to 64 MB | 108 to 109 MB |
+| `control-panel`, one exit | 0.7 to 0.8 | 20 to 22 MB | 46 to 48 MB |
+| Switchyard, eight exits | 0.7 to 0.8 | 68 MB | 94 MB |
+| `gluetun` | 0.1 | 91 to 100 MB | 149 to 157 MB |
+
+Per stack: a Mullvad or PIA exit with its own panel, 6 to 8 % and 93 to
+99 MB; a native exit without a panel, 5.1 to 7.2 % and 68 to 77 MB (NordVPN
+158 MB); the gluetun exit, 9.4 to 12.2 % and 216 MB; the gluetun sidecar,
+1.9 % and 155 MB. Images, from `podman system df -v`: the routing image
+14.0 MB, the applier 145.4 MB (124 MB of it the `python:3.14.7-slim` base,
+shared with the panel), NetBird 0.80.0 102.3 MB, gluetun v3.41.3 67.9 MB.
+
 ## Not yet tested
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
