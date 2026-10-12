@@ -37,7 +37,7 @@ func TestIngressGuardAndForwardRules(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	do(func() error { return nft.InstallIngressGuard(bound, 0, "mullvad", "wt0") })
+	do(func() error { return nft.InstallIngressGuard(bound, ns.Fd(), "mullvad", "wt0") })
 	guard := list(t, ns, "list", "table", "inet", "molebridge_guard")
 	for _, want := range []string{"chain forward", "type filter hook forward priority filter; policy accept;", `iifname "mullvad" oifname != "wt0" drop`} {
 		if !strings.Contains(guard, want) {
@@ -45,13 +45,13 @@ func TestIngressGuardAndForwardRules(t *testing.T) {
 		}
 	}
 	// Installing again replaces the table; it does not stack rules.
-	do(func() error { return nft.InstallIngressGuard(bound, 0, "mullvad", "wt0") })
+	do(func() error { return nft.InstallIngressGuard(bound, ns.Fd(), "mullvad", "wt0") })
 	if n := strings.Count(list(t, ns, "list", "table", "inet", "molebridge_guard"), "drop"); n != 1 {
 		t.Errorf("the guard has %d drop rules after a second install", n)
 	}
 
 	target := netip.MustParseAddr("100.64.0.9")
-	do(func() error { return nft.ApplyForwardRules(bound, 0, "mullvad", "wt0", 41234, target) })
+	do(func() error { return nft.ApplyForwardRules(bound, ns.Fd(), "mullvad", "wt0", 41234, target) })
 	fwd := list(t, ns, "list", "table", "ip", "molebridge_forward")
 	for _, want := range []string{
 		"type nat hook prerouting priority dstnat; policy accept;",
@@ -63,17 +63,17 @@ func TestIngressGuardAndForwardRules(t *testing.T) {
 			t.Errorf("forward table lacks %q:\n%s", want, fwd)
 		}
 	}
-	do(func() error { return nft.ApplyForwardRules(bound, 0, "mullvad", "wt0", 50000, target) })
+	do(func() error { return nft.ApplyForwardRules(bound, ns.Fd(), "mullvad", "wt0", 50000, target) })
 	fwd = list(t, ns, "list", "table", "ip", "molebridge_forward")
 	if strings.Contains(fwd, "41234") || !strings.Contains(fwd, "th dport 50000") || strings.Count(fwd, "dnat to") != 1 {
 		t.Errorf("a new port must replace the old rules:\n%s", fwd)
 	}
-	do(func() error { return nft.RemoveForwardRules(bound, 0) })
+	do(func() error { return nft.RemoveForwardRules(bound, ns.Fd()) })
 	if out, err := ns.Exec("nft", "list", "table", "ip", "molebridge_forward"); err == nil {
 		t.Errorf("the table is still there:\n%s", out)
 	}
 	// Removing a table that is not there is not an error.
-	do(func() error { return nft.RemoveForwardRules(bound, 0) })
+	do(func() error { return nft.RemoveForwardRules(bound, ns.Fd()) })
 	if !strings.Contains(list(t, ns, "list", "ruleset"), "molebridge_guard") {
 		t.Error("the guard is never removed")
 	}
