@@ -24,6 +24,25 @@ type Pair struct {
 // Python dict. A plain map[string]any is written with sorted keys instead.
 type Obj []Pair
 
+// Members builds an Obj from alternating keys and values:
+// Members("a", 1, "b", nil). It panics on a malformed call, which is a
+// programming error. (Composite literals of Pair would trip go vet outside this
+// package.)
+func Members(keyValues ...any) Obj {
+	if len(keyValues)%2 != 0 {
+		panic("validate.Members: odd number of arguments")
+	}
+	o := make(Obj, 0, len(keyValues)/2)
+	for i := 0; i < len(keyValues); i += 2 {
+		key, ok := keyValues[i].(string)
+		if !ok {
+			panic("validate.Members: key is not a string")
+		}
+		o = append(o, Pair{key, keyValues[i+1]})
+	}
+	return o
+}
+
 // Set returns o with key set to value, replacing it in place when present.
 func (o Obj) Set(key string, value any) Obj {
 	for i := range o {

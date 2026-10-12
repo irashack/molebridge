@@ -78,7 +78,7 @@ func TestDuplicateJSONAndSpecialFilesRejected(t *testing.T) {
 func TestSymlinkAndFIFONeverFollowedOrBlock(t *testing.T) {
 	dir := t.TempDir()
 	original := filepath.Join(dir, "original")
-	if err := Write(original, validate.Obj{{"server", "a"}}, Options{}); err != nil {
+	if err := Write(original, validate.Members("server", "a"), Options{}); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(dir, "link")
@@ -101,7 +101,7 @@ func TestSymlinkAndFIFONeverFollowedOrBlock(t *testing.T) {
 func TestWriteModesAndOutput(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "deeper", "out.json")
-	obj := validate.Obj{{"fetched_at", "2026-10-11T12:00:00Z"}, {"relays", map[string]any{"a": validate.Obj{{"city", strings.Repeat("é", 250)}, {"n", 1.5}, {"b", true}, {"x", nil}}}}}
+	obj := validate.Members("fetched_at", "2026-10-11T12:00:00Z", "relays", map[string]any{"a": validate.Members("city", strings.Repeat("é", 250), "n", 1.5, "b", true, "x", nil)})
 	if err := Write(path, obj, Options{MaxBytes: 1_000_000}); err != nil {
 		t.Fatal(err)
 	}
@@ -203,10 +203,10 @@ func TestEncodingStopsAtTheLimitWithBoundedMemory(t *testing.T) {
 	long := strings.Repeat("é", 250)
 	rows := make([]any, 50000)
 	for i := range rows {
-		rows[i] = validate.Obj{{"hostname", "us"}, {"city", long}, {"country", long}, {"virtual", false}}
+		rows[i] = validate.Members("hostname", "us", "city", long, "country", long, "virtual", false)
 	}
 	var err error
-	grown := allocated(func() { err = Write(path, validate.Obj{{"relays", rows}}, Options{Public: true, MaxBytes: 16 << 20}) })
+	grown := allocated(func() { err = Write(path, validate.Members("relays", rows), Options{Public: true, MaxBytes: 16 << 20}) })
 	if !errors.Is(err, ErrSizeLimit) {
 		t.Fatalf("got %v", err)
 	}

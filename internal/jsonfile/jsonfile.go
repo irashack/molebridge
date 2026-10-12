@@ -28,24 +28,31 @@ var ErrSizeLimit = errors.New("state file exceeds its size limit")
 // JSON null reads as nil too, as in Python.) A FIFO or a device is never
 // opened for reading.
 func Read(path string, limit int64) any {
+	value, _ := ReadOK(path, limit)
+	return value
+}
+
+// ReadOK is Read, with a second result that is false when the file could not
+// be read or decoded, and true for a document that is the JSON null.
+func ReadOK(path string, limit int64) (any, bool) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
-		return nil
+		return nil, false
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil || int64(len(raw)) > limit {
-		return nil
+		return nil, false
 	}
 	value, err := validate.DecodeJSON(raw)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return value
+	return value, true
 }
 
 // ReadObject is Read for a document that must be a JSON object.
