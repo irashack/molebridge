@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package deps pins the vendored netlink and WireGuard modules until each has
 // a real importer. It is deleted once internal/rtnl, internal/tunnel and
 // internal/nft import them.
