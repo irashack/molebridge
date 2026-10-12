@@ -942,3 +942,37 @@ func TestAStalledLinkOperationEndsAtTheDeadline(t *testing.T) {
 		})
 	}
 }
+
+func TestInterruptEndsARequestInFlightAndTheNextOneReconnects(t *testing.T) {
+	var stalled atomic.Bool
+	stalled.Store(true)
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if stalled.Load() {
+			return nil
+		}
+		return [][]byte{ackMsg(r.seq)}
+	})
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	done := make(chan error, 1)
+	go func() { done <- c.SetLinkUp(7) }()
+	for k.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	start := time.Now()
+	c.Interrupt()
+	select {
+	case err := <-done:
+		if err == nil || !IsStreamError(err) {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request outlived the interrupt")
+	}
+	if time.Since(start) > time.Second {
+		t.Error("slow")
+	}
+	stalled.Store(false)
+	if err := c.SetLinkUp(7); err != nil {
+		t.Fatalf("after the interrupt: %v", err)
+	}
+}
