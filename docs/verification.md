@@ -29,8 +29,9 @@ below doesn't apply.
 ## Inside the namespace
 
 The exit container is an Alpine image with busybox, not a toolbox: it has no
-`curl`, `nft`, `wg`, `tcpdump` or iproute2's `ip` (busybox's `ip` doesn't print
-`not`, `ipproto` or `suppress_prefixlength`). For the checks below, join a
+`curl`, `nft`, `wg`, `tcpdump` or iproute2's `ip` (busybox's `ip` has no `-d`
+and no `route get`, and it knows none of the rule selectors the contract uses, such
+as `not`, `ipproto` and `suppress_prefixlength`). For the checks below, join a
 throwaway container to the exit's network namespace and install the tools in it.
 It uses the same pinned Alpine as the image, and downloads its packages through
 the namespace's ordinary route (the host's), so it needs the Internet:
