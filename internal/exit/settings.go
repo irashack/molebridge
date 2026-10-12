@@ -109,7 +109,9 @@ func (s *Settings) BackendName() string {
 }
 
 // RunDirOf is the runtime directory an environment names.
-func RunDirOf(env map[string]string) string { return orDefault(env["MOLEBRIDGE_RUN_DIR"], DefaultRunDir) }
+func RunDirOf(env map[string]string) string {
+	return orDefault(env["MOLEBRIDGE_RUN_DIR"], DefaultRunDir)
+}
 
 // HeartbeatPathOf is the heartbeat file of an environment's runtime directory.
 func HeartbeatPathOf(env map[string]string) string {
