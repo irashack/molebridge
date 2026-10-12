@@ -8,3 +8,4 @@ routing/* text eol=lf
 applier/Dockerfile text eol=lf
 vendor/** -whitespace
 Dockerfile text eol=lf
+internal/**/testdata/** -whitespace

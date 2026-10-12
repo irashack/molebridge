@@ -400,6 +400,7 @@ func ConfigFromEnv(env map[string]string, exitIDs []string) (*Config, error) {
 		return nil, err
 	}
 	if len(adminGroups) == 0 && len(access) == 0 {
+		//lint:ignore ST1005 operator-facing message quoted verbatim in docs/troubleshooting.md and panel/oidc.py
 		return nil, errors.New("With PANEL_OIDC_ISSUER set, PANEL_ADMIN_GROUPS or PANEL_ACCESS must name at least one group")
 	}
 	ttlText, set := env["PANEL_SESSION_TTL"]

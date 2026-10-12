@@ -164,7 +164,6 @@ var (
 )
 
 func defaultText(hostname string) string { return hostname }
-func noDetails(*Relay) string            { return "" }
 
 func init() {
 	registry = map[string]*Provider{}

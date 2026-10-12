@@ -187,3 +187,54 @@ func wrap(op string, err error) error {
 	}
 	return fmt.Errorf("rtnl: %s: %w", op, err)
 }
+
+// LinkByName reads one interface. A missing one is an error for which
+// IsNotExist is true (ENODEV).
+func (c *Conn) LinkByName(name string) (Link, error) {
+	msgs, _, err := c.exchange(context.Background(), rtmGetLink, nlmRequest, LinkLookupRequest(name))
+	if err != nil {
+		return Link{}, fmt.Errorf("rtnl: look up link %s: %w", name, err)
+	}
+	for _, m := range msgs {
+		if m.typ != rtmNewLink {
+			continue
+		}
+		l, err := DecodeLink(m.data)
+		if err != nil {
+			return Link{}, c.malformed("look up link "+name, err)
+		}
+		return l, nil
+	}
+	return Link{}, c.malformed("look up link "+name, fmt.Errorf("%w: no link in the reply", ErrMalformed))
+}
+
+// AddLink creates an interface of a kind ("wireguard") with a name, like
+// `ip link add NAME type KIND` (EEXIST if the name is taken).
+func (c *Conn) AddLink(name, kind string) error {
+	return wrap("add link", c.request(context.Background(), rtmNewLink, nlmRequest|nlmAck|nlmCreate|nlmExcl, LinkCreateRequest(name, kind)))
+}
+
+// DelLink removes an interface by index.
+func (c *Conn) DelLink(index uint32) error {
+	return wrap("delete link", c.request(context.Background(), rtmDelLink, nlmRequest|nlmAck, LinkDeleteRequest(index)))
+}
+
+// SetLinkMTU sets an interface's MTU.
+func (c *Conn) SetLinkMTU(index, mtu uint32) error {
+	return wrap("set link MTU", c.request(context.Background(), rtmNewLink, nlmRequest|nlmAck, LinkMTURequest(index, mtu)))
+}
+
+// SetLinkUp brings an interface administratively up.
+func (c *Conn) SetLinkUp(index uint32) error {
+	return wrap("set link up", c.request(context.Background(), rtmNewLink, nlmRequest|nlmAck, LinkUpRequest(index)))
+}
+
+// AddAddr assigns an address (EEXIST if it is already there).
+func (c *Conn) AddAddr(a Addr) error {
+	return wrap("add address", c.request(context.Background(), rtmNewAddr, nlmRequest|nlmAck|nlmCreate|nlmExcl, a.Marshal()))
+}
+
+// DelAddr removes an address.
+func (c *Conn) DelAddr(a Addr) error {
+	return wrap("delete address", c.request(context.Background(), rtmDelAddr, nlmRequest|nlmAck, a.Marshal()))
+}

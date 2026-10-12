@@ -75,6 +75,9 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 				changed, cerr := c.settleChurn(ctx, churn, in, true)
 				switch {
 				case cerr == nil && !changed:
+					if eerr := c.expired(ctx); eerr != nil {
+						return nil, eerr
+					}
 					return s, nil
 				case cerr != nil && !errors.Is(cerr, errObservation):
 					return nil, cerr // out of time: no snapshot is returned after the deadline
@@ -90,6 +93,9 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 			var again *Snapshot
 			if again, err = c.takeOnce(ctx, in); err == nil {
 				if reflect.DeepEqual(s, again) {
+					if eerr := c.expired(ctx); eerr != nil {
+						return nil, eerr
+					}
 					return again, nil
 				}
 				lastSnap = again
@@ -110,6 +116,9 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 		// The kernel never held still (or could not be watched), but no dump
 		// failed: hand over the last look, marked, so that repairs are not
 		// starved by churn. It is evidence of nothing it shows to be absent.
+		if eerr := c.expired(ctx); eerr != nil {
+			return nil, eerr
+		}
 		lastSnap.Unstable = true
 		return lastSnap, nil
 	}
@@ -207,6 +216,11 @@ func (c *Conn) settleChurn(ctx context.Context, churn churnSource, in Interest, 
 			case errors.Is(rerr, ErrOverrun):
 				return true, nil
 			case Timeout(rerr):
+				// A timeout at the operation's own deadline says nothing
+				// about the queue: only one with time to spare is silence.
+				if cerr := c.expired(ctx); cerr != nil {
+					return false, cerr
+				}
 				return changed, nil
 			default:
 				return false, fmt.Errorf("%w: %v", errObservation, rerr)

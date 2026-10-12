@@ -160,7 +160,7 @@ func TestFixBlacklistChangesOnlyOneSpan(t *testing.T) {
 		// What is left of the original between prefix and suffix is at most
 		// the old list value (or nothing, for an insertion).
 		removed := string(in[p : len(in)-s])
-		if strings.Trim(removed, "null[] \t\r\n") != "" {
+		if strings.Trim(removed, "nul[] \t\r\n") != "" {
 			t.Errorf("%s: the edit removed %q", name, removed)
 		}
 	}

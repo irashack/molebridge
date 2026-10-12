@@ -1,5 +1,7 @@
 package rtnl
 
+//lint:file-ignore U1000 the rtm* message types are used only by the linux build (conn_linux.go, events_linux.go)
+
 // Numeric values from linux/rtnetlink.h, linux/fib_rules.h and
 // linux/if_link.h. They are repeated here, rather than taken from
 // golang.org/x/sys/unix, so the codec builds and is tested on any platform.

@@ -67,6 +67,13 @@ type Plan struct {
 	Routes         []RouteAction
 	// Unprotected: a live tunnel address lacks its return-path pair.
 	Unprotected bool
+	// Effective is the expected state this plan was judged against: the Spec
+	// with the pairs of the addresses observed live added (natively) or
+	// replaced by the observed address (gluetun). Everything that carries the
+	// plan out, rebuilds and deletion fallbacks included, must use it and
+	// nothing else, so that a pass cannot act on one idea of what is expected
+	// and judge by another.
+	Effective Spec
 	// Problems are what is still wrong if the plan is not applied; with
 	// gluetun, Problems also carries the conditions no action can fix
 	// (ProblemNoDefault) and a held kill switch is reported by HoldKillSwitch,
@@ -153,6 +160,7 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 			p.Problems = append(p.Problems, ProblemNoDefault)
 		}
 	}
+	p.Effective = spec
 	p.Rules = Diff(spec, f, snap.Rules[f], DiffOptions{HoldKillSwitch: p.HoldKillSwitch})
 	p.Routes = ExitTableActions(snap.RoutesInTable(f, c.Table), f, c.Table, p.ExitIf.Index, p.Tunnel)
 	if len(p.Rules) > 0 {

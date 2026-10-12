@@ -216,18 +216,6 @@ func TestAFailedExitShowsNoTierAndNoAddress(t *testing.T) {
 
 // -- sidecar wording -------------------------------------------------------------------
 
-func (h *harness) renderExit(ex Exit, desired, result map[string]any, embed bool) string {
-	h.t.Helper()
-	var d, r any
-	if desired != nil {
-		d = desired
-	}
-	if result != nil {
-		r = result
-	}
-	return h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.judge(ex, d, r), CSRFToken: "tok", Embed: embed})
-}
-
 func sidecarPage(t *testing.T, result, desired map[string]any) string {
 	h := setupExit(t, "gluetun-surfshark", "sidecar", result, desired)
 	ex := h.exit("x")
@@ -466,7 +454,8 @@ func TestConcurrentRequestsWriteOnce(t *testing.T) {
 func TestEachExitHasItsOwnLock(t *testing.T) {
 	h := newHarness(t, map[string]string{"PANEL_EXITS": "a=mullvad,b=mullvad"}, nil)
 	a, b := h.exit("a"), h.exit("b")
-	if h.srv.selectLock(a) != h.srv.selectLock(a) || h.srv.selectLock(a) == h.srv.selectLock(b) {
+	la := h.srv.selectLock(a)
+	if la != h.srv.selectLock(a) || la == h.srv.selectLock(b) {
 		t.Fatal("locks are not per exit")
 	}
 }

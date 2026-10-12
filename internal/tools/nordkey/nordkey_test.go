@@ -413,7 +413,7 @@ func TestFetchSendsTheCredentialOnlyAsBasicAuth(t *testing.T) { // test_fetch_pa
 func TestFetchFailureIsAFixedError(t *testing.T) { // test_fetch_failure_is_a_fixed_error_and_cleans_up
 	big := bytes.Repeat([]byte("x"), ResponseMaxBytes+1)
 	for name, handler := range map[string]http.HandlerFunc{
-		"401":            func(w http.ResponseWriter, r *http.Request) { http.Error(w, "bad "+token, 401) },
+		"401":            func(w http.ResponseWriter, r *http.Request) { http.Error(w, "bad "+token, http.StatusUnauthorized) },
 		"500":            func(w http.ResponseWriter, r *http.Request) { http.Error(w, "boom", 500) },
 		"too big":        func(w http.ResponseWriter, r *http.Request) { w.Write(big) },
 		"too big chunks": func(w http.ResponseWriter, r *http.Request) { w.(http.Flusher).Flush(); w.Write(big) },

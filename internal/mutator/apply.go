@@ -53,7 +53,8 @@ func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 // while it was taken) only additions are made: no rule, route or host-table
 // entry is removed or rebuilt on evidence that may show a gap or a repeat
 // that is not there. A phantom absence must never cost a protection.
-func (tx *Tx) apply(spec contract.Spec, p contract.Plan, removals bool) (mutations int, errs []error) {
+func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error) {
+	spec := p.Effective
 	f := p.Family
 	note := func(changed bool, err error, what string) {
 		if changed {
