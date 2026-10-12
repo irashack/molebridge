@@ -1,5 +1,5 @@
-# Build context of the root Dockerfile (BuildKit reads this file instead of
-# .dockerignore, which belongs to the older routing/ and applier/ images).
+# Build context of the root Dockerfile (BuildKit reads this file, named after
+# the Dockerfile, as its ignore list).
 # An allowlist: Go sources, vendored modules, the license texts shipped in the
 # image, and the assets the binary embeds.
 **
@@ -11,5 +11,4 @@
 !LICENSE
 !THIRD_PARTY.md
 !panel/static/
-!applier/PIA-CA-LICENSE.txt
 **/*_test.go

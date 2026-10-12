@@ -2,8 +2,7 @@
 #
 # The single Molebridge image: the molebridge binary (every role) and the
 # pinned NetBird client. Roles are chosen by argument, never guessed from the
-# environment (docs/architecture.md). The older routing/ and applier/ images
-# stay in the tree until the Python and shell sources are deleted.
+# environment (docs/architecture.md).
 #
 # Base images are pinned by tag and by the multi-arch index digest. Rebuild
 # deliberately when one changes, then run docs/verification.md.
@@ -15,7 +14,7 @@ FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662
 ARG TARGETOS=linux
 ARG TARGETARCH
 WORKDIR /src
-# The build context is the allowlist in .dockerignore (Go sources, vendor/,
+# The build context is the allowlist in Dockerfile.dockerignore (Go sources, vendor/,
 # embedded assets). vendor/ is used when the module has dependencies; a module
 # with none builds with -mod=vendor as well.
 COPY . .
@@ -67,6 +66,6 @@ COPY --from=netbird --chown=0:0 --chmod=0755 /netbird/netbird /usr/local/bin/net
 COPY --from=netbird --chown=0:0 /netbird/LICENSE /usr/share/licenses/netbird/LICENSE
 COPY --from=netbird --chown=0:0 /netbird/LICENSES/ /usr/share/licenses/netbird/LICENSES/
 COPY --chown=0:0 --chmod=0644 LICENSE THIRD_PARTY.md /usr/share/licenses/molebridge/
-COPY --chown=0:0 --chmod=0644 applier/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt
+COPY --chown=0:0 --chmod=0644 internal/applier/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt
 COPY --chown=0:0 --chmod=0644 panel/static/JetBrainsMono-OFL.txt /usr/share/licenses/molebridge/JetBrainsMono-OFL.txt
 ENTRYPOINT ["/usr/local/bin/molebridge"]

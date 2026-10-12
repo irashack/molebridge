@@ -87,10 +87,10 @@ License 1.1: [`panel/static/JetBrainsMono-OFL.txt`](panel/static/JetBrainsMono-O
 
 ## Private Internet Access certificate authority
 
-`applier/pia-ca.rsa.4096.crt` is PIA's certificate authority, copied unchanged
+`internal/applier/pia-ca.rsa.4096.crt` is PIA's certificate authority, copied unchanged
 from <https://github.com/pia-foss/manual-connections>, which is MIT-licensed
 (copyright 2020 Private Internet Access, Inc.). The notice is
-[`applier/PIA-CA-LICENSE.txt`](applier/PIA-CA-LICENSE.txt) (installed at
+[`internal/applier/PIA-CA-LICENSE.txt`](internal/applier/PIA-CA-LICENSE.txt) (installed at
 `/usr/share/licenses/molebridge/PIA-CA-LICENSE.txt`).
 
 ## Go modules

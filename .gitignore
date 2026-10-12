@@ -7,7 +7,4 @@ tunnel/wg_confs/*
 tunnel/gluetun/
 *.conf
 !internal/**/testdata/**/*.conf
-__pycache__/
-.pytest_cache/
-.venv/
 .claude/settings.local.json
