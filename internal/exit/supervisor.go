@@ -245,7 +245,7 @@ func (s *Supervisor) startWorker() error {
 		wFrom.Close()
 		return err
 	}
-	env := append(WorkerEnv(s.s.Env), "MOLEBRIDGE_GENERATION="+gen)
+	env := append(WorkerEnv(s.s.Env), "MOLEBRIDGE_GENERATION="+gen, "TMPDIR="+filepath.Join(s.s.RunDir, "tmp"))
 	env = append(env, s.c.ExtraWorkerEnv...)
 	args := append([]string{"molebridge"}, s.c.WorkerArgs...)
 	p, err := s.reap.Start(proc.Spec{Path: s.c.Self, Args: args, Env: env,

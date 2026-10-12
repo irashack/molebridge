@@ -99,6 +99,7 @@ func (l *lab) path(parts ...string) string {
 // overlay is true.
 func newLab(t *testing.T, overlayVeth bool) *lab {
 	t.Helper()
+	drillBinaries(t)
 	l := &lab{t: t, dir: t.TempDir()}
 	l.client = nstest.New(t, "client")
 	l.exit = nstest.New(t, "exit")
