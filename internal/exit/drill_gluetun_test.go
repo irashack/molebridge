@@ -232,3 +232,26 @@ func TestDrillSidecarOwnsNoInterfaceAndRunsNoNetBird(t *testing.T) {
 	}
 	_ = filepath.Join
 }
+
+// The monitors count from the launch, not from the end of `netbird up`: a
+// client whose `up` hangs without ever carrying the control mark is condemned
+// after FWMARK_GRACE, not after the 120-second bound of `up`.
+func TestDrillGluetunMonitorsCountFromTheLaunchNotFromUp(t *testing.T) {
+	skipWithoutWireGuard(t)
+	l := gluetunLab(t, "127.0.0.1:8000")
+	p := l.startEnv(l.gluetunEnv("overlay", "NB_FAKE_FWMARK=0x2a00", "NB_FAKE_UP_DELAY=60"))
+	l.waitFor(60*time.Second, "NetBird's daemon to start", func() bool { return l.traceHas("service run") })
+	launched := time.Now()
+	l.waitFor(30*time.Second, "NetBird to be condemned while `netbird up` is still running", func() bool { return l.traceHas("terminated") })
+	took := time.Since(launched)
+	t.Logf("condemned %v after the launch, `netbird up` still pending (FWMARK_GRACE=5)", took)
+	if took > 5*time.Second+5*time.Second {
+		t.Errorf("condemned only after %v", took)
+	}
+	if code := p.wait(30 * time.Second); code == 0 {
+		t.Error("a condemned NetBird must end the exit non-zero")
+	}
+	if !strings.Contains(p.out.String(), "has not carried the control mark 0x1bd00 for 5 seconds") {
+		t.Errorf("the reason is not in the log:\n%s", p.out.String())
+	}
+}
