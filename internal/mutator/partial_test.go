@@ -452,3 +452,92 @@ func TestTheNextChangeStartsFromEverythingProtected(t *testing.T) {
 		}
 	}
 }
+
+// One effective expected state per pass: the plan is judged against the Spec
+// plus the pairs of the addresses observed live, and the rebuild that carries
+// it out must use the same, not the Spec the mutator holds. Both A and B are
+// protected, the Spec names only A, and the rules at 94 and 98 are repeated so
+// that they are rebuilt.
+func TestARebuildKeepsThePairsOfEveryLiveAddress(t *testing.T) {
+	a11, a12 := netip.MustParseAddr("203.0.113.11"), netip.MustParseAddr("203.0.113.12")
+	for _, guard := range []bool{false, true} {
+		h := newPIAHarness(t, piaScenario{name: "A named, B live", old: a11, next: a11})
+		h.m.Close()
+		h.m = startWith(t, h.k, h.spec, func(o *Options) { o.GuardRepairs = guard })
+		h.k.setAddr(rtnl.V4, "mullvad", a12, true)
+		pair := h.spec.Clone()
+		pair.ReturnPath = map[rtnl.Family][]netip.Addr{rtnl.V4: {a12}}
+		for _, r := range pair.Rules(rtnl.V4) {
+			if r.Priority == 94 || r.Priority == 98 {
+				h.k.rules[rtnl.V4] = append(h.k.rules[rtnl.V4], r)
+			}
+		}
+		// Repeat both pairs' rules at 94 and 98: each repeat is a rule whose
+		// selectors are a subset of an expected rule's, so the priority is rebuilt.
+		for _, r := range append([]rtnl.Rule(nil), h.k.rules[rtnl.V4]...) {
+			if r.Priority == 94 || r.Priority == 98 {
+				h.k.rules[rtnl.V4] = append(h.k.rules[rtnl.V4], r)
+			}
+		}
+		sortRules(h.k.rules[rtnl.V4])
+		h.k.hook = h.observe
+		h.observe("start")
+		res, err := h.m.ReconcileNow(context.Background(), "x")
+		if err != nil || !res.Verified {
+			t.Fatalf("guard=%v: %+v %v", guard, res, err)
+		}
+		if h.violation != "" {
+			t.Errorf("guard=%v: %s", guard, h.violation)
+		}
+		got := map[netip.Addr][]uint32{}
+		for _, r := range h.k.rules[rtnl.V4] {
+			if r.Priority == 94 || r.Priority == 98 {
+				got[r.Src.Addr()] = append(got[r.Src.Addr()], r.Priority)
+			}
+		}
+		for _, a := range []netip.Addr{a11, a12} {
+			if len(got[a]) != 2 {
+				t.Errorf("guard=%v: %s has %v", guard, a, got[a])
+			}
+		}
+	}
+}
+
+// Readiness is withdrawn before the callback changes anything and comes back
+// only by a stable pass that verifies the result.
+func TestReadinessIsWithdrawnForTheWholeChange(t *testing.T) {
+	sc := piaScenarios()[0]
+	h := newPIAHarness(t, sc)
+	if res, err := h.m.ReconcileNow(context.Background(), "baseline"); err != nil || !res.Verified || !h.m.Ready() {
+		t.Fatalf("%+v %v", res, err)
+	}
+	var readyDuring bool
+	// The callback fails after the address changed and the exit route went; the
+	// settling looks are all unstable.
+	h.k.unstableFn = func(n int) bool { return n >= 3 }
+	h.k.takes = 0
+	err := h.m.ChangeReturnPath(context.Background(), rtnl.V4, sc.old, sc.next, func(tx *Tx) error {
+		readyDuring = h.m.Ready()
+		h.k.setAddr(rtnl.V4, "mullvad", sc.next, true)
+		h.k.mu.Lock()
+		h.k.routes[rtnl.V4] = h.k.routes[rtnl.V4][:1]
+		h.k.mu.Unlock()
+		return errors.New("setting the peer failed")
+	})
+	if err == nil {
+		t.Fatal("no error")
+	}
+	if readyDuring {
+		t.Error("ready while the callback was changing state")
+	}
+	if h.m.Ready() || h.m.LastPass().Verified {
+		t.Errorf("a verdict survived an unverifiable change: ready=%v %+v", h.m.Ready(), h.m.LastPass())
+	}
+	// A stable pass that verifies brings it back.
+	h.k.unstableFn = nil
+	res, err := h.m.ReconcileNow(context.Background(), "after")
+	if err != nil || !res.Verified || !h.m.Ready() {
+		t.Fatalf("%+v %v", res, err)
+	}
+	h.finalChecks("after", nil)
+}

@@ -779,3 +779,50 @@ func TestIfNotificationsCanNeverBeReadTheSnapshotIsUnstable(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 }
+
+// A notification read that ends at the operation's deadline is not evidence
+// of an empty queue; no snapshot, stable or not, is handed over after the
+// deadline.
+type atDeadlineChurn struct {
+	dumps *atomic.Int32
+	after int32
+	until time.Time
+}
+
+func (a *atDeadlineChurn) Next(deadline time.Time) ([]Event, error) {
+	if a.dumps.Load() >= a.after {
+		time.Sleep(time.Until(a.until)) // the read lasts until the operation's deadline
+	}
+	return nil, os.ErrDeadlineExceeded
+}
+func (a *atDeadlineChurn) Close() error { return nil }
+
+func TestAReadThatEndsAtTheOperationDeadlineIsNotSilence(t *testing.T) {
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			dumps.Add(1)
+		}
+		return ordinary(n, r)
+	})
+	dl := time.Now().Add(60 * time.Millisecond)
+	c.churn = &atDeadlineChurn{dumps: &dumps, after: 7, until: dl}
+	c.SetDeadline(dl)
+	s, err := c.Take(Interest{})
+	if err == nil || s != nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%+v %v: a snapshot was certified by the expiry of its own deadline", s, err)
+	}
+}
+
+func TestNoSnapshotIsReturnedAfterTheDeadlineEvenWithoutASubscription(t *testing.T) {
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		time.Sleep(4 * time.Millisecond)
+		return ordinary(n, r)
+	})
+	c.SetDeadline(time.Now().Add(40 * time.Millisecond))
+	// Two looks of seven dumps at 4 ms each cannot both fit.
+	s, err := c.Take(Interest{})
+	if err == nil || s != nil {
+		t.Fatalf("%+v %v", s, err)
+	}
+}

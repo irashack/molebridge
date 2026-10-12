@@ -157,6 +157,9 @@ func (m *Mutator) ChangeReturnPath(ctx context.Context, f rtnl.Family, old, next
 				fmt.Errorf("the new %s return-path rules could not be confirmed: %w", f, orUnverified(res.Err)),
 				tx.settle(before, both, f, old, next, true))
 		}
+		// The callback is about to change what the last verdict was about. From
+		// here until a stable pass verifies the result there is no verdict.
+		tx.unverified("a return-path change is in progress")
 		cerr := change(tx)
 		if cerr == nil {
 			// The exit table's default route comes back (changing the address
@@ -213,6 +216,7 @@ func (tx *Tx) settle(before, both contract.Spec, f rtnl.Family, old, next netip.
 	for i := 0; i < settleLooks; i++ {
 		if snap, err = tx.Snapshot(); err != nil {
 			// Cannot tell what is live: everything stays, as it is expected now.
+			tx.unverified("the tunnel addresses could not be read back")
 			return opErr("read the tunnel addresses back; the return-path pairs stay", err)
 		}
 		if !snap.Unstable {
@@ -220,6 +224,7 @@ func (tx *Tx) settle(before, both contract.Spec, f rtnl.Family, old, next netip.
 		}
 	}
 	if snap.Unstable {
+		tx.unverified("the kernel kept changing; the change cannot be verified")
 		return errors.New("the kernel kept changing; the return-path pairs stay until a stable look can prune them")
 	}
 	var keep []netip.Addr
@@ -267,4 +272,12 @@ func orUnverified(err error) error {
 		return err
 	}
 	return fmt.Errorf("the contract does not verify")
+}
+
+// unverified publishes a result that is not a verdict: not ready, not
+// verified, whatever an earlier look said. Only a later stable pass that
+// verifies the contract re-establishes readiness.
+func (tx *Tx) unverified(why string) {
+	tx.m.recordPass(PassResult{Reason: why, Err: errors.New(why), At: tx.m.o.Clock(),
+		Problems: map[rtnl.Family][]contract.Problem{}})
 }
