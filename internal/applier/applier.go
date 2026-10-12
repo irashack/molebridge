@@ -38,6 +38,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -115,6 +116,11 @@ func New(cfg Config) (*Applier, error) {
 	// Refuses a sidecar with a native provider, at start.
 	if _, err := verdict.NewExitConfig(spec.ID, cfg.Exit.Kind, ""); err != nil {
 		return nil, err
+	}
+	if checker, ok := cfg.Provider.(SystemChecker); ok {
+		if err := checker.CheckSystem(cfg.System, cfg.Exit); err != nil {
+			return nil, err
+		}
 	}
 	a := &Applier{sys: cfg.System, hooks: cfg.Provider, spec: spec, exit: cfg.Exit, gatus: cfg.Gatus,
 		publish: cfg.Publish, ownerCheck: cfg.OwnerCheck, logf: cfg.Log, clock: cfg.Monotonic, wallNow: cfg.Wall, sleeper: cfg.Sleep,
@@ -248,6 +254,11 @@ func (a *Applier) tunnelAddresses(ctx context.Context, requireIPv4 bool) (map[in
 	if err != nil {
 		return nil, err
 	}
+	return groupAddresses(addresses, requireIPv4)
+}
+
+// groupAddresses is tunnelAddresses' judgment of the interface's addresses.
+func groupAddresses(addresses []netip.Addr, requireIPv4 bool) (map[int]string, error) {
 	found := map[int]string{}
 	for _, address := range addresses {
 		version := 6
@@ -1355,7 +1366,9 @@ func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error
 		}
 		return a.Inspect(ctx, false)
 	}
-	a.hooks.BeforeMutation(ctx, a, target)
+	if err := a.hooks.BeforeMutation(ctx, a, target); err != nil {
+		return nil, err
+	}
 	at.State, at.Outcome, at.Message = "attempting", "", ""
 	at.Attempts++
 	now := a.clock()
