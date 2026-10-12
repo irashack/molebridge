@@ -27,19 +27,23 @@ rule out the config and settings, run `check-config` as above.
 **The exit stays unhealthy, and its log says `molebridge-exit: not operational:
 <reason>`.** The worker writes the health check's heartbeat only while the exit is
 operational, and says why it isn't, at most once a minute for each reason:
-`the NetBird profile check refused` (the stored profile lacks the tunnel interface
-in its blacklist, or isn't right; see [below](#netbirds-settings-and-profile)),
-`NetBird has not been started yet` (the contract isn't verified yet, or NetBird is
-still starting; with PIA and no region yet, a fresh tunnel has no address),
-`the routing contract is not verified` (see `not ready:` further down), `NetBird is
-not running`, or `the pipeline reports the namespace is not intact (<what>)`, where
-`<what>` lists, separated by `;`, `no readable status record`, `the last record is
-not a completed check`, `not exactly one tunnel peer` (a sidecar), `the tunnel
-interface has no WireGuard device`, `the tunnel addresses cannot be read`, `IPv4
-routing is not intact` or `IPv6 routing is not intact`, `icmp_errors_use_inbound_ifaddr
-is not 1`, `the overlay interface is not kernel WireGuard`, `NetBird's kernel
-firewall is not present`, and `the record may be stale`. The unhealthy exit keeps
-trying; none of these stops it.
+
+- `the NetBird profile check refused`: the stored profile lacks the tunnel interface
+  in its blacklist, or isn't right; see [below](#netbirds-settings-and-profile).
+- `NetBird has not been started yet`: the contract isn't verified yet, or NetBird is
+  still starting.
+- `the routing contract is not verified`: see `not ready:` further down.
+- `NetBird is not running`.
+- `the pipeline reports the namespace is not intact (<what>)`. `<what>` is one or more
+  of, separated by `;`: `no readable status record`, `the last record is not a completed
+  check`, `not exactly one tunnel peer` (a sidecar), `the tunnel interface has no
+  WireGuard device`, `the tunnel addresses cannot be read`, `IPv4 routing is not intact`,
+  `IPv6 routing is not intact`, `icmp_errors_use_inbound_ifaddr is not 1`, `the overlay
+  interface is not kernel WireGuard`, `NetBird's kernel firewall is not present` and `the
+  record may be stale`. With PIA, before you choose a region, expect `IPv4 routing is not
+  intact`: a fresh PIA tunnel has no address yet.
+
+The unhealthy exit keeps trying; none of these stops it.
 
 **`molebridge-exit: <setting> ...`, and the container exits.** The exit checks
 its settings and the tunnel config before touching anything, and names what it
