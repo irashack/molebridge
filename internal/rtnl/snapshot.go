@@ -11,6 +11,12 @@ type Snapshot struct {
 	Addrs  map[Family][]Addr
 }
 
+// Interest says which parts of the routing state a snapshot needs.
+type Interest struct {
+	// Tables are the routing tables whose routes are kept.
+	Tables []uint32
+}
+
 // NewSnapshot returns an empty snapshot with its maps made.
 func NewSnapshot() *Snapshot {
 	return &Snapshot{

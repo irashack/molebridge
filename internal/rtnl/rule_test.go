@@ -26,7 +26,7 @@ func contractRules() map[string]Rule {
 			Src: pfx("2001:db8:3::1/128"), IPProto: Some(uint8(58))},
 		"icmp backstop": {Family: V4, Priority: 98, Action: FRActUnreachable,
 			Src: pfx("203.0.113.1/32"), IPProto: Some(uint8(1))},
-		"big table": {Family: V4, Priority: 95, Action: FRActToTbl, Table: 2147483647, IifName: "wt0"},
+		"big table":   {Family: V4, Priority: 95, Action: FRActToTbl, Table: 2147483647, IifName: "wt0"},
 		"unreachable": {Family: V4, Priority: 97, Action: FRActUnreachable, IifName: "wt0"},
 	}
 }

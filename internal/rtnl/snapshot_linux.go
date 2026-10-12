@@ -2,12 +2,6 @@
 
 package rtnl
 
-// Interest says which parts of the routing state a snapshot needs.
-type Interest struct {
-	// Tables are the routing tables whose routes are kept.
-	Tables []uint32
-}
-
 // Take dumps the rules, the routes of the wanted tables, the links and the
 // addresses. Callers that watch for changes must have joined the multicast
 // groups (Subscribe) before calling it.
