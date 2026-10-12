@@ -49,7 +49,7 @@ type linkAPI interface {
 type legacy struct {
 	openWG func(ctx context.Context) (wgClient, error) // tests replace it
 	openLK func() (linkAPI, error)                     // tests replace it
-	wgMu   sync.Mutex                                  // one wgctrl call at a time
+	lwgMu  sync.Mutex                                  // one wgctrl call at a time
 	lkMu   sync.Mutex                                  // one link call at a time
 
 	lmu     sync.Mutex // guards lwg, llk, lclosed
@@ -203,8 +203,8 @@ func opened[T any](ctx context.Context, open func() (T, error), closeIt func(T))
 // legacyWgDo runs a call on the wgctrl client, opening one if needed, under
 // the context's deadline.
 func (m *Manager) legacyWgDo(ctx context.Context, fn func(wgClient) error) error {
-	m.wgMu.Lock()
-	defer m.wgMu.Unlock()
+	m.lwgMu.Lock()
+	defer m.lwgMu.Unlock()
 	m.lmu.Lock()
 	if m.lclosed {
 		m.lmu.Unlock()
