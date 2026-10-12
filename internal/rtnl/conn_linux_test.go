@@ -826,3 +826,119 @@ func TestNoSnapshotIsReturnedAfterTheDeadlineEvenWithoutASubscription(t *testing
 		t.Fatalf("%+v %v", s, err)
 	}
 }
+
+func linkReply(seq uint32, index uint32, name string) []byte {
+	return frame(rtmNewLink, 0, seq, appendAttrStr(ifinfo(index, 0, 0), iflaIfname, name))
+}
+
+func TestLinkOperationsSendTheKernelsRequests(t *testing.T) {
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.typ == rtmGetLink {
+			return [][]byte{linkReply(r.seq, 7, "wt0")}
+		}
+		return [][]byte{ackMsg(r.seq)}
+	})
+	l, err := c.LinkByName("wt0")
+	if err != nil || l.Index != 7 || l.Name != "wt0" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	for name, f := range map[string]func() error{
+		"add":     func() error { return c.AddLink("wt0", "wireguard") },
+		"del":     func() error { return c.DelLink(7) },
+		"mtu":     func() error { return c.SetLinkMTU(7, 1380) },
+		"up":      func() error { return c.SetLinkUp(7) },
+		"addr":    func() error { return c.AddAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+		"deladdr": func() error { return c.DelAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+	} {
+		if err := f(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	type want struct {
+		typ   uint16
+		flags uint16
+	}
+	wants := []want{
+		{rtmGetLink, nlmRequest},
+		{rtmNewLink, nlmRequest | nlmAck | nlmCreate | nlmExcl},
+		{rtmDelLink, nlmRequest | nlmAck},
+		{rtmNewLink, nlmRequest | nlmAck},
+		{rtmNewLink, nlmRequest | nlmAck},
+		{rtmNewAddr, nlmRequest | nlmAck | nlmCreate | nlmExcl},
+		{rtmDelAddr, nlmRequest | nlmAck},
+	}
+	// The map iterates in any order: compare as a multiset of (type, flags).
+	got := map[want]int{}
+	k.mu.Lock()
+	for _, r := range k.requests {
+		got[want{r.typ, r.flags}]++
+	}
+	k.mu.Unlock()
+	exp := map[want]int{}
+	for _, w := range wants {
+		exp[w]++
+	}
+	for w, n := range exp {
+		if got[w] != n {
+			t.Errorf("%+v sent %d times, want %d", w, got[w], n)
+		}
+	}
+}
+
+func TestAMissingLinkIsNotExist(t *testing.T) {
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		return [][]byte{frame(nlmsgError, 0, r.seq, errnoBody(syscall.ENODEV))}
+	})
+	if _, err := c.LinkByName("nope"); !IsNotExist(err) {
+		t.Fatalf("%v", err)
+	}
+	if c.Resets() != 0 {
+		t.Errorf("a refusal replaced the socket (%d dials)", c.Resets())
+	}
+}
+
+// Every link and address call ends at the one absolute deadline when the
+// kernel never answers, and the next call finds a fresh socket.
+func TestAStalledLinkOperationEndsAtTheDeadline(t *testing.T) {
+	calls := map[string]func(c *Conn) error{
+		"lookup":  func(c *Conn) error { _, err := c.LinkByName("wt0"); return err },
+		"add":     func(c *Conn) error { return c.AddLink("wt0", "wireguard") },
+		"del":     func(c *Conn) error { return c.DelLink(7) },
+		"mtu":     func(c *Conn) error { return c.SetLinkMTU(7, 1380) },
+		"up":      func(c *Conn) error { return c.SetLinkUp(7) },
+		"addr":    func(c *Conn) error { return c.AddAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+		"deladdr": func(c *Conn) error { return c.DelAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			var stalled atomic.Bool
+			stalled.Store(true)
+			c, k := newFake(t, func(n int, r request) [][]byte {
+				if stalled.Load() {
+					return nil // never answers
+				}
+				if r.typ == rtmGetLink {
+					return [][]byte{linkReply(r.seq, 7, "wt0")}
+				}
+				return [][]byte{ackMsg(r.seq)}
+			})
+			c.SetDeadline(time.Now().Add(80 * time.Millisecond))
+			start := time.Now()
+			err := call(c)
+			if !Timeout(err) || time.Since(start) > time.Second {
+				t.Fatalf("%v after %v", err, time.Since(start))
+			}
+			stalled.Store(false)
+			c.SetDeadline(time.Now().Add(time.Second))
+			if err := call(c); err != nil {
+				t.Fatalf("the next call, on a fresh socket: %v", err)
+			}
+			k.mu.Lock()
+			pairs := k.pairs
+			k.mu.Unlock()
+			if pairs < 2 {
+				t.Errorf("the cut-off socket was reused (%d sockets)", pairs)
+			}
+		})
+	}
+}
