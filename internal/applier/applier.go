@@ -16,8 +16,9 @@
 //     (system.go); HTTP is internal/netx.
 //   - A Provider (provider.go) holds what the Python subclasses overrode, and
 //     the core calls through it; there is no inheritance. NewMullvad,
-//     NewNordVPN and NewPIA are the native providers; the gluetun provider is
-//     another worker's and plugs into the same hooks.
+//     NewNordVPN and NewPIA are the native providers; NewGluetun is the
+//     gluetun backend's (gluetun_applier.go), one provider for every gluetun
+//     registry entry and for the sidecar kind.
 //   - It does not write result.json. Config.Publish receives every record and
 //     the supervisor publishes (decision D7); the owner_record check stays
 //     "unknown" in the records built here for the supervisor to fill.
@@ -27,8 +28,10 @@
 //   - There is no doctor or command-line entry (decision D22).
 //
 // The package offers New (Config, Exit, Gatus), Tick, Inspect, Switch,
-// Healthy, the System seam and Provider hooks, the native providers, Record,
-// and ChangePIAAddress, the ordering of PIA's address-change transaction.
+// Healthy, the System seam (and GluetunKernel, the extra reads of the gluetun
+// backend) and Provider hooks, the native providers, the gluetun provider with
+// its control-server client, catalogue and marked echo, Record, and
+// ChangePIAAddress, the ordering of PIA's address-change transaction.
 package applier
 
 import (
