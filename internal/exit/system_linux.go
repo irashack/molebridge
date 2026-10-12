@@ -573,18 +573,32 @@ func (k *KernelSystem) ChangePIAAddress(ctx context.Context, old, next netip.Add
 
 // -- nftables ----------------------------------------------------------------
 
+// The nftables changes are jobs of the mutation owner like any other kernel
+// change: serialized with the repairer, counted against the owner's progress
+// (a wedged flush stops the lease's renewals instead of hiding behind an idle
+// owner), and bounded by the operation's one absolute deadline, which every
+// nftables socket carries.
+
 // InstallIngressGuard installs the forward-path guard (never removed).
-func (k *KernelSystem) InstallIngressGuard(_ context.Context) error {
-	return nft.InstallIngressGuard(k.exitIf(), k.overlayIf())
+func (k *KernelSystem) InstallIngressGuard(ctx context.Context) error {
+	return k.Mut.Do(ctx, "install the ingress guard", func(tx *mutator.Tx) error {
+		return nft.InstallIngressGuard(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf())
+	})
 }
 
 // ApplyForwardRules atomically replaces the port-forwarding table.
-func (k *KernelSystem) ApplyForwardRules(_ context.Context, port int, target netip.Addr) error {
-	return nft.ApplyForwardRules(k.exitIf(), k.overlayIf(), port, target)
+func (k *KernelSystem) ApplyForwardRules(ctx context.Context, port int, target netip.Addr) error {
+	return k.Mut.Do(ctx, "apply the forward rules", func(tx *mutator.Tx) error {
+		return nft.ApplyForwardRules(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf(), port, target)
+	})
 }
 
 // RemoveForwardRules deletes the port-forwarding table.
-func (k *KernelSystem) RemoveForwardRules(_ context.Context) error { return nft.RemoveForwardRules() }
+func (k *KernelSystem) RemoveForwardRules(ctx context.Context) error {
+	return k.Mut.Do(ctx, "remove the forward rules", func(tx *mutator.Tx) error {
+		return nft.RemoveForwardRules(tx.Context(), k.NetNS)
+	})
+}
 
 // -- the gluetun backend's reads -------------------------------------------------
 
