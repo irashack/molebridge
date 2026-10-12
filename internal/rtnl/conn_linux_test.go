@@ -719,11 +719,9 @@ func TestPostDumpDrainingIsBoundedToo(t *testing.T) {
 }
 
 type brokenChurn struct {
-	fakeChurn
-	failPost bool
-	dumps    *atomic.Int32
-	after    int32
-	closed   atomic.Bool
+	dumps  *atomic.Int32
+	after  int32
+	closed atomic.Bool
 }
 
 func (b *brokenChurn) Next(d time.Time) ([]Event, error) {

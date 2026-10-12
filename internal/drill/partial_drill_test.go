@@ -115,6 +115,7 @@ func registered(t *testing.T) *rig {
 	if err := r.mut.ChangeReturnPath(context.Background(), rtnl.V4, netip.Addr{}, tunnel4, func(*mutator.Tx) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
+	r.waitHealthy(2 * time.Second)
 	return r
 }
 

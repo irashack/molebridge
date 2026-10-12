@@ -4,6 +4,7 @@ package tunnel
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -14,8 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vishvananda/netlink"
+	"github.com/mdlayher/netlink"
+	vnetlink "github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
@@ -40,6 +43,10 @@ const SampleBudget = 2 * time.Second
 // call's own deadline has passed: leaving the link behind is worse.
 const cleanupBudget = 3 * time.Second
 
+// openGrace is how long a call waits for a connection that is still being
+// opened after its deadline.
+const openGrace = 50 * time.Millisecond
+
 // Options say where a Manager operates.
 type Options struct {
 	// NetNS is a file descriptor of the network namespace to operate in; zero
@@ -54,46 +61,70 @@ type wgClient interface {
 	Close() error
 }
 
+// linkAPI is the part of *vishvananda/netlink.Handle the Manager uses.
+type linkAPI interface {
+	LinkByName(name string) (vnetlink.Link, error)
+	LinkAdd(l vnetlink.Link) error
+	LinkDel(l vnetlink.Link) error
+	LinkSetMTU(l vnetlink.Link, mtu int) error
+	LinkSetUp(l vnetlink.Link) error
+	AddrAdd(l vnetlink.Link, a *vnetlink.Addr) error
+	Close()
+}
+
 // Manager holds the netlink sockets the tunnel operations use.
 //
-// Bounded I/O. The link handle and the route socket take deadlines and get
-// the operation's. The WireGuard connection has none, so every call on it runs
-// under rtnl.RunBounded: at the deadline the connection is closed, which
+// Bounded I/O. The route socket takes an absolute deadline, and it is set. The
+// link handle's library restarts a relative timeout at every receive, and the
+// WireGuard library takes none: both are used only under rtnl.RunBounded. At
+// the context's deadline the connection under the call is closed, which
 // unblocks its read, and is discarded; the next call opens a fresh one. A
-// reply cut off that way may mean the change was applied or not; the caller
-// reads the state back.
+// connection that is delivered after its call gave up is closed. A reply cut
+// off that way may mean the change was applied or not; the caller reads the
+// state back.
 type Manager struct {
-	h  *netlink.Handle
 	rt *rtnl.Conn
 
-	open   func() (wgClient, error)
-	callMu sync.Mutex // one WireGuard call at a time
-	cmu    sync.Mutex // guards wg
+	openWG func(ctx context.Context) (wgClient, error)
+	wgMu   sync.Mutex // one WireGuard call at a time
+	openLK func() (linkAPI, error)
+	lkMu   sync.Mutex // one link call at a time
+
+	cmu    sync.Mutex // guards wg, lk, closed
 	wg     wgClient
+	lk     linkAPI
 	closed bool
 }
 
 // Open opens the sockets.
 func Open(o Options) (*Manager, error) {
-	var (
-		h   *netlink.Handle
-		err error
-	)
-	if o.NetNS != 0 {
-		h, err = netlink.NewHandleAt(netns.NsHandle(o.NetNS))
-	} else {
-		h, err = netlink.NewHandle()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("tunnel: open netlink: %w", err)
-	}
-	_ = h.SetSocketTimeout(Timeout)
 	rt, err := rtnl.Dial(rtnl.Options{NetNS: o.NetNS})
 	if err != nil {
-		h.Close()
 		return nil, err
 	}
-	m := &Manager{h: h, rt: rt, open: func() (wgClient, error) {
+	m := &Manager{rt: rt}
+	m.openLK = func() (linkAPI, error) {
+		var h *vnetlink.Handle
+		var err error
+		if o.NetNS != 0 {
+			h, err = vnetlink.NewHandleAt(netns.NsHandle(o.NetNS))
+		} else {
+			h, err = vnetlink.NewHandle()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tunnel: open netlink: %w", err)
+		}
+		_ = h.SetSocketTimeout(Timeout)
+		return h, nil
+	}
+	m.openWG = func(ctx context.Context) (wgClient, error) {
+		// wgctrl.New looks the WireGuard family up on a socket it opens
+		// itself and never lets go of until the kernel answers. Prove the
+		// kernel answers, on a socket we own and close, before handing it the
+		// job.
+		if err := probeWireGuardFamily(ctx, o.NetNS); err != nil {
+			return nil, err
+		}
 		// A generic netlink socket belongs to the namespace of the thread that
 		// opens it.
 		var c *wgctrl.Client
@@ -106,16 +137,80 @@ func Open(o Options) (*Manager, error) {
 			return nil, fmt.Errorf("tunnel: open WireGuard netlink: %w", err)
 		}
 		return c, nil
-	}}
-	// Fail early if WireGuard netlink is unavailable.
+	}
+	// Fail early if WireGuard netlink or the link socket is unavailable.
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultBudget)
 	defer cancel()
 	if err := m.wgDo(ctx, func(wgClient) error { return nil }); err != nil {
 		_ = m.Close()
 		return nil, err
 	}
+	if err := m.linkDo(ctx, func(linkAPI) error { return nil }); err != nil {
+		_ = m.Close()
+		return nil, err
+	}
 	return m, nil
 }
+
+// probeWireGuardFamily asks the kernel for the "wireguard" generic netlink
+// family on a socket of its own, with the context's deadline on it and closed
+// on return, so that a kernel that does not answer family lookups is found
+// out before wgctrl opens a socket we cannot reach.
+func probeWireGuardFamily(ctx context.Context, netnsFd int) error {
+	if err := ctx.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("tunnel: look up the WireGuard family: %w", rtnl.ErrDeadline)
+		}
+		return err
+	}
+	c, err := netlink.Dial(unix.NETLINK_GENERIC, &netlink.Config{NetNS: netnsFd})
+	if err != nil {
+		return fmt.Errorf("tunnel: open generic netlink: %w", err)
+	}
+	defer c.Close()
+	if dl, ok := ctx.Deadline(); ok {
+		if err := c.SetDeadline(dl); err != nil {
+			return err
+		}
+	}
+	// Close the socket when the context ends, which unblocks the request
+	// even if the deadline option could not.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.Close()
+		case <-stop:
+		}
+	}()
+	const ctrlCmdGetFamily, ctrlAttrFamilyName = 3, 2
+	req := []byte{ctrlCmdGetFamily, 1, 0, 0}
+	name := append([]byte("wireguard"), 0)
+	attr := make([]byte, 4, 4+len(name)+3)
+	nativeEnd.PutUint16(attr[0:2], uint16(4+len(name)))
+	nativeEnd.PutUint16(attr[2:4], ctrlAttrFamilyName)
+	attr = append(attr, name...)
+	for len(attr)%4 != 0 {
+		attr = append(attr, 0)
+	}
+	_, err = c.Execute(netlink.Message{
+		Header: netlink.Header{Type: unix.GENL_ID_CTRL, Flags: netlink.Request},
+		Data:   append(req, attr...),
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("tunnel: look up the WireGuard family: %w", rtnl.ErrDeadline)
+		}
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOENT) {
+			return fmt.Errorf("tunnel: the kernel has no WireGuard: %w", os.ErrNotExist)
+		}
+		return fmt.Errorf("tunnel: look up the WireGuard family: %w", err)
+	}
+	return nil
+}
+
+var nativeEnd = binary.NativeEndian
 
 // inNamespace runs fn on a thread that is in the namespace (when fd is set).
 func inNamespace(fd int, fn func() error) error {
@@ -140,13 +235,13 @@ func inNamespace(fd int, fn func() error) error {
 func (m *Manager) Close() error {
 	m.cmu.Lock()
 	m.closed = true
-	c := m.wg
-	m.wg = nil
+	c, l := m.wg, m.lk
+	m.wg, m.lk = nil, nil
 	m.cmu.Unlock()
-	if m.h != nil {
-		m.h.Close()
-	}
 	var err error
+	if l != nil {
+		l.Close()
+	}
 	if c != nil {
 		err = c.Close()
 	}
@@ -158,8 +253,10 @@ func (m *Manager) Close() error {
 	return err
 }
 
-// discard drops a WireGuard connection that was cut off.
-func (m *Manager) discard(c wgClient) {
+var errClosed = errors.New("tunnel: closed")
+
+// discardWG and discardLK drop a connection that was cut off.
+func (m *Manager) discardWG(c wgClient) {
 	m.cmu.Lock()
 	if m.wg == c {
 		m.wg = nil
@@ -168,40 +265,125 @@ func (m *Manager) discard(c wgClient) {
 	_ = c.Close()
 }
 
+func (m *Manager) discardLK(l linkAPI) {
+	m.cmu.Lock()
+	if m.lk == l {
+		m.lk = nil
+	}
+	m.cmu.Unlock()
+	l.Close()
+}
+
+// opened runs an open function under the context's deadline and hands its
+// connection over under a lock: one that arrives after the call gave up is
+// closed by the goroutine that made it, so nothing is left open.
+func opened[T any](ctx context.Context, open func() (T, error), closeIt func(T)) (T, error) {
+	var mu sync.Mutex
+	var got T
+	var have, abandoned bool
+	// Nothing can be closed to hurry an open along (the connection does not
+	// exist yet), so the wait after the deadline is short: the handoff below
+	// makes a late arrival harmless.
+	err := rtnl.RunBounded(ctx, openGrace, func() {
+		mu.Lock()
+		abandoned = true
+		mu.Unlock()
+	}, func() error {
+		c, err := open()
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if abandoned {
+			closeIt(c)
+			return rtnl.ErrDeadline
+		}
+		got, have = c, true
+		return nil
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if err != nil {
+		if have {
+			closeIt(got) // finished during the abort grace, but the call failed anyway
+			have = false
+		}
+		var zero T
+		return zero, err
+	}
+	if !have {
+		var zero T
+		return zero, rtnl.ErrDeadline
+	}
+	return got, nil
+}
+
 // wgDo runs a call on the WireGuard connection, opening one if needed, under
 // the context's deadline.
 func (m *Manager) wgDo(ctx context.Context, fn func(wgClient) error) error {
-	m.callMu.Lock()
-	defer m.callMu.Unlock()
+	m.wgMu.Lock()
+	defer m.wgMu.Unlock()
 	m.cmu.Lock()
 	if m.closed {
 		m.cmu.Unlock()
-		return errors.New("tunnel: closed")
+		return errClosed
 	}
 	c := m.wg
 	m.cmu.Unlock()
 	if c == nil {
-		var opened wgClient
-		err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() {}, func() error {
-			var err error
-			opened, err = m.open()
-			return err
-		})
+		var err error
+		c, err = opened(ctx, func() (wgClient, error) { return m.openWG(ctx) }, func(c wgClient) { _ = c.Close() })
 		if err != nil {
 			return err
 		}
 		m.cmu.Lock()
 		if m.closed {
 			m.cmu.Unlock()
-			_ = opened.Close()
-			return errors.New("tunnel: closed")
+			_ = c.Close()
+			return errClosed
 		}
-		m.wg, c = opened, opened
+		m.wg = c
 		m.cmu.Unlock()
 	}
-	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { m.discard(c) }, func() error { return fn(c) })
+	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { m.discardWG(c) }, func() error { return fn(c) })
 	if ctx.Err() != nil {
-		m.discard(c)
+		m.discardWG(c)
+	}
+	return err
+}
+
+// linkDo runs a group of link calls on the link handle under the context's
+// absolute deadline: whatever the library does with its own timeouts, at the
+// deadline the handle's sockets are closed, which unblocks a pending receive.
+func (m *Manager) linkDo(ctx context.Context, fn func(linkAPI) error) error {
+	m.lkMu.Lock()
+	defer m.lkMu.Unlock()
+	m.cmu.Lock()
+	if m.closed {
+		m.cmu.Unlock()
+		return errClosed
+	}
+	l := m.lk
+	m.cmu.Unlock()
+	if l == nil {
+		var err error
+		l, err = opened(ctx, m.openLK, func(l linkAPI) { l.Close() })
+		if err != nil {
+			return err
+		}
+		m.cmu.Lock()
+		if m.closed {
+			m.cmu.Unlock()
+			l.Close()
+			return errClosed
+		}
+		m.lk = l
+		m.cmu.Unlock()
+	}
+	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { m.discardLK(l) }, func() error { return fn(l) })
+	if ctx.Err() != nil {
+		m.discardLK(l)
 	}
 	return err
 }
@@ -214,8 +396,8 @@ func budgeted(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, DefaultBudget)
 }
 
-// begin readies the netlink sockets for an operation under ctx: one absolute
-// deadline for the route socket, and the time left for the link handle.
+// begin readies the route socket for an operation under ctx: one absolute
+// deadline.
 func (m *Manager) begin(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -223,18 +405,16 @@ func (m *Manager) begin(ctx context.Context) error {
 		}
 		return err
 	}
-	if dl, ok := ctx.Deadline(); ok {
+	if dl, ok := ctx.Deadline(); ok && m.rt != nil {
 		m.rt.SetDeadline(dl)
-		left := time.Until(dl)
-		if left > Timeout {
-			left = Timeout
-		}
-		if left < time.Millisecond {
-			left = time.Millisecond
-		}
-		_ = m.h.SetSocketTimeout(left)
 	}
 	return nil
+}
+
+func (m *Manager) clearDeadline() {
+	if m.rt != nil {
+		m.rt.SetDeadline(time.Time{})
+	}
 }
 
 // Params describe the tunnel to bring up.
@@ -248,7 +428,7 @@ func prefixOf(a netip.Addr) *net.IPNet {
 }
 
 func notFound(err error) bool {
-	var nf netlink.LinkNotFoundError
+	var nf vnetlink.LinkNotFoundError
 	return errors.As(err, &nf) || errors.Is(err, syscall.ENODEV) || errors.Is(err, os.ErrNotExist)
 }
 
@@ -257,82 +437,82 @@ func (m *Manager) Up(p Params) error { return m.UpContext(context.Background(), 
 
 // UpContext makes one attempt to bring the tunnel up: a leftover link of the
 // same name is removed, a wireguard link is created and configured, and the
-// exit table's default route goes in. Every request ends by ctx's deadline
-// (DefaultBudget if it has none) and ctx is checked between requests. On any
-// failure the half-built link is removed, even if the deadline has passed, so
-// the next attempt starts clean; the exit table keeps its unreachable
-// fallback throughout. No error carries key material.
+// exit table's default route goes in. Every call ends by ctx's deadline
+// (DefaultBudget if it has none), including every receive of the link
+// handle, and ctx is checked between calls. On any failure the half-built link
+// is removed, even if the deadline has passed, so the next attempt starts
+// clean; the exit table keeps its unreachable fallback throughout. No error
+// carries key material.
 func (m *Manager) UpContext(ctx context.Context, p Params) (err error) {
 	if p.Conf == nil {
 		return errors.New("tunnel: no config")
 	}
 	ctx, cancel := budgeted(ctx)
 	defer cancel()
-	defer m.rt.SetDeadline(time.Time{})
-	step := func() error { return m.begin(ctx) }
-	if err := step(); err != nil {
+	defer m.clearDeadline()
+	if err := m.begin(ctx); err != nil {
 		return err
 	}
-	if old, lerr := m.h.LinkByName(p.ExitIf); lerr == nil {
-		if derr := m.h.LinkDel(old); derr != nil && !notFound(derr) {
-			return fmt.Errorf("tunnel: remove the old %s link: %w", p.ExitIf, derr)
+	var link vnetlink.Link
+	err = m.linkDo(ctx, func(h linkAPI) error {
+		if old, lerr := h.LinkByName(p.ExitIf); lerr == nil {
+			if derr := h.LinkDel(old); derr != nil && !notFound(derr) {
+				return fmt.Errorf("tunnel: remove the old %s link: %w", p.ExitIf, derr)
+			}
+		} else if !notFound(lerr) {
+			return fmt.Errorf("tunnel: look up %s: %w", p.ExitIf, lerr)
 		}
-	} else if !notFound(lerr) {
-		return fmt.Errorf("tunnel: look up %s: %w", p.ExitIf, lerr)
-	}
-	if err := step(); err != nil {
-		return err
-	}
-	if err := m.h.LinkAdd(&netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: p.ExitIf}}); err != nil {
-		return fmt.Errorf("tunnel: create the wireguard link %s: %w", p.ExitIf, err)
-	}
+		if err := h.LinkAdd(&vnetlink.Wireguard{LinkAttrs: vnetlink.LinkAttrs{Name: p.ExitIf}}); err != nil {
+			return fmt.Errorf("tunnel: create the wireguard link %s: %w", p.ExitIf, err)
+		}
+		var lerr error
+		if link, lerr = h.LinkByName(p.ExitIf); lerr != nil {
+			return fmt.Errorf("tunnel: look up %s: %w", p.ExitIf, lerr)
+		}
+		return nil
+	})
 	defer func() {
 		if err != nil {
 			// Whatever the deadline says, the half-built link comes out.
 			rctx, rcancel := context.WithTimeout(context.Background(), cleanupBudget)
 			defer rcancel()
-			_ = m.begin(rctx)
-			if l, lerr := m.h.LinkByName(p.ExitIf); lerr == nil {
-				_ = m.h.LinkDel(l)
-			}
+			_ = m.linkDo(rctx, func(h linkAPI) error {
+				if l, lerr := h.LinkByName(p.ExitIf); lerr == nil {
+					return h.LinkDel(l)
+				}
+				return nil
+			})
 		}
 	}()
-	link, err := m.h.LinkByName(p.ExitIf)
 	if err != nil {
-		return fmt.Errorf("tunnel: look up %s: %w", p.ExitIf, err)
-	}
-	if err = step(); err != nil {
 		return err
 	}
 	if err = m.configure(ctx, p); err != nil {
 		return err
 	}
-	for _, a := range []netip.Addr{p.Conf.Addr4, p.Conf.Addr6} {
-		if !a.IsValid() {
-			continue
+	err = m.linkDo(ctx, func(h linkAPI) error {
+		for _, a := range []netip.Addr{p.Conf.Addr4, p.Conf.Addr6} {
+			if !a.IsValid() {
+				continue
+			}
+			if err := h.AddrAdd(link, &vnetlink.Addr{IPNet: prefixOf(a)}); err != nil {
+				return fmt.Errorf("tunnel: assign an address to %s: %w", p.ExitIf, err)
+			}
 		}
-		if err = step(); err != nil {
-			return err
+		if err := h.LinkSetMTU(link, p.Conf.MTU); err != nil {
+			return fmt.Errorf("tunnel: set the MTU of %s: %w", p.ExitIf, err)
 		}
-		if err = m.h.AddrAdd(link, &netlink.Addr{IPNet: prefixOf(a)}); err != nil {
-			return fmt.Errorf("tunnel: assign an address to %s: %w", p.ExitIf, err)
+		if err := h.LinkSetUp(link); err != nil {
+			return fmt.Errorf("tunnel: bring %s up: %w", p.ExitIf, err)
 		}
-	}
-	if err = step(); err != nil {
+		return nil
+	})
+	if err != nil {
 		return err
-	}
-	if err = m.h.LinkSetMTU(link, p.Conf.MTU); err != nil {
-		return fmt.Errorf("tunnel: set the MTU of %s: %w", p.ExitIf, err)
-	}
-	if err = step(); err != nil {
-		return err
-	}
-	if err = m.h.LinkSetUp(link); err != nil {
-		return fmt.Errorf("tunnel: bring %s up: %w", p.ExitIf, err)
 	}
 	// The PostUp hook: `ip route replace default dev %i table N`, per family.
 	for _, op := range p.Conf.UpRoutes() {
-		if err = step(); err != nil {
+		if err = m.begin(ctx); err != nil {
 			return err
 		}
 		if err = m.rt.ReplaceRoute(contract.TunnelRoute(op.Family, op.Table, uint32(link.Attrs().Index))); err != nil {
@@ -382,11 +562,16 @@ func (m *Manager) Down(p Params) error { return m.DownContext(context.Background
 func (m *Manager) DownContext(ctx context.Context, p Params) error {
 	ctx, cancel := budgeted(ctx)
 	defer cancel()
-	defer m.rt.SetDeadline(time.Time{})
+	defer m.clearDeadline()
 	if err := m.begin(ctx); err != nil {
 		return err
 	}
-	link, err := m.h.LinkByName(p.ExitIf)
+	var link vnetlink.Link
+	err := m.linkDo(ctx, func(h linkAPI) error {
+		var err error
+		link, err = h.LinkByName(p.ExitIf)
+		return err
+	})
 	if err != nil {
 		if notFound(err) {
 			return nil
@@ -405,10 +590,8 @@ func (m *Manager) DownContext(ctx context.Context, p Params) error {
 			}
 		}
 	}
-	if err := m.begin(ctx); err != nil {
-		return err
-	}
-	if err := m.h.LinkDel(link); err != nil && !notFound(err) {
+	err = m.linkDo(ctx, func(h linkAPI) error { return h.LinkDel(link) })
+	if err != nil && !notFound(err) {
 		return fmt.Errorf("tunnel: delete %s: %w", p.ExitIf, err)
 	}
 	return nil
@@ -432,8 +615,8 @@ func (m *Manager) Cleanup(backend contract.Backend, exitIf, overlayIf string) er
 // a namespace another container holds); the gluetun backend deletes only the
 // overlay link and never touches gluetun's tunnel, which is not ours. Every
 // rule and the unreachable fallback stay in place. A link that is not there
-// is fine; one that is still there afterwards is an error. Every request ends
-// by ctx's deadline (DefaultBudget if it has none).
+// is fine; one that is still there afterwards is an error. Every call ends by
+// ctx's deadline (DefaultBudget if it has none).
 func (m *Manager) CleanupContext(ctx context.Context, backend contract.Backend, exitIf, overlayIf string) error {
 	ctx, cancel := budgeted(ctx)
 	defer cancel()
@@ -443,22 +626,23 @@ func (m *Manager) CleanupContext(ctx context.Context, backend contract.Backend, 
 	}
 	var failed []string
 	for _, name := range names {
-		if err := m.begin(ctx); err != nil {
-			failed = append(failed, name)
-			continue
-		}
-		l, err := m.h.LinkByName(name)
-		if err != nil {
-			if !notFound(err) {
-				failed = append(failed, name)
+		err := m.linkDo(ctx, func(h linkAPI) error {
+			l, err := h.LinkByName(name)
+			if err != nil {
+				if notFound(err) {
+					return nil
+				}
+				return err
 			}
-			continue
-		}
-		if err := m.h.LinkDel(l); err != nil && !notFound(err) {
-			failed = append(failed, name)
-			continue
-		}
-		if _, err := m.h.LinkByName(name); err == nil {
+			if err := h.LinkDel(l); err != nil && !notFound(err) {
+				return err
+			}
+			if _, err := h.LinkByName(name); err == nil {
+				return fmt.Errorf("%s remains", name)
+			}
+			return nil
+		})
+		if err != nil {
 			failed = append(failed, name)
 		}
 	}
@@ -528,5 +712,26 @@ func (m *Manager) WgDo(ctx context.Context, fn func(*wgctrl.Client) error) error
 	})
 }
 
-// Netlink returns the link handle.
-func (m *Manager) Netlink() *netlink.Handle { return m.h }
+// LinkDo runs fn with the link handle under ctx's deadline (DefaultBudget if
+// it has none), closing the handle's sockets if it passes.
+func (m *Manager) LinkDo(ctx context.Context, fn func(*vnetlink.Handle) error) error {
+	ctx, cancel := budgeted(ctx)
+	defer cancel()
+	return m.linkDo(ctx, func(l linkAPI) error {
+		h, ok := l.(*vnetlink.Handle)
+		if !ok {
+			return errors.New("tunnel: not a netlink handle")
+		}
+		return fn(h)
+	})
+}
+
+// Netlink returns the link handle. Its calls are bounded only by a relative
+// per-receive timeout: prefer LinkDo.
+func (m *Manager) Netlink() *vnetlink.Handle {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultBudget)
+	defer cancel()
+	var out *vnetlink.Handle
+	_ = m.linkDo(ctx, func(l linkAPI) error { out, _ = l.(*vnetlink.Handle); return nil })
+	return out
+}
