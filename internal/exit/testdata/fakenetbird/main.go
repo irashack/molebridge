@@ -126,7 +126,9 @@ func service() {
 		}
 		nc, err := nftables.New()
 		if err == nil {
-			nc.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "netbird"})
+			t := nc.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "netbird"})
+			// ListChains finds NetBird's table through its chains.
+			nc.AddChain(&nftables.Chain{Name: "netbird-rt-fwd", Table: t})
 			_ = nc.Flush()
 		}
 	}

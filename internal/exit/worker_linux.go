@@ -582,7 +582,9 @@ func (w *worker) pipelineLoop() {
 // own health. A failed provider verification never fails health.
 func (w *worker) heartbeatLoop() {
 	for {
-		if w.operational() {
+		if why := w.notOperational(); why != "" {
+			w.warnEvery("operational:"+why, time.Minute, "not operational: %s", why)
+		} else {
 			if err := writeHeartbeat(w.s.PathHeartbeat(), w.clock()); err != nil {
 				w.warnEvery("heartbeat", time.Minute, "cannot write the heartbeat: %v", err)
 			}
@@ -593,9 +595,14 @@ func (w *worker) heartbeatLoop() {
 	}
 }
 
-func (w *worker) operational() bool {
-	if w.blocked.Load() || !w.pipeOn.Load() {
-		return false
+// notOperational is why the heartbeat is not written, "" when the exit is
+// operational.
+func (w *worker) notOperational() string {
+	switch {
+	case w.blocked.Load():
+		return "the NetBird profile check refused"
+	case !w.pipeOn.Load():
+		return "NetBird has not been started yet"
 	}
 	if w.s.Overlay() {
 		res := w.mut.LastPass()
@@ -603,9 +610,64 @@ func (w *worker) operational() bool {
 		if w.s.Native() {
 			holds = res.Verified && w.tunnelUp.Load()
 		}
-		if !holds || !w.nbRunning.Load() {
-			return false
+		switch {
+		case !holds:
+			return "the routing contract is not verified"
+		case !w.nbRunning.Load():
+			return "NetBird is not running"
 		}
 	}
-	return w.pipe.Healthy(w.ctx)
+	if !w.pipe.Healthy(w.ctx) {
+		return "the pipeline reports the namespace is not intact (" + w.diagnose() + ")"
+	}
+	return ""
+}
+
+// diagnose names what an unhealthy pipeline is missing, from the same reads
+// the pipeline makes; nothing here is secret.
+func (w *worker) diagnose() string {
+	var parts []string
+	ctx := w.ctx
+	if r, ok := readResult(w.s.PathResult()); !ok {
+		parts = append(parts, "no readable status record")
+	} else if st, _ := r["status"].(string); st != "ok" && st != "failed" {
+		parts = append(parts, "the last record is not a completed check")
+	}
+	if w.s.Kind() == "sidecar" {
+		if keys, err := w.sys.Peers(ctx); err != nil || len(keys) != 1 {
+			parts = append(parts, "not exactly one tunnel peer")
+		}
+		return strings.Join(parts, "; ")
+	}
+	if _, err := w.sys.Peers(ctx); err != nil {
+		parts = append(parts, "the tunnel interface has no WireGuard device")
+	}
+	addrs, err := w.sys.TunnelAddresses(ctx)
+	if err != nil {
+		parts = append(parts, "the tunnel addresses cannot be read")
+	}
+	for _, fam := range []int{4, 6} {
+		var addr string
+		for _, a := range addrs {
+			if (fam == 4) == a.Is4() {
+				addr = a.String()
+			}
+		}
+		if p, _, err := w.sys.RoutingStatus(ctx, fam, addr); err != nil || !p {
+			parts = append(parts, fmt.Sprintf("IPv%d routing is not intact", fam))
+		}
+	}
+	if v, err := w.sys.ReadSysctl(ctx, contract.ReturnPathSysctl); err != nil || !contract.ReturnPathEnabled(v) {
+		parts = append(parts, "icmp_errors_use_inbound_ifaddr is not 1")
+	}
+	if ok, err := w.sys.OverlayKernelWireGuard(ctx); err != nil || !ok {
+		parts = append(parts, "the overlay interface is not kernel WireGuard")
+	}
+	if ok, err := w.sys.NetbirdFirewallPresent(ctx); err != nil || !ok {
+		parts = append(parts, "NetBird's kernel firewall is not present")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "the record may be stale")
+	}
+	return strings.Join(parts, "; ")
 }

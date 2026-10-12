@@ -226,6 +226,9 @@ func (l *lab) start(extra ...string) *exitProc {
 		if l.t.Failed() {
 			l.t.Logf("exit output:\n%s", p.out.String())
 			l.t.Logf("trace:\n%s", strings.Join(l.trace(), "\n"))
+			if b, err := os.ReadFile(filepath.Join(l.stateDir, "applier", "result.json")); err == nil {
+				l.t.Logf("result.json:\n%s", b)
+			}
 		}
 	})
 	return p
@@ -361,7 +364,8 @@ func (l *lab) result() map[string]any {
 
 func (l *lab) rules(family string) string {
 	out, _ := l.exit.TryIP(family, "rule", "show")
-	return out
+	// Rules that name a removed interface print as detached.
+	return strings.NewReplacer(" [detached]", "", "\t", " ").Replace(out)
 }
 
 // guardsStay asserts the contract's rules and the unreachable fallback remain.
@@ -369,7 +373,7 @@ func (l *lab) guardsStay(when string) {
 	l.t.Helper()
 	for _, f := range []string{"-4", "-6"} {
 		rules := l.rules(f)
-		for _, want := range []string{"1:\tnot from all iif " + dOverlay + " lookup local", "97:\tfrom all iif " + dOverlay + " ", "95:", "96:"} {
+		for _, want := range []string{"1: not from all iif " + dOverlay + " lookup local", "97: from all iif " + dOverlay + " ", "95:", "96:"} {
 			if !strings.Contains(rules, want) {
 				l.t.Errorf("%s: %s rules lack %q:\n%s", when, f, want, rules)
 			}
