@@ -690,7 +690,8 @@ func TestDrillIdleCPU(t *testing.T) {
 	}
 	skipWithoutWireGuard(t)
 	l := newLab(t, false)
-	p := l.start()
+	profile := l.path("worker.pprof")
+	p := l.start("MOLEBRIDGE_DRILL_CPUPROFILE=" + profile)
 	l.waitReady(p)
 	// Let the first inspections and the catalogue attempt settle.
 	time.Sleep(30 * time.Second)
@@ -713,11 +714,22 @@ func TestDrillIdleCPU(t *testing.T) {
 	time.Sleep(120 * time.Second)
 	ticks, elapsed := read()-before, time.Since(start)
 	cg1 := cgroupUsec()
+	for _, pid := range pids {
+		n, _ := cpuTicks(pid)
+		t.Logf("pid %d: %d ticks since start", pid, n)
+	}
 	hz := 100.0
 	pct := float64(ticks) / hz / elapsed.Seconds() * 100
 	t.Logf("supervisor + worker (own and reaped children): %d ticks in %v = %.3f%% of one core", ticks, elapsed.Round(time.Second), pct)
 	if cg0 >= 0 && cg1 >= 0 {
 		t.Logf("the container's cgroup (harness included): %.3f%% of one core", float64(cg1-cg0)/1e6/elapsed.Seconds()*100)
+	}
+	_ = p.cmd.Process.Signal(syscall.SIGTERM)
+	p.wait(20 * time.Second)
+	if dir := os.Getenv("MB_PROFILE_OUT"); dir != "" {
+		if b, err := os.ReadFile(profile); err == nil {
+			_ = os.WriteFile(filepath.Join(dir, "worker.pprof"), b, 0o644)
+		}
 	}
 	if pct > 0.5 {
 		t.Errorf("idle CPU %.3f%% is over the 0.5%% target", pct)

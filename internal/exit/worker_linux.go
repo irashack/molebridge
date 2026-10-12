@@ -455,7 +455,7 @@ func (w *worker) tunnelLoop(tun *tunnel.Manager, obs *rtnl.Conn) {
 				w.tunnelUp.Store(true)
 			}
 		}
-		if !sleepCtx(w.ctx, time.Second) {
+		if !sleepCtx(w.ctx, 2*time.Second) {
 			return
 		}
 	}

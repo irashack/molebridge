@@ -5,6 +5,7 @@ package exit
 import (
 	"os"
 	"path/filepath"
+	"runtime/pprof"
 	"time"
 
 	"github.com/irashack/molebridge/internal/mutator"
@@ -16,6 +17,16 @@ import (
 // loop included) keeps running. It exists only in binaries built with the
 // drill tag.
 func (w *worker) drillHooks() {
+	// MOLEBRIDGE_DRILL_CPUPROFILE=<file> profiles the worker until it stops.
+	if path := w.s.Env["MOLEBRIDGE_DRILL_CPUPROFILE"]; path != "" {
+		if f, err := os.Create(path); err == nil && pprof.StartCPUProfile(f) == nil {
+			go func() {
+				<-w.ctx.Done()
+				pprof.StopCPUProfile()
+				f.Close()
+			}()
+		}
+	}
 	path := filepath.Join(w.s.RunDir, "wedge-mutator")
 	go func() {
 		for {
@@ -27,7 +38,7 @@ func (w *worker) drillHooks() {
 				})
 				return
 			}
-			if !sleepCtx(w.ctx, 100*time.Millisecond) {
+			if !sleepCtx(w.ctx, time.Second) {
 				return
 			}
 		}

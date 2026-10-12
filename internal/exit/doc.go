@@ -31,6 +31,15 @@
 // NetBird process's unexpected exit or a protocol violation starts the stop
 // sequence.
 //
+// # Timing (all bounded; see Timing and the constants in lease.go)
+//
+// Loops report to the lease every 2 seconds (the mutation owner within 10
+// seconds under load). A loop is late after its bound (10 s for the owner, 3 s
+// for the 2-second loops: 2 s plus one second of scheduling slack), and the
+// supervisor allows one more second for the pipe. The longest failure-to-stop
+// bound is therefore the loop bound plus GUARD_GRACE plus the stop budget:
+// T+0 stop and TERM, T+6 KILL, T+7 reaped, T+7..12 cleanup, T+13 exit.
+//
 // # Wire protocol
 //
 // Newline-delimited JSON on two pipes, every line at most 64 KiB, decoded

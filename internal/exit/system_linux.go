@@ -59,14 +59,12 @@ func (k *KernelSystem) overlayIf() string { return k.S.Routing.OverlayIf }
 
 // LinkExists is nil when the interface exists.
 func (k *KernelSystem) LinkExists(_ context.Context, name string) error {
-	links, err := k.Obs.Links()
+	snap, err := k.readSnapshot()
 	if err != nil {
 		return err
 	}
-	for _, l := range links {
-		if l.Name == name {
-			return nil
-		}
+	if _, ok := snap.Link(name); ok {
+		return nil
 	}
 	return fmt.Errorf("interface %s does not exist", name)
 }
@@ -94,7 +92,7 @@ func (k *KernelSystem) RoutingStatus(_ context.Context, family int, tunnelAddres
 			return false, false, errors.New("invalid tunnel address")
 		}
 	}
-	snap, err := k.Obs.Take(k.Spec.Interest())
+	snap, err := k.readSnapshot()
 	if err != nil {
 		return false, false, err
 	}
@@ -125,11 +123,11 @@ func (k *KernelSystem) ReadSysctl(_ context.Context, path string) (string, error
 // OverlayKernelWireGuard is whether the overlay interface is a kernel
 // WireGuard link.
 func (k *KernelSystem) OverlayKernelWireGuard(_ context.Context) (bool, error) {
-	links, err := k.Obs.Links()
+	snap, err := k.readSnapshot()
 	if err != nil {
 		return false, err
 	}
-	return contract.OverlayIsKernelWireguard(links, k.overlayIf()), nil
+	return contract.OverlayIsKernelWireguard(snap.Links, k.overlayIf()), nil
 }
 
 // NetbirdFirewallPresent is whether NetBird's nftables table or chains exist.
@@ -283,6 +281,7 @@ func (k *KernelSystem) PublicKey(ctx context.Context) (string, error) {
 // ReplacePeer removes the peers in remove, one after another, then sets add.
 // An empty public key in add means remove only.
 func (k *KernelSystem) ReplacePeer(ctx context.Context, remove []string, add applier.PeerConfig) error {
+	defer k.invalidate()
 	return k.Mut.Do(ctx, "change the tunnel peer", func(tx *mutator.Tx) error {
 		configure := func(cfg wgtypes.Config) error {
 			return k.Tun.WgDo(tx.Context(), func(c *wgctrl.Client) error { return c.ConfigureDevice(k.exitIf(), cfg) })
@@ -379,6 +378,10 @@ func (p piaOnTx) IPv4Rules(_ context.Context, priority int) ([]applier.Rule, err
 	if err != nil {
 		return nil, err
 	}
+	return ipv4RulesAt(snap, priority), nil
+}
+
+func ipv4RulesAt(snap *rtnl.Snapshot, priority int) []applier.Rule {
 	var out []applier.Rule
 	for _, r := range snap.Rules[rtnl.V4] {
 		if int(r.Priority) != priority {
@@ -401,7 +404,7 @@ func (p piaOnTx) IPv4Rules(_ context.Context, priority int) ([]applier.Rule, err
 			r.Tos != 0 || r.SuppressPrefixLen.OK || r.Goto.OK || len(r.Unknown) > 0 || r.Bad
 		out = append(out, rule)
 	}
-	return out, nil
+	return out
 }
 
 func (p piaOnTx) TunnelAddresses(_ context.Context) ([]netip.Addr, error) {
@@ -409,9 +412,13 @@ func (p piaOnTx) TunnelAddresses(_ context.Context) ([]netip.Addr, error) {
 	if err != nil {
 		return nil, err
 	}
-	l, ok := snap.Link(p.k.exitIf())
+	return tunnelAddressesIn(snap, p.k.exitIf())
+}
+
+func tunnelAddressesIn(snap *rtnl.Snapshot, exitIf string) ([]netip.Addr, error) {
+	l, ok := snap.Link(exitIf)
 	if !ok {
-		return nil, fmt.Errorf("interface %s does not exist", p.k.exitIf())
+		return nil, fmt.Errorf("interface %s does not exist", exitIf)
 	}
 	var out []netip.Addr
 	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
@@ -495,19 +502,34 @@ func (p piaOnTx) ReplaceExitDefaultRoute(_ context.Context) error {
 // The standalone primitives are each one job on the owner.
 
 func (k *KernelSystem) onOwner(ctx context.Context, name string, fn func(piaOnTx) error) error {
+	defer k.invalidate()
 	return k.Mut.Do(ctx, name, func(tx *mutator.Tx) error { return fn(piaOnTx{k, tx}) })
 }
 
-// IPv4Rules lists the IPv4 rules at a priority.
-func (k *KernelSystem) IPv4Rules(ctx context.Context, priority int) (out []applier.Rule, err error) {
-	err = k.onOwner(ctx, "list the return-path rules", func(p piaOnTx) (e error) { out, e = p.IPv4Rules(ctx, priority); return })
-	return
+// invalidate drops the shared snapshot: after a change, the next read looks at
+// the kernel again.
+func (k *KernelSystem) invalidate() {
+	k.snapMu.Lock()
+	k.snap = nil
+	k.snapMu.Unlock()
 }
 
-// TunnelAddresses are the exit interface's global-scope addresses.
-func (k *KernelSystem) TunnelAddresses(ctx context.Context) (out []netip.Addr, err error) {
-	err = k.onOwner(ctx, "read the tunnel addresses", func(p piaOnTx) (e error) { out, e = p.TunnelAddresses(ctx); return })
-	return
+// IPv4Rules lists the IPv4 rules at a priority (a read: no job on the owner).
+func (k *KernelSystem) IPv4Rules(_ context.Context, priority int) ([]applier.Rule, error) {
+	snap, err := k.Obs.Take(k.Spec.Interest())
+	if err != nil {
+		return nil, err
+	}
+	return ipv4RulesAt(snap, priority), nil
+}
+
+// TunnelAddresses are the exit interface's global-scope addresses (a read).
+func (k *KernelSystem) TunnelAddresses(_ context.Context) ([]netip.Addr, error) {
+	snap, err := k.readSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return tunnelAddressesIn(snap, k.exitIf())
 }
 
 // AddReturnPathRule installs rule 94 or 98 for addr.
@@ -541,6 +563,7 @@ func (k *KernelSystem) ReplaceExitDefaultRoute(ctx context.Context) error {
 // and removes the old pair's leftovers, the owner restores the exit table's
 // default route and drops the old pair from the expected state.
 func (k *KernelSystem) ChangePIAAddress(ctx context.Context, old, next netip.Addr) error {
+	defer k.invalidate()
 	return k.Mut.ChangeReturnPath(ctx, rtnl.V4, old, next, func(tx *mutator.Tx) error {
 		return applier.ChangePIAAddress(tx.Context(), piaOnTx{k, tx}, old, next)
 	})
@@ -603,13 +626,18 @@ func (k *KernelSystem) GluetunTables(_ context.Context, family int) (applier.Glu
 	}, nil
 }
 
-// gluetunSnapshotAge is how long a snapshot is shared between the two calls.
-const gluetunSnapshotAge = 100 * time.Millisecond
+// snapshotAge is how long a read-only snapshot is shared between the calls
+// that read the namespace (a health check and a tick make a dozen within
+// milliseconds of each other).
+const snapshotAge = 100 * time.Millisecond
 
-func (k *KernelSystem) gluetunSnapshot() (*rtnl.Snapshot, error) {
+// gluetunSnapshot is the shared read-only snapshot.
+func (k *KernelSystem) gluetunSnapshot() (*rtnl.Snapshot, error) { return k.readSnapshot() }
+
+func (k *KernelSystem) readSnapshot() (*rtnl.Snapshot, error) {
 	k.snapMu.Lock()
 	defer k.snapMu.Unlock()
-	if k.snap != nil && time.Since(k.snapAt) < gluetunSnapshotAge {
+	if k.snap != nil && time.Since(k.snapAt) < snapshotAge {
 		return k.snap, nil
 	}
 	snap, err := k.Obs.Take(k.Spec.Interest())
