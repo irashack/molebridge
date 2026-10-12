@@ -88,7 +88,7 @@ flowchart TB
         worker("worker<br/>routing contract, tunnel,<br/>provider logic")
         netbird("NetBird<br/>exit peer on wt0")
         sup -- "starts when the contract holds,<br/>stops when the lease lapses" --> netbird
-        sup <-- "renewals and acknowledgements,<br/>status records" --> worker
+        sup -- "renewals, acknowledgements,<br/>status records" --- worker
     end
     provider("Provider API<br/>server list, egress check")
     server("SERVER, optional<br/>in the exit's settings")

@@ -24,7 +24,7 @@ route in `SECURITY.md`, never in a public issue or commit message.
 
 - **Fail-closed:** forwarded client traffic must never egress anywhere but the
   tunnel. Changes to routing, the tunnel config, compose networking or the
-  applier need the checks in `docs/verification.md`, run on a real host, before
+  exit need the checks in `docs/verification.md`, run on a real host, before
   a claim that they work.
 - **Privilege split:** the panel is its own container, holds no capabilities,
   never runs `wg`, `ip` or subprocesses, and only writes the desired server
