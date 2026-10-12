@@ -93,10 +93,12 @@ type Provider interface {
 
 	// RestoreTarget is the server to put back when nothing else selects one.
 	RestoreTarget(a *Applier) *Selection
-	// BeforeMutation runs just before the mutation's I/O; OnApplied when a
-	// server is live after a mutation, verified or not; OnVerified when a check
-	// passed on the target.
-	BeforeMutation(ctx context.Context, a *Applier, target *Selection)
+	// BeforeMutation runs just before the mutation's I/O (the gluetun backend
+	// records its selection there, and can fail writing it, which leaves the
+	// control cycle like any failure of the applier's own file I/O); OnApplied
+	// when a server is live after a mutation, verified or not; OnVerified when
+	// a check passed on the target.
+	BeforeMutation(ctx context.Context, a *Applier, target *Selection) error
 	OnApplied(a *Applier, server string) error
 	OnVerified(a *Applier, server string) error
 	// ControlAnswers is whether the provider's control plane answers (the
@@ -210,7 +212,7 @@ func (BaseProvider) PublishDefaults() validate.Obj { return nil }
 func (BaseProvider) RestoreTarget(*Applier) *Selection { return nil }
 
 // BeforeMutation implements Provider.
-func (BaseProvider) BeforeMutation(context.Context, *Applier, *Selection) {}
+func (BaseProvider) BeforeMutation(context.Context, *Applier, *Selection) error { return nil }
 
 // OnApplied implements Provider.
 func (BaseProvider) OnApplied(*Applier, string) error { return nil }
@@ -227,13 +229,23 @@ func (BaseProvider) ReleaseSignature(*Applier, string) (string, bool) { return "
 // Published implements Provider.
 func (BaseProvider) Published(*Record) {}
 
+// SystemChecker is implemented by a provider that needs more of the machine
+// than System offers: New asks it, once, whether the System it was given
+// serves it (the gluetun providers need GluetunKernel on an overlay exit).
+type SystemChecker interface {
+	CheckSystem(sys System, exit Exit) error
+}
+
 // ProviderFor is the provider for the PROVIDER setting: the registry id, with
-// the provider's own settings read through getenv (PIA's). The gluetun
-// providers are not part of this package.
+// the provider's own settings read through getenv (PIA's, gluetun's). Every
+// registry entry of the gluetun backend is a gluetun provider.
 func ProviderFor(id string, exit Exit, getenv func(string) string) (Provider, error) {
 	spec, err := providers.Get(id)
 	if err != nil {
 		return nil, err
+	}
+	if spec.Backend == providers.BackendGluetun {
+		return NewGluetunFromEnv(spec.ID, exit, getenv, nil)
 	}
 	switch spec.ID {
 	case "mullvad":
