@@ -97,6 +97,8 @@ func ControlServerVerdict(tcp4, tcp6 string, port int) (found bool, refusal erro
 
 // readProcNet reads both listener tables; a missing IPv6 table (a kernel
 // without IPv6) is an empty one.
+//
+//lint:ignore U1000 linux-only: called from gluetun_linux.go
 func readProcNet() (tcp4, tcp6 string, err error) {
 	b4, err := os.ReadFile("/proc/net/tcp")
 	if err != nil {

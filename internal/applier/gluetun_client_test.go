@@ -203,7 +203,7 @@ func TestExactSelectionBody(t *testing.T) {
 			if useRelay && c.filter == "numbers" {
 				continue // a relay's id is a string; a number is selected by SelectServer alone
 			}
-			f := &fakeControl{response: "VPN settings updated\r\n\x00\x7f\u0085‮"}
+			f := &fakeControl{response: "VPN settings updated\r\n\x00\x7f\u0085\u202e"}
 			client := clientFor(t, loopback, f)
 			var outcome string
 			var err error
@@ -270,7 +270,7 @@ func TestInvalidIDOrFilterIsRefused(t *testing.T) {
 		id     any
 		filter string
 	}{{"relay.example.test", ""}, {"relay.example.test", "countries"}, {"EX#1\n", "names"}, {"\x00", "names"},
-		{strings.Repeat("x", 257), "names"}, {"", "names"}, {"EX‮#1", "names"}, {"26", "numbers"},
+		{strings.Repeat("x", 257), "names"}, {"", "names"}, {"EX\u202e#1", "names"}, {"26", "numbers"},
 		{true, "numbers"}, {0, "numbers"}, {65536, "numbers"}, {nil, "hostnames"}, {1.5, "numbers"}} {
 		f := &fakeControl{}
 		_, err := clientFor(t, loopback, f).SelectServer(context.Background(), c.id, c.filter)

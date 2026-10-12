@@ -19,7 +19,7 @@ func TestStripAndFields(t *testing.T) {
 }
 
 func TestIsPrintable(t *testing.T) {
-	for s, want := range map[string]bool{"": true, "a b": true, "é": true, "a\x07": false, "a​b": false, "a\nb": false, "a b": false} {
+	for s, want := range map[string]bool{"": true, "a b": true, "é": true, "a\x07": false, "a\u200bb": false, "a\nb": false, "a b": false} {
 		if IsPrintable(s) != want {
 			t.Errorf("IsPrintable(%q) = %v", s, !want)
 		}

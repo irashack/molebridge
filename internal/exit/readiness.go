@@ -49,4 +49,6 @@ func (r *readiness) step(now time.Time, holds, tunnelOK, blocked bool) action {
 
 // markUnready records that the supervisor was told NetBird is not wanted, for
 // an unready the caller sent itself (the profile check after `netbird up`).
+//
+//lint:ignore U1000 linux-only: called from worker_linux.go
 func (r *readiness) markUnready() { r.sent = false }
