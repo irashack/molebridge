@@ -54,9 +54,9 @@ for candidate in gtar tar; do
 done
 [ -n "$tar_cmd" ] || die "GNU tar is required (gtar on a Mac)"
 
-# Required files, then the optional one.
-required=".env.example .env.sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
-optional=".env.gluetun.example"
+# Required files, then any optional ones.
+required=".env.example .env.gluetun.example .env.sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
+optional=""
 files=
 for f in $required; do
     [ -f "$src/$f" ] && [ ! -L "$src/$f" ] || die "missing bundle file: $f"

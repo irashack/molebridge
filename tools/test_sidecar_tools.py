@@ -265,56 +265,6 @@ def test_engine_detection():
 
 # The compose file itself
 
-def test_sidecar_compose_file():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.sidecar.yaml').read_text())
-    services = compose['services']
-    assert set(services) == {'gluetun', 'applier', 'example-app', 'control-panel'}
-    gluetun = services['gluetun']
-    overlay = yaml.safe_load((ROOT / 'compose.gluetun.yaml').read_text())['services']['gluetun']
-    assert gluetun['image'] == overlay['image']
-    assert gluetun['entrypoint'] == host_tools.PREFLIGHT_ENTRYPOINT == overlay['entrypoint']
-    assert './routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro' in gluetun['volumes']
-    env = gluetun['environment']
-    assert env['HTTP_CONTROL_SERVER_ADDRESS'] == '127.0.0.1:8000' and 'ports' not in gluetun
-    assert env['WIREGUARD_IMPLEMENTATION'] == 'kernelspace' and env['VPN_INTERFACE'] == '${EXIT_IF:-wg0}'
-    binds = {v['target']: v for v in gluetun['volumes'] if isinstance(v, dict)}
-    # The role file only in gluetun, the key only in the applier, no post-rules.
-    assert set(binds) == {'/gluetun/auth/config.toml', '/run/secrets/wireguard_private_key'}
-    assert '/iptables/post-rules.txt' not in str(gluetun) and 'post-rules' not in str(services)
-    for bind in binds.values():
-        assert bind['read_only'] is True and bind['bind'] == {'create_host_path': False}
-    applier = services['applier']
-    assert applier['network_mode'] == 'service:gluetun' and applier['read_only'] is True
-    assert applier['cap_drop'] == ['ALL'] and applier['cap_add'] == ['NET_ADMIN', 'NET_RAW', 'DAC_OVERRIDE']
-    assert applier['security_opt'] == ['no-new-privileges:true']
-    assert applier['healthcheck']['test'] == ['CMD', 'python', '-m', 'applier.apply', '--healthcheck']
-    aenv = applier['environment']
-    assert aenv['EXIT_KIND'] == 'sidecar' and aenv['TUNNEL_BACKEND'] == 'gluetun'
-    assert aenv['PROVIDER'].startswith('gluetun-${GLUETUN_PROVIDER')
-    assert aenv['GLUETUN_CONTROL_URL'] == 'http://127.0.0.1:8000'
-    for name in ('EXIT_IF', 'SERVER', 'GLUETUN_API_KEY_FILE', 'GLUETUN_SERVERS_FILE', 'GLUETUN_UPDATER_PERIOD',
-                 'GATUS_URL', 'GATUS_ENDPOINT'):
-        assert name in aenv, name
-    assert not set(aenv) & {'OVERLAY_CIDR', 'CONTROL_MARK', 'HOST_TABLE'}
-    applier_binds = {v['target']: v for v in applier['volumes'] if isinstance(v, dict)}
-    assert set(applier_binds) == {'/run/secrets/gluetun/api_key'}
-    assert applier_binds['/run/secrets/gluetun/api_key']['read_only'] is True
-    assert not any('auth.toml' in str(v) or 'wireguard_private_key' in str(v) for v in applier['volumes'])
-    assert applier['labels'] == {host_tools.SIDECAR_APPS_LABEL: '${SIDECAR_APPS:-}'}
-    app = services['example-app']
-    assert app['network_mode'] == 'service:gluetun' and app['image'].count('@sha256:') == 1
-    assert app['profiles'] == ['example']
-    panel = services['control-panel']
-    assert panel['environment']['EXIT_KIND'] == 'sidecar' and panel['environment']['PROVIDER'] == aenv['PROVIDER']
-    assert panel['cap_drop'] == ['ALL'] and 'cap_add' not in panel
-    assert panel['ports'] == ['127.0.0.1:${PANEL_PORT:-8095}:8080']
-    assert not any('secrets' in str(v) for v in panel['volumes'])
-    assert not {'netbird', 'guard', 'wireguard'} & set(services)
-    example = (ROOT / '.env.sidecar.example').read_text()
-    assert 'SIDECAR_APPS=example-app\n' in example and 'COMPOSE_FILE=compose.sidecar.yaml\n' in example
-    assert 'COMPOSE_PROFILES=example\n' in example
-
 
 # Configuration refusals
 

@@ -5,47 +5,67 @@
 # Run from the repository root after following docs/setup.md:
 #   docker compose up -d
 #
-# For PIA, set PROVIDER=pia and EXIT_IF=pia in .env and add compose.pia.yaml
-# (COMPOSE_FILE=compose.yaml:compose.pia.yaml); for NordVPN, nordvpn and
-# compose.nordvpn.yaml the same way. See docs/providers.md.
+# One file serves all three providers: PROVIDER (mullvad, pia or nordvpn)
+# selects the provider, and EXIT_IF names its tunnel interface (the same as
+# PROVIDER unless you chose another name); see docs/providers.md. The
+# gluetun forms are separate files: compose.gluetun.yaml and
+# compose.sidecar.yaml.
 #
-# Namespace ownership: `wireguard` creates the network namespace and the
-# provider tunnel. `netbird` and `applier` join it (`network_mode:
-# service:wireguard`) and share its interfaces and routing. If `wireguard`
-# is recreated, those two can remain in its old namespace: its owner record
-# (exit-run volume) then no longer matches, NetBird's gate stops NetBird and
-# the applier reports routing as unsafe. Recreate all four together:
-# tools/molebridge.py recover on Docker, or the Podman commands in
-# docs/operations.md. `control-panel`
-# runs on its own network with no capabilities and talks to the applier only
-# through files under ./state.
+# Two containers from one image, where the image's first argument picks the
+# role (docs/architecture.md):
+#   exit        `molebridge exit` owns the network namespace: the routing
+#               contract, the provider tunnel, NetBird and the provider
+#               logic, one process tree under a supervisor. It serves no HTTP.
+#   switchyard  `molebridge panel` is the web panel. It has no capabilities
+#               and shares no network with the exit; the two talk only
+#               through the files under ./state.
+# If the exit's worker stops answering, its supervisor stops NetBird, removes
+# the tunnel and exits non-zero, and the restart policy brings the container
+# back. No volume carries an owner record any more: the supervisor's lease
+# inside the container does what the owner-record volume of 0.7 did.
 #
-# Images are pinned to exact multi-arch releases. Secrets live in the
-# mode-0600 files under ./tunnel and ./secrets, and the NetBird identity in the
-# netbird-data volume; never print them or paste `docker compose config`
-# output anywhere.
+# The image is pinned to an exact release; the release bundle pins it by tag
+# and digest. `docker compose build` builds the same image from a checkout.
+# Secrets live in the mode-0600 files under ./tunnel and ./secrets, and the
+# NetBird identity in the netbird-data volume; never print them or paste
+# `docker compose config` output anywhere.
 # Keep COMPOSE_PROJECT_NAME unchanged after the first start: it scopes the
 # NetBird identity volume.
 name: molebridge
 
 services:
-  wireguard:
+  exit:
+    image: ghcr.io/irashack/molebridge:0.8.0
+    # Only for people who build from a checkout (`docker compose build`);
+    # the release bundle has no Dockerfile and pulls the image instead.
     build:
       context: .
-      dockerfile: routing/Dockerfile
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-wireguard"
+      dockerfile: Dockerfile
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
     restart: unless-stopped
-    # NET_ADMIN for routing and the tunnel. DAC_READ_SEARCH reads the tunnel
-    # config when it belongs to your host user with mode 0600 (rootful
-    # Docker); a rootless engine's container root is that user already.
     cap_drop: [ALL]
-    cap_add: [NET_ADMIN, DAC_READ_SEARCH]
+    # NET_ADMIN: the routing contract, the tunnel and NetBird's interface.
+    # NET_RAW: NetBird opens an IPv4 raw socket while bringing the overlay
+    # interface up. Docker grants NET_RAW by default and Podman does not,
+    # where the engine then fails with "failed to create ipv4 raw socket:
+    # operation not permitted", the interface never appears, and the exit
+    # carries no traffic.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and creates, syncs and replaces files in a state
+    # directory your host user owns (rootful Docker; a rootless engine's
+    # container root is that user already).
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
-      - /run:size=1m,mode=0755,noexec,nosuid,nodev
-    # The entrypoint brings the tunnel down within 7 seconds of a stop; this
-    # leaves room so the engine never cuts it short.
+      # The supervisor's runtime files and NetBird's control socket.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+      # NetBird's client log, kept off the read-only root; the exit reads its
+      # own launch's lines from it.
+      - /var/log/netbird:size=16m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence ends NetBird and the worker and removes the tunnel
+    # within 13 seconds; this leaves room so the engine never cuts it short.
     stop_grace_period: 15s
     sysctls:
       # The namespace forwards overlay traffic into the tunnel.
@@ -59,23 +79,80 @@ services:
       net.ipv6.conf.default.disable_ipv6: "0"
     environment:
       TZ: "${TZ:-Etc/UTC}"
-      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
-      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
-      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      # Molebridge creates the provider tunnel itself, on an overlay exit.
+      # compose.gluetun.yaml and compose.sidecar.yaml set the other forms.
+      TUNNEL_BACKEND: native
+      EXIT_KIND: overlay
+      PROVIDER: "${PROVIDER:-mullvad}"
       EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
-      PROVIDER: "${PROVIDER:-mullvad}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default; see docs/providers.md#port-forwarding.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Overrides whose defaults live in the binary (docs/configuration.md).
+      # Seconds between full repair passes, 2 to 60; netlink events repair in
+      # between. And seconds without an accepted lease renewal before the
+      # supervisor stops NetBird, 5 to 30.
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+      # NetBird, as the old netbird service set it.
+      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
+      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
+      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
+      NB_LOG_LEVEL: info
+      # This peer only forwards traffic; NetBird leaves the namespace's
+      # resolver alone.
+      NB_DISABLE_DNS: "true"
+      # Part of Molebridge's supported NetBird configuration; the exit
+      # refuses to start NetBird without it.
+      NB_DISABLE_USERSPACE_ROUTING: "true"
+      # Keeps ICE off the exit tunnel interface from the peer's first
+      # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
+      # first `netbird up`. An already enrolled peer keeps its stored
+      # blacklist; the exit then refuses to start and names the repair tool
+      # (`fix-blacklist`, docs/operations.md).
+      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
+    env_file:
+      # NB_SETUP_KEY, needed only until the peer first enrolls.
+      - path: ./secrets/netbird.env
+        required: false
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
     volumes:
       # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
       - ./tunnel/wg_confs:/config/wg_confs:ro
-      # The owner record NetBird's gate and the applier check.
-      - exit-run:/run/molebridge
+      # The panel's requests in, read-only; the exit's records out.
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: the account login the exit registers the tunnel key with,
+      # secrets/pia/username and secrets/pia/password, one value per file,
+      # mode 0600. Compose cannot mount a directory for one PROVIDER only, so
+      # the mount is always there: the directory is empty, and unused, with
+      # Mullvad or NordVPN. Create it for every provider (docs/setup.md);
+      # Compose then refuses to start, rather than create it root-owned, when
+      # it is missing.
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+      # Durable peer identity; deleting it re-enrolls as a new peer.
+      - netbird-data:/var/lib/netbird
     healthcheck:
-      test: ["CMD-SHELL", "test -f /run/molebridge-routing-ready && ip link show \"$$EXIT_IF\" >/dev/null 2>&1"]
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     # `json-file` with a size cap is the one bounded driver every supported
     # engine accepts. Docker's `local` driver does not exist under Podman, and
     # a container naming an unknown driver fails to create outright; Podman's
@@ -87,156 +164,43 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          # One process tree where 0.7.0 had 256m (tunnel), 256m (NetBird)
+          # and 128m (applier). 512m is NordVPN's: its server list is about
+          # 8 MB of JSON, downloaded and parsed every six hours and capped at
+          # 32 MiB, and a list near that cap takes about 300 MB to parse, with
+          # NetBird beside it. It is a ceiling, not a reservation: Mullvad and
+          # PIA exits idle far below it.
+          memory: 512m
 
-  netbird:
-    image: docker.io/netbirdio/netbird:0.80.0@sha256:4976692ea44bb93871743d0b742b4a8f97f6425bfc458ca2d78e28fdb8bdf4ad
-    # This gate also runs on daemon/host restarts, which ignore depends_on. It
-    # refuses NetBird settings Molebridge does not support (docs/configuration.md),
-    # and stays in front of NetBird: it stops NetBird when the routing guards
-    # or the exit's owner record go (routing/wait-for-guards).
-    entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-wait-for-guards", "/usr/local/bin/netbird-entrypoint.sh"]
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-netbird"
-    restart: unless-stopped
-    network_mode: service:wireguard
-    # The gate stays in front of NetBird as its parent; an init reaps what it
-    # leaves behind and passes signals on. It ends NetBird within 11 seconds
-    # of a stop.
-    init: true
-    stop_grace_period: 15s
-    # NetBird opens an IPv4 raw socket while bringing the overlay interface up.
-    # Docker grants NET_RAW by default and Podman does not, where the engine
-    # then fails with "failed to create ipv4 raw socket: operation not
-    # permitted", the interface never appears, and the exit carries no traffic.
-    cap_add: [NET_ADMIN, NET_RAW]
-    environment:
-      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
-      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
-      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
-      NB_LOG_LEVEL: info
-      # This peer only forwards traffic; NetBird leaves the namespace's
-      # resolver alone.
-      NB_DISABLE_DNS: "true"
-      # Part of Molebridge's supported NetBird configuration; the entrypoint
-      # gate refuses to start without it.
-      NB_DISABLE_USERSPACE_ROUTING: "true"
-      # Keeps ICE off the exit tunnel interface from the peer's first
-      # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
-      # first `netbird up`. An already enrolled peer keeps its stored
-      # blacklist, so an upgrade sets it with the flag instead
-      # (docs/setup.md#5-keep-ice-off-the-tunnel-interface).
-      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
-      # The gate checks the whole routing contract with the exit's settings.
-      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
-      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
-      EXIT_IF: "${EXIT_IF:-mullvad}"
-      EXIT_TABLE: "${EXIT_TABLE:-51821}"
-    env_file:
-      # NB_SETUP_KEY, needed only until the peer first enrolls.
-      - path: ./secrets/netbird.env
-        required: false
-    volumes:
-      - ./routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro
-      - ./routing/contract-rules:/usr/local/bin/molebridge-contract-rules:ro
-      - exit-run:/run/molebridge:ro
-      # Durable peer identity; deleting it re-enrolls as a new peer.
-      - netbird-data:/var/lib/netbird
-    depends_on:
-      wireguard:
-        condition: service_healthy
-        restart: true
-    healthcheck:
-      test: ["CMD-SHELL", "netbird status 2>/dev/null | grep -q 'Management: Connected'"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    logging: *logging
-    deploy:
-      resources:
-        limits:
-          memory: 256m
-
-  applier:
-    # Built from a pinned Python base with wg/ip/curl. This trusted component
-    # owns the relay catalogue. NET_ADMIN can read the live interface key;
-    # the tunnel configuration file is deliberately not mounted.
-    build:
-      context: .
-      dockerfile: applier/Dockerfile
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-applier"
-    restart: unless-stopped
-    network_mode: service:wireguard
-    cap_drop: [ALL]
-    # NET_RAW supports interface binding on older kernels; DAC_OVERRIDE reads
-    # mode-0600 requests and writes host-user-owned state directories.
-    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
-    security_opt: ["no-new-privileges:true"]
-    read_only: true
-    tmpfs:
-      # curl's output lands here before it is parsed: room for the largest
-      # server list any provider may send (NordVPN's, capped at 32 MiB). It
-      # takes memory only while a download is there.
-      - /tmp:size=48m,mode=1777,noexec,nosuid,nodev
-    environment:
-      EXIT_IF: "${EXIT_IF:-mullvad}"
-      EXIT_TABLE: "${EXIT_TABLE:-51821}"
-      PROVIDER: "${PROVIDER:-mullvad}"
-      SERVER: "${SERVER:-}"
-      # PIA only, off by default; see docs/providers.md#port-forwarding.
-      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
-      PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"
-      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
-      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env}"
-      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
-      GATUS_URL: "${GATUS_URL:-}"
-      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
-    env_file:
-      # Optional GATUS_TOKEN for health pushes.
-      - path: ./secrets/applier.env
-        required: false
-    volumes:
-      - ./state/panel:/state/panel:ro
-      - ./state/applier:/state/applier
-      # The wireguard container's owner record: the applier counts routing
-      # as safe only while it is live (molebridge/routing.py).
-      - exit-run:/run/molebridge:ro
-    depends_on:
-      wireguard:
-        condition: service_healthy
-        restart: true
-    healthcheck:
-      test: ["CMD", "python", "-m", "applier.apply", "--healthcheck"]
-      interval: 30s
-      timeout: 25s
-      retries: 3
-      start_period: 30s
-    logging: *logging
-    deploy:
-      resources:
-        limits:
-          memory: 128m
-
-  control-panel:
-    image: docker.io/library/python:3.14.7-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
-    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-control-panel"
+  switchyard:
+    image: ghcr.io/irashack/molebridge:0.8.0
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
     restart: unless-stopped
     # The user that owns ./state/panel, as the container sees it. Keep it equal
     # to your host user's uid:gid on an engine that maps container uids to host
     # uids directly.
     # Under a rootless engine that remaps them, container root is already the
     # host user and an unmapped uid cannot read the 0700 state tree; set
-    # PANEL_USER=0:0 there. See docs/configuration.md.
+    # PANEL_USER=0:0 there, and PANEL_ALLOW_ROOT=1 beside it, because the
+    # panel refuses to run as uid 0 unless you say so. See
+    # docs/configuration.md.
     user: "${PANEL_USER:-1000:1000}"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
-    working_dir: /app
-    command: ["python", "/app/panel/app.py"]
     environment:
       STATE_DIR: /state
       PROVIDER: "${PROVIDER:-mullvad}"
-      PYTHONDONTWRITEBYTECODE: "1"
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The panel treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      # Several exits in one panel: `id=provider[/kind][:label]`, with each
+      # exit's state mounted under /state/<id> in a compose.override.yaml,
+      # every applier directory read-only (docs/switchyard.md). Empty means
+      # this one exit.
+      PANEL_EXITS: "${PANEL_EXITS:-}"
       PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
       PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
       PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
@@ -257,13 +221,15 @@ services:
       # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
       - "127.0.0.1:${PANEL_PORT:-8095}:8080"
     volumes:
-      - ./panel:/app/panel:ro
-      - ./molebridge:/app/molebridge:ro
+      # Only `panel/`, where requests are written, is writable here;
+      # everything the exit publishes is read-only. The panel checks this at
+      # start and refuses to run otherwise.
       - ./state/panel:/state/panel
       - ./state/applier:/state/applier:ro
+    # Its own network: it shares none with the exit.
     networks: [panel]
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -272,12 +238,11 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 128m
 
 networks:
   panel:
 
 volumes:
+  # The NetBird peer identity; the name is unchanged since 0.7.
   netbird-data:
-  # The wireguard container's owner record (routing/molebridge-exit).
-  exit-run:

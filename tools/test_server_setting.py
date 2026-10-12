@@ -204,16 +204,6 @@ def test_configured_inspection_cannot_mark_a_different_server_healthy(tmp_path, 
     assert res['message'] == 'The configured SERVER is not the current server; waiting for convergence.'
 
 
-def test_compose_passes_server_only_to_applier():
-    import yaml
-    root = Path(__file__).resolve().parents[1]
-    for name in ['compose.yaml', 'compose.pia.yaml', 'compose.nordvpn.yaml', 'compose.gluetun.yaml']:
-        compose = yaml.safe_load((root / name).read_text())
-        assert compose['services']['applier']['environment']['SERVER'] == '${SERVER:-}'
-        assert all('SERVER' not in service.get('environment', {})
-                   for key, service in compose['services'].items() if key != 'applier')
-
-
 def test_invalid_unicode_setting_keeps_status_bounded_and_readable(tmp_path):
     from molebridge.state import read_json, configured_server
     app, _ = native(tmp_path, 'mullvad', '😀' * 4096)

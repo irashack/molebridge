@@ -1,11 +1,12 @@
 .DS_Store
 .env
-secrets/
-state/
+/secrets/
+/state/
 tunnel/wg_confs/*
 !tunnel/wg_confs/.gitkeep
 tunnel/gluetun/
 *.conf
+!internal/**/testdata/**/*.conf
 __pycache__/
 .pytest_cache/
 .venv/

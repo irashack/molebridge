@@ -1,0 +1,26 @@
+[
+{
+"bytes": "{\"attempt_id\": \"0123456789abcdef\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"idle\", \"outcome\": null, \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 0, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": null, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+"mode": "0o600"
+},
+{
+"bytes": "{\"attempt_id\": \"0123456789abcdef\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"attempting\", \"outcome\": null, \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 1234.5678, \"mutation_certainty\": \"uncertain\", \"generation\": \"0a0a\", \"rejected\": null, \"extra\": {}}",
+"mode": "0o600"
+},
+{
+"bytes": "{\"attempt_id\": \"0123456789abcdef\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"failed\", \"outcome\": \"mutation-failed\", \"message\": \"Example \\\"quoted\\\" \\u00e9.\", \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 1, \"backoff_step\": 2, \"next_action\": \"reapply\", \"next_action_at\": 5000.25, \"last_mutation_at\": 1234.5678, \"mutation_certainty\": \"uncertain\", \"generation\": \"0a0a\", \"rejected\": null, \"extra\": {}}",
+"mode": "0o600"
+},
+{
+"bytes": "{\"attempt_id\": \"0123456789abcdef\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"rejected\", \"outcome\": \"mutation-failed\", \"message\": \"Example \\\"quoted\\\" \\u00e9.\", \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 1, \"backoff_step\": 2, \"next_action\": \"reapply\", \"next_action_at\": 5000.25, \"last_mutation_at\": 1234.5678, \"mutation_certainty\": \"uncertain\", \"generation\": \"0a0a\", \"rejected\": {\"key\": \"k\", \"reason\": \"Requested server is not in a fresh trusted relay catalogue.\", \"why\": \"invalid\", \"release\": \"sig\"}, \"extra\": {\"why\": \"invalid\", \"release\": \"sig\"}}",
+"mode": "0o600"
+},
+{
+"bytes": "{\"attempt_id\": \"0123456789abcdef\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 1234.5678, \"mutation_certainty\": null, \"generation\": \"0a0a\", \"rejected\": {\"key\": \"k\", \"reason\": \"Requested server is not in a fresh trusted relay catalogue.\", \"why\": \"invalid\", \"release\": \"sig\"}, \"extra\": {\"why\": \"invalid\", \"release\": \"sig\"}}",
+"mode": "0o600"
+},
+{
+"bytes": "{\"attempt_id\": \"ffffffffffffffff\", \"source\": \"seed\", \"target\": null, \"target_key\": null, \"state\": \"idle\", \"outcome\": null, \"message\": null, \"boot_id\": \"b\", \"started_at\": \"2026-10-11T12:00:00Z\", \"attempts\": 0, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": null, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+"mode": "0o600"
+}
+]
