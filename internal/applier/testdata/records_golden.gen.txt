@@ -1,8 +1,11 @@
 """Writes the status records the Python applier publishes for fixed scenarios,
 as testdata/records_golden.json (the values are the records as JSON text; the
-Go test normalizes timestamps). Run from the repository root at the commit
-before the Go port, with a stub pytest module on the path (test_runtime and
-its siblings import it). Kept as text so nothing treats it as Python source."""
+Go test normalizes timestamps). The golden was generated from 0.7.0's Python
+implementation at commit d553f25 (run from the repository root there, with a
+stub pytest module on the path; test_runtime and its siblings import it) and is
+now fixed: the Python sources are gone from the tree, so this script is kept as
+a record of the scenarios, not as something to rerun. Kept as text so nothing
+treats it as Python source."""
 import json, sys, tempfile, copy, dataclasses
 from pathlib import Path
 sys.path.insert(0, 'path/to/stub-pytest'); sys.path.insert(0, '.'); sys.path.insert(0, 'tools')

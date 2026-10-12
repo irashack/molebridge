@@ -1,5 +1,7 @@
 // Tests for the timestamp helpers of molebridge/state.py (now_iso,
 // age_seconds, recent) and molebridge/verdict.py (_parse_time, _fresh).
+// testdata/time_golden.json was generated from 0.7.0's Python implementation at
+// commit d553f25 and is now fixed.
 package validate
 
 import (

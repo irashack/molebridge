@@ -3,8 +3,8 @@
 // test_an_unreadable_attempt_starts_idle in full; the resting-states test
 // without the applier it restarts) and from tools/test_runtime.py's boot id
 // helpers. The rest of those files tests the admission pipeline in
-// applier/apply.py, which the applier port carries. The golden file is what the
-// Python code wrote.
+// applier/apply.py, which the applier port carries. The golden file is what
+// 0.7.0's Python code wrote (commit d553f25); it is now fixed.
 package attempt
 
 import (

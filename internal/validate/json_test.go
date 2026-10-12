@@ -1,7 +1,8 @@
 // Tests for molebridge/validate.py (decode_json, valid_key, valid_ipv4,
 // valid_text) and for the JSON encoding the state files rely on
-// (state.write_json_atomic's json.dump output). The golden files were made by
-// running the Python code on the same inputs.
+// (state.write_json_atomic's json.dump output). The golden files were generated
+// from 0.7.0's Python implementation at commit d553f25 (run on the same inputs) and
+// are now fixed.
 package validate
 
 import (

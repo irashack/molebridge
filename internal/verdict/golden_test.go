@@ -9,7 +9,8 @@ import (
 	"github.com/irashack/molebridge/internal/validate"
 )
 
-// TestAssessMatchesPython runs the Python assess on records mutated at random
+// TestAssessMatchesPython compares with the Python assess of 0.7.0 (commit
+// d553f25), run on records mutated at random; the golden is now fixed
 // (testdata/assess_golden.json: 330 records, the outcomes of 12,000 capped per
 // verdict) and requires the same verdict, reasons, checks and legacy projection
 // from this port. Records the Python code cannot judge (it raises TypeError on an

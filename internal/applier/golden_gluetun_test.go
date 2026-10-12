@@ -2,7 +2,8 @@ package applier
 
 // The gluetun scenarios of the golden-record parity test (golden_test.go):
 // each mirrors, line for line, the scenario in testdata/records_golden.gen.txt
-// that generated its Python record.
+// that generated its Python record (0.7.0's implementation, commit d553f25; the
+// golden is now fixed).
 
 import (
 	"testing"

@@ -1,5 +1,6 @@
 // Tests for molebridge/countries.py. The Python module has no test file of its
-// own; the golden table was dumped from NAME_TO_CODE, and the lookups below
+// own; the golden table was dumped from NAME_TO_CODE of 0.7.0's Python implementation
+// at commit d553f25 and is now fixed, and the lookups below
 // cover what the panel relies on (code_for, used by panel/app.py).
 package countries
 
