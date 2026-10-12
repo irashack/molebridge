@@ -48,7 +48,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/irashack/molebridge/internal/panel/pystr"
@@ -248,7 +247,7 @@ func ParseAccess(raw string, exitIDs []string) (map[string]Set, error) {
 		group, exitID, sep := strings.Cut(entry, "=")
 		group, exitID = pystr.Strip(group), pystr.Strip(exitID)
 		if !sep || !validGroup(group) {
-			return nil, fmt.Errorf("PANEL_ACCESS: entries are group=exit, with no spaces, commas or = in the group, in %s", pyRepr(entry))
+			return nil, fmt.Errorf("PANEL_ACCESS: entries are group=exit, with no spaces, commas or = in the group, in %s", pystr.Repr(entry))
 		}
 		known := false
 		for _, id := range exitIDs {
@@ -257,7 +256,7 @@ func ParseAccess(raw string, exitIDs []string) (map[string]Set, error) {
 			}
 		}
 		if !known {
-			return nil, fmt.Errorf("PANEL_ACCESS: %s is not an exit in PANEL_EXITS, in %s", pyRepr(exitID), pyRepr(entry))
+			return nil, fmt.Errorf("PANEL_ACCESS: %s is not an exit in PANEL_EXITS, in %s", pystr.Repr(exitID), pystr.Repr(entry))
 		}
 		if access[group] == nil {
 			access[group] = Set{}
@@ -265,46 +264,6 @@ func ParseAccess(raw string, exitIDs []string) (map[string]Set, error) {
 		access[group][exitID] = struct{}{}
 	}
 	return access, nil
-}
-
-// pyRepr is repr() for the plain text the settings messages quote: single
-// quotes unless the text holds a single quote and no double quote, and a
-// backslash escape for the characters repr escapes.
-func pyRepr(s string) string {
-	quote := byte('\'')
-	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
-		quote = '"'
-	}
-	var b strings.Builder
-	b.WriteByte(quote)
-	for _, r := range s {
-		switch {
-		case r == rune(quote) || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r == '\n':
-			b.WriteString(`\n`)
-		case r == '\r':
-			b.WriteString(`\r`)
-		case r == '\t':
-			b.WriteString(`\t`)
-		case r < 0x20 || r == 0x7f:
-			fmt.Fprintf(&b, `\x%02x`, r)
-		case !unicode.IsPrint(r):
-			switch {
-			case r < 0x100:
-				fmt.Fprintf(&b, `\x%02x`, r)
-			case r < 0x10000:
-				fmt.Fprintf(&b, `\u%04x`, r)
-			default:
-				fmt.Fprintf(&b, `\U%08x`, r)
-			}
-		default:
-			b.WriteRune(r)
-		}
-	}
-	b.WriteByte(quote)
-	return b.String()
 }
 
 // strerror is the C library's text for the errors reading a file can give,
@@ -433,7 +392,7 @@ func ConfigFromEnv(env map[string]string, exitIDs []string) (*Config, error) {
 	adminGroups := NewSet(splitList(get("PANEL_ADMIN_GROUPS"))...)
 	for _, group := range adminGroups.Sorted() {
 		if !validGroup(group) {
-			return nil, fmt.Errorf("PANEL_ADMIN_GROUPS: %s is not a valid group name", pyRepr(group))
+			return nil, fmt.Errorf("PANEL_ADMIN_GROUPS: %s is not a valid group name", pystr.Repr(group))
 		}
 	}
 	access, err := ParseAccess(get("PANEL_ACCESS"), exitIDs)

@@ -6,6 +6,7 @@
 package pystr
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 	"unicode"
@@ -69,4 +70,44 @@ func Quote(s string) string {
 	// QueryEscape differs from quote(safe='') only in writing a space as '+'
 	// and in leaving '~' alone, which quote also leaves alone since 3.7.
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+// Repr is repr() for the plain text the settings messages quote: single
+// quotes unless the text holds a single quote and no double quote, and a
+// backslash escape for the characters repr escapes.
+func Repr(s string) string {
+	quote := byte('\'')
+	if strings.Contains(s, "'") && !strings.Contains(s, `"`) {
+		quote = '"'
+	}
+	var b strings.Builder
+	b.WriteByte(quote)
+	for _, r := range s {
+		switch {
+		case r == rune(quote) || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case !unicode.IsPrint(r):
+			switch {
+			case r < 0x100:
+				fmt.Fprintf(&b, `\x%02x`, r)
+			case r < 0x10000:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			default:
+				fmt.Fprintf(&b, `\U%08x`, r)
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte(quote)
+	return b.String()
 }
