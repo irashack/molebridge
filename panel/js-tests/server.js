@@ -1,8 +1,7 @@
 // What the real panel serves for the fixture cases (the consumer matrix of
-// panel/fixtures/records.py). The panel is the Go one when MOLEBRIDGE_PANEL=go
-// (needs the Go toolchain; run from anywhere inside the repository), else the
-// Python one, for which PYTHON chooses the interpreter (python3 by default).
-// Remove the Python path with panel/*.py.
+// internal/panel/fixtures_test.go). The panel is the Go one: `go test` runs
+// TestWritePayloads in internal/panel, which writes the document. Needs the Go
+// toolchain; run from anywhere inside the repository.
 'use strict';
 
 const { execFileSync } = require('node:child_process');
@@ -11,17 +10,6 @@ const os = require('node:os');
 const path = require('node:path');
 
 let cached;
-
-function pythonPayloads() {
-  const script = path.join(__dirname, '..', 'fixtures', 'payloads.py');
-  // A clean environment: no PANEL_EXITS, sign-in or provider from the caller.
-  const output = execFileSync(process.env.PYTHON || 'python3', [script], {
-    env: { PATH: process.env.PATH, PYTHONDONTWRITEBYTECODE: '1' },
-    encoding: 'utf8',
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  return JSON.parse(output);
-}
 
 function goPayloads() {
   const repository = path.join(__dirname, '..', '..');
@@ -42,7 +30,7 @@ function goPayloads() {
 }
 
 function serverPayloads() {
-  if (!cached) cached = process.env.MOLEBRIDGE_PANEL === 'go' ? goPayloads() : pythonPayloads();
+  if (!cached) cached = goPayloads();
   return cached;
 }
 

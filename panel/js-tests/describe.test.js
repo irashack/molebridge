@@ -1,7 +1,7 @@
 // panel.js's status rendering (describe), with Node's own test runner and
 // no dependencies:  node --test panel/js-tests/describe.test.js
 // The cases and the wording come from the real server
-// (panel/fixtures/payloads.py), which also says how it renders each one, so
+// (internal/panel/payloads_test.go), which also says how it renders each one, so
 // the browser and the server are checked against each other.
 'use strict';
 
