@@ -25,8 +25,10 @@ Anything that breaks the properties in [the architecture](docs/architecture.md):
   tunnel (a fail-open), for either address family;
 - the panel gaining privileges, running commands, or changing anything other
   than the desired server request;
-- the applier acting on unvalidated server-list, provider API, desired-state
-  or form input;
+- the exit acting on unvalidated server-list, provider API, desired-state,
+  tunnel-config, NetBird-profile or form input;
+- a published image or release bundle that does not match the signatures,
+  provenance and SBOMs described in [setup](docs/setup.md#1-download-and-verify);
 - disclosure of the WireGuard key, the NetBird identity, the PIA login or
   other secrets;
 - with PIA port forwarding on, forwarded inbound connections reaching
