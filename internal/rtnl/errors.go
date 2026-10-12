@@ -2,6 +2,7 @@ package rtnl
 
 import (
 	"errors"
+	"os"
 	"syscall"
 )
 
@@ -21,4 +22,9 @@ func IsExist(err error) bool { return errors.Is(err, syscall.EEXIST) }
 // matches) or ENODEV.
 func IsNotExist(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ENODEV)
+}
+
+// Timeout reports whether err is a deadline expiry.
+func Timeout(err error) bool {
+	return errors.Is(err, os.ErrDeadlineExceeded)
 }

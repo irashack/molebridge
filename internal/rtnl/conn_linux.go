@@ -5,7 +5,6 @@ package rtnl
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -225,9 +224,4 @@ func wrap(op string, err error) error {
 		return fmt.Errorf("rtnl: %s: %w (%s)", op, err, oe.Message)
 	}
 	return fmt.Errorf("rtnl: %s: %w", op, err)
-}
-
-// Timeout reports whether err is a deadline expiry.
-func Timeout(err error) bool {
-	return errors.Is(err, os.ErrDeadlineExceeded)
 }
