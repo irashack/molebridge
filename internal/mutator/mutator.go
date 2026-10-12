@@ -27,6 +27,16 @@ type Kernel interface {
 // (rtnl.Conn); the owner narrows it to what is left of the operation.
 type timeouter interface{ SetTimeout(time.Duration) }
 
+// deadliner is implemented by kernels that take one absolute deadline for a
+// whole operation (rtnl.Conn); it is preferred over timeouter.
+type deadliner interface{ SetDeadline(time.Time) }
+
+// contextTaker is implemented by kernels whose snapshot can be bounded and
+// cancelled by a context (rtnl.Conn).
+type contextTaker interface {
+	TakeContext(context.Context, rtnl.Interest) (*rtnl.Snapshot, error)
+}
+
 // Defaults of the bounds the lease is built on.
 const (
 	DefaultOpTimeout = 10 * time.Second
@@ -276,6 +286,10 @@ func (m *Mutator) exec(o *op) {
 		result <- err
 	}()
 	err := <-result
+	if k, ok := m.o.Kernel.(deadliner); ok {
+		// The deadline belonged to the operation.
+		k.SetDeadline(time.Time{})
+	}
 	if err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = ErrOpTimeout
 	}

@@ -148,6 +148,19 @@ func (tx *Tx) reconcile(reason string) (res PassResult) {
 			}
 		}
 		plans := planAll(spec, snap)
+		if allClean(plans) && snap.Unstable {
+			// Nothing to repair on this look, but the kernel kept changing
+			// while it was taken: no verdict, no release of a guard.
+			if round >= maxRounds {
+				fail(errors.New("the kernel kept changing; the routing contract could not be verified"))
+				break
+			}
+			if snap, err = tx.Snapshot(); err != nil {
+				fail(opErr("look at the kernel", err))
+				return
+			}
+			continue
+		}
 		if allClean(plans) {
 			if !guardsHeld(spec) {
 				res.ContractHolds = true
