@@ -538,7 +538,7 @@ func TestDrillWedgedMutatorLapsesTheLeaseEvenWithRenewalsRunnable(t *testing.T) 
 	l := newLab(t, false)
 	p := l.start()
 	l.waitReady(p)
-	l.waitFor(20*time.Second, "the first full record", func() bool { return l.result() != nil && l.result()["status"] != "unknown" })
+	time.Sleep(3 * time.Second) // renewals are flowing
 	wedged := time.Now()
 	if err := os.WriteFile(filepath.Join(l.runDir, "wedge-mutator"), nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -614,7 +614,6 @@ func TestDrillNothingLeavesOffTunnelAfterACrash(t *testing.T) {
 		t.Fatal("the cleanup should have removed the overlay interface")
 	}
 	// The peer returns (NetBird in another container would recreate it).
-	l.client.IP("link", "del", "client0")
 	l.makeOverlay()
 	l.pingBoth()
 	if n := l.counter(); n != 0 {

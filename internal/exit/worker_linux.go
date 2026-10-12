@@ -323,7 +323,6 @@ func (w *worker) run() int {
 	w.mut = mutator.New(mutator.Options{Kernel: kernel, Spec: spec, Clock: w.clock, GuardRepairs: s.Native(),
 		Logf: func(format string, a ...any) { w.logf(format, a...) }})
 	w.mut.Start()
-	defer w.mut.Close()
 
 	w.loops = map[string]loopSource{LoopMutator: {w.mut.Progress, MutatorBound}}
 	if s.Overlay() {
@@ -392,7 +391,19 @@ func (w *worker) run() int {
 
 	<-w.ctx.Done()
 	w.logf("stopping")
-	wg.Wait()
+	// The worker holds nothing that needs tearing down (the rules and the
+	// fallback stay by design), so a stop never waits on a wedged owner or a
+	// blocked loop: a second to wind down, then the process ends.
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		w.mut.Close()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+	}
 	return 0
 }
 
