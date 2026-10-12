@@ -57,6 +57,10 @@ type Server struct {
 	now  func() time.Time
 	mono func() time.Time
 	dial DialFunc
+	// Test hooks, nil in production: onRead sees every status read, assessed
+	// runs inside a switch's lock after the exit was assessed.
+	onRead   func(Exit)
+	assessed func()
 	// probe times one relay address; tests replace it.
 	probe func(ip string) *float64
 	files fs.FS
@@ -266,6 +270,9 @@ func (s *Server) judge(ex Exit, desired, result any) ExitStatus {
 }
 
 func (s *Server) readStatus(ex Exit) ExitStatus {
+	if s.onRead != nil {
+		s.onRead(ex)
+	}
 	result := state.ReadJSON(ex.ResultPath, 16384)
 	// A configured exit's request file isn't even read.
 	var desired any
@@ -1099,6 +1106,9 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 	lock := s.selectLock(ex)
 	lock.Lock()
 	v := s.readStatus(ex).Verdict
+	if s.assessed != nil {
+		s.assessed()
+	}
 	switch {
 	case v.ConfiguredServer != "":
 		code, message = 403, "Exit is set in configuration; change SERVER to choose another server."
