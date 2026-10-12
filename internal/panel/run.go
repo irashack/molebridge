@@ -29,7 +29,11 @@ func Run(ctx context.Context, env map[string]string, stderr io.Writer, probe Iso
 		}
 		return 1
 	}
-	listener, err := net.Listen("tcp", ListenAddr)
+	address := ListenAddr
+	if override := env[ListenEnv]; override != "" {
+		address = override
+	}
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		fmt.Fprintf(stderr, "molebridge panel: cannot listen: %v\n", err)
 		return 1

@@ -37,6 +37,9 @@ const (
 	// ListenAddr is where the panel listens: all interfaces in its own
 	// container, published on loopback only by the Compose file.
 	ListenAddr = "0.0.0.0:8080"
+	// ListenEnv replaces ListenAddr. It exists for tests and for running the
+	// panel by hand; the Compose file never sets it.
+	ListenEnv = "MOLEBRIDGE_PANEL_LISTEN"
 )
 
 // Server is the panel: one process-lifetime value holding the settings, the
