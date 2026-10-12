@@ -175,6 +175,18 @@ is 1 for all of these:
 If the exit is stopped on purpose (`docker compose stop`), the line is `stopping
 (requested)`, and the exit status is 0 when the cleanup completed.
 
+**`molebridge-exit: cannot start the worker: <reason>`, or `cannot create <path>: <reason>`.** The
+supervisor could not create its runtime directories under `/run` (the tmpfs the Compose files
+mount there), or could not start the worker. The first usually means `/run` is not writable, for
+example a Compose override that removed the tmpfs; the container exits with status 1.
+
+**Running the image by hand.** The image's role is its first argument and is never guessed:
+`usage: molebridge <role> [arguments]` followed by the list of roles, with exit status 2, or
+`molebridge: unknown role "<name>"`. `molebridge exit` takes no arguments of its own;
+`molebridge-exit: the only arguments are the internal --worker and --cleanup` and
+`molebridge-exit: the worker is started by the supervisor only` mean a role was started by hand
+that only the supervisor starts.
+
 ### NetBird's settings and profile
 
 **NetBird isn't started, and the log (or the exit's only line) says
@@ -405,6 +417,23 @@ that it isn't isolated. The reasons are fixed lines:
 - `an exit's applier state must be mounted read-only into the panel; only its panel
   directory may be writable`, and `the panel cannot tell whether an exit's applier
   state is mounted read-only`. The panel's `state/applier` mount must end `:ro`.
+
+**The panel stops at start with `molebridge panel: <setting> ...`.** Before it checks its
+isolation, the panel validates its settings, and the last line of its log names the one it
+refused:
+
+- `PROVIDER must be one of: <ids>`: the panel's `PROVIDER` (single-exit panel) is not a
+  provider id.
+- `EXIT_KIND must be overlay or sidecar`, and `a sidecar exit needs a gluetun provider
+  (PROVIDER=gluetun-<name>)`: the single-exit panel's kind.
+- `PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in '<entry>'`,
+  `PANEL_EXITS: provider must be one of <ids>, in '<entry>'`,
+  `PANEL_EXITS: the kind after / is overlay or sidecar, in '<entry>'`,
+  `PANEL_EXITS: a sidecar exit needs a gluetun provider (gluetun-<name>/sidecar), in '<entry>'`,
+  `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
+  `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
+  ([several exits](switchyard.md#several-exits-in-one-panel)).
+- The sign-in messages in [the next section](#sign-in).
 
 **`421 unknown host; publish the panel under PANEL_PUBLIC_HOSTS`.** The request's
 `Host` isn't loopback or listed in `PANEL_PUBLIC_HOSTS`. Add the public hostname. If
