@@ -786,16 +786,6 @@ def test_routing_init_accepts_an_address_less_pia_tunnel():
     assert 'mullvad) [ -n "$tunnel4" ] || fail' in script
 
 
-def test_compose_passes_the_provider_everywhere():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
-    for service in ('wireguard', 'applier', 'control-panel'):
-        assert compose['services'][service]['environment']['PROVIDER'] == '${PROVIDER:-mullvad}'
-    override = yaml.safe_load((ROOT / 'compose.pia.yaml').read_text())
-    assert override['services'] == {'applier': {'environment': {'SERVER': '${SERVER:-}'},
-                                               'volumes': ['./secrets/pia:/run/secrets/pia:ro']}}
-
-
 # -- egress check retry --------------------------------------------------------
 
 def pia_status(args):

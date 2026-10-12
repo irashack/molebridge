@@ -22,7 +22,7 @@
 # If the exit's worker stops answering, its supervisor stops NetBird, removes
 # the tunnel and exits non-zero, and the restart policy brings the container
 # back. No volume carries an owner record any more: the supervisor's lease
-# inside the container does what the old `exit-run` volume did.
+# inside the container does what the owner-record volume of 0.7 did.
 #
 # The image is pinned to an exact release; the release bundle pins it by tag
 # and digest. `docker compose build` builds the same image from a checkout.

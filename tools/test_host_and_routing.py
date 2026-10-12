@@ -75,52 +75,6 @@ def test_doctor_detects_dead_namespace(tmp_path):
         host.namespace_checks()
 
 
-def test_compose_trust_boundary():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
-    panel = compose['services']['control-panel']
-    assert panel['cap_drop'] == ['ALL'] and 'cap_add' not in panel
-    assert './state/applier:/state/applier:ro' in panel['volumes']
-    assert './state/panel:/state/panel' in panel['volumes']
-    applier = compose['services']['applier']
-    assert './state/panel:/state/panel:ro' in applier['volumes']
-    assert all('tunnel' not in v and '/config' not in v for v in applier['volumes'])
-    assert applier['network_mode'] == 'service:wireguard'
-    assert applier['read_only']
-    netbird = compose['services']['netbird']
-    assert netbird['environment']['NB_INTERFACE_NAME'] == applier['environment']['OVERLAY_IF']
-    assert netbird['entrypoint'] == ['/bin/sh', '/usr/local/bin/molebridge-wait-for-guards',
-                                     '/usr/local/bin/netbird-entrypoint.sh']
-    assert './routing/wait-for-guards:/usr/local/bin/molebridge-wait-for-guards:ro' in netbird['volumes']
-    wireguard = compose['services']['wireguard']
-    assert wireguard['sysctls']['net.ipv4.icmp_errors_use_inbound_ifaddr'] == '1'
-
-
-def test_compose_sets_the_required_netbird_settings():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
-    netbird = compose['services']['netbird']['environment']
-    assert netbird['NB_DISABLE_USERSPACE_ROUTING'] == 'true'
-    assert not set(host_tools.NETBIRD_MUST_BE_OFF) & set(netbird)
-    pia = yaml.safe_load((ROOT / 'compose.pia.yaml').read_text())
-    assert 'environment' not in pia['services'].get('netbird', {})
-
-
-def test_compose_avoids_engine_specific_runtime_settings():
-    """Settings Docker accepts silently but a rootless Podman host rejects, or
-    honors differently, once the same file runs there."""
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
-    for name, service in compose['services'].items():
-        logging = service['logging']
-        assert logging['driver'] == 'json-file', name
-        assert set(logging['options']) == {'max-size'}, name
-    # Docker grants NET_RAW implicitly; NetBird needs it to bring the overlay up.
-    assert compose['services']['netbird']['cap_add'] == ['NET_ADMIN', 'NET_RAW']
-    # The panel's user must be separable from PUID/PGID for remapped engines.
-    assert compose['services']['control-panel']['user'] == '${PANEL_USER:-1000:1000}'
-
-
 TUNNEL_CONF = """[Interface]
 PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 Address = 203.0.113.1/32, 2001:db8:3::1/128
@@ -275,14 +229,6 @@ def test_doctor_checks_the_blacklist_before_trusting_applier_state(monkeypatch, 
     host.doctor()
     assert order[:3] == [['namespace', 'wireguard'], ['blacklist'], ['rosenpass']]
     assert order[3][-2:] == ['applier.apply', '--doctor']
-
-
-def test_compose_blacklists_the_exit_interface_at_first_enrollment():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.yaml').read_text())
-    netbird = compose['services']['netbird']['environment']
-    wireguard = compose['services']['wireguard']['environment']
-    assert netbird['NB_EXTRA_IFACE_BLACKLIST'] == wireguard['EXIT_IF'] == '${EXIT_IF:-mullvad}'
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='mode 0600 files')

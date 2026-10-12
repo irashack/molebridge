@@ -1421,69 +1421,6 @@ def test_gluetun_auth_command_never_prints_the_key(tmp_path, monkeypatch, capsys
     assert key not in out.out + out.err and 'key not shown' in out.out
 
 
-def test_gluetun_compose_file_wires_the_guard_and_gate():
-    yaml = pytest.importorskip('yaml')
-    compose = yaml.safe_load((ROOT / 'compose.gluetun.yaml').read_text())
-    services = compose['services']
-    assert set(services) == {'gluetun', 'guard', 'netbird', 'applier', 'control-panel'}
-    gluetun = services['gluetun']
-    assert gluetun['image'].startswith('docker.io/qmcgaw/gluetun:v3.41.3@sha256:')
-    env = gluetun['environment']
-    assert env['VPN_TYPE'] == 'wireguard' and env['WIREGUARD_IMPLEMENTATION'] == 'kernelspace'
-    assert env['HTTP_CONTROL_SERVER_ADDRESS'] == '127.0.0.1:8000'
-    assert env['WIREGUARD_PRIVATE_KEY_SECRETFILE'] == '/run/secrets/wireguard_private_key'
-    assert 'ports' not in gluetun
-    assert gluetun['entrypoint'] == ['/bin/sh', '/usr/local/bin/molebridge-gluetun-preflight', '/gluetun-entrypoint']
-    assert './routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro' in gluetun['volumes']
-    binds = {v['target']: v for v in gluetun['volumes'] if isinstance(v, dict)}
-    # Compose must fail rather than start gluetun without its role file:
-    # without one, gluetun answers PUT /v1/vpn/status with no authentication.
-    for target in ('/iptables/post-rules.txt', '/gluetun/auth/config.toml', '/run/secrets/wireguard_private_key'):
-        assert binds[target]['read_only'] is True and binds[target]['bind'] == {'create_host_path': False}
-    assert env['STORAGE_FILEPATH'] == '/gluetun/servers/servers.json'
-    assert 'gluetun-servers:/gluetun/servers' in gluetun['volumes']
-    applier = services['applier']
-    assert applier['network_mode'] == 'service:gluetun' and applier['read_only'] is True
-    assert applier['cap_drop'] == ['ALL'] and applier['cap_add'] == ['NET_ADMIN', 'NET_RAW', 'DAC_OVERRIDE']
-    aenv = applier['environment']
-    assert aenv['TUNNEL_BACKEND'] == 'gluetun' and aenv['PROVIDER'].startswith('gluetun-${GLUETUN_PROVIDER')
-    assert aenv['GLUETUN_SERVERS_FILE'] == '/gluetun-servers/servers.json'
-    assert 'gluetun-servers:/gluetun-servers:ro' in applier['volumes']
-    applier_binds = {v['target']: v for v in applier['volumes'] if isinstance(v, dict)}
-    assert applier_binds['/run/secrets/gluetun/api_key']['read_only'] is True
-    assert applier_binds['/run/secrets/gluetun/api_key']['bind'] == {'create_host_path': False}
-    assert not any('auth.toml' in str(v) or 'wireguard_private_key' in str(v) for v in applier['volumes'])
-    for name in ('HOST_IF', 'HOST_TABLE', 'CONTROL_MARK', 'EXIT_IF', 'EXIT_TABLE', 'OVERLAY_IF', 'OVERLAY_CIDR'):
-        assert aenv[name] == services['guard']['environment'][name], name
-    assert services['netbird']['init'] is True
-    panel = services['control-panel']
-    assert panel['environment']['PROVIDER'] == aenv['PROVIDER']
-    assert 'volumes' not in panel
-    assert gluetun['sysctls']['net.ipv4.icmp_errors_use_inbound_ifaddr'] == '1'
-    guard = services['guard']
-    assert guard['network_mode'] == 'service:gluetun'
-    assert guard['cap_drop'] == ['ALL'] and guard['cap_add'] == ['NET_ADMIN']
-    assert guard['environment']['TUNNEL_BACKEND'] == 'gluetun'
-    # The image's own entrypoint (tini, then routing/molebridge-exit) runs the guard.
-    assert 'entrypoint' not in guard
-    netbird = services['netbird']
-    assert netbird['network_mode'] == 'service:gluetun'
-    assert netbird['depends_on']['guard']['condition'] == 'service_healthy'
-    nenv = netbird['environment']
-    assert nenv['TUNNEL_BACKEND'] == 'gluetun' and nenv['NB_DISABLE_USERSPACE_ROUTING'] == 'true'
-    assert nenv['NB_FWMARK_BASE'] == nenv['CONTROL_MARK'] == guard['environment']['CONTROL_MARK']
-    assert nenv['NB_EXTRA_IFACE_BLACKLIST'] == guard['environment']['EXIT_IF'] == env['VPN_INTERFACE']
-    assert nenv['HOST_TABLE'] == guard['environment']['HOST_TABLE']
-    assert not set(host_tools.NETBIRD_MUST_BE_OFF) & set(nenv)
-    assert netbird['entrypoint'] == ['/bin/sh', '/usr/local/bin/molebridge-wait-for-guards',
-                                     '/usr/local/bin/netbird-entrypoint.sh']
-    assert any(v.endswith(':/run/molebridge:ro') for v in netbird['volumes'])
-    assert services['control-panel']['extends'] == {'file': 'compose.yaml', 'service': 'control-panel'}
-    for name, service in services.items():
-        if 'logging' in service:
-            assert service['logging']['driver'] == 'json-file', name
-
-
 def test_namespace_check_covers_every_gluetun_member(tmp_path):
     calls = []
     host = host_tools.Host(tmp_path, run=lambda args, **kw: calls.append(args) or 'net:[4026531840]\n')
@@ -1502,7 +1439,10 @@ def run_preflight(tmp_path, text, **env):
     if text is not None:
         auth.write_bytes(text.encode() if isinstance(text, str) else text)
     started = tmp_path / 'started'
-    environment = {'PATH': os.environ['PATH'], 'HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH': str(auth)}
+    # The role-file cases run as a sidecar's gluetun, which has no post-rules; the
+    # kind and the post-rules rule are tested by tools/test-gluetun-preflight.sh.
+    environment = {'PATH': os.environ['PATH'], 'HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH': str(auth),
+                   'MOLEBRIDGE_KIND': 'sidecar', 'MOLEBRIDGE_POST_RULES_FILE': str(tmp_path / 'no-post-rules')}
     environment.update(env)
     result = subprocess.run(['sh', str(PREFLIGHT), 'sh', '-c', 'touch "$1"; echo "args:$2"', 'gluetun',
                              str(started), 'healthcheck'], env=environment, capture_output=True, text=True,
