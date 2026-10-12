@@ -114,6 +114,9 @@ func TestRecordsMatchThePythonApplierByteForByte(t *testing.T) {
 			return a, a.inspect(t)
 		},
 	}
+	for name, run := range gluetunGoldenScenarios() {
+		scenarios[name] = run
+	}
 	if len(scenarios) != len(golden) {
 		t.Errorf("%d scenarios, %d golden records", len(scenarios), len(golden))
 	}
