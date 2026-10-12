@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOTOOLCHAIN=local GOFLAG
 # Stage 2: the NetBird client release archive, checked against the hashes
 # committed here. The hashes are the linux_amd64 and linux_arm64 lines of
 #   https://github.com/netbirdio/netbird/releases/download/v0.80.0/netbird_0.80.0_checksums.txt
-# Update all three values together (docs/maintenance.md "NetBird pin").
+# Update the version and both hashes together.
 # Alpine 3.24.2, as before: https://hub.docker.com/_/alpine
 FROM --platform=$BUILDPLATFORM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS netbird
 ARG TARGETARCH
