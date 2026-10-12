@@ -470,11 +470,11 @@ func Parse(text string, provider Provider, table uint32) (*Conf, error) {
 func Hint(p Provider) string {
 	switch p {
 	case Mullvad:
-		return "regenerate it with tools/prepare-tunnel-config.py (docs/setup.md)"
+		return "regenerate it with prepare-config (docs/setup.md)"
 	case PIA:
-		return "regenerate it with tools/prepare-tunnel-config.py --pia (docs/setup.md)"
+		return "regenerate it with prepare-config --pia (docs/setup.md)"
 	case NordVPN:
-		return "regenerate it with tools/nordvpn-key.py (docs/setup.md)"
+		return "regenerate it with nordvpn-key (docs/setup.md)"
 	}
 	return ""
 }
