@@ -1,17 +1,38 @@
 #!/usr/bin/env sh
-# Runs the routing image (routing/Dockerfile) the way compose.yaml does, with a
+# Runs the Molebridge image's `exit` role the way compose.yaml does, with a
 # throwaway tunnel config whose peer is a documentation address (no handshake
-# is needed for the interface to come up), and checks its life cycle: what the
-# image holds, reading the config under the capabilities compose.yaml grants,
-# start, repair, tunnel loss, a bring-up that fails or hangs, every stop, and
-# the guard mode. The routing contract's traffic properties are drilled in
-# tools/check-routing.sh; this checks the container around it.
+# is needed for the interface to come up), and checks the container around the
+# exit: the refusal of each invalid setting with its exact message, the start
+# (the routing contract first, then the tunnel, readiness, and only then
+# NetBird), the health check failing while the exit cannot be healthy, and a
+# stop that exits 0 inside the 15 second budget and leaves the routing rules in
+# place. The routing contract's traffic properties are drilled in Go
+# (internal/drill, internal/exit); this checks the image and the container.
+#
+# The exit runs in a network namespace that a busybox container owns and keeps
+# alive, as a recreated exit does behind gluetun. That container has no
+# network, so nothing here reaches a provider, a NetBird server or the
+# Internet. A second busybox container joins the namespace to look at the
+# rules and links the exit leaves. The sysctls compose.yaml sets on the exit
+# are set on the namespace's owner, because a container that joins a namespace
+# cannot set them.
+#
+# NetBird gets no setup key and no management server, so it cannot enroll. What
+# is checked of it: the exit says plainly that it would enroll a new peer, it
+# starts NetBird only after the rules are installed, the tunnel is up and the
+# exit is ready, the daemon runs, and the interface blacklist reaches its
+# profile. NetBird's own firewall table and the overlay interface exist only
+# after an enrollment, so `nft list tables` from the diagnostic container is
+# not part of this script (the stripped image's nftables path is covered by
+# internal/nft's drill and docs/verification.md). For the same reason the
+# health check stays failing: it passes only when NetBird runs.
 #
 # Needs Docker on Linux with kernel WireGuard. No accounts, real endpoints or
 # keys: keys are generated per run and discarded.
 #   sh tools/check-exit-image.sh <image>
 set -eu
 image=${1:?usage: sh tools/check-exit-image.sh <image>}
+busybox=docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
 work=$(mktemp -d)
 run=mbx$$
 names=''
@@ -28,295 +49,263 @@ fail() {
     exit 1
 }
 pass() { echo "PASS $1"; }
-# Seconds, for timing; /proc/uptime on Linux, perl where there is none (a
-# macOS host driving a Docker VM).
-uptime_now() {
-    if [ -r /proc/uptime ]; then awk '{ print $1 }' /proc/uptime; else perl -MTime::HiRes=time -e 'printf "%.2f\n", time'; fi
-}
-elapsed() { awk -v a="$1" -v b="$(uptime_now)" 'BEGIN { printf "%.1f", b - a }'; }
+note() { echo "NOTE $1"; }
 
-# --- What the image holds.
-docker run --rm --network none --entrypoint sh "$image" -c '
-    set -e
-    for tool in bash wg wg-quick ip tini setsid timeout stat; do command -v "$tool" >/dev/null; done
-    ip -Version >/dev/null
-    test "$(stat -c %u:%a /usr/local/bin/molebridge-exit)" = 0:755
-    test "$(stat -c %u:%a /usr/local/lib/molebridge/10-exit-routing)" = 0:755
-    test "$(stat -c %u:%a /usr/local/lib/molebridge/contract-rules)" = 0:644
-    test "$(stat -c %u:%a /usr/local/lib/molebridge)" = 0:755
-    test ! -e /custom-cont-init.d && test ! -L /usr/local/lib/molebridge/gluetun-rules
-    sleep 0.1
-    apk info -v 2>/dev/null | grep -E "^(alpine-baselayout|bash|busybox|iproute2|tini|wireguard-tools)-[0-9]" | sort
-' > "$work/versions" || fail 'the image is missing a tool or a script has the wrong owner or mode'
-echo "Installed: $(tr '\n' ' ' < "$work/versions")"
-pass 'image tools and script ownership, no pre-0.6.0 paths'
-
-# A Mullvad-shaped config (dual stack) in a fresh volume, owned by $2:$3.
-make_conf() {
-    volume=$run-$1
-    volumes="$volumes $volume"
-    docker volume create "$volume" >/dev/null
-    private=$(docker run --rm --network none --entrypoint wg "$image" genkey)
-    public=$(docker run --rm --network none --entrypoint wg "$image" genkey | docker run --rm -i --network none --entrypoint wg "$image" pubkey)
-    case "$1" in
-        pia*)
-            printf '%s\n' '[Interface]' "PrivateKey = $private" 'MTU = 1420' 'Table = off' \
-                'PostUp = ip route replace default dev %i table 51821' 'PreDown = ip route del default dev %i table 51821' > "$work/conf" ;;
-        *)
-            printf '%s\n' '[Interface]' "PrivateKey = $private" 'Address = 203.0.113.2/32, 2001:db8:3::2/128' \
-                'MTU = 1420' 'Table = off' \
-                'PostUp = ip route replace default dev %i table 51821; ip -6 route replace default dev %i table 51821' \
-                'PreDown = ip route del default dev %i table 51821; ip -6 route del default dev %i table 51821' '' \
-                '[Peer]' "PublicKey = $public" 'Endpoint = 192.0.2.10:51820' 'AllowedIPs = 0.0.0.0/0, ::/0' \
-                'PersistentKeepalive = 25' > "$work/conf" ;;
-    esac
-    exit_if=mullvad
-    case "$1" in pia*) exit_if=pia ;; esac
-    docker run --rm -i --network none -v "$volume:/c" --entrypoint sh "$image" \
-        -c "cat > /c/$exit_if.conf && chown $2:$3 /c/$exit_if.conf && chmod 600 /c/$exit_if.conf" < "$work/conf"
+new_volume() {
+    volumes="$volumes $run-$1"
+    docker volume create "$run-$1" >/dev/null
 }
 
-# The exit as compose.yaml runs it; extra docker arguments follow the name.
-start_exit() {
-    name=$run-$1
-    volume=$run-$2
+# --- Throwaway tunnel configs, made with the image's own prepare-config.
+# A Mullvad-shaped download (dual stack, documentation addresses, random keys:
+# any 32 random bytes are a valid WireGuard key) and a PIA config with a key
+# the tool generates itself.
+key() { head -c 32 /dev/urandom | base64; }
+umask 077
+printf '%s\n' '[Interface]' "PrivateKey = $(key)" 'Address = 203.0.113.2/32, 2001:db8:3::2/128' \
+    'DNS = 192.0.2.53' '' '[Peer]' "PublicKey = $(key)" 'AllowedIPs = 0.0.0.0/0, ::/0' \
+    'Endpoint = 192.0.2.10:51820' > "$work/download.conf"
+umask 022
+new_volume mullvad
+docker run --rm --network none -v "$run-mullvad:/out" -v "$work/download.conf:/in.conf:ro" \
+    "$image" prepare-config /in.conf /out/mullvad.conf >/dev/null || fail 'prepare-config refused the throwaway Mullvad download'
+new_volume pia
+docker run --rm --network none -v "$run-pia:/out" "$image" prepare-config --pia /out/pia.conf >/dev/null ||
+    fail 'prepare-config --pia could not create a config'
+# The same Mullvad config owned by a host user (uid 1000), mode 0600: container
+# root reads it only with DAC_OVERRIDE.
+new_volume user
+docker run --rm --network none -v "$run-mullvad:/a:ro" -v "$run-user:/b" "$busybox" \
+    sh -c 'cat /a/mullvad.conf > /b/mullvad.conf && chown 1000:1000 /b/mullvad.conf && chmod 600 /b/mullvad.conf' ||
+    fail 'could not copy the throwaway config'
+pass 'throwaway tunnel configs made with prepare-config (Mullvad download, PIA key)'
+
+new_volume state
+new_volume nbdata
+new_volume nbdata-pia
+new_volume stale
+# A stored NetBird profile that does not exclude the tunnel interface.
+docker run --rm --network none -v "$run-stale:/n" "$busybox" \
+    sh -c 'printf "{\"WgIface\":\"wt0\",\"IFaceBlackList\":[\"docker0\"]}" > /n/default.json' ||
+    fail 'could not write the throwaway NetBird profile'
+
+# The exit's environment, as compose.yaml sets it for a native Mullvad exit,
+# one option per line. Later -e options override earlier ones.
+env_args() {
+    printf '%s\n' -e TUNNEL_BACKEND=native -e EXIT_KIND=overlay -e PROVIDER=mullvad -e EXIT_IF=mullvad \
+        -e EXIT_TABLE=51821 -e OVERLAY_IF=wt0 -e OVERLAY_CIDR=192.0.2.0/24 -e OVERLAY6_CIDR=2001:db8:1::/64 \
+        -e STATE_DIR=/state -e NB_INTERFACE_NAME=wt0 -e NB_DISABLE_USERSPACE_ROUTING=true \
+        -e NB_MANAGEMENT_URL=https://netbird.example.test:33073 -e NB_EXTRA_IFACE_BLACKLIST=mullvad
+}
+
+# --- Refusals: one line, exit 1, before anything changes. The container is
+# one-shot with no network; $1 is the whole line expected, the rest are extra
+# docker options.
+refuse_case() {
+    want=$1
+    shift
+    rc=0
+    # shellcheck disable=SC2046 # env_args prints one option per line
+    docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --cap-add DAC_OVERRIDE --read-only \
+        $(env_args) -v "$run-mullvad:/config/wg_confs:ro" -v "$run-state:/state" "$@" \
+        "$image" exit > "$work/refusal" 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { cat "$work/refusal" >&2; fail "exit status $rc, want 1, for: $want"; }
+    printf '%s\n' "$want" > "$work/refusal.want"
+    cmp -s "$work/refusal" "$work/refusal.want" || {
+        echo "want: $want" >&2
+        echo 'got:' >&2
+        cat "$work/refusal" >&2
+        fail 'the refusal is not the expected line'
+    }
+}
+refuse_case 'molebridge-exit: TUNNEL_BACKEND must be native or gluetun' -e TUNNEL_BACKEND=docker
+refuse_case 'molebridge-exit: EXIT_KIND must be overlay or sidecar' -e EXIT_KIND=edge
+refuse_case 'molebridge-exit: PROVIDER must be mullvad, pia or nordvpn' -e PROVIDER=acme
+refuse_case 'molebridge-exit: OVERLAY_CIDR must be an IPv4 CIDR' -e OVERLAY_CIDR=
+refuse_case 'molebridge-exit: OVERLAY_CIDR must use the network address' -e OVERLAY_CIDR=192.0.2.1/24
+refuse_case 'molebridge-exit: overlay and exit interfaces must differ' -e EXIT_IF=wt0
+refuse_case 'molebridge-exit: ROUTING_RECONCILE_INTERVAL must be 2..60 seconds' -e ROUTING_RECONCILE_INTERVAL=1
+refuse_case 'molebridge-exit: GUARD_GRACE must be 5..30 seconds' -e GUARD_GRACE=4
+refuse_case 'molebridge-exit: the tunnel config /config/wg_confs/other.conf is missing; regenerate it with prepare-config (docs/setup.md)' -e EXIT_IF=other
+refuse_case 'molebridge-exit: NB_INTERFACE_NAME (nb0) must equal OVERLAY_IF (wt0), the interface the routing contract guards' -e NB_INTERFACE_NAME=nb0
+refuse_case 'NetBird gate: refusing to start NetBird: NB_DISABLE_USERSPACE_ROUTING must be "true" (compose.yaml sets it) (see docs/troubleshooting.md)' -e NB_DISABLE_USERSPACE_ROUTING=false
+refuse_case 'NetBird gate: refusing to start NetBird: NB_ENABLE_ROSENPASS is set; Rosenpass cannot work on this exit (see docs/troubleshooting.md)' -e NB_ENABLE_ROSENPASS=true
+refuse_case "NetBird gate: refusing to start NetBird: NB_FOREGROUND_MODE is set; Molebridge supports only NetBird's daemon mode (see docs/troubleshooting.md)" -e NB_FOREGROUND_MODE=true
+refuse_case "NetBird gate: refusing to start NetBird: the stored NetBird profile /var/lib/netbird/default.json does not exclude the tunnel interface mullvad from NetBird's connection candidates; stop the exit and run fix-blacklist (docs/operations.md#netbird-interface-blacklist) (see docs/troubleshooting.md)" \
+    -v "$run-stale:/var/lib/netbird"
+pass 'invalid settings: each refused with its exact message and exit 1 (backend, kind, provider, overlay range, interface names, intervals, NetBird settings, a stored profile)'
+
+# Refusals that need a different container shape than refuse_case gives.
+refuse_shape() {
+    # $1 the whole line expected, $2 what the case is, the rest docker options
+    # (without the image); the environment is the Mullvad exit's.
+    want=$1
+    what=$2
     shift 2
-    names="$names $name"
-    docker run -d --name "$name" --cap-drop ALL --cap-add NET_ADMIN --cap-add DAC_READ_SEARCH \
-        --security-opt no-new-privileges:true --read-only --tmpfs /run:size=1m,mode=0755,noexec,nosuid,nodev \
+    rc=0
+    # shellcheck disable=SC2046
+    docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --read-only $(env_args) "$@" \
+        "$image" exit > "$work/refusal" 2>&1 || rc=$?
+    [ "$rc" = 1 ] || { cat "$work/refusal" >&2; fail "$what: exit status $rc, want 1"; }
+    printf '%s\n' "$want" > "$work/refusal.want"
+    cmp -s "$work/refusal" "$work/refusal.want" || { cat "$work/refusal" >&2; fail "$what: not refused with its exact message"; }
+}
+# A state directory that does not exist and cannot be created (read-only root).
+refuse_shape "molebridge-exit: the state directory /state/applier is missing and can't be created (on Docker the container needs DAC_OVERRIDE; see docs/setup.md)" \
+    'a missing state directory' --cap-add DAC_OVERRIDE -v "$run-mullvad:/config/wg_confs:ro"
+pass 'a missing state directory: refused with its exact message'
+# A host user's mode-0600 config: container root reads it only with
+# DAC_OVERRIDE, which compose.yaml grants.
+refuse_shape "molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf can't be read (on Docker the exit container needs DAC_OVERRIDE to read a mode-0600 tunnel config, and the Compose files grant it; see docs/setup.md)" \
+    "a host user's config without DAC_OVERRIDE" -v "$run-user:/config/wg_confs:ro" -v "$run-state:/state"
+pass "a host user's mode-0600 config: refused without DAC_OVERRIDE (the message names DAC_OVERRIDE)"
+
+# --- The namespace's owner, and the exit joined to it.
+# $1 name. A namespace keeps the rules of the exit that left them, so each
+# provider's exit gets a namespace of its own.
+new_owner() {
+    owner=$run-$1
+    names="$names $owner"
+    docker run -d --name "$owner" --network none --cap-drop ALL \
         --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv6.conf.all.forwarding=1 \
         --sysctl net.ipv4.icmp_errors_use_inbound_ifaddr=1 --sysctl net.ipv6.conf.all.disable_ipv6=0 \
-        --sysctl net.ipv6.conf.default.disable_ipv6=0 --stop-timeout 15 \
-        -e OVERLAY_CIDR=192.0.2.0/24 -e OVERLAY6_CIDR=2001:db8:1::/64 -e EXIT_IF="${EXIT_IF:-mullvad}" \
-        -e PROVIDER="${PROVIDER:-mullvad}" -v "$volume:/config/wg_confs:ro" "$@" "$image" >/dev/null
+        --sysctl net.ipv6.conf.default.disable_ipv6=0 "$busybox" sleep 3600 >/dev/null ||
+        fail 'could not start the namespace owner'
 }
-in_exit() { docker exec "$name" sh -c "$1"; }
-wait_for() {
-    # $1 seconds for the command in $2 to succeed in the container.
-    deadline=$(awk -v n="$(uptime_now)" -v s="$1" 'BEGIN { printf "%.2f", n + s }')
-    while ! in_exit "$2" >/dev/null 2>&1; do
-        awk -v n="$(uptime_now)" -v d="$deadline" 'BEGIN { exit !(n > d) }' && return 1
-        sleep 0.5
+new_owner owner
+
+nbvolume=$run-nbdata
+# $1 name, $2 config volume, the rest extra docker options.
+start_exit() {
+    name=$run-$1
+    confvolume=$2
+    shift 2
+    names="$names $name"
+    # shellcheck disable=SC2046
+    docker run -d --name "$name" --network "container:$owner" --cap-drop ALL \
+        --cap-add NET_ADMIN --cap-add NET_RAW --cap-add DAC_OVERRIDE \
+        --security-opt no-new-privileges:true --read-only \
+        --tmpfs /run:size=4m,mode=0755,noexec,nosuid,nodev \
+        --tmpfs /var/log/netbird:size=16m,mode=0755,noexec,nosuid,nodev \
+        --stop-timeout 15 $(env_args) \
+        -v "$confvolume:/config/wg_confs:ro" -v "$run-state:/state" -v "$nbvolume:/var/lib/netbird" \
+        "$@" "$image" exit >/dev/null
+}
+# Seconds since the epoch; the timings here are coarse.
+now() { date +%s; }
+wait_log() {
+    # $1 container, $2 text, $3 seconds
+    waited=0
+    while [ "$waited" -lt "$3" ]; do
+        if docker logs "$1" 2>&1 | grep -qF -- "$2"; then return 0; fi
+        [ "$(docker inspect -f '{{.State.Running}}' "$1")" = true ] || return 1
+        sleep 1
+        waited=$((waited + 1))
     done
+    return 1
 }
-ready() { wait_for "${1:-20}" 'test -f /run/molebridge-routing-ready'; }
-running() { [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" = true ]; }
-stop_exit() {
-    started=$(uptime_now)
-    docker stop -t 15 "$name" >/dev/null
-    took=$(elapsed "$started")
-    code=$(docker inspect -f '{{.State.ExitCode}}' "$name")
+line_of() { docker logs "$1" 2>&1 | grep -nF -- "$2" | head -n 1 | cut -d: -f1; }
+# What the joined diagnostic container sees of the namespace.
+diag() {
+    docker run --rm --network "container:$owner" --cap-drop ALL --cap-add NET_ADMIN "$busybox" sh -c "$1"
 }
-expected_rules() {
-    # $1 family, $2 address or empty: the native contract as `ip rule show` prints it.
-    {
-        echo "1: not from all iif wt0 lookup local"
-        if [ "$1" = -4 ]; then echo "90: from all to 192.0.2.0/24 iif mullvad lookup main"; else echo "90: from all to 2001:db8:1::/64 iif mullvad lookup main"; fi
-        icmp=icmp
-        [ "$1" = -4 ] || icmp=ipv6-icmp
-        [ -z "$2" ] || echo "94: from $2 ipproto $icmp lookup 51821"
-        echo "95: from all iif wt0 lookup 51821"
-        echo "96: from all oif mullvad lookup 51821"
-        echo "97: from all iif wt0 unreachable"
-        [ -z "$2" ] || echo "98: from $2 ipproto $icmp unreachable"
-    } | sort
-}
-actual_rules() {
-    in_exit "ip $1 rule show" | sed 's/\t/ /; s/ \[detached\]//g; s/ipproto 1 /ipproto icmp /; s/ipproto 58 /ipproto ipv6-icmp /' |
-        awk -F: '$1 <= 98' | sort
+rules_in_place() {
+    # $1 container whose logs to print on failure, $2 where we are
+    diag 'ip rule; echo ---; ip -6 rule' > "$work/rules" || fail 'could not list the rules' "$1"
+    sed '/^---$/q' "$work/rules" > "$work/rules4"
+    sed '1,/^---$/d' "$work/rules" > "$work/rules6"
+    for family in 4 6; do
+        for priority in 1 90 94 95 96 97 98; do
+            grep -q "^$priority:" "$work/rules$family" || fail "IPv$family rule $priority is not in place$2" "$1"
+        done
+    done
+    grep -q '^95:.*iif wt0 lookup 51821' "$work/rules4" || fail "rule 95 does not send the overlay into the exit table$2" "$1"
+    grep -q '^97:.*iif wt0.*unreachable' "$work/rules4" || fail "rule 97 is not the overlay fallback$2" "$1"
 }
 
-# --- Reading the config: a host user's 0600 file needs DAC_READ_SEARCH.
-make_conf user 1000 1000
-names="$names $run-nodac"
-docker run -d --name "$run-nodac" --cap-drop ALL --cap-add NET_ADMIN --read-only --tmpfs /run \
-    -e OVERLAY_CIDR=192.0.2.0/24 -v "$run-user:/config/wg_confs:ro" "$image" >/dev/null
-docker wait "$run-nodac" >/dev/null
-[ "$(docker inspect -f '{{.State.ExitCode}}' "$run-nodac")" = 1 ] || fail 'started without DAC_READ_SEARCH' "$run-nodac"
-docker logs "$run-nodac" 2>&1 | grep -q "can't be read" || fail 'no message about reading the config' "$run-nodac"
-docker logs "$run-nodac" 2>&1 | grep -q 'bringing the tunnel up' && fail 'touched the network before reading the config' "$run-nodac"
-start_exit main user
-ready || fail 'not ready with DAC_READ_SEARCH' "$name"
-pass "a host user's mode-0600 config: refused without DAC_READ_SEARCH, read with it"
+# --- Start: contract first, tunnel, readiness, then NetBird.
+start_exit main "$run-mullvad"
+# The health check cannot pass before the exit has run a healthy tick.
+rc=0
+docker exec "$name" /usr/local/bin/molebridge health > "$work/health" 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "health exited $rc right after the start, want 1" "$name"
+grep -q '^unhealthy: ' "$work/health" || fail 'health did not say why it failed' "$name"
+pass 'molebridge health fails before the exit is ready'
+wait_log "$name" 'molebridge-exit: ready' 40 || fail 'the exit did not become ready' "$name"
+wait_log "$name" 'molebridge-exit: starting NetBird' 10 || fail 'the exit did not start NetBird' "$name"
+notice='molebridge-exit: no NetBird identity found in the state directory or the legacy profile paths; NetBird will enroll a new peer'
+installed=$(line_of "$name" 'molebridge-exit: rules installed')
+tunnel=$(line_of "$name" 'molebridge-exit: tunnel up')
+ready=$(line_of "$name" 'molebridge-exit: ready')
+starting=$(line_of "$name" 'molebridge-exit: starting NetBird')
+told=$(line_of "$name" "$notice")
+[ -n "$installed" ] && [ -n "$tunnel" ] && [ -n "$ready" ] && [ -n "$starting" ] || fail 'the start log lacks a step' "$name"
+{ [ "$installed" -lt "$tunnel" ] && [ "$tunnel" -lt "$ready" ] && [ "$ready" -lt "$starting" ]; } ||
+    fail 'the start order is not rules, tunnel, ready, NetBird' "$name"
+pass 'start order: rules installed, tunnel up, ready, and only then NetBird'
+[ -n "$told" ] && [ "$told" -lt "$starting" ] || fail 'the exit did not say plainly, before starting NetBird, that it would enroll a new peer' "$name"
+pass 'with no NetBird identity the exit says it will enroll a new peer, before NetBird starts'
+wait_log "$name" 'started daemon server' 30 || fail 'the NetBird daemon did not start' "$name"
+pass 'NetBird daemon started (no setup key: it cannot enroll)'
+# NB_EXTRA_IFACE_BLACKLIST reaches the stored profile on the first `netbird up`;
+# a recreated exit would refuse to start without it.
+waited=0
+until docker exec "$name" grep -q mullvad /var/lib/netbird/default.json 2>/dev/null; do
+    waited=$((waited + 1))
+    [ "$waited" -le 30 ] || fail "the tunnel interface did not reach NetBird's interface blacklist" "$name"
+    sleep 1
+done
+pass "NB_EXTRA_IFACE_BLACKLIST reached NetBird's stored profile"
+rules_in_place "$name" ' while running'
+diag 'ip link show mullvad' >/dev/null || fail 'the tunnel interface is missing' "$name"
+pass 'running: the tunnel interface and the contract rules 1/90/94/95/96/97/98 in both families'
+if diag 'ip link show wt0' >/dev/null 2>&1; then
+    note 'NetBird created wt0 without enrolling; its firewall table is not checked here'
+else
+    note "no overlay interface or NetBird firewall table: NetBird cannot enroll without a setup key (see this script's header)"
+fi
+rc=0
+docker exec "$name" /usr/local/bin/molebridge health > "$work/health" 2>&1 || rc=$?
+[ "$rc" = 1 ] || fail "health exited $rc while NetBird cannot enroll, want 1" "$name"
+pass 'molebridge health keeps failing while NetBird is not running'
 
-# --- The running exit: owner record, rules, readiness.
-in_exit 'test -f /run/molebridge/exit-owner' || fail 'no owner record' "$name"
-in_exit 'read -r a b c d e f g h i j k < /run/molebridge/exit-owner; [ "$a $b $g $h $i" = "molebridge-exit 1 203.0.113.2 2001:db8:3::2 conf" ]' ||
-    fail 'the owner record is not the expected shape' "$name"
-for family in -4 -6; do
-    address=203.0.113.2
-    [ "$family" = -4 ] || address=2001:db8:3::2
-    [ "$(actual_rules "$family")" = "$(expected_rules "$family" "$address")" ] || {
-        actual_rules "$family" >&2
-        fail "IPv${family#-} rules differ from the native contract" "$name"
-    }
-done
-in_exit 'ip route show table 51821 | grep -q "^default dev mullvad" && ip route show table 51821 | grep -q "^unreachable default metric 4096"' ||
-    fail 'IPv4 exit table' "$name"
-in_exit 'ip -6 route show table 51821 | grep -q "^default dev mullvad" && ip -6 route show table 51821 | grep -q "^unreachable default"' ||
-    fail 'IPv6 exit table' "$name"
-pass 'running: owner record, the native rules 1/90/94/95/96/97/98 in both families, the exit table'
+# --- Stop: exit 0 inside the 15 second budget, the rules stay.
+started=$(now)
+docker stop -t 15 "$name" >/dev/null
+took=$(($(now) - started))
+code=$(docker inspect -f '{{.State.ExitCode}}' "$name")
+[ "$code" = 0 ] || fail "exit code $code after a stop (137 would mean the engine had to kill it)" "$name"
+[ "$took" -le 15 ] || fail "stop took ${took}s, over the 15 s budget" "$name"
+docker logs "$name" 2>&1 | grep -qF 'stopped (requested, exit 0); the routing guards stay in place' || fail 'no stop message' "$name"
+if docker logs "$name" 2>&1 | grep -qF 'cleanup incomplete'; then fail 'the stop left something behind' "$name"; fi
+pass "docker stop: exit 0 in ${took}s (budget 15 s)"
+rules_in_place "$name" ' after the stop'
+if diag 'ip link show mullvad' >/dev/null 2>&1; then fail 'the tunnel interface survived the stop' "$name"; fi
+pass 'after the stop the contract rules are still in place in both families and the tunnel interface is gone'
 
-# --- Single deletions, insertions and tunnel loss: repaired and logged.
-for change in 'ip rule del priority 97' 'ip -6 rule del priority 94' 'ip rule del priority 98' \
-        'ip route del unreachable default metric 4096 table 51821' 'ip -6 rule del priority 1' \
-        'ip rule add lookup main priority 50' 'ip -6 rule add lookup local priority 0' \
-        'ip route add 203.0.113.99 dev eth0 table 51821'; do
-    in_exit "$change"
-    wait_for 6 "[ \"\$(ip rule show | awk -F: '\$1 <= 98' | wc -l)\" = 7 ] && [ \"\$(ip -6 rule show | awk -F: '\$1 <= 98' | wc -l)\" = 7 ] && [ \"\$(ip route show table 51821 | wc -l)\" = 2 ]" ||
-        fail "not repaired within 6 s: $change" "$name"
-done
-for family in -4 -6; do
-    address=203.0.113.2
-    [ "$family" = -4 ] || address=2001:db8:3::2
-    [ "$(actual_rules "$family")" = "$(expected_rules "$family" "$address")" ] || fail "IPv${family#-} rules after repair" "$name"
-done
-docker logs "$name" 2>&1 | grep -q '10-exit-routing: added IPv4 rule 97' || fail 'the repair of rule 97 is not logged' "$name"
-docker logs "$name" 2>&1 | grep -q '10-exit-routing: removed IPv4 rule 50' || fail 'the removal of rule 50 is not logged' "$name"
-in_exit 'read -r a b c d e f g h i j k < /run/molebridge/exit-owner; [ "$j" -gt 0 ] && [ "$k" != - ]' || fail 'repairs are not counted in the owner record' "$name"
-pass 'deletions (97, 94, 98, the fallback, 1) and insertions (lookup main at 50, lookup local at 0, a foreign route) repaired within 6 s and logged'
-ups=$(docker logs "$name" 2>&1 | grep -c 'molebridge-exit: tunnel up')
-in_exit 'ip link del mullvad'
-deadline=$(awk -v n="$(uptime_now)" 'BEGIN { printf "%.2f", n + 15 }')
-until [ "$(docker logs "$name" 2>&1 | grep -c 'molebridge-exit: tunnel up')" -gt "$ups" ]; do
-    awk -v n="$(uptime_now)" -v d="$deadline" 'BEGIN { exit !(n > d) }' && fail 'the tunnel did not come back' "$name"
-    sleep 0.5
-done
-docker logs "$name" 2>&1 | grep -q 'molebridge-exit: not ready' || fail 'readiness was not withdrawn while the tunnel was gone' "$name"
-ready 5 || fail 'not ready after the tunnel came back' "$name"
-pass 'tunnel interface deleted: readiness withdrawn, tunnel recreated, ready again'
-
-# --- A slow reconcile interval keeps the heartbeat at 2 s.
-start_exit slow user -e ROUTING_RECONCILE_INTERVAL=60
-ready || fail 'not ready with a 60 s interval' "$name"
-sleep 5
-in_exit 'read -r a b c s rest < /run/molebridge/exit-owner; read -r up _ < /proc/uptime; [ $(( ${up%%.*} - s )) -le 3 ]' ||
-    fail 'the owner record went stale with a 60 s reconcile interval' "$name"
-pass 'heartbeat every 2 s whatever the reconcile interval'
+# --- A recreated exit finds the guards in place and repairs onto them.
+docker rm -f "$name" >/dev/null
+start_exit again "$run-mullvad"
+wait_log "$name" 'molebridge-exit: ready' 40 || fail 'a recreated exit did not become ready in the kept namespace' "$name"
+started=$(now)
+docker stop -t 15 "$name" >/dev/null
+took=$(($(now) - started))
+[ "$(docker inspect -f '{{.State.ExitCode}}' "$name")" = 0 ] || fail 'a recreated exit did not stop with exit 0' "$name"
+pass "a recreated exit in the kept namespace becomes ready and stops with exit 0 in ${took}s"
 docker rm -f "$name" >/dev/null
 
-# --- Stopping, with the tunnel up.
-name=$run-main
-stop_exit
-[ "$code" = 0 ] || fail "exit code $code after a stop" "$name"
-awk -v t="$took" 'BEGIN { exit !(t <= 8) }' || fail "stop took ${took}s" "$name"
-docker logs "$name" 2>&1 | grep -q 'stopped; the routing guards stay in place' || fail 'no stop message' "$name"
-pass "stop with the tunnel up: exit 0 in ${took}s"
+# --- PIA: a config with no address; rules 94 and 98 are left to the pipeline.
+nbvolume=$run-nbdata-pia
+new_owner owner-pia
+start_exit pia "$run-pia" -e PROVIDER=pia -e EXIT_IF=pia -e NB_EXTRA_IFACE_BLACKLIST=pia
+wait_log "$name" 'molebridge-exit: ready' 40 || fail 'PIA: the exit did not become ready' "$name"
+diag 'ip link show pia' >/dev/null || fail 'PIA: the tunnel interface is missing' "$name"
+diag 'ip rule; echo ---; ip -6 rule' > "$work/rules" || fail 'could not list the rules' "$name"
+if grep -Eq '^9[48]:' "$work/rules"; then fail 'PIA: the exit installed rule 94 or 98 for a config with no address' "$name"; fi
+grep -q '^95:' "$work/rules" || fail 'PIA: rule 95 is missing' "$name"
+pass 'PIA: ready without an address; rules 94 and 98 left to the pipeline'
+docker stop -t 15 "$name" >/dev/null
+[ "$(docker inspect -f '{{.State.ExitCode}}' "$name")" = 0 ] || fail 'PIA: the stop did not exit 0' "$name"
+pass 'PIA: stop exits 0'
 
-# --- A root-owned config, and PIA's addressless one.
-make_conf root 0 0
-start_exit root root
-ready || fail 'not ready with a root-owned config' "$name"
-pass 'a root-owned config'
-docker rm -f "$name" >/dev/null
-make_conf pia 0 0
-# Assignments before a function call outlive it in some shells: set and reset.
-EXIT_IF=pia
-PROVIDER=pia
-start_exit pia pia
-EXIT_IF=mullvad
-PROVIDER=mullvad
-ready || fail 'PIA: not ready before registration' "$name"
-in_exit 'ip rule show | grep -Eq "^9[48]:"' && fail 'PIA: the loop installed 94 or 98' "$name"
-in_exit 'ip rule add from 203.0.113.7 ipproto icmp lookup 51821 priority 94 && ip rule add from 203.0.113.7 ipproto icmp unreachable priority 98 && ip addr add 203.0.113.7/32 dev pia'
-sleep 5
-[ "$(in_exit 'ip rule show | grep -cE "^9[48]:"')" = 2 ] || fail "PIA: the loop changed the applier's rules" "$name"
-in_exit 'test -f /run/molebridge-routing-ready' || fail 'PIA: not ready with the applier-owned rules' "$name"
-pass "PIA: ready without an address; rules 94/98 left to the applier"
-docker rm -f "$name" >/dev/null
-
-# --- Settings and configs refused before anything changes.
-names="$names $run-bad"
-docker run -d --name "$run-bad" --cap-drop ALL --cap-add NET_ADMIN --cap-add DAC_READ_SEARCH --read-only --tmpfs /run \
-    -e OVERLAY_CIDR=192.0.2.1/24 -v "$run-root:/config/wg_confs:ro" "$image" >/dev/null
-docker wait "$run-bad" >/dev/null
-[ "$(docker inspect -f '{{.State.ExitCode}}' "$run-bad")" = 1 ] || fail 'an invalid OVERLAY_CIDR did not stop the exit' "$run-bad"
-docker logs "$run-bad" 2>&1 | grep -Eq 'installed|bringing the tunnel' && fail 'routing or the tunnel changed with invalid settings' "$run-bad"
-pass 'invalid settings: exit 1 before any routing or tunnel change'
-
-# --- wg-quick that fails, hangs, or leaves the interface behind: a stand-in
-# ahead of it in PATH, and one for `ip link del`.
-cat > "$work/wg-quick" <<'EOF'
-#!/bin/sh
-case "${FAKE_WGQ:-}:$1" in
-    fail:up) exit 1 ;;
-    hang:up) sleep 300 & exec sleep 301 ;;
-    hangdown:down) sleep 300 & exec sleep 301 ;;
-    failpredown:down) ip route del default dev "$EXIT_IF" table 51821 2>/dev/null || : ;;
-esac
-exec /usr/bin/wg-quick "$@"
-EOF
-cat > "$work/ip" <<'EOF'
-#!/bin/sh
-case "${FAKE_IP:-}:$*" in
-    nodel:link\ del*) exit 2 ;;
-esac
-exec /sbin/ip "$@"
-EOF
-chmod 755 "$work/wg-quick" "$work/ip"
-fakes="-v $work/wg-quick:/usr/local/sbin/wg-quick:ro -v $work/ip:/usr/local/sbin/ip:ro"
-
-# shellcheck disable=SC2086 # $fakes is two docker arguments each
-start_exit fail root $fakes -e FAKE_WGQ=fail
-wait_for 10 'test -f /run/molebridge/exit-owner' || fail 'no owner record during failing bring-ups' "$name"
-sleep 6
-running || fail 'a failing bring-up stopped the container' "$name"
-in_exit 'test ! -f /run/molebridge-routing-ready' || fail 'ready without a tunnel' "$name"
-in_exit 'read -r a b c s rest < /run/molebridge/exit-owner; read -r up _ < /proc/uptime; [ $(( ${up%%.*} - s )) -le 3 ]' ||
-    fail 'the heartbeat stopped during failing bring-ups' "$name"
-[ "$(docker logs "$name" 2>&1 | grep -c 'tunnel bring-up failed')" -ge 2 ] || fail 'bring-up is not retried' "$name"
-stop_exit
-[ "$code" = 0 ] || fail "exit code $code stopping during backoff" "$name"
-pass "bring-up failing: alive, not ready, heartbeat fresh, retried with backoff; stop during backoff exits 0 in ${took}s"
-
-# shellcheck disable=SC2086
-start_exit hang root $fakes -e FAKE_WGQ=hang
-wait_for 10 'pgrep -f "sleep 301" >/dev/null' || fail 'the hanging bring-up did not start' "$name"
-# At its 20-second deadline the bring-up's whole group goes, its child too,
-# before the retry 2 seconds later.
-deadline=$(awk -v n="$(uptime_now)" 'BEGIN { printf "%.2f", n + 30 }')
-until docker logs "$name" 2>&1 | grep -q 'tunnel bring-up failed'; do
-    awk -v n="$(uptime_now)" -v d="$deadline" 'BEGIN { exit !(n > d) }' && fail 'the hanging bring-up was not ended at its deadline' "$name"
-    sleep 0.5
-done
-in_exit '! pgrep -f "sleep 30[01]" >/dev/null' || fail "part of the hung bring-up's group survived its deadline" "$name"
-wait_for 10 'pgrep -f "sleep 301" >/dev/null' || fail 'the bring-up was not retried after its deadline' "$name"
-in_exit 'read -r a b c s rest < /run/molebridge/exit-owner; read -r up _ < /proc/uptime; [ $(( ${up%%.*} - s )) -le 3 ]' ||
-    fail 'the heartbeat stopped during a hanging bring-up' "$name"
-# The stop's cancellation, not the engine's KILL, must end the hung worker
-# and its child: the entrypoint logs nothing about a survivor, and the stop
-# finishes well inside the engine's timeout.
-stop_exit
-[ "$code" = 0 ] || fail "exit code $code stopping during a hanging bring-up" "$name"
-docker logs "$name" 2>&1 | grep -q 'cleanup incomplete' && fail 'a hung bring-up worker survived its cancellation' "$name"
-awk -v t="$took" 'BEGIN { exit !(t <= 8) }' || fail "stop during a hanging bring-up took ${took}s" "$name"
-pass "stop during a hanging bring-up (with a child): its group cancelled, exit 0 in ${took}s"
-
-for mode in failpredown hangdown; do
-    # shellcheck disable=SC2086
-    start_exit "$mode" root $fakes -e FAKE_WGQ="$mode"
-    ready || fail "$mode: not ready" "$name"
-    stop_exit
-    [ "$code" = 0 ] || fail "$mode: exit code $code" "$name"
-    awk -v t="$took" 'BEGIN { exit !(t <= 8) }' || fail "$mode: stop took ${took}s" "$name"
-    pass "stop with a $mode PreDown: the interface removed directly, exit 0 in ${took}s"
-done
-
-# shellcheck disable=SC2086
-start_exit nodel root $fakes -e FAKE_WGQ=hangdown -e FAKE_IP=nodel
-ready || fail 'nodel: not ready' "$name"
-stop_exit
-[ "$code" = 1 ] || fail "cleanup failure reported as exit $code" "$name"
-docker logs "$name" 2>&1 | grep -q 'cleanup incomplete' || fail 'no cleanup-incomplete message' "$name"
-pass "the interface can't be removed: exit 1 and 'cleanup incomplete', in ${took}s"
-
-# --- The guard mode starts under busybox sh and waits for gluetun's tunnel.
-names="$names $run-guard"
-docker run -d --name "$run-guard" --cap-drop ALL --cap-add NET_ADMIN --read-only --tmpfs /tmp --tmpfs /run \
-    -e TUNNEL_BACKEND=gluetun -e OVERLAY_CIDR=192.0.2.0/24 -e EXIT_IF=wg0 \
-    -e ROUTING_READY_FILE=/run/routing-ready "$image" >/dev/null
-sleep 5
-[ "$(docker inspect -f '{{.State.Running}}' "$run-guard")" = true ] || fail 'the guard mode exited' "$run-guard"
-docker logs "$run-guard" 2>&1 | grep -q '10-exit-routing:' || fail 'the guard mode logged nothing' "$run-guard"
-pass 'guard mode (TUNNEL_BACKEND=gluetun) runs and waits for the tunnel'
-echo 'All routing image checks passed.'
+echo 'All exit image checks passed.'
