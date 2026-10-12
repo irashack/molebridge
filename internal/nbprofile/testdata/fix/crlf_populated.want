@@ -1,0 +1,6 @@
+{
+  "IFaceBlackList": [
+    "wt0",
+    "mullvad"
+  ]
+}

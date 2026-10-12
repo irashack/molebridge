@@ -1,0 +1,5 @@
+{
+  "ifaceblacklist": [
+    "wt0"
+  ]
+}

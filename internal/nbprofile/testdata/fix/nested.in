@@ -1,0 +1,4 @@
+{
+  "A": {"IFaceBlackList": ["inner"]},
+  "B": [1, 2, {"x": null}]
+}

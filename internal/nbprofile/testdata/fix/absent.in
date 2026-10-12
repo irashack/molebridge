@@ -1,0 +1,7 @@
+{
+    "PrivateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "WgIface": "mesh0",
+    "SSHKey": "-----BEGIN-----\nAAAA\n-----END-----\n",
+    "Name": "café \u00e9 \ud83d\ude00 \"q\" \\ \/",
+    "RosenpassEnabled": false
+}
