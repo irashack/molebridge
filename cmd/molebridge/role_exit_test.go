@@ -45,7 +45,7 @@ func roleEnv(t *testing.T) (map[string]string, string) {
 	writeConf(t, confDir)
 	return map[string]string{
 		"TUNNEL_BACKEND": "native", "PROVIDER": "mullvad", "EXIT_IF": "mullvad", "OVERLAY_CIDR": "192.0.2.0/24",
-		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_STATE_DIR": filepath.Join(dir, "nb"),
+		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_EXTRA_IFACE_BLACKLIST": "mullvad", "NB_STATE_DIR": filepath.Join(dir, "nb"),
 		"STATE_DIR": filepath.Join(dir, "state"), "TUNNEL_CONF_DIR": confDir, "MOLEBRIDGE_RUN_DIR": filepath.Join(dir, "run"),
 	}, dir
 }

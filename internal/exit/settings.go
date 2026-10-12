@@ -276,6 +276,24 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 			return nil, verbatim(err)
 		}
 		s.NoIdentity = res.NoIdentity
+		if res.NoIdentity {
+			// First enrollment (D25). With no stored profile there is nothing to
+			// check yet, and the profile NetBird writes on its first `netbird up`
+			// takes its interface blacklist from this setting
+			// (--extra-iface-blacklist), so without it the new peer would offer
+			// the tunnel interface's address as a connection candidate. It must
+			// name the tunnel interface by NetBird's own rule: an entry matches
+			// every interface whose name starts with it.
+			//
+			// There is deliberately no kernel fence beyond this. The blacklist
+			// governs which local addresses NetBird's own ICE candidates may use;
+			// it does not decide what is forwarded for clients, which the routing
+			// contract already confines. The worker still reads the profile again
+			// after `netbird up` and stops NetBird if the entry is not effective.
+			if !coversInterface(env["NB_EXTRA_IFACE_BLACKLIST"], cfg.ExitIf) {
+				return nil, refuse("NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface %s (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it", cfg.ExitIf)
+			}
+		}
 		if cfg.IsGluetun() {
 			s.FwmarkGrace = nb.FwmarkGrace
 			s.WatchLog = nb.WatchLog
@@ -285,6 +303,19 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// coversInterface applies NetBird's blacklist rule to a comma-separated list:
+// an entry matches an interface whose name begins with it
+// (client/internal/stdnet/filter.go, strings.HasPrefix). Entries are taken as
+// written: no trimming, and an empty entry matches nothing.
+func coversInterface(list, iface string) bool {
+	for _, entry := range strings.Split(list, ",") {
+		if entry != "" && strings.HasPrefix(iface, entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func orDefault(v, def string) string {
