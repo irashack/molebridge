@@ -116,7 +116,7 @@ func (s Spec) Rules(f rtnl.Family) []rtnl.Rule {
 	guard.Flags = rtnl.FIBRuleInvert
 	guard.IifName = c.OverlayIf
 	add(guard)
-	if s.TempGuard[f] && !c.IsGluetun() {
+	if s.TempGuard[f] {
 		r := reject(PrioTempGuard, f)
 		r.IifName = c.OverlayIf
 		add(r)
@@ -180,5 +180,16 @@ func (s Spec) Rules(f rtnl.Family) []rtnl.Rule {
 		add(r)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Priority < out[j].Priority })
+	return out
+}
+
+// RulesAt returns the expected rules of a family at one priority.
+func (s Spec) RulesAt(f rtnl.Family, priority uint32) []rtnl.Rule {
+	var out []rtnl.Rule
+	for _, r := range s.Rules(f) {
+		if r.Priority == priority {
+			out = append(out, r)
+		}
+	}
 	return out
 }

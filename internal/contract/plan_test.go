@@ -170,11 +170,11 @@ func TestGluetunPlanReportsMissingDefault(t *testing.T) {
 	}
 	s.Routes[4] = kept
 	p := glSpec().PlanFamily(s, rtnl.V4, PlanInput{})
-	if p.HostRefresh || !reflect.DeepEqual(p.Problems, []Problem{ProblemNoDefault}) {
+	if p.HostRefresh || !reflect.DeepEqual(p.Problems, []Problem{ProblemNoDefault}) || !p.Clean() || p.Healthy() {
 		t.Fatalf("%+v", p)
 	}
 	// IPv6 may have no default.
-	if p := glSpec().PlanFamily(glSnapshot(), rtnl.V6, PlanInput{}); !p.Clean() {
+	if p := glSpec().PlanFamily(glSnapshot(), rtnl.V6, PlanInput{}); !p.Healthy() {
 		t.Fatalf("%+v", p)
 	}
 }

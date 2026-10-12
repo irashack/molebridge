@@ -45,7 +45,9 @@ type PlanInput struct {
 type Plan struct {
 	Family rtnl.Family
 	// ExitIf is the tunnel interface as the snapshot shows it.
-	ExitIf  rtnl.Link
+	ExitIf rtnl.Link
+	// HostIf is the namespace's host interface (the gluetun backend).
+	HostIf  rtnl.Link
 	Tunnel  TunnelMode
 	Address netip.Addr
 	// HostRefresh is set when the host table must be flushed and refilled:
@@ -65,9 +67,25 @@ type Plan struct {
 	Problems []Problem
 }
 
-// Clean reports that nothing needs doing.
+// Clean reports that nothing needs doing: the rules, the exit table and the
+// host table are what they should be. A missing IPv4 default route through the
+// host interface (ProblemNoDefault) is not something a repair can do anything
+// about, so it does not make a plan unclean; see Healthy.
 func (p Plan) Clean() bool {
-	return len(p.Rules) == 0 && len(p.Routes) == 0 && !p.HostRefresh && len(p.Problems) == 0
+	return len(p.Rules) == 0 && len(p.Routes) == 0 && !p.HostRefresh
+}
+
+// Healthy is Clean and nothing is wrong that no action can repair.
+func (p Plan) Healthy() bool {
+	if !p.Clean() {
+		return false
+	}
+	for _, pr := range p.Problems {
+		if pr == ProblemNoDefault {
+			return false
+		}
+	}
+	return true
 }
 
 // PlanFamily judges one family of a snapshot. For the gluetun backend the
@@ -100,6 +118,7 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 
 	if c.IsGluetun() {
 		hostIf, _ := snap.Link(c.HostIf)
+		p.HostIf = hostIf
 		mainList, _ := HostRoutes(snap.RoutesInTable(f, rtnl.TableMain), hostIf.Index, false)
 		hostList, hostOdd := HostRoutes(snap.RoutesInTable(f, c.HostTable), hostIf.Index, true)
 		if !HostTableMatches(mainList, hostList, hostOdd) {
