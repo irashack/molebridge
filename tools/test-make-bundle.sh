@@ -46,6 +46,7 @@ services:
     image: ghcr.io/irashack/molebridge:v0.8.0-rc.1@sha256:3333333333333333333333333333333333333333333333333333333333333333
 EOM
 printf 'MOLEBRIDGE_IMAGE=ghcr.io/irashack/molebridge:0.8\nPROVIDER=mullvad\n' > "$src/.env.example"
+printf 'G=1\n' > "$src/.env.gluetun.example"
 printf 'X=1\n' > "$src/.env.sidecar.example"
 printf '#!/usr/bin/env sh\necho "docker run ghcr.io/irashack/molebridge:<tag> gluetun-auth"\n' > "$src/routing/gluetun-preflight"
 printf 'MIT\n' > "$src/LICENSE"
@@ -64,7 +65,7 @@ mkdir -p "$work/o1"
 archive=$(run v0.8.0 "$digest" "$work/o1")
 [ "$archive" = "$work/o1/molebridge-v0.8.0.tar.gz" ] || fail "archive path: $archive"
 members=$($tar -tzf "$archive" | tr '\n' ' ')
-want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
+want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
 [ "$members" = "$want" ] || fail "member list: $members"
 pass "member list"
 
@@ -102,12 +103,11 @@ SOURCE_DATE_EPOCH=1700000000 run v0.8.0 "$digest" "$work/o2" >/dev/null
 cmp -s "$archive" "$work/o2/molebridge-v0.8.0.tar.gz" && fail "SOURCE_DATE_EPOCH ignored"
 pass "SOURCE_DATE_EPOCH changes the mtime"
 
-# A different digest changes the archive; the optional file is included.
-printf 'G=1\n' > "$src/.env.gluetun.example"
+# A different digest changes the archive.
 run v0.8.0-rc.1 "$other" "$work/o2" >/dev/null
-$tar -tzf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" | grep -q '/.env.gluetun.example$' || fail "optional env example missing"
+$tar -tzf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" | grep -q '/.env.gluetun.example$' || fail "gluetun env example missing"
 $tar -xzOf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" molebridge-v0.8.0-rc.1/compose.yaml | grep -q "molebridge:v0.8.0-rc.1@$other" || fail "rc reference"
-pass "release candidate tag and optional file"
+pass "release candidate tag"
 
 # Refusals.
 refuses "a bad tag" 'tag must look like' 0.8.0 "$digest" "$work/o3"
@@ -117,6 +117,9 @@ refuses "an uppercase digest" 'digest must be' v0.8.0 "sha256:$(printf 'A%.0s' $
 rm "$src/LICENSE"
 refuses "a missing file" 'missing bundle file: LICENSE' v0.8.0 "$digest" "$work/o3"
 printf 'MIT\n' > "$src/LICENSE"
+mv "$src/.env.gluetun.example" "$work/env.gluetun.bak"
+refuses "a missing gluetun env example" 'missing bundle file: .env.gluetun.example' v0.8.0 "$digest" "$work/o3"
+mv "$work/env.gluetun.bak" "$src/.env.gluetun.example"
 cp "$src/compose.yaml" "$work/compose.yaml.bak"
 printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.yaml"
 refuses "a compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$work/o3"

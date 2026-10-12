@@ -339,7 +339,9 @@ fi
 
 # gluetun's role-file check under the same shells and awks, busybox as in
 # gluetun's Alpine image: the generated file starts gluetun, a misspelled key
-# field does not, and nothing from the file is printed.
+# field does not, and nothing from the file is printed. (The kind and
+# post-rules rules are tested by tools/test-gluetun-preflight.sh; here the
+# preflight runs as a sidecar's, with no post-rules file.)
 if [ -n "$awk_dirs" ]; then
     preflight_key=Zx9-_kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk
     printf '%s\n' '[[roles]]' 'name = "molebridge"' 'auth = "apikey"' "apikey = \"$preflight_key\"" \
@@ -351,6 +353,7 @@ if [ -n "$awk_dirs" ]; then
             rm -f "$work/preflight-started"
             # gluetun's image sets HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE="{}".
             PATH="$dir:$PATH" HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH="$work/auth-$case.toml" \
+                MOLEBRIDGE_KIND=sidecar MOLEBRIDGE_POST_RULES_FILE="$work/no-post-rules" \
                 HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE='{}' \
                 "$work/rsh" "$root/routing/gluetun-preflight" touch "$work/preflight-started" > "$work/preflight.out" 2>&1 || :
             if grep -q "$preflight_key" "$work/preflight.out"; then
@@ -370,6 +373,7 @@ if [ -n "$awk_dirs" ]; then
     for dir in $awk_dirs; do
         rm -f "$work/preflight-started"
         PATH="$dir:$PATH" HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH="$work/auth-ok.toml" \
+            MOLEBRIDGE_KIND=sidecar MOLEBRIDGE_POST_RULES_FILE="$work/no-post-rules" \
             HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE='{"auth":"none"}' \
             "$work/rsh" "$root/routing/gluetun-preflight" touch "$work/preflight-started" > /dev/null 2>&1 || :
         if [ -f "$work/preflight-started" ]; then

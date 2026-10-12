@@ -1,23 +1,45 @@
 #!/usr/bin/env sh
-# gluetun's entrypoint in compose.gluetun.yaml: check gluetun's control-server
-# role file, then hand over to gluetun's own entrypoint with its arguments.
+# gluetun's entrypoint in compose.gluetun.yaml and compose.sidecar.yaml: check
+# the kind of exit and gluetun's control-server role file, then hand over to
+# gluetun's own entrypoint with its arguments.
 #
 # gluetun v3.41.3 logs a role file it can't decode with an excerpt of the
 # offending line (internal/server/middlewares/auth/configfile.go:28-31, logged
 # by cmd/gluetun/main.go:115), so a misspelled field next to the API key would
 # print the key. Without the file it would apply a public default role that
 # includes PUT /v1/vpn/status. This check runs on every start, including
-# restart-policy restarts, and accepts only the exact structure
-# `tools/molebridge.py gluetun-auth` writes (applier/gluetun.py,
-# gluetun_auth_file). Its messages are fixed and print nothing from the file.
+# restart-policy restarts, and accepts only the exact structure the
+# `gluetun-auth` tool of the Molebridge image writes
+# (internal/gluetunauth). Its messages are fixed and print nothing from the
+# file.
+#
+# It is also the one place that can see gluetun's own mounts, which the exit
+# container cannot (a shared network namespace shows nothing of them), so it
+# enforces the post-rules rule from the kind of exit, MOLEBRIDGE_KIND, which
+# the Compose file sets on the gluetun service:
+#   overlay  an overlay exit needs the post-rules the `gluetun-post-rules`
+#            tool writes (they accept output on the host interface, which the
+#            overlay's guard makes safe), so a missing file stops gluetun;
+#   sidecar  a sidecar has no overlay guard behind those rules, so gluetun
+#            does not start while the file is present.
+# Anything else, or nothing, is refused: the mode is never guessed.
 #
 # Runs under busybox sh and awk in gluetun's Alpine image.
 set -eu
 auth_file=${HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH:-/gluetun/auth/config.toml}
-refuse() {
-    echo "molebridge: not starting gluetun: $1 (python3 tools/molebridge.py gluetun-auth --rotate writes a valid one)" >&2
+# gluetun reads its post-rules from this fixed path; the override is for tests.
+post_rules=${MOLEBRIDGE_POST_RULES_FILE:-/iptables/post-rules.txt}
+fail() {
+    echo "molebridge: not starting gluetun: $1" >&2
     exit 1
 }
+refuse() {
+    fail "$1 (docker run --rm ... ghcr.io/irashack/molebridge:<tag> gluetun-auth --rotate writes a valid one)"
+}
+case "${MOLEBRIDGE_KIND:-}" in
+    overlay|sidecar) : ;;
+    *) fail 'MOLEBRIDGE_KIND must be overlay or sidecar (set by compose.gluetun.yaml and compose.sidecar.yaml)' ;;
+esac
 # A default role would answer routes the file leaves out. gluetun's own image
 # sets this to "{}" (Dockerfile:206 at v3.41.3), which decodes to a role
 # without an auth method, that is no default role
@@ -53,4 +75,12 @@ verdict=$(LC_ALL=C awk '
 ' "$auth_file") || verdict=bad
 [ "$verdict" = ok ] ||
     refuse 'the control-server role file is not the one Molebridge generates (one role, apikey, the five routes)'
+if [ "$MOLEBRIDGE_KIND" = sidecar ]; then
+    if [ -e "$post_rules" ] || [ -L "$post_rules" ]; then
+        fail "a sidecar must not mount the overlay's post-rules ($post_rules); remove that mount from the gluetun service"
+    fi
+else
+    [ ! -L "$post_rules" ] && [ -f "$post_rules" ] && [ -r "$post_rules" ] && [ -s "$post_rules" ] ||
+        fail "the post-rules file $post_rules is missing, empty or not a regular file (docker run --rm ... ghcr.io/irashack/molebridge:<tag> gluetun-post-rules writes it)"
+fi
 exec "$@"
