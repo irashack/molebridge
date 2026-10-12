@@ -194,6 +194,19 @@ func (c *Conn) Close() error {
 	return err
 }
 
+// Interrupt closes the socket under a request in flight, which unblocks its
+// read; the request fails as a stream error and the next one opens a fresh
+// socket. Unlike Close it leaves the Conn usable. A cancelled context uses it
+// to end a call before the deadline.
+func (c *Conn) Interrupt() {
+	c.tmu.Lock()
+	defer c.tmu.Unlock()
+	if c.t != nil {
+		_ = c.t.close()
+		c.t = nil
+	}
+}
+
 // SetTimeout changes the bound on each request. It is a ceiling per request;
 // SetDeadline bounds a whole operation.
 func (c *Conn) SetTimeout(d time.Duration) {

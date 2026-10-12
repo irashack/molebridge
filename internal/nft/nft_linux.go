@@ -37,11 +37,25 @@ func familyName(f nftables.TableFamily) string {
 	return fmt.Sprintf("family-%d", f)
 }
 
-// lister is the part of *nftables.Conn the listing uses. The connection is a
-// lasting one, so that closing it cancels a call in flight.
+// ContextBudget bounds a listing whose context has no deadline: a call is
+// always run under an absolute deadline.
+const ContextBudget = 2 * time.Second
+
+// lister is the part of *nftables.Conn the listing uses.
 type lister interface {
 	ListChains() ([]*nftables.Chain, error)
-	CloseLasting() error
+}
+
+// connector opens the nftables connection. The library calls sockOpt on every
+// netlink socket it creates, before the socket is used.
+type connector func(sockOpt nftables.SockOption, netns int) (lister, error)
+
+func dialNftables(sockOpt nftables.SockOption, netns int) (lister, error) {
+	opts := []nftables.ConnOption{nftables.AsLasting(), nftables.WithSockOptions(sockOpt)}
+	if netns != 0 {
+		opts = append(opts, nftables.WithNetNSFd(netns))
+	}
+	return nftables.New(opts...)
 }
 
 // ListChains returns every chain of every table, base chains and regular
@@ -53,65 +67,67 @@ func ListChains(netns int) ([]contract.NftChain, error) {
 	return ListChainsContext(ctx, netns)
 }
 
-// ListChainsContext is ListChains bounded by ctx. Every socket the nftables
-// connection opens carries the absolute deadline from the start, through the
-// connection's own socket options, including the transient socket it opens by
-// itself if the lasting one has been closed; and the dump also runs under
-// rtnl.RunBounded, which closes the lasting connection at the deadline. A
-// connection delivered after cancellation is closed.
+// ListChainsContext is ListChains bounded by ctx, or by ContextBudget if ctx
+// has no deadline. One netlink socket is created for the call, under that
+// absolute deadline (set on the socket the moment the library creates it) and
+// closed when the call ends or ctx does, which unblocks a read the deadline
+// did not reach. The socket is never reused, and the library is not given the
+// chance to open another: it would redial a transient socket if its lasting
+// one were cleared, so the socket is closed directly rather than through
+// CloseLasting, and the socket option refuses a second socket.
 func ListChainsContext(ctx context.Context, netns int) ([]contract.NftChain, error) {
-	dl, _ := ctx.Deadline()
-	return listChains(ctx, func() (lister, error) {
-		opts := []nftables.ConnOption{nftables.AsLasting()}
-		if !dl.IsZero() {
-			opts = append(opts, nftables.WithSockOptions(func(c *netlink.Conn) error { return c.SetDeadline(dl) }))
-		}
-		if netns != 0 {
-			opts = append(opts, nftables.WithNetNSFd(netns))
-		}
-		return nftables.New(opts...)
-	})
+	return listChains(ctx, netns, dialNftables)
 }
 
-func listChains(ctx context.Context, open func() (lister, error)) ([]contract.NftChain, error) {
+var errSecondSocket = errors.New("nft: refusing to open a second netlink socket for one call")
+
+func listChains(ctx context.Context, netns int, open connector) ([]contract.NftChain, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ContextBudget)
+		defer cancel()
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("nft: %w", boundedErr(err))
 	}
-	// The connection is handed over under a lock, so that one delivered after
-	// the call gave up on it is closed by the goroutine that made it.
-	var mu sync.Mutex
-	var c lister
-	abandoned := false
-	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() {
+	dl, _ := ctx.Deadline()
+	var (
+		mu      sync.Mutex
+		sock    *netlink.Conn
+		sockets int
+	)
+	closeSock := func() {
 		mu.Lock()
-		abandoned = true
-		cc := c
+		c := sock
 		mu.Unlock()
-		if cc != nil {
-			_ = cc.CloseLasting()
+		if c != nil {
+			_ = c.Close()
 		}
-	}, func() error {
-		opened, err := open()
-		if err != nil {
-			return err
-		}
+	}
+	sockOpt := func(c *netlink.Conn) error {
 		mu.Lock()
 		defer mu.Unlock()
-		if abandoned {
-			_ = opened.CloseLasting()
-			return rtnl.ErrDeadline
+		sockets++
+		if sockets > 1 {
+			_ = c.Close()
+			return errSecondSocket
 		}
-		c = opened
+		if err := c.SetDeadline(dl); err != nil {
+			_ = c.Close() // the library does not close a socket whose option failed
+			return err
+		}
+		sock = c
 		return nil
-	})
+	}
+	conn, err := open(sockOpt, netns)
+	defer closeSock()
 	if err != nil {
 		return nil, fmt.Errorf("nft: open netlink: %w", err)
 	}
-	defer c.CloseLasting()
 	var chains []*nftables.Chain
-	err = rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { _ = c.CloseLasting() }, func() error {
+	err = rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, closeSock, func() error {
 		var err error
-		chains, err = c.ListChains()
+		chains, err = conn.ListChains()
 		return err
 	})
 	if err != nil {

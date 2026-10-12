@@ -3,6 +3,7 @@
 package tunnel_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -75,7 +76,7 @@ func TestUpBringsUpTheMullvadTunnelAsWgQuickDid(t *testing.T) {
 			t.Errorf("%s exit table: %q", f, r)
 		}
 	}
-	dev, err := m.Wg().Device("mullvad")
+	dev, err := m.Device(context.Background(), "mullvad")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestUpForPIAHasNoAddressNoPeerAndIPv4Only(t *testing.T) {
 	if r, err := ns.TryIP("-6", "route", "show", "table", "51821"); err == nil && strings.Contains(r, "default") {
 		t.Errorf("IPv6 exit table: %q", r)
 	}
-	dev, _ := m.Wg().Device("pia")
+	dev, _ := m.Device(context.Background(), "pia")
 	if len(dev.Peers) != 0 {
 		t.Errorf("peers: %d", len(dev.Peers))
 	}
@@ -243,7 +244,7 @@ func TestFwmark(t *testing.T) {
 		t.Fatalf("%d %v", v, err)
 	}
 	mark := 0x1bd00
-	if err := m.Wg().ConfigureDevice("wt0", wgtypes.Config{FirewallMark: &mark}); err != nil {
+	if err := m.Configure(context.Background(), "wt0", wgtypes.Config{FirewallMark: &mark}); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := m.Fwmark("wt0"); err != nil || v != 0x1bd00 {

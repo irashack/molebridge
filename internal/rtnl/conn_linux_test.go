@@ -779,3 +779,200 @@ func TestIfNotificationsCanNeverBeReadTheSnapshotIsUnstable(t *testing.T) {
 		t.Fatalf("%+v %v", s, err)
 	}
 }
+
+// A notification read that ends at the operation's deadline is not evidence
+// of an empty queue; no snapshot, stable or not, is handed over after the
+// deadline.
+type atDeadlineChurn struct {
+	dumps *atomic.Int32
+	after int32
+	until time.Time
+}
+
+func (a *atDeadlineChurn) Next(deadline time.Time) ([]Event, error) {
+	if a.dumps.Load() >= a.after {
+		time.Sleep(time.Until(a.until)) // the read lasts until the operation's deadline
+	}
+	return nil, os.ErrDeadlineExceeded
+}
+func (a *atDeadlineChurn) Close() error { return nil }
+
+func TestAReadThatEndsAtTheOperationDeadlineIsNotSilence(t *testing.T) {
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			dumps.Add(1)
+		}
+		return ordinary(n, r)
+	})
+	dl := time.Now().Add(60 * time.Millisecond)
+	c.churn = &atDeadlineChurn{dumps: &dumps, after: 7, until: dl}
+	c.SetDeadline(dl)
+	s, err := c.Take(Interest{})
+	if err == nil || s != nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%+v %v: a snapshot was certified by the expiry of its own deadline", s, err)
+	}
+}
+
+func TestNoSnapshotIsReturnedAfterTheDeadlineEvenWithoutASubscription(t *testing.T) {
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		time.Sleep(4 * time.Millisecond)
+		return ordinary(n, r)
+	})
+	c.SetDeadline(time.Now().Add(40 * time.Millisecond))
+	// Two looks of seven dumps at 4 ms each cannot both fit.
+	s, err := c.Take(Interest{})
+	if err == nil || s != nil {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func linkReply(seq uint32, index uint32, name string) []byte {
+	return frame(rtmNewLink, 0, seq, appendAttrStr(ifinfo(index, 0, 0), iflaIfname, name))
+}
+
+func TestLinkOperationsSendTheKernelsRequests(t *testing.T) {
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.typ == rtmGetLink {
+			return [][]byte{linkReply(r.seq, 7, "wt0")}
+		}
+		return [][]byte{ackMsg(r.seq)}
+	})
+	l, err := c.LinkByName("wt0")
+	if err != nil || l.Index != 7 || l.Name != "wt0" {
+		t.Fatalf("%+v %v", l, err)
+	}
+	for name, f := range map[string]func() error{
+		"add":     func() error { return c.AddLink("wt0", "wireguard") },
+		"del":     func() error { return c.DelLink(7) },
+		"mtu":     func() error { return c.SetLinkMTU(7, 1380) },
+		"up":      func() error { return c.SetLinkUp(7) },
+		"addr":    func() error { return c.AddAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+		"deladdr": func() error { return c.DelAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+	} {
+		if err := f(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	type want struct {
+		typ   uint16
+		flags uint16
+	}
+	wants := []want{
+		{rtmGetLink, nlmRequest},
+		{rtmNewLink, nlmRequest | nlmAck | nlmCreate | nlmExcl},
+		{rtmDelLink, nlmRequest | nlmAck},
+		{rtmNewLink, nlmRequest | nlmAck},
+		{rtmNewLink, nlmRequest | nlmAck},
+		{rtmNewAddr, nlmRequest | nlmAck | nlmCreate | nlmExcl},
+		{rtmDelAddr, nlmRequest | nlmAck},
+	}
+	// The map iterates in any order: compare as a multiset of (type, flags).
+	got := map[want]int{}
+	k.mu.Lock()
+	for _, r := range k.requests {
+		got[want{r.typ, r.flags}]++
+	}
+	k.mu.Unlock()
+	exp := map[want]int{}
+	for _, w := range wants {
+		exp[w]++
+	}
+	for w, n := range exp {
+		if got[w] != n {
+			t.Errorf("%+v sent %d times, want %d", w, got[w], n)
+		}
+	}
+}
+
+func TestAMissingLinkIsNotExist(t *testing.T) {
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		return [][]byte{frame(nlmsgError, 0, r.seq, errnoBody(syscall.ENODEV))}
+	})
+	if _, err := c.LinkByName("nope"); !IsNotExist(err) {
+		t.Fatalf("%v", err)
+	}
+	if c.Resets() != 0 {
+		t.Errorf("a refusal replaced the socket (%d dials)", c.Resets())
+	}
+}
+
+// Every link and address call ends at the one absolute deadline when the
+// kernel never answers, and the next call finds a fresh socket.
+func TestAStalledLinkOperationEndsAtTheDeadline(t *testing.T) {
+	calls := map[string]func(c *Conn) error{
+		"lookup":  func(c *Conn) error { _, err := c.LinkByName("wt0"); return err },
+		"add":     func(c *Conn) error { return c.AddLink("wt0", "wireguard") },
+		"del":     func(c *Conn) error { return c.DelLink(7) },
+		"mtu":     func(c *Conn) error { return c.SetLinkMTU(7, 1380) },
+		"up":      func(c *Conn) error { return c.SetLinkUp(7) },
+		"addr":    func(c *Conn) error { return c.AddAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+		"deladdr": func(c *Conn) error { return c.DelAddr(HostAddr(7, netip.MustParseAddr("198.51.100.2"))) },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			var stalled atomic.Bool
+			stalled.Store(true)
+			c, k := newFake(t, func(n int, r request) [][]byte {
+				if stalled.Load() {
+					return nil // never answers
+				}
+				if r.typ == rtmGetLink {
+					return [][]byte{linkReply(r.seq, 7, "wt0")}
+				}
+				return [][]byte{ackMsg(r.seq)}
+			})
+			c.SetDeadline(time.Now().Add(80 * time.Millisecond))
+			start := time.Now()
+			err := call(c)
+			if !Timeout(err) || time.Since(start) > time.Second {
+				t.Fatalf("%v after %v", err, time.Since(start))
+			}
+			stalled.Store(false)
+			c.SetDeadline(time.Now().Add(time.Second))
+			if err := call(c); err != nil {
+				t.Fatalf("the next call, on a fresh socket: %v", err)
+			}
+			k.mu.Lock()
+			pairs := k.pairs
+			k.mu.Unlock()
+			if pairs < 2 {
+				t.Errorf("the cut-off socket was reused (%d sockets)", pairs)
+			}
+		})
+	}
+}
+
+func TestInterruptEndsARequestInFlightAndTheNextOneReconnects(t *testing.T) {
+	var stalled atomic.Bool
+	stalled.Store(true)
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if stalled.Load() {
+			return nil
+		}
+		return [][]byte{ackMsg(r.seq)}
+	})
+	c.SetDeadline(time.Now().Add(10 * time.Second))
+	done := make(chan error, 1)
+	go func() { done <- c.SetLinkUp(7) }()
+	for k.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	start := time.Now()
+	c.Interrupt()
+	select {
+	case err := <-done:
+		if err == nil || !IsStreamError(err) {
+			t.Fatalf("%v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the request outlived the interrupt")
+	}
+	if time.Since(start) > time.Second {
+		t.Error("slow")
+	}
+	stalled.Store(false)
+	if err := c.SetLinkUp(7); err != nil {
+		t.Fatalf("after the interrupt: %v", err)
+	}
+}
