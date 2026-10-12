@@ -21,7 +21,7 @@ panel can still be switched.
   <img src="assets/switchyard-configured.png" alt="Switchyard with a NordVPN exit set in configuration: the current server is shown with the note 'Set in configuration', and there is no location list" width="900">
 </p>
 
-The panel learns the setting from the applier's `result.json`, through its
+The panel learns the setting from the exit's `result.json`, through its
 existing read-only mount. A stale status keeps the exit read-only and shows
 its connection as unknown. A `POST /select` for that exit is refused with
 403 and "Exit is set in configuration; change SERVER to choose another
@@ -30,8 +30,8 @@ server." `/api/status` gives the configured name as
 object still carries `selection_mode: configuration` and `configured_server`
 in 0.7.)
 
-Change or clear `SERVER` in the exit's configuration and apply it with
-[recovery](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
+Change or clear `SERVER` in the exit's configuration and apply it by
+[recreating the exit](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
 explains validation, startup and what happens to a previous panel request.
 
 ## Switching
@@ -44,14 +44,14 @@ The page has three parts:
   | State | Meaning |
   |---|---|
   | connected | Every check the exit needs passed in the last 150 seconds, on the server you selected |
-  | switching | A switch is running, or the applier hasn't picked up your request yet |
+  | switching | A switch is running, or the exit hasn't picked up your request yet |
   | failed | The last switch, or the latest periodic check, failed |
   | unknown | The status can't be confirmed: stale or unavailable, not yet measured, or not readable by this panel ([troubleshooting](troubleshooting.md#the-panel)) |
 
   Every page, `/api/status`, the tabs and `/readyz` show the same
   [verdict](architecture.md#the-verdict).
 
-  Beside the state, "checked 20 s ago" says how old the applier's last check
+  Beside the state, "checked 20 s ago" says how old the exit's last check
   is, counting up live; status is polled every 30 seconds, and every 2 while
   switching. Once the exit is connected, **Copy** next to the egress address
   copies it (or selects it where the browser allows no clipboard, as in some
@@ -74,10 +74,10 @@ A switch takes two taps: the first arms the button, and the second confirms
 it within eight seconds. Escape, or moving focus away, cancels. Without
 JavaScript a single tap submits.
 
-The applier then changes the tunnel and waits for a fresh handshake, intact
+The exit then changes the tunnel and waits for a fresh handshake, intact
 routing and the egress check: the provider's own, or the tunnel checks for a
 provider without one. That normally takes a few seconds. The page shows which
-server it is leaving and for how long it has been switching. The applier
+server it is leaving and for how long it has been switching. The exit
 stops waiting for verification 60 seconds after making the change with the
 default backend, and 90 with gluetun; making the change, and an inspection
 already under way, come on top. When
@@ -88,17 +88,17 @@ and connections open through the exit drop.
 
 While a switch runs, the panel refuses another one for the same exit with
 "A switch is in progress; wait for it to finish." (409). If the status is
-stale, it doesn't refuse; the applier decides.
+stale, it doesn't refuse; the exit decides.
 
-**Diagnostics** lists every check the applier reports, by name: passed,
-failed (with the reason when the applier gives one), unknown, "not
+**Diagnostics** lists every check the exit reports, by name: passed,
+failed (with the reason when the exit gives one), unknown, "not
 applicable" for a check that doesn't exist for this kind of exit, and "not
 checked by Molebridge" with who checks it instead. Only a passed check reads
 as passed. An exit still writing a 0.6 status record shows its checks as
-"not reported individually". When the applier will check or try again by
+"not reported individually". When the exit will check or try again by
 itself, the note says when ("Re-checking at …" or "Retrying at …", UTC).
 
-If a switch fails, the applier tries again by itself after 1, 2, 4 and 8
+If a switch fails, the exit tries again by itself after 1, 2, 4 and 8
 minutes, then every 15, and a switch that is made but not verified is
 re-checked without switching again (with PIA, a handshake stale for 180
 seconds registers the same region again; [retries](operations.md#retries)).
@@ -108,7 +108,7 @@ failed check doesn't always mean traffic stopped: the previous or new tunnel
 may still be carrying it. What can't happen is forwarded traffic leaving
 through the host's own connection. Molebridge never picks a different server
 as failover. With PIA, choosing the region you're already on (it asks
-"reconnect?") registers again; PIA may pick the same server. With gluetun, the applier puts your
+"reconnect?") registers again; PIA may pick the same server. With gluetun, the exit puts your
 selection back when gluetun restarts on another one.
 
 Some parts appear only once they're useful:
@@ -141,11 +141,11 @@ answered 429 and the page tries again a few seconds later.
 
 ## The server list
 
-The applier downloads the provider's server list at startup and every six
+The exit downloads the provider's server list at startup and every six
 hours, and keeps the last good copy if a download fails. With the gluetun
 backend it reads gluetun's own list instead; Diagnostics shows the date of
 gluetun's data, stale after 30 days. A list older than 24
-hours can't authorize a switch. The panel only reads the applier's copy; it
+hours can't authorize a switch. The panel only reads the exit's copy; it
 can't change it.
 
 ## Looks
@@ -240,7 +240,7 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
   ([the ids](providers.md)).
 - `kind` is optional: `overlay`, the default, for a NetBird exit, or
   `sidecar` for a [gluetun sidecar](gluetun-sidecar.md), which needs a
-  `gluetun-<provider>`. It must match the exit applier's `EXIT_KIND`; a
+  `gluetun-<provider>`. It must match the exit's `EXIT_KIND`; a
   status record of the other kind shows as "kind mismatch", never as
   connected. A single-exit panel reads `EXIT_KIND` instead.
 - `label` is optional (40 characters at most). It defaults to the provider's
@@ -251,7 +251,9 @@ native provider. Without `PANEL_EXITS` it
 serves a single exit from `$STATE_DIR/panel` and `$STATE_DIR/applier`.
 
 Run it as one more container beside the exits, mounting each exit's state
-under `/state/<id>`. This example assumes two exits already set up in
+under `/state/<id>`. It is the same image and the `panel` role. Take the image
+reference from the newest exit's `compose.yaml`, so the panel is at least as new
+as every exit. This example assumes two exits already set up in
 `/srv/molebridge-mullvad` and `/srv/molebridge-pia`:
 
 ```yaml
@@ -259,39 +261,41 @@ under `/state/<id>`. This example assumes two exits already set up in
 name: switchyard
 services:
   panel:
-    image: docker.io/library/python:3.14.7-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
+    image: ghcr.io/irashack/molebridge:<tag>@sha256:<digest>   # as in your bundle's compose.yaml
+    command: ["panel"]
     restart: unless-stopped
-    user: "1000:1000"          # the owner of both state trees; 0:0 under rootless Podman
+    user: "1000:1000"          # the owner of both state trees; 0:0 with PANEL_ALLOW_ROOT=1 under rootless Podman
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
-    working_dir: /app
-    command: ["python", "/app/panel/app.py"]
     environment:
       STATE_DIR: /state
       PANEL_EXITS: "mullvad=mullvad:Mullvad,pia=pia:PIA"
       PANEL_PUBLIC_HOSTS: switchyard.example.net
-      PYTHONDONTWRITEBYTECODE: "1"
     ports:
       - "127.0.0.1:8098:8080"   # loopback only; publish through an authenticating proxy
     volumes:
-      - /srv/molebridge-mullvad/panel:/app/panel:ro
-      - /srv/molebridge-mullvad/molebridge:/app/molebridge:ro
       - /srv/molebridge-mullvad/state/panel:/state/mullvad/panel
       - /srv/molebridge-mullvad/state/applier:/state/mullvad/applier:ro
       - /srv/molebridge-pia/state/panel:/state/pia/panel
       - /srv/molebridge-pia/state/applier:/state/pia/applier:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
 ```
 
-The panel code comes from one checkout. That checkout must include
-multi-exit support and be at least as new as the newest exit: a panel reads
-its own release's status records and the previous release's, so a 0.7 panel
-reads 0.6 and 0.7 exits, and a 0.6 panel misreads 0.7 exits
-([upgrades](operations.md#from-06x-to-070)).
+The panel refuses to start unless it has no capabilities, isn't root unless
+`PANEL_ALLOW_ROOT=1` says so, and has every exit's `applier` directory mounted
+read-only ([the isolation check](configuration.md#the-panels-isolation-check)). A
+panel reads its own release's status records and the previous release's: a 0.8
+panel reads 0.7 and 0.8 exits, and a 0.7 panel reads 0.8 exits, because the state
+files are unchanged. A 0.6 panel misreads 0.7 and later exits
+([upgrades](operations.md#upgrading-from-07x)).
 
-Each exit's own panel keeps working. Both write the same `desired.json`, so
-whichever posted last wins. You can stop an exit's own `control-panel`
-container, but recovery and upgrades start it again.
+Each exit's own `switchyard` container keeps working. Both write the same
+`desired.json`, so whichever posted last wins. You can leave an exit's bundled
+`switchyard` stopped (`docker compose up -d exit` starts only the exit), but a
+plain `docker compose up -d` starts it again.
 
 With several exits, every page and API call names its exit. `/` redirects to
 `/?exit=<id>` for the exit this browser last opened, and `/api/exits` returns
