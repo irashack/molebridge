@@ -20,15 +20,6 @@ const (
 	rtmDelRule  = 33
 	rtmGetRule  = 34
 
-	// Multicast groups (RTNLGRP_*).
-	grpLink       = 1
-	grpIPv4Ifaddr = 5
-	grpIPv4Route  = 7
-	grpIPv4Rule   = 8
-	grpIPv6Ifaddr = 9
-	grpIPv6Route  = 11
-	grpIPv6Rule   = 19
-
 	// fib_rule_hdr.action
 	FRActToTbl       = 1
 	FRActGoto        = 2

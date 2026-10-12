@@ -120,6 +120,4 @@ func (tx *Tx) DelRoute(r rtnl.Route) error {
 // Reconcile runs a repair pass inside the operation.
 func (tx *Tx) Reconcile(reason string) PassResult { return tx.reconcile(reason) }
 
-func (tx *Tx) familyName(f rtnl.Family) string { return f.String() }
-
 func opErr(op string, err error) error { return fmt.Errorf("%s: %w", op, err) }

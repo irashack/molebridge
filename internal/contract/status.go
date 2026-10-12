@@ -320,3 +320,57 @@ func ReturnPathEnabled(value string) bool {
 // big) from the tunnel address, and the priority-94 rule routes that address
 // through the exit table.
 const ReturnPathSysctl = "/proc/sys/net/ipv4/icmp_errors_use_inbound_ifaddr"
+
+// RoutingOptions are the conditions beyond the snapshot that routing_status
+// (applier/apply.py) judged.
+type RoutingOptions struct {
+	// RequireAddress: the exit interface must have a global IPv4 address.
+	// Without it an interface with no address yet passes when its guards are
+	// intact: a provider that assigns the address per server installs rules
+	// 94 and 98 with it.
+	RequireAddress bool
+	// ReturnPath: the kernel sources the exit's own ICMP errors from the
+	// inbound interface address (ReturnPathEnabled of the sysctl file).
+	ReturnPath bool
+}
+
+// RoutingStatus is routing_status: (protected, fallback) for both families
+// of the native backend, from one snapshot. The overlay interface and the
+// tunnel interface must exist; the tunnel addresses are read from the
+// interface, never its routes, and exactly one global address per family is
+// supported (the return-path rule and the kernel's ICMP source selection
+// both assume a single address). The owner record (the exit's liveness) is
+// the supervisor's to judge, not this function's.
+func RoutingStatus(spec Spec, snap *rtnl.Snapshot, opt RoutingOptions) (protected, fallback bool) {
+	c := spec.Config
+	if _, ok := snap.Link(c.OverlayIf); !ok {
+		return false, false
+	}
+	link, ok := snap.Link(c.ExitIf)
+	if !ok {
+		return false, false
+	}
+	addresses := map[rtnl.Family]netip.Addr{}
+	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
+		for _, a := range snap.Addrs[f] {
+			if a.Index != link.Index || !a.Global() {
+				continue
+			}
+			if _, dup := addresses[f]; dup {
+				return false, false
+			}
+			addresses[f] = a.Local.Addr()
+		}
+	}
+	if !addresses[rtnl.V4].IsValid() && opt.RequireAddress {
+		return false, false
+	}
+	protected, fallback = opt.ReturnPath, true
+	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
+		ready, fb := FamilyStatus(spec, f, snap.Rules[f], snap.RoutesInTable(f, c.Table),
+			StatusOptions{TunnelAddress: addresses[f], ExitIfIndex: link.Index})
+		protected = protected && ready
+		fallback = fallback && fb
+	}
+	return protected, fallback
+}

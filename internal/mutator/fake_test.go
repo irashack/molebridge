@@ -515,5 +515,3 @@ func (k *fakeKernel) linkIndex(name string) uint32 {
 	}
 	return 0
 }
-
-func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }

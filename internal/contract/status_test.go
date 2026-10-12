@@ -671,3 +671,97 @@ func TestOutsideASwitchTheFullValidationApplies(t *testing.T) { // test_outside_
 		t.Fatal("detached rules passed outside a switch")
 	}
 }
+
+// ---- routing_status (applier/apply.py), from one snapshot ----
+
+func routingSnapshot() *rtnl.Snapshot {
+	s := nativeSnapshot()
+	s.Addrs[4] = []rtnl.Addr{{Family: 4, Index: exitIfIndex, Local: netip.MustParsePrefix(tunnel4 + "/32")}}
+	s.Addrs[6] = []rtnl.Addr{{Family: 6, Index: exitIfIndex, Local: netip.MustParsePrefix(tunnel6 + "/128")}}
+	return s
+}
+
+func TestRoutingStatusOfAHealthyExit(t *testing.T) {
+	protected, fallback := RoutingStatus(nativeSpec(), routingSnapshot(), RoutingOptions{RequireAddress: true, ReturnPath: true})
+	if !protected || !fallback {
+		t.Fatalf("%v %v", protected, fallback)
+	}
+}
+
+func TestReturnPathSysctlIsRequiredForHealth(t *testing.T) { // test_return_path_sysctl_is_required_for_health_and_switching
+	for _, value := range []string{"0\n", "", "x"} {
+		if ReturnPathEnabled(value) {
+			t.Errorf("%q", value)
+		}
+		protected, _ := RoutingStatus(nativeSpec(), routingSnapshot(), RoutingOptions{RequireAddress: true, ReturnPath: ReturnPathEnabled(value)})
+		if protected {
+			t.Errorf("%q: protected", value)
+		}
+	}
+	if !ReturnPathEnabled("1\n") || !ReturnPathEnabled(" 1 ") {
+		t.Error("1 should enable")
+	}
+}
+
+func TestUnsupportedTunnelAddressesAreUnhealthy(t *testing.T) { // test_unsupported_tunnel_addresses_are_unhealthy
+	a := func(f rtnl.Family, text string) rtnl.Addr {
+		p := netip.MustParsePrefix(text)
+		return rtnl.Addr{Family: f, Index: exitIfIndex, Local: p}
+	}
+	for name, addrs := range map[string]map[rtnl.Family][]rtnl.Addr{
+		"none":               {4: nil, 6: nil},
+		"two in one family":  {4: {a(4, tunnel4+"/32"), a(4, "203.0.113.2/32")}, 6: {a(6, tunnel6+"/128")}},
+		"IPv6 only":          {4: nil, 6: {a(6, tunnel6+"/128")}},
+		"two IPv6 addresses": {4: {a(4, tunnel4+"/32")}, 6: {a(6, tunnel6+"/128"), a(6, "2001:db8:3::2/128")}},
+	} {
+		s := routingSnapshot()
+		s.Addrs[4], s.Addrs[6] = addrs[4], addrs[6]
+		if protected, _ := RoutingStatus(nativeSpec(), s, RoutingOptions{RequireAddress: true, ReturnPath: true}); protected {
+			t.Errorf("%s: protected", name)
+		}
+	}
+	// Link-local and host-scope addresses are not tunnel addresses.
+	s := routingSnapshot()
+	s.Addrs[6] = append(s.Addrs[6], rtnl.Addr{Family: 6, Index: exitIfIndex, Scope: rtnl.RTScopeLink, Local: netip.MustParsePrefix("fe80::1/64")})
+	if protected, _ := RoutingStatus(nativeSpec(), s, RoutingOptions{RequireAddress: true, ReturnPath: true}); !protected {
+		t.Error("a link-local address broke the judgment")
+	}
+}
+
+func TestIPv4OnlyTunnelKeepsTheIPv6GuardWithoutAnIPv6Address(t *testing.T) { // test_ipv4_only_tunnel_keeps_ipv6_guard_without_requiring_ipv6_egress
+	s := routingSnapshot()
+	s.Addrs[6] = nil
+	s.Rules[6] = without(s.Rules[6], 94, 98)
+	s.Routes[6] = s.Routes[6][1:]
+	if protected, fallback := RoutingStatus(nativeSpec(), s, RoutingOptions{RequireAddress: true, ReturnPath: true}); !protected || !fallback {
+		t.Fatalf("%v %v", protected, fallback)
+	}
+}
+
+func TestAnAddresslessInterfaceIsProtectedWhenItsGuardsAreIntact(t *testing.T) { // PIA before the first registration
+	s := routingSnapshot()
+	s.Addrs[4], s.Addrs[6] = nil, nil
+	for _, f := range families {
+		s.Rules[f] = without(s.Rules[f], 94, 98)
+	}
+	s.Routes[6] = s.Routes[6][1:]
+	if protected, _ := RoutingStatus(nativeSpec(), s, RoutingOptions{RequireAddress: true, ReturnPath: true}); protected {
+		t.Error("an address was required")
+	}
+	if protected, fallback := RoutingStatus(nativeSpec(), s, RoutingOptions{ReturnPath: true}); !protected || !fallback {
+		t.Errorf("%v %v", protected, fallback)
+	}
+}
+
+func TestRoutingStatusNeedsBothInterfaces(t *testing.T) {
+	s := routingSnapshot()
+	s.Links = s.Links[:3] // no tunnel interface
+	if protected, _ := RoutingStatus(nativeSpec(), s, RoutingOptions{ReturnPath: true}); protected {
+		t.Error("protected without the tunnel interface")
+	}
+	s = routingSnapshot()
+	s.Links = append(s.Links[:2:2], s.Links[3])
+	if protected, _ := RoutingStatus(nativeSpec(), s, RoutingOptions{ReturnPath: true}); protected {
+		t.Error("protected without the overlay interface")
+	}
+}
