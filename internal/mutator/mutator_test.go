@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1064,5 +1065,19 @@ func TestReturnPathPairIsNeverBothGone(t *testing.T) {
 	repairs(t, m, k, spec)
 	if gone.Load() {
 		t.Fatal("at some step neither rule 94 nor rule 98 covered the tunnel address")
+	}
+}
+
+func TestAnOperationThatEndsItsGoroutineDoesNotEndTheOwner(t *testing.T) {
+	m := start(t, newFakeKernel(), nativeSpec())
+	err := m.Do(context.Background(), "goexit", func(tx *Tx) error {
+		runtime.Goexit() // what t.Fatal does
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "ended its goroutine") {
+		t.Fatalf("%v", err)
+	}
+	if err := m.Do(context.Background(), "after", func(tx *Tx) error { return nil }); err != nil {
+		t.Fatalf("the owner died: %v", err)
 	}
 }

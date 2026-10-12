@@ -255,14 +255,27 @@ func (m *Mutator) exec(o *op) {
 	ctx, cancel := context.WithTimeout(o.ctx, m.o.OpTimeout)
 	defer cancel()
 	tx := &Tx{m: m, ctx: ctx, name: o.name}
-	err := func() (err error) {
+	// The operation runs on a goroutine of its own and the owner waits for it:
+	// still one mutation at a time, but a panic or a runtime.Goexit inside the
+	// operation (a test helper calling t.Fatal, say) cannot end the owner.
+	result := make(chan error, 1)
+	go func() {
+		finished := false
 		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("mutator: operation %q panicked: %v", o.name, r)
+			if finished {
+				return
 			}
+			if r := recover(); r != nil {
+				result <- fmt.Errorf("mutator: operation %q panicked: %v", o.name, r)
+				return
+			}
+			result <- fmt.Errorf("mutator: operation %q ended its goroutine", o.name)
 		}()
-		return o.fn(tx)
+		err := o.fn(tx)
+		finished = true
+		result <- err
 	}()
+	err := <-result
 	if err == nil && ctx.Err() != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		err = ErrOpTimeout
 	}

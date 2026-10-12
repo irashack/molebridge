@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,6 +73,47 @@ func (n *NS) Exec(name string, args ...string) (string, error) {
 	cmd := exec.Command("ip", append([]string{"netns", "exec", n.Name, name}, args...)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// ExecInput runs a command inside the namespace with the given standard input.
+func (n *NS) ExecInput(input, name string, args ...string) (string, error) {
+	cmd := exec.Command("ip", append([]string{"netns", "exec", n.Name, name}, args...)...)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// Start runs a long-lived command inside the namespace and stops it when the
+// test ends.
+func (n *NS) Start(name string, args ...string) *exec.Cmd {
+	n.t.Helper()
+	cmd := exec.Command("ip", append([]string{"netns", "exec", n.Name, name}, args...)...)
+	if err := cmd.Start(); err != nil {
+		n.t.Fatal(err)
+	}
+	n.t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	return cmd
+}
+
+// Do runs fn on a thread that is in the namespace. Sockets created inside fn
+// belong to the namespace for good; the goroutines that use them afterwards
+// may run anywhere.
+func (n *NS) Do(fn func() error) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	orig, err := netns.Get()
+	if err != nil {
+		return err
+	}
+	defer orig.Close()
+	if err := netns.Set(netns.NsHandle(n.Fd())); err != nil {
+		return err
+	}
+	defer func() { _ = netns.Set(orig) }()
+	return fn()
 }
 
 // Sysctl sets a sysctl inside the namespace.
