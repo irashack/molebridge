@@ -45,6 +45,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -1019,6 +1020,10 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 		return nil
 	}
 	refreshed, err := a.catalog.Refresh(ctx, func() ([]byte, error) { return a.hooks.FetchCatalog(ctx, a) })
+	// A provider's server list is megabytes of JSON parsed into a much smaller
+	// catalogue; hand the parse's garbage back to the kernel now rather than
+	// keep it as idle heap until the next refresh.
+	debug.FreeOSMemory()
 	if err != nil {
 		return wrapIO(err)
 	}

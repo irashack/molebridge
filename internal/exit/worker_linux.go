@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,9 +99,6 @@ type worker struct {
 // descriptors are 3 (to the supervisor) and 4 (from it). It returns the exit
 // status.
 func RunWorker(environ []string, stderr io.Writer) int {
-	// The heap is small and the process idles: collect less often, a few
-	// megabytes more heap for a quarter of the collections.
-	debug.SetGCPercent(400)
 	env := EnvMap(environ)
 	// NetBird's setup key is the supervisor's; the worker never needs it.
 	delete(env, "NB_SETUP_KEY")
