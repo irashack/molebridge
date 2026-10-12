@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/proc"
 )
 
@@ -70,13 +71,16 @@ type nbEvent struct {
 // live` once a second until the daemon answers, then `netbird up`. Every wait
 // is bounded and every process is reaped by the reaper.
 type nbManager struct {
-	reaper  *proc.Reaper
-	bin     string
-	env     []string
-	logPath string
-	out     io.Writer
-	timing  Timing
-	emit    func(nbEvent)
+	reaper *proc.Reaper
+	bin    string
+	// env is NetBird's environment for every command; envUp adds the
+	// enrollment secret for `netbird up` alone.
+	env, envUp []string
+	clock      bootclock.Clock
+	logPath    string
+	out        io.Writer
+	timing     Timing
+	emit       func(nbEvent)
 
 	mu       sync.Mutex
 	closed   bool
@@ -84,7 +88,10 @@ type nbManager struct {
 	stopping bool
 	launch   int
 	cancel   context.CancelFunc
+	done     chan struct{}
 	procs    []*proc.Process
+	// hook, when set (tests), is called at stages of a launch's sequence.
+	hook func(stage string)
 }
 
 // lookPath finds name in the PATH of an environment, as the NetBird children
@@ -138,20 +145,31 @@ func fileSize(path string) int64 {
 	return fi.Size()
 }
 
+// launchInfo says what a launch begins with: its number, the size of NetBird's
+// log at that moment (the launch's own lines start there) and the boot-clock
+// time it began (the gluetun fwmark accounting starts there).
+type launchInfo struct {
+	launch int
+	offset int64
+	at     time.Duration
+}
+
 // Start begins a launch. It reports false when the supervisor is stopping or a
 // launch is already running or being stopped.
-func (m *nbManager) Start() bool {
+func (m *nbManager) Start() (launchInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.active || m.stopping {
-		return false
+		return launchInfo{}, false
 	}
 	m.active = true
 	m.launch++
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	go m.run(ctx, m.launch)
-	return true
+	m.done = make(chan struct{})
+	info := launchInfo{launch: m.launch, offset: fileSize(m.logPath), at: m.clock()}
+	go m.run(ctx, info, m.done)
+	return info, true
 }
 
 func (m *nbManager) currentLaunch() int {
@@ -167,20 +185,23 @@ func (m *nbManager) Active() bool {
 	return m.active || m.stopping
 }
 
-// Close forbids new launches for good and abandons the running launch's
-// sequence; the stop sequence ends the processes.
+// Close forbids new launches for good and cancels the running launch's
+// sequence. The cancellation and the refusal of every later spawn happen under
+// the lock spawn checks them under, so a process either exists before Close
+// returns (and the stop sequence signals it) or is never started.
 func (m *nbManager) Close() {
 	m.mu.Lock()
 	m.closed = true
-	cancel := m.cancel
-	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if m.cancel != nil {
+		m.cancel()
 	}
+	m.mu.Unlock()
 }
 
-// Stop ends the running launch for an unready contract: TERM to every group,
-// KILL after NBTerm, reaped; then nbStopped. It does not block.
+// Stop ends the running launch for an unready contract: the launch is
+// cancelled (under the spawn lock), TERM goes to every group, the launch's
+// goroutine is joined, KILL follows after NBTerm, and only when every process
+// is reaped is nbStopped emitted. It does not block.
 func (m *nbManager) Stop() {
 	m.mu.Lock()
 	if !m.active || m.stopping {
@@ -189,12 +210,19 @@ func (m *nbManager) Stop() {
 	}
 	m.stopping = true
 	launch := m.launch
-	cancel := m.cancel
+	done := m.done
+	m.cancel()
 	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
 	go func() {
+		m.TermAll()
+		// The startup goroutine ends at once on cancellation (every wait it
+		// has selects on its context); it is joined before anything is
+		// reported, so nothing it started can be missed. The wait is bounded
+		// all the same.
+		select {
+		case <-done:
+		case <-time.After(m.timing.NBTerm):
+		}
 		m.TermAll()
 		if !m.waitGone(m.timing.NBTerm) {
 			m.KillAll()
@@ -254,16 +282,20 @@ func (m *nbManager) waitGone(d time.Duration) bool {
 	return true
 }
 
-var errClosed = errors.New("the supervisor is stopping; NetBird is not started")
+var errClosed = errors.New("the supervisor is stopping or the launch was cancelled; NetBird is not started")
 
 // spawn starts a NetBird program in a group of its own, its output copied
-// line by line to the supervisor's stderr (when copy), and tracks it.
-func (m *nbManager) spawn(args []string, copyOutput bool) (*proc.Process, error) {
-	path, err := lookPath(args[0], m.env)
+// line by line to the supervisor's log (when copyOutput), and tracks it. It
+// starts nothing unless the manager is open and the launch is still the
+// current, uncancelled one, checked under the lock Stop and Close cancel
+// under: a cancelled launch can never start a process nobody supervises.
+// env is the command's own environment.
+func (m *nbManager) spawn(ctx context.Context, launch int, args []string, env []string, copyOutput bool) (*proc.Process, error) {
+	path, err := lookPath(args[0], env)
 	if err != nil {
 		return nil, err
 	}
-	spec := proc.Spec{Path: path, Args: args, Env: m.env}
+	spec := proc.Spec{Path: path, Args: args, Env: env}
 	var r *os.File
 	if copyOutput {
 		var w *os.File
@@ -274,7 +306,7 @@ func (m *nbManager) spawn(args []string, copyOutput bool) (*proc.Process, error)
 		defer w.Close()
 	}
 	m.mu.Lock()
-	if m.closed {
+	if m.closed || m.launch != launch || ctx.Err() != nil {
 		m.mu.Unlock()
 		if r != nil {
 			r.Close()
@@ -303,8 +335,8 @@ func (m *nbManager) spawn(args []string, copyOutput bool) (*proc.Process, error)
 
 // probe runs a short NetBird command (status check), killing its group if it
 // is late or the launch is cancelled. It reports whether it exited 0.
-func (m *nbManager) probe(ctx context.Context, args []string, limit time.Duration) bool {
-	p, err := m.spawn(args, false)
+func (m *nbManager) probe(ctx context.Context, launch int, args []string, limit time.Duration) bool {
+	p, err := m.spawn(ctx, launch, args, m.env, false)
 	if err != nil {
 		return false
 	}
@@ -346,9 +378,14 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (m *nbManager) run(ctx context.Context, launch int) {
-	offset := fileSize(m.logPath)
-	svc, err := m.spawn([]string{"netbird", "service", "run"}, true)
+func (m *nbManager) run(ctx context.Context, info launchInfo, done chan struct{}) {
+	defer close(done)
+	launch, offset := info.launch, info.offset
+	if m.hook != nil {
+		m.hook("begin")
+	}
+	// The daemon gets NetBird's environment without the enrollment secret.
+	svc, err := m.spawn(ctx, launch, []string{"netbird", "service", "run"}, m.env, true)
 	if err != nil {
 		m.fail(ctx, launch, "could not start `netbird service run`: %v", err)
 		return
@@ -367,7 +404,7 @@ func (m *nbManager) run(ctx context.Context, launch int) {
 			return
 		default:
 		}
-		if m.probe(ctx, []string{"netbird", "status", "--check", "live"}, m.timing.NBProbe) {
+		if m.probe(ctx, launch, []string{"netbird", "status", "--check", "live"}, m.timing.NBProbe) {
 			break
 		}
 		if !time.Now().Before(deadline) {
@@ -378,7 +415,11 @@ func (m *nbManager) run(ctx context.Context, launch int) {
 			return
 		}
 	}
-	up, err := m.spawn([]string{"netbird", "up"}, true)
+	if m.hook != nil {
+		m.hook("before up")
+	}
+	// Only `netbird up` enrolls: only it gets the setup key.
+	up, err := m.spawn(ctx, launch, []string{"netbird", "up"}, m.envUp, true)
 	if err != nil {
 		m.fail(ctx, launch, "could not start `netbird up`: %v", err)
 		return
@@ -442,16 +483,4 @@ func CopyLines(prefix string, r io.Reader, w io.Writer, max int) {
 			return
 		}
 	}
-}
-
-// lockedWriter serializes writes from several goroutines.
-type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (l *lockedWriter) Write(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.w.Write(p)
 }

@@ -73,15 +73,16 @@ type worker struct {
 	// acknowledged: informational, the supervisor's clock decides.
 	ackExpiry atomic.Int64
 
-	// resetReady asks the readiness loop to forget that it sent ready (a
-	// monitor stopped NetBird).
-	resetReady atomic.Bool
-	tunnelUp   atomic.Bool
-	nbRunning  atomic.Bool
-	blocked    atomic.Bool
-	pipeOn     atomic.Bool
-	launch     atomic.Int64
-	netbirdCh  chan Msg
+	tunnelUp atomic.Bool
+	// fatalMsg is set when the generation must end with a failure (a gluetun
+	// monitor condemned NetBird).
+	fatalOnce sync.Once
+	fatalMsg  atomic.Pointer[string]
+	nbRunning atomic.Bool
+	blocked   atomic.Bool
+	pipeOn    atomic.Bool
+	launch    atomic.Int64
+	netbirdCh chan Msg
 
 	mut  *mutator.Mutator
 	sys  *KernelSystem
@@ -122,6 +123,16 @@ func RunWorker(environ []string, stderr io.Writer) int {
 	defer w.cancel()
 	go w.readSupervisor(os.NewFile(4, "from-supervisor"))
 	return w.run()
+}
+
+// fatal ends the worker with a failure: the line is printed, the worker stops
+// and exits non-zero, and the supervisor does the rest.
+func (w *worker) fatal(msg string) {
+	w.fatalOnce.Do(func() {
+		w.fatalMsg.Store(&msg)
+		w.logf("%s", msg)
+		w.cancel()
+	})
 }
 
 func (w *worker) logf(format string, a ...any) {
@@ -409,6 +420,9 @@ func (w *worker) run() int {
 	if w.drillStop != nil {
 		w.drillStop()
 	}
+	if w.fatalMsg.Load() != nil {
+		return 1
+	}
 	return 0
 }
 
@@ -477,9 +491,6 @@ func (w *worker) readinessLoop() {
 			return
 		case <-t.C:
 		}
-		if w.resetReady.Swap(false) {
-			r.markUnready()
-		}
 		res := w.mut.LastPass()
 		holds := res.ContractHolds
 		if w.s.Native() {
@@ -544,8 +555,13 @@ func (w *worker) netbirdLoop() {
 			return
 		case m := <-w.netbirdCh:
 			switch m.State {
-			case NBStarted:
+			case NBLaunching:
+				// The launch begins: the gluetun monitors count from here.
 				w.launch.Store(int64(m.Launch))
+				if w.monitors != nil {
+					w.monitors.newLaunch(m.Launch, m.LogOffset, time.Duration(m.AtBootNs))
+				}
+			case NBStarted:
 				// `netbird up` in daemon mode can return before any
 				// configuration change applies: read the profile again and
 				// admit nothing unless the tunnel is excluded.
@@ -557,9 +573,6 @@ func (w *worker) netbirdLoop() {
 					continue
 				}
 				w.nbRunning.Store(true)
-				if w.monitors != nil {
-					w.monitors.newLaunch(m.Launch, m.LogOffset)
-				}
 				w.pipeOn.Store(true)
 			case NBStopped, NBFailed:
 				w.nbRunning.Store(false)

@@ -50,7 +50,7 @@ func newFixture(t *testing.T) *fixture {
 	return &fixture{dir: dir, env: map[string]string{
 		"TUNNEL_BACKEND": "native", "EXIT_KIND": "overlay", "PROVIDER": "mullvad", "EXIT_IF": "mullvad",
 		"OVERLAY_CIDR": "192.0.2.0/24", "OVERLAY_IF": "wt0", "NB_INTERFACE_NAME": "wt0",
-		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_STATE_DIR": nb, "STATE_DIR": state, "TUNNEL_CONF_DIR": conf,
+		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_EXTRA_IFACE_BLACKLIST": "mullvad", "NB_STATE_DIR": nb, "STATE_DIR": state, "TUNNEL_CONF_DIR": conf,
 		"MOLEBRIDGE_RUN_DIR": filepath.Join(dir, "run"),
 	}, opts: LoadOptions{NBPaths: nbprofile.Paths{StateDir: nb}}}
 }
@@ -130,6 +130,37 @@ func TestSettingsRefusals(t *testing.T) {
 	}
 }
 
+func TestFirstEnrollmentNeedsTheTunnelOnTheBlacklistSetting(t *testing.T) {
+	want := "NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface mullvad"
+	for _, tt := range []struct {
+		value string
+		ok    bool
+	}{
+		{"mullvad", true}, {"mull", true}, {"docker0,mullvad", true}, {"m", true}, {"wg,mullvad", true},
+		{"", false}, {"docker0", false}, {"mullvad0", false}, {"Mullvad", false}, {" mullvad", false}, {",", false},
+	} {
+		f := newFixture(t)
+		f.env["NB_EXTRA_IFACE_BLACKLIST"] = tt.value
+		_, err := f.load()
+		if tt.ok && err != nil {
+			t.Errorf("%q: %v", tt.value, err)
+		}
+		if !tt.ok && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%q: %v", tt.value, err)
+		}
+	}
+	// With a stored profile the setting is not consulted: the profile is.
+	f := newFixture(t)
+	delete(f.env, "NB_EXTRA_IFACE_BLACKLIST")
+	p := filepath.Join(f.env["NB_STATE_DIR"], "default.json")
+	if err := os.WriteFile(p, []byte(`{"WgIface":"wt0","IFaceBlackList":["wg","mullvad"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.load(); err != nil {
+		t.Errorf("an enrolled peer: %v", err)
+	}
+}
+
 func TestGraceAndIntervalOverrides(t *testing.T) {
 	f := newFixture(t)
 	f.env["GUARD_GRACE"] = "5"
@@ -181,7 +212,13 @@ func TestChildEnvironments(t *testing.T) {
 		"NB_SETUP_KEY": "SETUPVALUE", "NB_HOSTNAME": "x", "WT_FOO": "1", "GATUS_TOKEN": "TOKENVALUE", "PATH": "/bin",
 		"PIA_USER": "u", "TZ": "UTC", "HOME": "/root", "STATE_DIR": "/state",
 	}
-	nb := strings.Join(ChildEnvNetBird(env, "/run/tmp"), "\n")
+	nb := strings.Join(ChildEnvNetBird(env, "/run/tmp", true), "\n")
+	if strings.Contains(strings.Join(ChildEnvNetBird(env, "/run/tmp", false), "\n"), "SETUPVALUE") {
+		t.Error("only `netbird up` gets the setup key")
+	}
+	if c := strings.Join(CleanupEnv(env), "\n"); strings.Contains(c, "TOKENVALUE") || strings.Contains(c, "SETUPVALUE") || strings.Contains(c, "STATE_DIR") {
+		t.Errorf("the cleanup gets interface names only: %s", c)
+	}
 	for _, bad := range []string{"GATUS_TOKEN", "TOKENVALUE", "PIA_USER", "STATE_DIR"} {
 		if strings.Contains(nb, bad) {
 			t.Errorf("NetBird must not get %s", bad)

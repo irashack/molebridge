@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vishvananda/netlink"
-	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/irashack/molebridge/internal/applier"
@@ -214,11 +212,7 @@ func (k *KernelSystem) OwnerGeneration(_ context.Context) string {
 }
 
 func (k *KernelSystem) device(ctx context.Context) (*wgtypes.Device, error) {
-	var d *wgtypes.Device
-	err := k.Tun.WgDo(ctx, func(c *wgctrl.Client) (e error) {
-		d, e = c.Device(k.exitIf())
-		return
-	})
+	d, err := k.Tun.Device(ctx, k.exitIf())
 	if err != nil {
 		return nil, fmt.Errorf("WireGuard interface %s: %w", k.exitIf(), err)
 	}
@@ -287,7 +281,7 @@ func (k *KernelSystem) ReplacePeer(ctx context.Context, remove []string, add app
 	defer k.invalidate()
 	return k.Mut.Do(ctx, "change the tunnel peer", func(tx *mutator.Tx) error {
 		configure := func(cfg wgtypes.Config) error {
-			return k.Tun.WgDo(tx.Context(), func(c *wgctrl.Client) error { return c.ConfigureDevice(k.exitIf(), cfg) })
+			return k.Tun.Configure(tx.Context(), k.exitIf(), cfg)
 		}
 		for _, r := range remove {
 			key, err := wgtypes.ParseKey(r)
@@ -469,30 +463,35 @@ func (p piaOnTx) DeleteReturnPathRule(_ context.Context, priority int, src netip
 	return p.tx.DelRule(r)
 }
 
-func hostNet(a netip.Addr) *netlink.Addr {
-	return &netlink.Addr{IPNet: &net.IPNet{IP: a.AsSlice(), Mask: net.CIDRMask(a.BitLen(), a.BitLen())}}
-}
-
+// ReplaceTunnelAddress is `ip -4 address replace <addr>/32 dev <exit>`: the
+// address is added, and already being there is the same outcome. It runs on the
+// tunnel manager's route socket under the operation's deadline.
 func (p piaOnTx) ReplaceTunnelAddress(_ context.Context, addr netip.Addr) error {
-	l, err := p.p().LinkByName(p.k.exitIf())
-	if err != nil {
-		return err
-	}
-	return p.p().AddrReplace(l, hostNet(addr))
+	return p.k.Tun.RouteDo(p.tx.Context(), func(c *rtnl.Conn) error {
+		l, err := c.LinkByName(p.k.exitIf())
+		if err != nil {
+			return err
+		}
+		if err := c.AddAddr(rtnl.HostAddr(l.Index, addr)); err != nil && !rtnl.IsExist(err) {
+			return err
+		}
+		return nil
+	})
 }
 
+// DeleteTunnelAddress is `ip -4 address del <addr>/32 dev <exit>`.
 func (p piaOnTx) DeleteTunnelAddress(_ context.Context, addr netip.Addr) error {
-	l, err := p.p().LinkByName(p.k.exitIf())
-	if err != nil {
-		return err
-	}
-	if err := p.p().AddrDel(l, hostNet(addr)); err != nil && !rtnl.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return p.k.Tun.RouteDo(p.tx.Context(), func(c *rtnl.Conn) error {
+		l, err := c.LinkByName(p.k.exitIf())
+		if err != nil {
+			return err
+		}
+		if err := c.DelAddr(rtnl.HostAddr(l.Index, addr)); err != nil && !rtnl.IsNotExist(err) {
+			return err
+		}
+		return nil
+	})
 }
-
-func (p piaOnTx) p() *netlink.Handle { return p.k.Tun.Netlink() }
 
 func (p piaOnTx) ReplaceExitDefaultRoute(_ context.Context) error {
 	l, err := p.exitLink()
@@ -574,18 +573,32 @@ func (k *KernelSystem) ChangePIAAddress(ctx context.Context, old, next netip.Add
 
 // -- nftables ----------------------------------------------------------------
 
+// The nftables changes are jobs of the mutation owner like any other kernel
+// change: serialized with the repairer, counted against the owner's progress
+// (a wedged flush stops the lease's renewals instead of hiding behind an idle
+// owner), and bounded by the operation's one absolute deadline, which every
+// nftables socket carries.
+
 // InstallIngressGuard installs the forward-path guard (never removed).
-func (k *KernelSystem) InstallIngressGuard(_ context.Context) error {
-	return nft.InstallIngressGuard(k.exitIf(), k.overlayIf())
+func (k *KernelSystem) InstallIngressGuard(ctx context.Context) error {
+	return k.Mut.Do(ctx, "install the ingress guard", func(tx *mutator.Tx) error {
+		return nft.InstallIngressGuard(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf())
+	})
 }
 
 // ApplyForwardRules atomically replaces the port-forwarding table.
-func (k *KernelSystem) ApplyForwardRules(_ context.Context, port int, target netip.Addr) error {
-	return nft.ApplyForwardRules(k.exitIf(), k.overlayIf(), port, target)
+func (k *KernelSystem) ApplyForwardRules(ctx context.Context, port int, target netip.Addr) error {
+	return k.Mut.Do(ctx, "apply the forward rules", func(tx *mutator.Tx) error {
+		return nft.ApplyForwardRules(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf(), port, target)
+	})
 }
 
 // RemoveForwardRules deletes the port-forwarding table.
-func (k *KernelSystem) RemoveForwardRules(_ context.Context) error { return nft.RemoveForwardRules() }
+func (k *KernelSystem) RemoveForwardRules(ctx context.Context) error {
+	return k.Mut.Do(ctx, "remove the forward rules", func(tx *mutator.Tx) error {
+		return nft.RemoveForwardRules(tx.Context(), k.NetNS)
+	})
+}
 
 // -- the gluetun backend's reads -------------------------------------------------
 

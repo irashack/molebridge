@@ -276,6 +276,24 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 			return nil, verbatim(err)
 		}
 		s.NoIdentity = res.NoIdentity
+		if res.NoIdentity {
+			// First enrollment (D25). With no stored profile there is nothing to
+			// check yet, and the profile NetBird writes on its first `netbird up`
+			// takes its interface blacklist from this setting
+			// (--extra-iface-blacklist), so without it the new peer would offer
+			// the tunnel interface's address as a connection candidate. It must
+			// name the tunnel interface by NetBird's own rule: an entry matches
+			// every interface whose name starts with it.
+			//
+			// There is deliberately no kernel fence beyond this. The blacklist
+			// governs which local addresses NetBird's own ICE candidates may use;
+			// it does not decide what is forwarded for clients, which the routing
+			// contract already confines. The worker still reads the profile again
+			// after `netbird up` and stops NetBird if the entry is not effective.
+			if !coversInterface(env["NB_EXTRA_IFACE_BLACKLIST"], cfg.ExitIf) {
+				return nil, refuse("NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface %s (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it", cfg.ExitIf)
+			}
+		}
 		if cfg.IsGluetun() {
 			s.FwmarkGrace = nb.FwmarkGrace
 			s.WatchLog = nb.WatchLog
@@ -285,6 +303,19 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// coversInterface applies NetBird's blacklist rule to a comma-separated list:
+// an entry matches an interface whose name begins with it
+// (client/internal/stdnet/filter.go, strings.HasPrefix). Entries are taken as
+// written: no trimming, and an empty entry matches nothing.
+func coversInterface(list, iface string) bool {
+	for _, entry := range strings.Split(list, ",") {
+		if entry != "" && strings.HasPrefix(iface, entry) {
+			return true
+		}
+	}
+	return false
 }
 
 func orDefault(v, def string) string {
@@ -344,13 +375,19 @@ func checkStateDir(stateDir string, create bool) error {
 	return nil
 }
 
-// ChildEnvNetBird is the environment the NetBird processes get: NB_* and WT_*
+// ChildEnvNetBird is the environment a NetBird command gets: NB_* and WT_*
 // variables, PATH, HOME, TZ and TMPDIR, with NB_LOG_FILE's default filled in.
-// Pipeline secrets (the Gatus token, PIA's files) never reach NetBird.
-func ChildEnvNetBird(env map[string]string, tmpDir string) []string {
+// Pipeline secrets (the Gatus token, PIA's files) never reach NetBird, and the
+// enrollment secret (NB_SETUP_KEY, WT_SETUP_KEY) reaches only the command that
+// enrolls: withSetupKey is true for `netbird up` alone, not for the daemon or
+// the liveness probes.
+func ChildEnvNetBird(env map[string]string, tmpDir string, withSetupKey bool) []string {
 	out := map[string]string{}
 	for k, v := range env {
 		if strings.HasPrefix(k, "NB_") || strings.HasPrefix(k, "WT_") {
+			if (k == "NB_SETUP_KEY" || k == "WT_SETUP_KEY") && !withSetupKey {
+				continue
+			}
 			out[k] = v
 		}
 	}
@@ -366,6 +403,19 @@ func ChildEnvNetBird(env map[string]string, tmpDir string) []string {
 		out["NB_LOG_FILE"] = DefaultNetBirdLog
 	}
 	out["TMPDIR"] = tmpDir
+	return flatten(out)
+}
+
+// CleanupEnv is the cleanup child's environment: the names of the interfaces
+// it removes and nothing else. It touches no secret and reads no file.
+func CleanupEnv(env map[string]string) []string {
+	out := map[string]string{}
+	for _, k := range []string{"EXIT_IF", "OVERLAY_IF", "NB_INTERFACE_NAME", "TUNNEL_BACKEND", "EXIT_KIND", "TZ"} {
+		if v, ok := env[k]; ok {
+			out[k] = v
+		}
+	}
+	out["PATH"] = "/usr/local/bin:/usr/bin:/bin"
 	return flatten(out)
 }
 

@@ -59,13 +59,18 @@ func (w *worker) startGluetunMonitors(tun *tunnel.Manager) error {
 	return nil
 }
 
-// newLaunch starts accounting for a NetBird launch: the log from the offset
-// the supervisor reported, the mark from this moment.
-func (m *gluetunMonitors) newLaunch(launch int, logOffset int64) {
+// newLaunch starts accounting for a NetBird launch, at the launch itself: the
+// supervisor reports it before the daemon exists, with the size NetBird's log
+// had then and the boot-clock time the launch began. The log is read from that
+// offset and the mark is owed from that time, however long `netbird up` takes,
+// as when the gate was NetBird's parent.
+func (m *gluetunMonitors) newLaunch(launch int, logOffset int64, at time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := m.w.clock()
-	m.launched, m.launchAt, m.lastGood, m.lastSeen = true, now, now, "nothing"
+	if now := m.w.clock(); at <= 0 || at > now {
+		at = now
+	}
+	m.launched, m.launchAt, m.lastGood, m.lastSeen = true, at, at, "nothing"
 	m.scanner = newLogScanner(m.logPath, logOffset)
 }
 
@@ -75,15 +80,15 @@ func (m *gluetunMonitors) endLaunch() {
 	m.mu.Unlock()
 }
 
-// stop tells the supervisor NetBird must not run.
+// stop is fatal to the generation, as `stop` was in wait-for-guards: NetBird
+// cannot be trusted to mark its control traffic, so the worker ends, the
+// supervisor runs the stop sequence, publishes the failure record and exits
+// non-zero. It is never a silent relaunch of the rejected client.
 func (m *gluetunMonitors) stop(reason string) {
 	m.mu.Lock()
 	m.launched, m.scanner = false, nil
 	m.mu.Unlock()
-	m.w.logf("%s", reason)
-	m.w.nbRunning.Store(false)
-	m.w.resetReady.Store(true)
-	_ = m.w.send.send(Msg{Type: TypeUnready, Reason: truncate(reason, 900)})
+	m.w.fatal(fmt.Sprintf("NetBird gate: stopping NetBird: %s (see docs/troubleshooting.md)", reason))
 }
 
 func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {

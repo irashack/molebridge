@@ -27,12 +27,15 @@ type publisher struct {
 
 	mu       sync.Mutex
 	last     map[string]any
-	closed   bool // a failure record was written or the lease revoked: nothing more
+	closed   bool // a failure record was queued or the lease revoked: nothing more
 	warnedAt time.Time
+
+	// out runs the writes: nothing here waits on the state volume.
+	out *coalescer
 }
 
 func newPublisher(s *Settings, lease *Lease, boot bootclock.Clock, wall func() time.Time, logf func(string, ...any)) *publisher {
-	return &publisher{s: s, lease: lease, boot: boot, wall: wall, logf: logf,
+	return &publisher{s: s, lease: lease, boot: boot, wall: wall, logf: logf, out: newCoalescer(),
 		write: func(path string, v any) error {
 			return jsonfile.Write(path, v, jsonfile.Options{Public: true})
 		}}
@@ -59,6 +62,9 @@ func (p *publisher) render(rec map[string]any) validate.Obj {
 	return OrderRecord(rec, p.s.Kind(), p.s.BackendName())
 }
 
+// writeOut renders and writes one record. It runs on the writer goroutine, and
+// owner_record is therefore judged at the moment of the write: a write that
+// waited on a slow volume still states the lease as it is when it lands.
 func (p *publisher) writeOut(rec map[string]any) {
 	if err := p.write(p.s.PathResult(), p.render(rec)); err != nil {
 		now := p.wall()
@@ -69,7 +75,8 @@ func (p *publisher) writeOut(rec map[string]any) {
 	}
 }
 
-// Full publishes a record from the worker (or the starting record).
+// Full publishes a record from the worker (or the starting record). It only
+// records it and queues the write.
 func (p *publisher) Full(rec map[string]any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -77,7 +84,7 @@ func (p *publisher) Full(rec map[string]any) {
 		return
 	}
 	p.last = rec
-	p.writeOut(rec)
+	p.out.Submit(func() { p.writeOut(rec) }, false)
 }
 
 // LeaseOnly rewrites the last record with a fresh owner_record check. It does
@@ -91,11 +98,13 @@ func (p *publisher) LeaseOnly() {
 	if p.closed || p.last == nil {
 		return
 	}
-	p.writeOut(p.last)
+	rec := p.last
+	p.out.Submit(func() { p.writeOut(rec) }, false)
 }
 
-// Failure publishes the failure record built from the last one and closes the
-// publisher: nothing the worker says afterwards is published.
+// Failure queues the failure record built from the last one and closes the
+// publisher: nothing the worker says afterwards is published. It never waits
+// for the write.
 func (p *publisher) Failure(lapse time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -106,15 +115,19 @@ func (p *publisher) Failure(lapse time.Time) {
 	rec := FailureRecord(p.last, p.s, lapse)
 	// The failure record carries the owner_record check as built (fail, no
 	// expiry): the lease is revoked.
-	p.writeOut(rec)
+	p.out.Submit(func() { p.writeOut(rec) }, true)
 }
 
 // Close stops publication without writing a record (a requested stop leaves
-// the last record to go stale, as the Python applier did).
+// the last record to go stale, as the Python applier did). A write already
+// queued still lands.
 func (p *publisher) Close() {
 	p.mu.Lock()
 	p.closed = true
 	p.mu.Unlock()
 }
+
+// Wait waits up to d for the queued write to finish.
+func (p *publisher) Wait(d time.Duration) bool { return p.out.Wait(d) }
 
 func (p *publisher) String() string { return fmt.Sprintf("publisher(%s)", p.s.PathResult()) }

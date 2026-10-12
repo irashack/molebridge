@@ -75,6 +75,10 @@ type Lease struct {
 	accepted      bool
 	deadline      time.Duration
 	revoked       bool
+	// lapsed is set the first time the deadline is seen passed, and never
+	// cleared within a generation: a lease that has run out cannot be revived
+	// by a renewal that arrives before the supervisor's next timer event.
+	lapsed bool
 }
 
 // NewLease creates a lease with the given grace and loop bounds. It has no
@@ -100,6 +104,7 @@ func (l *Lease) NewGeneration() (string, error) {
 	l.lastSeq, l.lastStatusSeq = 0, 0
 	l.accepted = false
 	l.revoked = false
+	l.lapsed = false
 	l.deadline = l.clock() + StartupAllowance
 	return l.gen, nil
 }
@@ -131,9 +136,12 @@ func (l *Lease) Accept(m Msg) (time.Duration, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.clock()
+	l.noteExpiry(now)
 	switch {
 	case l.revoked:
 		return 0, &RejectError{"the lease is revoked"}
+	case l.lapsed:
+		return 0, &RejectError{"the lease has expired"}
 	case m.Gen != l.gen:
 		return 0, &RejectError{"stale generation"}
 	case m.Seq <= l.lastSeq:
@@ -165,11 +173,19 @@ func (l *Lease) Accept(m Msg) (time.Duration, error) {
 func (l *Lease) AcceptStatus(gen string, seq uint64) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.revoked || gen != l.gen || seq <= l.lastStatusSeq {
+	l.noteExpiry(l.clock())
+	if l.revoked || l.lapsed || gen != l.gen || seq <= l.lastStatusSeq {
 		return false
 	}
 	l.lastStatusSeq = seq
 	return true
+}
+
+// noteExpiry records, for good, that the deadline has passed.
+func (l *Lease) noteExpiry(now time.Duration) {
+	if !l.revoked && now >= l.deadline {
+		l.lapsed = true
+	}
 }
 
 // Held reports an acknowledged, unexpired, unrevoked lease: the worker is
@@ -177,7 +193,7 @@ func (l *Lease) AcceptStatus(gen string, seq uint64) bool {
 func (l *Lease) Held() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return !l.revoked && l.accepted && l.clock() < l.deadline
+	return !l.revoked && !l.lapsed && l.accepted && l.clock() < l.deadline
 }
 
 // Expiry returns the accepted expiry on the boot clock; ok is false before the
@@ -196,5 +212,5 @@ func (l *Lease) Expiry() (time.Duration, bool) {
 func (l *Lease) Lapsed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return !l.revoked && l.clock() >= l.deadline
+	return !l.revoked && (l.lapsed || l.clock() >= l.deadline)
 }

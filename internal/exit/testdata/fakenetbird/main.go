@@ -16,6 +16,7 @@
 // (die: exit 9 after a second; deaf: ignore TERM; existing: do not create or
 // delete the interface), NB_FAKE_FWMARK (the WireGuard fwmark to set, 0x...),
 // NB_FAKE_NOBLACKLIST (write a profile without the tunnel exclusion),
+// NB_FAKE_UP_DELAY (seconds `netbird up` takes),
 // NB_FAKE_LOG_AFTER and NB_FAKE_LOG_LINE (append a line to the client log
 // after that many seconds). The trace file records every call with a
 // timestamp, and for `service run` the rules and links at that moment.
@@ -176,6 +177,9 @@ func service() {
 
 func up() {
 	trace("up")
+	if d, err := strconv.Atoi(os.Getenv("NB_FAKE_UP_DELAY")); err == nil {
+		time.Sleep(time.Duration(d) * time.Second)
+	}
 	state := os.Getenv("NB_STATE_DIR")
 	if state == "" {
 		state = "/var/lib/netbird"

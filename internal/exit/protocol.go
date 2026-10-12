@@ -31,9 +31,13 @@ const (
 
 // NetBird states the supervisor reports.
 const (
-	NBStarted = "started"
-	NBStopped = "stopped"
-	NBFailed  = "failed"
+	// NBLaunching: a launch begins now (its log offset and boot-clock time
+	// are in the message), before the daemon is even started, so the worker's
+	// monitors count from the launch itself, as the gate's did.
+	NBLaunching = "launching"
+	NBStarted   = "started"
+	NBStopped   = "stopped"
+	NBFailed    = "failed"
 )
 
 // Msg is one decoded message. Only the fields of its Type are set.
@@ -62,6 +66,8 @@ type Msg struct {
 	Launch    int
 	State     string
 	LogOffset int64
+	// AtBootNs: the boot-clock time the launch began (netbird messages).
+	AtBootNs int64
 }
 
 // ErrProtocol wraps every decoding failure; the text never carries input.
@@ -116,7 +122,7 @@ func (m Msg) Encode() ([]byte, error) {
 	case TypeStop:
 		o = validate.Members("type", m.Type)
 	case TypeNetBird:
-		o = validate.Members("type", m.Type, "gen", m.Gen, "launch", m.Launch, "state", m.State, "log_offset", m.LogOffset)
+		o = validate.Members("type", m.Type, "gen", m.Gen, "launch", m.Launch, "state", m.State, "log_offset", m.LogOffset, "at_boot_ns", m.AtBootNs)
 	default:
 		return nil, fmt.Errorf("exit: unknown message type %q", m.Type)
 	}
@@ -239,15 +245,15 @@ func decode(line []byte, from map[string]bool) (Msg, error) {
 	case TypeStop:
 		err = fields(o, "type")
 	case TypeNetBird:
-		if err = fields(o, "type", "gen", "launch", "state", "log_offset"); err == nil {
+		if err = fields(o, "type", "gen", "launch", "state", "log_offset", "at_boot_ns"); err == nil {
 			var launch int64
 			if launch, err = num(o, "launch"); err == nil {
 				m.Launch = int(launch)
 				if m.State, err = str(o, "state", 16); err == nil {
-					if m.State != NBStarted && m.State != NBStopped && m.State != NBFailed {
+					if m.State != NBLaunching && m.State != NBStarted && m.State != NBStopped && m.State != NBFailed {
 						err = violation("unknown NetBird state")
-					} else {
-						m.LogOffset, err = num(o, "log_offset")
+					} else if m.LogOffset, err = num(o, "log_offset"); err == nil {
+						m.AtBootNs, err = num(o, "at_boot_ns")
 					}
 				}
 			}

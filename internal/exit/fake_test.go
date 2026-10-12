@@ -3,7 +3,10 @@ package exit
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -54,7 +57,20 @@ func trace(format string, a ...any) {
 }
 
 func fakeCleanup(mode string) {
+	var names []string
+	for _, kv := range os.Environ() {
+		if k, _, ok := strings.Cut(kv, "="); ok {
+			names = append(names, k)
+		}
+	}
+	sort.Strings(names)
+	// The cleanup child's environment is interface names only: the trace file
+	// comes on the command line.
+	if len(os.Args) > 3 {
+		os.Setenv("MB_TRACE_FILE", os.Args[3])
+	}
 	trace("cleanup %s", mode)
+	trace("cleanup env %s", strings.Join(names, " "))
 	switch mode {
 	case "fail":
 		os.Exit(1)
@@ -66,20 +82,30 @@ func fakeCleanup(mode string) {
 // fakeWorker speaks the worker's side of the protocol.
 func fakeWorker(mode string) {
 	gen := os.Getenv("MOLEBRIDGE_GENERATION")
+	if os.Getenv("NB_SETUP_KEY") != "" || os.Getenv("WT_SETUP_KEY") != "" {
+		trace("worker has the setup key")
+	}
 	out := os.NewFile(3, "to-supervisor")
 	in := os.NewFile(4, "from-supervisor")
 	send := NewSender(out)
 	clock := bootclock.System()
 	s := settingsFor("overlay", "wireguard", "mullvad")
-	var seq uint64
+	var seq atomic.Uint64
+	var sendMu sync.Mutex
+	// Sequence numbers are taken under the lock the write is made under, so
+	// they reach the supervisor in order.
+	sendSeq := func(m Msg) {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+		m.Seq = seq.Add(1)
+		_ = send.Send(m)
+	}
 	renew := func() {
 		now := int64(clock())
-		seq++
-		_ = send.Send(Msg{Type: TypeRenew, Gen: gen, Seq: seq, Loops: map[string]int64{LoopMutator: now, LoopWatcher: now}})
+		sendSeq(Msg{Type: TypeRenew, Gen: gen, Loops: map[string]int64{LoopMutator: now, LoopWatcher: now}})
 	}
 	status := func() {
-		seq++
-		_ = send.Send(Msg{Type: TypeStatus, Gen: gen, Seq: seq, Rec: okRecord(s, time.Now().UTC())})
+		sendSeq(Msg{Type: TypeStatus, Gen: gen, Rec: okRecord(s, time.Now().UTC())})
 	}
 	hangStop := mode == "hangstop"
 	if hangStop {
@@ -107,7 +133,7 @@ func fakeWorker(mode string) {
 					os.Exit(0)
 				}
 			case TypeNetBird:
-				trace("worker told netbird %s %d", m.State, m.Launch)
+				trace("worker told netbird %s %d offset=%d at>0=%v", m.State, m.Launch, m.LogOffset, m.AtBootNs > 0)
 				if mode == "unready-after-start" && m.State == NBStarted && m.Launch == 1 {
 					_ = send.Send(Msg{Type: TypeUnready, Gen: gen, Reason: "test: the contract cannot be restored"})
 					go func() {
@@ -152,12 +178,11 @@ func fakeWorker(mode string) {
 		if mode == "stale" && time.Since(start) > time.Second {
 			// Renewals keep coming, but the loops they report have stopped
 			// advancing: a wedged mutation owner.
-			seq++
 			old := int64(clock()) - int64(time.Hour)
 			if old < 0 {
 				old = 0
 			}
-			_ = send.Send(Msg{Type: TypeRenew, Gen: gen, Seq: seq, Loops: map[string]int64{LoopMutator: old, LoopWatcher: int64(clock())}})
+			sendSeq(Msg{Type: TypeRenew, Gen: gen, Loops: map[string]int64{LoopMutator: old, LoopWatcher: int64(clock())}})
 			continue
 		}
 		renew()

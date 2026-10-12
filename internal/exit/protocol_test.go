@@ -37,7 +37,7 @@ func TestRoundTrip(t *testing.T) {
 	back := []Msg{
 		{Type: TypeAck, Gen: goodGen, Seq: 3, ExpiryBootNs: 99},
 		{Type: TypeStop},
-		{Type: TypeNetBird, Gen: goodGen, Launch: 2, State: NBStarted, LogOffset: 1234},
+		{Type: TypeNetBird, Gen: goodGen, Launch: 2, State: NBLaunching, LogOffset: 1234, AtBootNs: 77},
 	}
 	for _, m := range back {
 		b, err := m.Encode()
@@ -48,7 +48,7 @@ func TestRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", m.Type, err)
 		}
-		if got.Type != m.Type || got.ExpiryBootNs != m.ExpiryBootNs || got.Launch != m.Launch || got.State != m.State || got.LogOffset != m.LogOffset {
+		if got.Type != m.Type || got.ExpiryBootNs != m.ExpiryBootNs || got.Launch != m.Launch || got.State != m.State || got.LogOffset != m.LogOffset || got.AtBootNs != m.AtBootNs {
 			t.Errorf("%s: %+v", m.Type, got)
 		}
 	}
@@ -90,7 +90,7 @@ func TestDecodeRefusesMalformedMessages(t *testing.T) {
 	if _, err := DecodeFromSupervisor([]byte(`{"type":"ready","gen":"` + goodGen + `"}`)); !errors.Is(err, ErrProtocol) {
 		t.Error("a worker message is not valid from the supervisor")
 	}
-	if _, err := DecodeFromSupervisor([]byte(`{"type":"netbird","gen":"` + goodGen + `","launch":1,"state":"weird","log_offset":0}`)); !errors.Is(err, ErrProtocol) {
+	if _, err := DecodeFromSupervisor([]byte(`{"type":"netbird","gen":"` + goodGen + `","launch":1,"state":"weird","log_offset":0,"at_boot_ns":0}`)); !errors.Is(err, ErrProtocol) {
 		t.Error("unknown NetBird state")
 	}
 }

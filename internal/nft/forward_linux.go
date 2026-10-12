@@ -3,13 +3,18 @@
 package nft
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net/netip"
+	"sync"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
+
+	"github.com/irashack/molebridge/internal/rtnl"
 )
 
 // The tables the exit's pipeline owns (applier/pia.py NFT_TABLE, GUARD_TABLE).
@@ -17,6 +22,59 @@ const (
 	ForwardTable = "molebridge_forward"
 	GuardTable   = "molebridge_guard"
 )
+
+// withConn opens a lasting nftables connection for one change and runs fn on
+// it. Every socket the connection opens carries the context's absolute
+// deadline from the start (WithSockOptions), the whole change also runs under
+// rtnl.RunBounded, which closes the connection at the deadline (a kernel that
+// never answers cannot hold the caller), and the connection is never reused:
+// it is closed when fn returns, and one delivered after the caller gave up on
+// it is closed by the goroutine that opened it. netns is a file descriptor of
+// a network namespace, 0 for the caller's.
+func withConn(ctx context.Context, netns int, fn func(*nftables.Conn) error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("nft: %w", rtnl.ErrDeadline)
+	}
+	opts := []nftables.ConnOption{nftables.AsLasting()}
+	if dl, ok := ctx.Deadline(); ok {
+		opts = append(opts, nftables.WithSockOptions(func(c *netlink.Conn) error { return c.SetDeadline(dl) }))
+	}
+	if netns != 0 {
+		opts = append(opts, nftables.WithNetNSFd(netns))
+	}
+	var (
+		mu        sync.Mutex
+		c         *nftables.Conn
+		abandoned bool
+	)
+	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() {
+		mu.Lock()
+		abandoned = true
+		cc := c
+		mu.Unlock()
+		if cc != nil {
+			_ = cc.CloseLasting()
+		}
+	}, func() error {
+		opened, err := nftables.New(opts...)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if abandoned {
+			_ = opened.CloseLasting()
+			return rtnl.ErrDeadline
+		}
+		c = opened
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("nft: open netlink: %w", err)
+	}
+	defer c.CloseLasting()
+	return rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { _ = c.CloseLasting() }, func() error { return fn(c) })
+}
 
 // ifname is an interface name as nft compares it: NUL-padded to IFNAMSIZ.
 func ifname(name string) []byte {
@@ -45,11 +103,15 @@ func replaceTable(c *nftables.Conn, family nftables.TableFamily, name string) *n
 //	}
 //
 // An earlier table of that name is replaced atomically. Nothing removes it.
-func InstallIngressGuard(exitIf, overlayIf string) error {
-	c, err := nftables.New()
+func InstallIngressGuard(ctx context.Context, netns int, exitIf, overlayIf string) error {
+	err := withConn(ctx, netns, func(c *nftables.Conn) error { return installIngressGuard(c, exitIf, overlayIf) })
 	if err != nil {
-		return fmt.Errorf("nft: open netlink: %w", err)
+		return fmt.Errorf("nft: install the ingress guard: %w", err)
 	}
+	return nil
+}
+
+func installIngressGuard(c *nftables.Conn, exitIf, overlayIf string) error {
 	t := replaceTable(c, nftables.TableFamilyINet, GuardTable)
 	policy := nftables.ChainPolicyAccept
 	chain := c.AddChain(&nftables.Chain{Name: "forward", Table: t, Type: nftables.ChainTypeFilter,
@@ -61,10 +123,7 @@ func InstallIngressGuard(exitIf, overlayIf string) error {
 		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname(overlayIf)},
 		&expr.Verdict{Kind: expr.VerdictDrop},
 	}})
-	if err := c.Flush(); err != nil {
-		return fmt.Errorf("nft: install the ingress guard: %w", err)
-	}
-	return nil
+	return c.Flush()
 }
 
 // ApplyForwardRules atomically replaces `table ip molebridge_forward`:
@@ -80,14 +139,18 @@ func InstallIngressGuard(exitIf, overlayIf string) error {
 //
 // (The target's WireGuard peer accepts only the exit's overlay address from
 // this peer, so forwarded connections carry it.)
-func ApplyForwardRules(exitIf, overlayIf string, port int, target netip.Addr) error {
+func ApplyForwardRules(ctx context.Context, netns int, exitIf, overlayIf string, port int, target netip.Addr) error {
 	if !target.Is4() || port < 1 || port > 65535 {
 		return fmt.Errorf("nft: invalid forward target")
 	}
-	c, err := nftables.New()
+	err := withConn(ctx, netns, func(c *nftables.Conn) error { return applyForwardRules(c, exitIf, overlayIf, port, target) })
 	if err != nil {
-		return fmt.Errorf("nft: open netlink: %w", err)
+		return fmt.Errorf("nft: apply the forward rules: %w", err)
 	}
+	return nil
+}
+
+func applyForwardRules(c *nftables.Conn, exitIf, overlayIf string, port int, target netip.Addr) error {
 	t := replaceTable(c, nftables.TableFamilyIPv4, ForwardTable)
 	accept := nftables.ChainPolicyAccept
 	pre := c.AddChain(&nftables.Chain{Name: "prerouting", Table: t, Type: nftables.ChainTypeNAT,
@@ -97,7 +160,7 @@ func ApplyForwardRules(exitIf, overlayIf string, port int, target netip.Addr) er
 
 	set := &nftables.Set{Table: t, Anonymous: true, Constant: true, KeyType: nftables.TypeInetProto}
 	if err := c.AddSet(set, []nftables.SetElement{{Key: []byte{unix.IPPROTO_TCP}}, {Key: []byte{unix.IPPROTO_UDP}}}); err != nil {
-		return fmt.Errorf("nft: build the forward rules: %w", err)
+		return err
 	}
 	dport := make([]byte, 2)
 	binary.BigEndian.PutUint16(dport, uint16(port))
@@ -125,22 +188,18 @@ func ApplyForwardRules(exitIf, overlayIf string, port int, target netip.Addr) er
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: addr[:]},
 		&expr.Masq{},
 	}})
-	if err := c.Flush(); err != nil {
-		return fmt.Errorf("nft: apply the forward rules: %w", err)
-	}
-	return nil
+	return c.Flush()
 }
 
 // RemoveForwardRules deletes the forwarding table whether or not it exists.
-func RemoveForwardRules() error {
-	c, err := nftables.New()
+func RemoveForwardRules(ctx context.Context, netns int) error {
+	err := withConn(ctx, netns, func(c *nftables.Conn) error {
+		t := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: ForwardTable}
+		c.AddTable(t) // so that deleting a missing table is not an error
+		c.DelTable(t)
+		return c.Flush()
+	})
 	if err != nil {
-		return fmt.Errorf("nft: open netlink: %w", err)
-	}
-	t := &nftables.Table{Family: nftables.TableFamilyIPv4, Name: ForwardTable}
-	c.AddTable(t) // so that deleting a missing table is not an error
-	c.DelTable(t)
-	if err := c.Flush(); err != nil {
 		return fmt.Errorf("nft: remove the forward rules: %w", err)
 	}
 	return nil

@@ -46,11 +46,13 @@ func TestLeaseOnlyPublicationChangesNothingButOwnerRecord(t *testing.T) {
 	s := h.p.s
 	rec := okRecord(s, h.wall)
 	h.p.Full(rec)
+	h.p.Wait(time.Second)
 	first := h.writes[len(h.writes)-1]
 
 	h.clock.now += 4 * time.Second
 	h.renew(2, gen)
 	h.p.LeaseOnly()
+	h.p.Wait(time.Second)
 	second := h.writes[len(h.writes)-1]
 	if len(h.writes) != 2 {
 		t.Fatalf("%d writes", len(h.writes))
@@ -90,12 +92,14 @@ func TestOwnerRecordFailsWhenTheLeaseIsNotHeld(t *testing.T) {
 	h := newPubHarness(t)
 	gen, _ := h.lease.NewGeneration()
 	h.p.Full(okRecord(h.p.s, h.wall))
+	h.p.Wait(time.Second)
 	if o := h.writes[0]["checks"].(map[string]any)["owner_record"].(map[string]any); o["state"] != "fail" {
 		t.Errorf("no renewal yet: %v", o)
 	}
 	h.renew(1, gen)
 	h.clock.now += 11 * time.Second // the expiry has passed
 	h.p.LeaseOnly()
+	h.p.Wait(time.Second)
 	if o := h.writes[len(h.writes)-1]["checks"].(map[string]any)["owner_record"].(map[string]any); o["state"] != "fail" || o["expires_at"] != nil {
 		t.Errorf("expired lease: %v", o)
 	}
@@ -106,16 +110,21 @@ func TestRecordsAfterTheFailureRecordAreDropped(t *testing.T) {
 	gen, _ := h.lease.NewGeneration()
 	h.renew(1, gen)
 	h.p.Full(okRecord(h.p.s, h.wall))
+	h.p.Wait(time.Second)
 	h.lease.Revoke()
 	h.p.Failure(h.wall.Add(time.Minute))
+	h.p.Wait(time.Second)
 	n := len(h.writes)
 	last := h.writes[n-1]
 	if last["status"] != "failed" || last["message"] != OwnerStoppedMessage {
 		t.Fatalf("%v", last)
 	}
 	h.p.Full(okRecord(h.p.s, h.wall))
+	h.p.Wait(time.Second)
 	h.p.LeaseOnly()
+	h.p.Wait(time.Second)
 	h.p.Failure(h.wall)
+	h.p.Wait(time.Second)
 	if len(h.writes) != n {
 		t.Fatalf("%d writes after the failure record", len(h.writes)-n)
 	}
@@ -126,7 +135,9 @@ func TestOtherKindsGetNoLeaseOnlyPublication(t *testing.T) {
 		h := newPubHarness(t)
 		h.p.s = s
 		h.p.Full(okRecord(s, h.wall))
+		h.p.Wait(time.Second)
 		h.p.LeaseOnly()
+		h.p.Wait(time.Second)
 		if len(h.writes) != 1 {
 			t.Errorf("%s: %d writes; only a native overlay exit carries owner_record", s.Kind(), len(h.writes))
 		}
