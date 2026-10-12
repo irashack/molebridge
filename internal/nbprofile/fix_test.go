@@ -203,6 +203,32 @@ func TestFixBlacklistAlreadyPresentIsANoOp(t *testing.T) {
 	}
 }
 
+// The tunnel interface is already excluded when an entry is a prefix of its
+// name; otherwise the exact name is added.
+func TestFixBlacklistFollowsNetBirdsPrefixMatching(t *testing.T) {
+	for _, c := range []struct {
+		list, tunnel, want string
+	}{
+		{`["wg"]`, "wg0", `["wg"]`},
+		{`["wt0", "wg"]`, "wg0", `["wt0", "wg"]`},
+		{`["mull"]`, "mullvad", `["mull"]`},
+		{`["mullvad0"]`, "mullvad", `["mullvad0", "mullvad"]`},
+		{`[""]`, "mullvad", `["", "mullvad"]`},
+		{`["", "wt0"]`, "mullvad", `["", "wt0", "mullvad"]`},
+	} {
+		f := newFixture(t)
+		path := f.write("default.json", listProfile(c.list))
+		res, err := FixBlacklistWith(f.paths, c.tunnel, fixOpts())
+		if err != nil || res.Changed != (c.want != c.list) {
+			t.Errorf("%s with %s: %+v, %v", c.list, c.tunnel, res, err)
+			continue
+		}
+		if got, _ := os.ReadFile(path); string(got) != listProfile(c.want) {
+			t.Errorf("%s with %s:\n%s", c.list, c.tunnel, got)
+		}
+	}
+}
+
 func TestFixBlacklistEditsTheLegacyProfileInPlace(t *testing.T) {
 	f := newFixture(t)
 	path := f.write(f.paths.Legacy[0], "{\n  \"WgIface\": \"mesh0\"\n}\n")
@@ -569,7 +595,7 @@ func FuzzFixBlacklistSplice(f *testing.F) {
 			}
 		}
 		st, ok := blacklistOf(l)
-		if !ok || contains(st.entries, "mullvad") {
+		if !ok || covers(st.entries, "mullvad") {
 			return
 		}
 		out, err := spliceBlacklist(l, st, "mullvad")

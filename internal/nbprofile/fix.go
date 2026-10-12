@@ -169,7 +169,9 @@ func FixBlacklistWith(p Paths, tunnelIF string, o FixOptions) (FixResult, error)
 	if !ok {
 		return res, fixErr("the stored NetBird profile %s has an IFaceBlackList that is not a list of strings", path)
 	}
-	if contains(st.entries, tunnelIF) {
+	// Already excluded as NetBird's filter reads the list (an entry that is a
+	// prefix of the name, filter.go:13-35): nothing to do.
+	if covers(st.entries, tunnelIF) {
 		return res, nil
 	}
 	out, err := spliceBlacklist(l, st, tunnelIF)

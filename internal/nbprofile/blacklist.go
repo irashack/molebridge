@@ -110,6 +110,21 @@ func contains(list []string, name string) bool {
 	return false
 }
 
+// covers reports whether NetBird's ICE candidate filter excludes the
+// interface: it drops an interface when strings.HasPrefix(iface, entry) holds
+// for any entry of IFaceBlackList (client/internal/stdnet/filter.go:13-35),
+// so the default "wg" covers wg0. An empty entry is ignored here (the filter
+// would treat it as matching every interface; a profile holding one is not
+// taken as proof that the tunnel interface was deliberately excluded).
+func covers(list []string, iface string) bool {
+	for _, s := range list {
+		if s != "" && strings.HasPrefix(iface, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // checkListFile applies the verdicts every reader of a profile shares
 // (unreadable, malformed, a non-ASCII root field name, a repeated checked
 // field) and returns the loaded file and its IFaceBlackList.
@@ -145,11 +160,10 @@ func checkListFile(path string) (loaded, listState, error) {
 // filters NetBird's connection candidates, and excluding the host interface
 // would remove the direct-connection path the gluetun backend relies on.
 //
-// Entries are compared as exact names. NetBird itself matches by prefix
-// (client/internal/stdnet/filter.go:13-35), so a shorter entry such as "wg"
-// would also cover "wg0"; the check asks for the interface's own entry
-// because that is what `netbird up` with NB_EXTRA_IFACE_BLACKLIST writes and
-// what fix-blacklist adds.
+// The tunnel interface counts as excluded when any non-empty entry is a
+// prefix of its name, which is how NetBird's candidate filter applies the list
+// (client/internal/stdnet/filter.go:13-35, strings.HasPrefix(iface, entry)):
+// the default entry "wg" covers wg0.
 //
 // A missing entry is refused with a fixed message naming the repair tool;
 // nothing from the file is printed. An absent profile is not a refusal:
@@ -169,7 +183,7 @@ func CheckBlacklist(p Paths, tunnelIF string) (BlacklistResult, error) {
 	if err != nil {
 		return BlacklistResult{Path: path}, err
 	}
-	if !contains(st.entries, tunnelIF) {
+	if !covers(st.entries, tunnelIF) {
 		return BlacklistResult{Path: path}, refuse(fmt.Sprintf(
 			"the stored NetBird profile %s does not exclude the tunnel interface %s from NetBird's connection candidates; %s",
 			path, tunnelIF, repairHint))

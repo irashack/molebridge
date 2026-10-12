@@ -49,7 +49,11 @@ func TestCheckBlacklistRequiresTheTunnelInterface(t *testing.T) {
 		{"empty", listProfile(`[]`), false},
 		{"populated without the tunnel", listProfile(`["wt0", "docker"]`), false},
 		{"the host interface only", listProfile(`["eth0"]`), false},
-		{"entries are exact names", listProfile(`["mullvad0"]`), false},
+		{"an entry longer than the name does not cover it", listProfile(`["mullvad0"]`), false},
+		{"a prefix entry covers it", listProfile(`["mull"]`), true},
+		{"an unrelated entry does not cover it", listProfile(`["wt0"]`), false},
+		{"an empty entry is ignored", listProfile(`[""]`), false},
+		{"an empty entry beside others is ignored", listProfile(`["", "wt0"]`), false},
 		{"entries are case-sensitive", listProfile(`["Mullvad"]`), false},
 		{"another case of the tunnel in a key", `{"Nested": {"IFaceBlackList": ["mullvad"]}}`, false},
 	} {
@@ -68,6 +72,34 @@ func TestCheckBlacklistRequiresTheTunnelInterface(t *testing.T) {
 			}
 			notContent(t, err)
 		})
+	}
+}
+
+func TestCheckBlacklistFollowsNetBirdsPrefixMatching(t *testing.T) {
+	for _, c := range []struct {
+		list, tunnel string
+		ok           bool
+	}{
+		{`["wg"]`, "wg0", true},
+		{`["wt0", "wg"]`, "wg0", true},
+		{`["mull"]`, "mullvad", true},
+		{`["mullvad"]`, "mullvad", true},
+		{`["mullvad0"]`, "mullvad", false},
+		{`[""]`, "mullvad", false},
+		{`["", "mullvad0"]`, "mullvad", false},
+		{`["wg"]`, "mullvad", false},
+		{`["WG"]`, "wg0", false},
+		{`["g0"]`, "wg0", false},
+	} {
+		f := newFixture(t)
+		path := f.write("default.json", listProfile(c.list))
+		_, err := CheckBlacklist(f.paths, c.tunnel)
+		if c.ok != (err == nil) || (err != nil && err.Error() != refusalFor(path, c.tunnel)) {
+			t.Errorf("%s with %s: %v", c.list, c.tunnel, err)
+		}
+		if c.ok != (CheckBlacklistAfterUp(f.paths, "mesh0", c.tunnel) == nil) {
+			t.Errorf("after up, %s with %s", c.list, c.tunnel)
+		}
 	}
 }
 
