@@ -40,6 +40,7 @@ type Event struct {
 	Err  error
 }
 
+//lint:ignore U1000 linux-only: called from events_linux.go
 func decodeEvents(msgs []netlink.Message) []Event {
 	var out []Event
 	for _, m := range msgs {

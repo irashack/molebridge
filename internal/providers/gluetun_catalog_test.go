@@ -164,7 +164,7 @@ func TestMalformedGluetunEntriesAreSkipped(t *testing.T) {
 		{"hostname", "a..test"}, {"hostname", long(64) + ".test"}, {"hostname", strings.Repeat("a.", 126) + "aa"},
 		{"hostname", "bad.example.test\n"}, {"hostname", "a_test"},
 		{"country", long(257)}, {"country", "\x00"}, {"city", "\x7f"}, {"city", "\u0085"},
-		{"city", int64(4)}, {"city", "‮"}, {"city", "\xed\xa0\x80"},
+		{"city", int64(4)}, {"city", "\u202e"}, {"city", "\xed\xa0\x80"},
 		{"region", []any{"Example"}}, {"categories", "Standard"},
 		{"categories", []any{long(257)}}, {"categories", []any{"\n"}}, {"categories", []any{int64(3)}},
 		{"categories", repeat("Standard", 65)}, {"ips", []any{"2001:db8::1"}},

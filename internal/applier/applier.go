@@ -491,9 +491,7 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 		"configured_server", orNull(truncateChars(a.configuredServer, ServerReportChars)),
 		"request_id", requestID, "selection", a.selectionRecord(), "checks", checks,
 		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)
-	for _, pair := range a.hooks.ResultDefaults() {
-		members = append(members, pair)
-	}
+	members = append(members, a.hooks.ResultDefaults()...)
 	all := append(validate.Obj(nil), fields...)
 	for _, pair := range a.hooks.PublishDefaults() {
 		present := false

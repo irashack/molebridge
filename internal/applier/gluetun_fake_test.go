@@ -358,15 +358,6 @@ func (g *glKernel) GluetunTables(_ context.Context, family int) (GluetunTables, 
 		Host: slices.Clone(g.hostRoutes[family]), Main: g.mainRoutes(f)}, nil
 }
 
-func (g *glKernel) priority(family int, priority uint32) (int, bool) {
-	for i, r := range g.rules[family] {
-		if r.Priority == priority {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
 // dropRule removes the rules at a priority from a family (the Python tests
 // filtered the kernel's list).
 func (g *glKernel) dropRule(family int, priority uint32) {

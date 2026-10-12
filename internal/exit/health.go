@@ -86,4 +86,6 @@ func Healthy(path string, clock bootclock.Clock) (bool, string) {
 }
 
 // readResult reads the published status record, bounded and strictly.
+//
+//lint:ignore U1000 linux-only: called from worker_linux.go
 func readResult(path string) (map[string]any, bool) { return state.ReadObject(path, 16384) }

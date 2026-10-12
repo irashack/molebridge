@@ -27,16 +27,21 @@ const TickInterval = applier.PollSec * time.Second
 // ticks, and never more than 30 seconds.
 const HealthAge = 3 * TickInterval
 
+//lint:ignore U1000 linux-only: built in newPipeline, used by worker_linux.go
 type applierPipeline struct{ a *applier.Applier }
 
+//lint:ignore U1000 linux-only: see applierPipeline
 func (p applierPipeline) Tick(ctx context.Context) error {
 	_, err := p.a.Tick(ctx)
 	return err
 }
 
+//lint:ignore U1000 linux-only: see applierPipeline
 func (p applierPipeline) Healthy(ctx context.Context) bool { return p.a.Healthy(ctx) }
 
 // pipelineEnv is what a pipeline is built from.
+//
+//lint:ignore U1000 linux-only: built by newPipeline, called from worker_linux.go
 type pipelineEnv struct {
 	S       *Settings
 	System  applier.System
@@ -48,6 +53,8 @@ type pipelineEnv struct {
 }
 
 // newPipeline builds the pipeline for the settings' provider.
+//
+//lint:ignore U1000 linux-only: called from worker_linux.go
 func newPipeline(e pipelineEnv) (Pipeline, error) {
 	s := e.S
 	exit := applier.Exit{ExitIf: s.Routing.ExitIf, OverlayIf: s.Routing.OverlayIf, Table: fmt.Sprint(s.Routing.Table), Kind: s.Kind()}
@@ -70,9 +77,3 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 	}
 	return applierPipeline{a}, nil
 }
-
-// recordObj is an ordered record as a publishable value.
-type recordObj validate.Obj
-
-// JSONObject implements validate.ObjectMarshaler.
-func (r recordObj) JSONObject() validate.Obj { return validate.Obj(r) }
