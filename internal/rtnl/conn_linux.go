@@ -32,7 +32,7 @@ type Options struct {
 func (c *Conn) Rules(f Family) ([]Rule, error) {
 	return c.rulesWith(func(ctx context.Context, typ, want uint16, data []byte) ([][]byte, error) {
 		return c.dumpRetry(ctx, typ, want, data)
-	}, nil, f)
+	}, context.Background(), f)
 }
 
 func (c *Conn) rulesOnce(ctx context.Context, f Family) ([]Rule, error) {
@@ -70,7 +70,7 @@ func (c *Conn) malformed(what string, err error) error {
 func (c *Conn) Routes(f Family, tables func(uint32) bool) ([]Route, error) {
 	return c.routesWith(func(ctx context.Context, typ, want uint16, data []byte) ([][]byte, error) {
 		return c.dumpRetry(ctx, typ, want, data)
-	}, nil, f, tables)
+	}, context.Background(), f, tables)
 }
 
 func (c *Conn) routesOnce(ctx context.Context, f Family, tables func(uint32) bool) ([]Route, error) {
@@ -105,7 +105,7 @@ func (c *Conn) routesWith(d dumper, ctx context.Context, f Family, tables func(u
 func (c *Conn) Links() ([]Link, error) {
 	return c.linksWith(func(ctx context.Context, typ, want uint16, data []byte) ([][]byte, error) {
 		return c.dumpRetry(ctx, typ, want, data)
-	}, nil)
+	}, context.Background())
 }
 
 func (c *Conn) linksOnce(ctx context.Context) ([]Link, error) { return c.linksWith(c.dump, ctx) }
@@ -131,7 +131,7 @@ func (c *Conn) linksWith(d dumper, ctx context.Context) ([]Link, error) {
 func (c *Conn) Addrs(f Family) ([]Addr, error) {
 	return c.addrsWith(func(ctx context.Context, typ, want uint16, data []byte) ([][]byte, error) {
 		return c.dumpRetry(ctx, typ, want, data)
-	}, nil, f)
+	}, context.Background(), f)
 }
 
 func (c *Conn) addrsOnce(ctx context.Context, f Family) ([]Addr, error) {
@@ -158,27 +158,27 @@ func (c *Conn) addrsWith(d dumper, ctx context.Context, f Family) ([]Addr, error
 
 // AddRule installs a rule (NLM_F_EXCL: an identical rule is EEXIST).
 func (c *Conn) AddRule(r Rule) error {
-	return wrap("add rule", c.request(nil, rtmNewRule, nlmRequest|nlmAck|nlmCreate|nlmExcl, r.Marshal()))
+	return wrap("add rule", c.request(context.Background(), rtmNewRule, nlmRequest|nlmAck|nlmCreate|nlmExcl, r.Marshal()))
 }
 
 // DelRule removes the first rule that has every attribute of r.
 func (c *Conn) DelRule(r Rule) error {
-	return wrap("delete rule", c.request(nil, rtmDelRule, nlmRequest|nlmAck, r.Marshal()))
+	return wrap("delete rule", c.request(context.Background(), rtmDelRule, nlmRequest|nlmAck, r.Marshal()))
 }
 
 // DelRulePriority removes the first rule at a priority, whatever it selects.
 func (c *Conn) DelRulePriority(f Family, priority uint32) error {
-	return wrap("delete rule by priority", c.request(nil, rtmDelRule, nlmRequest|nlmAck, PriorityOnly(f, priority)))
+	return wrap("delete rule by priority", c.request(context.Background(), rtmDelRule, nlmRequest|nlmAck, PriorityOnly(f, priority)))
 }
 
 // ReplaceRoute creates or replaces a route, like `ip route replace`.
 func (c *Conn) ReplaceRoute(r Route) error {
-	return wrap("replace route", c.request(nil, rtmNewRoute, nlmRequest|nlmAck|nlmCreate|nlmReplace, r.Marshal()))
+	return wrap("replace route", c.request(context.Background(), rtmNewRoute, nlmRequest|nlmAck|nlmCreate|nlmReplace, r.Marshal()))
 }
 
 // DelRoute removes the route that matches r's attributes.
 func (c *Conn) DelRoute(r Route) error {
-	return wrap("delete route", c.request(nil, rtmDelRoute, nlmRequest|nlmAck, r.Marshal()))
+	return wrap("delete route", c.request(context.Background(), rtmDelRoute, nlmRequest|nlmAck, r.Marshal()))
 }
 
 func wrap(op string, err error) error {

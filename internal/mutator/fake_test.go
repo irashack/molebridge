@@ -45,6 +45,8 @@ type fakeKernel struct {
 	// takeFail returns an error for the n-th snapshot (1-based).
 	takeFail func(n int) error
 	takes    int
+	// unstable marks every snapshot as taken while the kernel kept changing.
+	unstable bool
 	// mutations counts requests that change something, in order.
 	mutations int
 }
@@ -104,6 +106,7 @@ func (k *fakeKernel) Take(in rtnl.Interest) (*rtnl.Snapshot, error) {
 		}
 	}
 	s := rtnl.NewSnapshot()
+	s.Unstable = k.unstable
 	for _, f := range families {
 		s.Rules[f] = append([]rtnl.Rule(nil), k.rules[f]...)
 		for _, r := range k.routes[f] {

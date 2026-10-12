@@ -187,9 +187,9 @@ func TestASnapshotWithAnInterruptedDumpIsTakenAgainWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Seven dumps make a snapshot: the first attempt stopped at its third,
-	// so the whole of the second attempt followed.
-	if got := k.count(); got != 3+7 {
+	// Seven dumps make a look and a snapshot is two looks that agree: the
+	// first attempt stopped at its third dump, so all of the second followed.
+	if got := k.count(); got != 3+2*7 { // each look is taken twice and the two compared
 		t.Fatalf("%d dumps", got)
 	}
 	if len(s.Rules[V4]) != 2 || len(s.Rules[V6]) != 2 {
@@ -515,5 +515,127 @@ func TestAnEventThatDoesNotDecodeStillCounts(t *testing.T) {
 	ev, err := (&Subscriber{c: r}).Next(time.Time{})
 	if err != nil || len(ev) != 1 || ev[0].Kind != EventRule || ev[0].Err == nil {
 		t.Fatalf("%+v %v", ev, err)
+	}
+}
+
+func TestTwoLooksThatNeverAgreeGiveAnUnstableSnapshot(t *testing.T) {
+	var n atomic.Int32
+	c, _ := newFake(t, func(i int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			// A different rule every time: the kernel never holds still.
+			return [][]byte{ruleEntry(r.seq, uint32(100+n.Add(1)), 0), doneMsg(r.seq, 0)}
+		}
+		return [][]byte{ackMsg(r.seq)}
+	})
+	s, err := c.Take(Interest{})
+	if err != nil || !s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func TestTwoLooksThatAgreeGiveAStableSnapshot(t *testing.T) {
+	c, _ := newFake(t, ordinary)
+	s, err := c.Take(Interest{})
+	if err != nil || s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+// ---- the change detector ----
+
+type fakeChurn struct {
+	mu      sync.Mutex
+	pending []Event
+	err     error
+}
+
+func (f *fakeChurn) push(e ...Event) { f.mu.Lock(); f.pending = append(f.pending, e...); f.mu.Unlock() }
+func (f *fakeChurn) Next(time.Time) ([]Event, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		err := f.err
+		f.err = nil
+		return nil, err
+	}
+	if len(f.pending) == 0 {
+		return nil, os.ErrDeadlineExceeded
+	}
+	out := f.pending
+	f.pending = nil
+	return out, nil
+}
+func (f *fakeChurn) Close() error { return nil }
+
+func TestASnapshotDuringWhichTheKernelChangedIsTakenAgain(t *testing.T) {
+	churn := &fakeChurn{}
+	var dumps atomic.Int32
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && dumps.Add(1) == 4 {
+			churn.push(Event{Kind: EventRule, Family: V4}) // a rule changed in the middle of the first snapshot
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{Tables: []uint32{51821}})
+	if err != nil || s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if got := k.count(); got != 7+7 {
+		t.Fatalf("%d dumps: one snapshot discarded, one kept", got)
+	}
+}
+
+func TestChangesElsewhereDoNotSpoilASnapshot(t *testing.T) {
+	churn := &fakeChurn{}
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if n == 2 {
+			churn.push(Event{Kind: EventRoute, Table: 254, Family: V4}, Event{Kind: EventRoute, Table: 7120, Family: V6})
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{Tables: []uint32{51821}})
+	if err != nil || s.Unstable || k.count() != 7 {
+		t.Fatalf("%+v %v (%d dumps)", s, err, k.count())
+	}
+	// A route in a table the snapshot reads, or a link or address change, does.
+	for _, e := range []Event{{Kind: EventRoute, Table: 51821}, {Kind: EventLink, Name: "wg0"}, {Kind: EventAddr}, {Kind: EventRoute, Table: 254, Err: errors.New("undecodable")}} {
+		if !relevantToSnapshot(e, Interest{Tables: []uint32{51821}}) {
+			t.Errorf("%+v should spoil it", e)
+		}
+	}
+}
+
+func TestAKernelThatNeverHoldsStillGivesAnUnstableSnapshotNotAnError(t *testing.T) {
+	churn := &fakeChurn{}
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			churn.push(Event{Kind: EventRule, Family: V4})
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil || !s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func TestLostChangeNotificationsSpoilTheSnapshotToo(t *testing.T) {
+	churn := &fakeChurn{}
+	var first atomic.Bool
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && first.CompareAndSwap(false, true) {
+			churn.mu.Lock()
+			churn.err = ErrOverrun
+			churn.mu.Unlock()
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil || s.Unstable || k.count() != 14 {
+		t.Fatalf("%+v %v (%d dumps)", s, err, k.count())
 	}
 }

@@ -5,10 +5,15 @@ import "net/netip"
 // Snapshot is a consistent-as-possible copy of the kernel state the contract
 // is judged on. Routes hold only the tables a caller asked for.
 type Snapshot struct {
-	Rules  map[Family][]Rule
-	Routes map[Family][]Route
-	Links  []Link
-	Addrs  map[Family][]Addr
+	// Unstable says the kernel kept changing while the snapshot was taken, so
+	// two consecutive looks never agreed. Repairs judged on it are safe (they
+	// are idempotent and gap-free), but it must not be taken as proof that the
+	// contract holds.
+	Unstable bool
+	Rules    map[Family][]Rule
+	Routes   map[Family][]Route
+	Links    []Link
+	Addrs    map[Family][]Addr
 }
 
 // Interest says which parts of the routing state a snapshot needs.

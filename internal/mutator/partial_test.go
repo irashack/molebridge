@@ -120,7 +120,7 @@ func (h *piaHarness) observe(where string) {
 	}
 }
 
-func (h *piaHarness) run(failStep int, failMutation int, persistent bool, failTake int) (err error, steps int) {
+func (h *piaHarness) run(failStep int, failMutation int, persistent bool, failTake int) (steps int, err error) {
 	h.k.hook = h.observe
 	h.k.mutations = 0
 	h.k.takes = 0
@@ -151,7 +151,7 @@ func (h *piaHarness) run(failStep int, failMutation int, persistent bool, failTa
 		}
 		return nil
 	})
-	return err, steps
+	return steps, err
 }
 
 // finalChecks: whatever the transaction returned, the kernel protects every
@@ -205,7 +205,7 @@ func TestEveryFailurePointOfAnAddressChangeLeavesLiveAddressesProtected(t *testi
 		sc := sc
 		// How many requests and snapshots a clean run makes.
 		clean := newPIAHarness(t, sc)
-		if err, _ := clean.run(-1, 0, false, 0); err != nil {
+		if _, err := clean.run(-1, 0, false, 0); err != nil {
 			t.Fatalf("%s: a clean run failed: %v", sc.name, err)
 		}
 		clean.finalChecks(sc.name+" (clean)", nil)
@@ -214,7 +214,7 @@ func TestEveryFailurePointOfAnAddressChangeLeavesLiveAddressesProtected(t *testi
 
 		for step := 0; step <= len(sc.steps); step++ {
 			h := newPIAHarness(t, sc)
-			err, _ := h.run(step, 0, false, 0)
+			_, err := h.run(step, 0, false, 0)
 			h.finalChecks(fmt.Sprintf("%s, callback fails at step %d", sc.name, step), err)
 			if step < len(sc.steps) || len(sc.steps) > 0 {
 				if err == nil {
@@ -225,23 +225,23 @@ func TestEveryFailurePointOfAnAddressChangeLeavesLiveAddressesProtected(t *testi
 		for n := 1; n <= mutations+2; n++ {
 			for _, persistent := range []bool{false, true} {
 				h := newPIAHarness(t, sc)
-				err, _ := h.run(-1, n, persistent, 0)
+				_, err := h.run(-1, n, persistent, 0)
 				h.finalChecks(fmt.Sprintf("%s, request %d fails (persistent=%v)", sc.name, n, persistent), err)
 				// And the same together with a callback failure.
 				for step := 0; step <= len(sc.steps); step++ {
 					h := newPIAHarness(t, sc)
-					err, _ := h.run(step, n, persistent, 0)
+					_, err := h.run(step, n, persistent, 0)
 					h.finalChecks(fmt.Sprintf("%s, request %d fails (persistent=%v) and the callback at step %d", sc.name, n, persistent, step), err)
 				}
 			}
 		}
 		for n := 1; n <= takes+1; n++ {
 			h := newPIAHarness(t, sc)
-			err, _ := h.run(-1, 0, false, n)
+			_, err := h.run(-1, 0, false, n)
 			h.finalChecks(fmt.Sprintf("%s, snapshots fail from the %d-th", sc.name, n), err)
 			for step := 0; step <= len(sc.steps); step++ {
 				h := newPIAHarness(t, sc)
-				err, _ := h.run(step, 0, false, n)
+				_, err := h.run(step, 0, false, n)
 				h.finalChecks(fmt.Sprintf("%s, snapshots fail from the %d-th and the callback at step %d", sc.name, n, step), err)
 			}
 		}
