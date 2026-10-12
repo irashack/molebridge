@@ -147,6 +147,8 @@ type GluetunCatalog struct {
 	haveSig    bool
 	readAt     float64
 	haveReadAt bool
+	// reads counts the times the file was read and parsed (tests).
+	reads int
 }
 
 type fileSignature struct {
@@ -206,6 +208,7 @@ func (c *GluetunCatalog) read() bool {
 	if c.haveSig && signature == c.signature && c.haveReadAt && now-c.readAt < CatalogRereadSec && c.Usable() {
 		return true
 	}
+	c.reads++
 	relays, timestamp, err := providers.ReadGluetunSnapshot(c.source, c.gluetunProvider, now)
 	if err != nil {
 		return false
