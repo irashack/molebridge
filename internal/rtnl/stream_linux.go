@@ -40,9 +40,6 @@ var ErrStream = errors.New("rtnl: request socket reset")
 // errInterrupted is a dump the kernel marked NLM_F_DUMP_INTR.
 var errInterrupted = errors.New("rtnl: dump interrupted by a concurrent change")
 
-// ErrDeadline is returned when the operation's deadline has passed.
-var ErrDeadline = fmt.Errorf("rtnl: operation deadline exceeded: %w", os.ErrDeadlineExceeded)
-
 const recvBuffer = 1 << 17
 
 const (
@@ -143,6 +140,12 @@ type Conn struct {
 	deadline time.Time
 	seq      uint32
 	resets   int
+	// interrupts counts dumps the kernel marked NLM_F_DUMP_INTR.
+	interrupts int
+
+	// churn is a private multicast subscription that tells a snapshot whether
+	// anything changed while it was being taken. Optional.
+	churn churnSource
 
 	tmu    sync.Mutex // guards t and closed
 	t      transport
@@ -157,11 +160,24 @@ func Dial(o Options) (*Conn, error) {
 		return nil, err
 	}
 	c.t = t
+	// Best effort: without it a snapshot is judged by two looks that agree.
+	if sub, err := Subscribe(o); err == nil {
+		c.churn = sub
+	}
 	return c, nil
+}
+
+// churnSource is what a Conn needs of its change detector; *Subscriber.
+type churnSource interface {
+	Next(deadline time.Time) ([]Event, error)
+	Close() error
 }
 
 // Close closes the socket and unblocks a request in flight.
 func (c *Conn) Close() error {
+	if c.churn != nil {
+		_ = c.churn.Close()
+	}
 	c.tmu.Lock()
 	defer c.tmu.Unlock()
 	c.closed = true
@@ -179,6 +195,14 @@ func (c *Conn) SetTimeout(d time.Duration) {
 	c.mu.Lock()
 	c.timeout = d
 	c.mu.Unlock()
+}
+
+// Interrupts counts the dumps the kernel marked as interrupted by a concurrent
+// change, each of which was discarded.
+func (c *Conn) Interrupts() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.interrupts
 }
 
 // Resets counts how many times the stream has been closed and reopened.
@@ -430,6 +454,9 @@ func (c *Conn) dump(ctx context.Context, typ, want uint16, data []byte) ([][]byt
 		return nil, err
 	}
 	if interrupted {
+		c.mu.Lock()
+		c.interrupts++
+		c.mu.Unlock()
 		return nil, errInterrupted
 	}
 	out := make([][]byte, 0, len(msgs))
