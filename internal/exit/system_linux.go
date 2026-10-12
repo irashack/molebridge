@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vishvananda/netlink"
@@ -41,9 +42,16 @@ type KernelSystem struct {
 	Tun  *tunnel.Manager
 	// Generation is the launch generation: the native exit's owner generation.
 	Generation string
+
+	snapMu sync.Mutex
+	snap   *rtnl.Snapshot
+	snapAt time.Time
 }
 
-var _ applier.System = (*KernelSystem)(nil)
+var (
+	_ applier.System        = (*KernelSystem)(nil)
+	_ applier.GluetunSystem = (*KernelSystem)(nil)
+)
 
 func (k *KernelSystem) exitIf() string    { return k.S.Routing.ExitIf }
 func (k *KernelSystem) overlayIf() string { return k.S.Routing.OverlayIf }
@@ -543,3 +551,62 @@ func (k *KernelSystem) ApplyForwardRules(_ context.Context, port int, target net
 
 // RemoveForwardRules deletes the port-forwarding table.
 func (k *KernelSystem) RemoveForwardRules(_ context.Context) error { return nft.RemoveForwardRules() }
+
+// -- the gluetun backend's reads -------------------------------------------------
+
+// GluetunLinks reads the tunnel interface and the host interface from one
+// dump. A missing tunnel is routine (gluetun recreates it on every
+// reconnect) and not an error.
+func (k *KernelSystem) GluetunLinks(_ context.Context) (applier.GluetunLinks, error) {
+	snap, err := k.gluetunSnapshot()
+	if err != nil {
+		return applier.GluetunLinks{}, err
+	}
+	var out applier.GluetunLinks
+	if l, ok := snap.Link(k.exitIf()); ok {
+		out.Tunnel = applier.TunnelLink{Present: true, Up: l.Up(), Index: l.Index}
+	}
+	if k.Spec.Config.HostIf != "" {
+		if l, ok := snap.Link(k.Spec.Config.HostIf); ok {
+			out.HostIndex = l.Index
+		}
+	}
+	return out, nil
+}
+
+// GluetunTables reads one family's rules and the exit, host and main tables.
+// The links and the tables of one reading come from one snapshot: calls within
+// 100 ms of each other share it, so the tunnel route's interface index is the
+// tunnel link's index the previous call reported.
+func (k *KernelSystem) GluetunTables(_ context.Context, family int) (applier.GluetunTables, error) {
+	f, err := familyOf(family)
+	if err != nil {
+		return applier.GluetunTables{}, err
+	}
+	snap, err := k.gluetunSnapshot()
+	if err != nil {
+		return applier.GluetunTables{}, err
+	}
+	c := k.Spec.Config
+	return applier.GluetunTables{
+		Rules: snap.Rules[f], Exit: snap.RoutesInTable(f, c.Table), Host: snap.RoutesInTable(f, c.HostTable),
+		Main: snap.RoutesInTable(f, rtnl.TableMain),
+	}, nil
+}
+
+// gluetunSnapshotAge is how long a snapshot is shared between the two calls.
+const gluetunSnapshotAge = 100 * time.Millisecond
+
+func (k *KernelSystem) gluetunSnapshot() (*rtnl.Snapshot, error) {
+	k.snapMu.Lock()
+	defer k.snapMu.Unlock()
+	if k.snap != nil && time.Since(k.snapAt) < gluetunSnapshotAge {
+		return k.snap, nil
+	}
+	snap, err := k.Obs.Take(k.Spec.Interest())
+	if err != nil {
+		return nil, err
+	}
+	k.snap, k.snapAt = snap, time.Now()
+	return snap, nil
+}
