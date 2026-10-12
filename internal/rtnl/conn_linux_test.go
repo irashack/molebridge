@@ -639,3 +639,145 @@ func TestLostChangeNotificationsSpoilTheSnapshotToo(t *testing.T) {
 		t.Fatalf("%+v %v (%d dumps)", s, err, k.count())
 	}
 }
+
+// ---- finding: observation failure is not silence; draining is bounded ----
+
+// endlessChurn always has an irrelevant notification waiting, and a read takes
+// as long as its deadline allows, up to a millisecond.
+type endlessChurn struct{ reads atomic.Int32 }
+
+func (e *endlessChurn) Next(deadline time.Time) ([]Event, error) {
+	e.reads.Add(1)
+	d := time.Until(deadline)
+	if d > time.Millisecond {
+		d = time.Millisecond
+	}
+	if d > 0 {
+		time.Sleep(d)
+	}
+	return []Event{{Kind: EventRoute, Table: 7120, Family: V4}}, nil
+}
+func (e *endlessChurn) Close() error { return nil }
+
+func TestNotificationDrainingIsBoundedByTheOperationDeadline(t *testing.T) {
+	c, k := newFake(t, ordinary)
+	c.churn = &endlessChurn{}
+	c.SetDeadline(time.Now().Add(15 * time.Millisecond))
+	start := time.Now()
+	s, err := c.Take(Interest{Tables: []uint32{51821}})
+	if err == nil || !errors.Is(err, os.ErrDeadlineExceeded) || s != nil {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if took := time.Since(start); took > 60*time.Millisecond {
+		t.Errorf("took %v for a 15 ms deadline (256 one-millisecond reads would be 256 ms)", took)
+	}
+	if k.count() != 0 {
+		t.Errorf("a dump was made after the deadline passed in the pre-dump drain: %d", k.count())
+	}
+}
+
+// After the dumps the same bound applies, and a snapshot is not handed over
+// after the deadline.
+type lateChurn struct {
+	dumps *atomic.Int32
+	after int32
+}
+
+func (l *lateChurn) Next(deadline time.Time) ([]Event, error) {
+	if l.dumps.Load() < l.after {
+		return nil, os.ErrDeadlineExceeded
+	}
+	d := time.Until(deadline)
+	if d > time.Millisecond {
+		d = time.Millisecond
+	}
+	if d > 0 {
+		time.Sleep(d)
+	}
+	return []Event{{Kind: EventRoute, Table: 7120}}, nil
+}
+func (l *lateChurn) Close() error { return nil }
+
+func TestPostDumpDrainingIsBoundedToo(t *testing.T) {
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			dumps.Add(1)
+		}
+		return ordinary(n, r)
+	})
+	c.churn = &lateChurn{dumps: &dumps, after: 7}
+	c.SetDeadline(time.Now().Add(40 * time.Millisecond))
+	start := time.Now()
+	s, err := c.Take(Interest{Tables: []uint32{51821}})
+	if err == nil || s != nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if time.Since(start) > 120*time.Millisecond {
+		t.Errorf("took %v", time.Since(start))
+	}
+}
+
+type brokenChurn struct {
+	fakeChurn
+	failPost bool
+	dumps    *atomic.Int32
+	after    int32
+	closed   atomic.Bool
+}
+
+func (b *brokenChurn) Next(d time.Time) ([]Event, error) {
+	if b.dumps.Load() >= b.after {
+		return nil, errors.New("receive failed: bad message")
+	}
+	return nil, os.ErrDeadlineExceeded
+}
+func (b *brokenChurn) Close() error { b.closed.Store(true); return nil }
+
+func TestAFailedNotificationReadIsNotSilence(t *testing.T) { // finding: it returned a stable snapshot
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			dumps.Add(1)
+		}
+		return ordinary(n, r)
+	})
+	bad := &brokenChurn{dumps: &dumps, after: 7}
+	c.churn = bad
+	reopened := 0
+	good := &fakeChurn{}
+	c.reopen = func() (churnSource, error) { reopened++; return good, nil }
+	s, err := c.Take(Interest{Tables: []uint32{51821}})
+	if err != nil || s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if reopened != 1 || !bad.closed.Load() {
+		t.Errorf("the failed subscription was not replaced (reopened %d, closed %v)", reopened, bad.closed.Load())
+	}
+	if dumps.Load() < 14 {
+		t.Errorf("%d dumps: the snapshot the failed read could not vouch for must be taken again", dumps.Load())
+	}
+}
+
+func TestIfNotificationsCanNeverBeReadTheSnapshotIsUnstable(t *testing.T) {
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump {
+			dumps.Add(1)
+		}
+		return ordinary(n, r)
+	})
+	c.churn = &brokenChurn{dumps: &dumps, after: 0}
+	c.reopen = func() (churnSource, error) { return &brokenChurn{dumps: &dumps, after: 0}, nil }
+	s, err := c.Take(Interest{})
+	if err != nil || !s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+	// With no way to reopen at all, the same.
+	c.churn = &brokenChurn{dumps: &dumps, after: 0}
+	c.reopen = func() (churnSource, error) { return nil, errors.New("cannot subscribe") }
+	s, err = c.Take(Interest{})
+	if err != nil || !s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
