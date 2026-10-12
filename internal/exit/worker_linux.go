@@ -388,6 +388,7 @@ func (w *worker) run() int {
 	}
 	spawn(w.pipelineLoop)
 	spawn(w.heartbeatLoop)
+	w.drillHooks()
 
 	<-w.ctx.Done()
 	w.logf("stopping")
