@@ -1,0 +1,76 @@
+"""Writes the status records the Python applier publishes for fixed scenarios,
+as testdata/records_golden.json (the values are the records as JSON text; the
+Go test normalizes timestamps). Run from the repository root at the commit
+before the Go port, with a stub pytest module on the path (test_runtime and
+its siblings import it). Kept as text so nothing treats it as Python source."""
+import json, sys, tempfile, copy, dataclasses
+from pathlib import Path
+sys.path.insert(0, 'path/to/stub-pytest'); sys.path.insert(0, '.'); sys.path.insert(0, 'tools')
+import test_runtime as tr
+import test_pia as tp
+import test_nordvpn_applier as tn
+import test_egress as te
+from applier.apply import Applier
+from molebridge import providers
+from molebridge.state import now_iso, write_json_atomic
+
+out = {}
+
+def runtime():
+    tmp = Path(tempfile.mkdtemp())
+    write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'relays': {tr.HOST: tr.ENTRY}})
+    kernel = tr.Kernel()
+    app = Applier(tmp, tr.CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, boot_id='00000000-0000-4000-8000-0000000000aa')
+    app.next_catalog = float('inf')
+    return app, kernel
+
+app, k = runtime(); out['mullvad_inspect'] = app.inspect()
+app, k = runtime(); out['mullvad_switch'] = app.switch(tr.request())
+app, k = runtime(); k.egress_ok = False; out['mullvad_unanswered'] = app.inspect()
+app, k = runtime(); app.catalog.snapshot['fetched_at'] = tr.timestamp(86401); out['mullvad_pending_stale'] = app.switch(tr.request())
+app, k = runtime(); write_json_atomic(app.desired_path, tr.request(server='xx-xxx-wg-999')); out['mullvad_rejected'] = app.tick()
+app, k = runtime()
+app.catalog.relays[tr.OTHER_HOST] = {**tr.ENTRY, 'hostname': tr.OTHER_HOST, 'public_key': tr.OTHER_KEY}
+k.keys = [tr.OTHER_KEY]; k.fail_set = True
+write_json_atomic(app.desired_path, tr.request()); out['mullvad_mutation_failed'] = app.tick()
+app, k = runtime(); k.egress_ok = False; write_json_atomic(app.desired_path, tr.request()); out['mullvad_unverified'] = app.tick()
+tmp = Path(tempfile.mkdtemp())
+write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'relays': {tr.HOST: tr.ENTRY}})
+kernel = tr.Kernel()
+app = Applier(tmp, tr.CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, server=tr.HOST)
+app.next_catalog = float('inf'); out['mullvad_configured'] = app.tick()
+app, k = runtime(); write_json_atomic(app.desired_path, {'server': '--bad', 'requested_at': now_iso()}); out['mullvad_invalid_desired'] = app.tick()
+
+def nord():
+    tmp = Path(tempfile.mkdtemp())
+    write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'provider': 'nordvpn', 'relays': tn.catalogue()}, public=True)
+    kernel = tn.NordKernel()
+    a = tn.NordApplier(tmp, tn.CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, boot_id='00000000-0000-4000-8000-0000000000aa')
+    a.next_catalog = float('inf')
+    return a, kernel
+a, k = nord(); out['nord_fresh'] = a.inspect()
+a, k = nord(); out['nord_switch'] = a.switch(tn.request(tn.US))
+
+def pia(forward):
+    tmp = Path(tempfile.mkdtemp())
+    secrets = tmp/'secrets'; secrets.mkdir(); (secrets/'username').write_text(tp.USERNAME+'\n'); (secrets/'password').write_text(tp.PASSWORD)
+    write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'provider': 'pia', 'relays': {tp.REGION: tp.entry()}})
+    kernel = tp.PiaKernel()
+    kw = dict(port_forward=True, forward_target='192.0.2.10') if forward else {}
+    a = tp.PiaApplier(tmp, tp.CONFIG, secrets_dir=secrets, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, choose=lambda items: items[0], **kw)
+    a.next_catalog = float('inf')
+    return a, kernel
+a, k = pia(False); out['pia_unregistered'] = a.inspect()
+a, k = pia(True); tp.desire(a); a.tick(); out['pia_forward_bound'] = a.inspect()
+a, k = pia(False); out['pia_switch'] = a.switch(tp.request())
+
+spec = dataclasses.replace(providers.get('mullvad'), id='tunnelvpn', label='Tunnel Example', egress_tier='tunnel', validate_entry=lambda entry: dict(entry))
+providers.REGISTRY['tunnelvpn'] = spec
+tmp = Path(tempfile.mkdtemp())
+write_json_atomic(tmp/'applier'/'relays.json', {'fetched_at': now_iso(), 'provider': 'tunnelvpn', 'relays': {tr.HOST: tr.ENTRY}})
+kernel = te.EchoKernel()
+a = te.TunnelApplier(tmp, tr.CONFIG, run=kernel.run, clock=lambda: kernel.now, sleep=kernel.sleep, boot_id='00000000-0000-4000-8000-0000000000aa')
+a.next_catalog = float('inf'); out['tunnel_tier'] = a.inspect()
+
+Path('internal/applier/testdata/records_golden.json').write_text(json.dumps({k: json.dumps(v) for k, v in out.items()}, indent=1))
+print(len(out), 'records')
