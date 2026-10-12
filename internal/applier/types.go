@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/irashack/molebridge/internal/providers"
+	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/state"
 	"github.com/irashack/molebridge/internal/validate"
 	"github.com/irashack/molebridge/internal/verdict"
@@ -92,11 +92,6 @@ func wrapIO(err error) error {
 func caught(err error) bool {
 	var io *ioError
 	return !errors.As(err, &io) && !errors.Is(err, context.Canceled)
-}
-
-func isPathError(err error) bool {
-	var pe *fs.PathError
-	return errors.As(err, &pe)
 }
 
 // Exit is the part of the exit worker's configuration the applier reads.
@@ -261,7 +256,14 @@ func (r *Record) Decoded() map[string]any {
 }
 
 // ResultPath is state/applier/result.json under a state directory.
-func ResultPath(stateDir string) string { return stateDir + "/applier/result.json" }
+func ResultPath(stateDir string) string { return filepath.Join(stateDir, "applier", "result.json") }
+
+// WriteResult writes a record as result.json: atomically, readable by the
+// non-root panel (0644). The supervisor calls it (decision D7); the applier
+// never does.
+func WriteResult(stateDir string, record *Record) error {
+	return jsonfile.Write(ResultPath(stateDir), record, jsonfile.Options{Public: true})
+}
 
 // orNull is nil for the empty string (Python's None).
 func orNull(s string) any {
@@ -320,6 +322,3 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
-// registryEntry is the provider's registry entry.
-func registryEntry(id string) (*providers.Provider, error) { return providers.Get(id) }

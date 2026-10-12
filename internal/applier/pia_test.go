@@ -191,6 +191,7 @@ func (api *piaAPI) fetch(req netx.Request) (netx.Response, error) {
 		t.Errorf("unexpected pinned request %s", req.URL)
 	}
 	req.ConnectAddr = api.server.Listener.Addr().String()
+	req.BindInterface = "" // the test namespace has no such interface (netx's own tests cover binding)
 	return netx.Client{}.Fetch(context.Background(), req)
 }
 
