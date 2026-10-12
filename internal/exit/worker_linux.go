@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,8 @@ type worker struct {
 	pipe Pipeline
 
 	monitors *gluetunMonitors
+	// drillStop is set by the drill-only hook (worker_hook_drill_linux.go).
+	drillStop func()
 
 	logMu  sync.Mutex
 	warned map[string]time.Time
@@ -97,6 +100,9 @@ type worker struct {
 // descriptors are 3 (to the supervisor) and 4 (from it). It returns the exit
 // status.
 func RunWorker(environ []string, stderr io.Writer) int {
+	// The heap is small and the process idles: collect less often, a few
+	// megabytes more heap for a quarter of the collections.
+	debug.SetGCPercent(400)
 	env := EnvMap(environ)
 	// NetBird's setup key is the supervisor's; the worker never needs it.
 	delete(env, "NB_SETUP_KEY")
@@ -403,6 +409,9 @@ func (w *worker) run() int {
 	select {
 	case <-finished:
 	case <-time.After(time.Second):
+	}
+	if w.drillStop != nil {
+		w.drillStop()
 	}
 	return 0
 }

@@ -20,11 +20,10 @@ func (w *worker) drillHooks() {
 	// MOLEBRIDGE_DRILL_CPUPROFILE=<file> profiles the worker until it stops.
 	if path := w.s.Env["MOLEBRIDGE_DRILL_CPUPROFILE"]; path != "" {
 		if f, err := os.Create(path); err == nil && pprof.StartCPUProfile(f) == nil {
-			go func() {
-				<-w.ctx.Done()
+			w.drillStop = func() {
 				pprof.StopCPUProfile()
 				f.Close()
-			}()
+			}
 		}
 	}
 	path := filepath.Join(w.s.RunDir, "wedge-mutator")

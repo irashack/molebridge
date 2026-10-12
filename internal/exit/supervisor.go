@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -152,6 +153,7 @@ func (s *Supervisor) Lease() *Lease { return s.lease }
 // when told and runs the stop sequence. It returns the process's exit status.
 func (s *Supervisor) Run() int {
 	defer close(s.done)
+	debug.SetGCPercent(400)
 	if s.c.Reaper == nil {
 		_ = proc.BecomeSubreaper()
 		r, err := proc.NewReaper()
