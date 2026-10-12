@@ -1,0 +1,5 @@
+{
+    "PrivateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "IFaceBlackList": ["wt0"],
+    "WgIface": "mesh0"
+}

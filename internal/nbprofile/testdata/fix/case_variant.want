@@ -1,0 +1,6 @@
+{
+  "ifaceblacklist": [
+    "wt0",
+    "mullvad"
+  ]
+}

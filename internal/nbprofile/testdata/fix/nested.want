@@ -1,0 +1,21 @@
+{
+  "A": {"IFaceBlackList": ["inner"]},
+  "B": [1, 2, {"x": null}],
+  "IFaceBlackList": [
+    "wt0",
+    "wt",
+    "utun",
+    "tun0",
+    "zt",
+    "ZeroTier",
+    "wg",
+    "ts",
+    "Tailscale",
+    "tailscale",
+    "docker",
+    "veth",
+    "br-",
+    "lo",
+    "mullvad"
+  ]
+}
