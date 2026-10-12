@@ -28,6 +28,9 @@ const piaConfText = "[Interface]\nPrivateKey = " + zeroKey + "\nMTU = 1420\nTabl
 func sysRig(t *testing.T) (*KernelSystem, *nstest.NS) {
 	t.Helper()
 	ns := nstest.New(t, "sys")
+	if _, err := ns.TryIP("link", "add", "wt0", "type", "wireguard"); err != nil {
+		t.Skipf("no WireGuard: %v", err)
+	}
 	cfg, err := contract.ConfigFromEnv(func(k string) string {
 		return map[string]string{"OVERLAY_CIDR": "192.0.2.0/24", "OVERLAY_IF": "wt0", "EXIT_IF": "mullvad", "EXIT_TABLE": "51821"}[k]
 	})
@@ -65,7 +68,7 @@ func sysRig(t *testing.T) (*KernelSystem, *nstest.NS) {
 	}); err != nil {
 		t.Skipf("no WireGuard: %v", err)
 	}
-	ks := &KernelSystem{S: s, Spec: spec, Obs: obs, Mut: mut, Tun: tun, Generation: strings.Repeat("a", 32)}
+	ks := &KernelSystem{S: s, Spec: spec, Obs: obs, Mut: mut, Tun: tun, Generation: strings.Repeat("a", 32), NetNS: ns.Fd()}
 	var _ applier.System = ks
 	return ks, ns
 }
@@ -198,12 +201,18 @@ func TestKernelSystemReadsTheNamespace(t *testing.T) {
 	if err := ks.LinkExists(ctx, "nonexistent0"); err == nil {
 		t.Error("a missing interface")
 	}
-	if ok, err := ks.OverlayKernelWireGuard(ctx); err != nil || ok {
-		t.Errorf("no overlay interface yet: %v %v", ok, err)
-	}
-	ns.IP("link", "add", "wt0", "type", "wireguard")
 	if ok, err := ks.OverlayKernelWireGuard(ctx); err != nil || !ok {
 		t.Errorf("a wireguard overlay: %v %v", ok, err)
+	}
+	ns.IP("link", "del", "wt0")
+	ks.invalidate()
+	if ok, err := ks.OverlayKernelWireGuard(ctx); err != nil || ok {
+		t.Errorf("no overlay interface: %v %v", ok, err)
+	}
+	ns.IP("link", "add", "wt0", "type", "dummy")
+	ks.invalidate()
+	if ok, err := ks.OverlayKernelWireGuard(ctx); err != nil || ok {
+		t.Errorf("a dummy overlay is not kernel WireGuard: %v %v", ok, err)
 	}
 	if ok, err := ks.NetbirdFirewallPresent(ctx); err != nil || ok {
 		t.Errorf("no NetBird firewall yet: %v %v", ok, err)

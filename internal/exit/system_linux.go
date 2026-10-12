@@ -43,6 +43,9 @@ type KernelSystem struct {
 	Tun  *tunnel.Manager
 	// Generation is the launch generation: the native exit's owner generation.
 	Generation string
+	// NetNS is a file descriptor of the namespace the exit lives in; zero (the
+	// process's own) in production, set by tests that look from outside.
+	NetNS int
 
 	snapMu sync.Mutex
 	snap   *rtnl.Snapshot
@@ -134,7 +137,7 @@ func (k *KernelSystem) OverlayKernelWireGuard(_ context.Context) (bool, error) {
 func (k *KernelSystem) NetbirdFirewallPresent(ctx context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	chains, err := nft.ListChainsContext(ctx, 0)
+	chains, err := nft.ListChainsContext(ctx, k.NetNS)
 	if err != nil {
 		return false, err
 	}
