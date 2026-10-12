@@ -6,3 +6,5 @@ panel/static/JetBrainsMono-OFL.txt -whitespace
 routing/* text eol=lf
 *.py text eol=lf
 applier/Dockerfile text eol=lf
+vendor/** -whitespace
+Dockerfile text eol=lf

@@ -1,0 +1,150 @@
+name: Acceptance
+
+# Run by a maintainer after live acceptance of a release candidate (D19). It
+# attests, against the candidate's index digest, that acceptance passed, with
+# the project's own predicate type. The release workflow promotes a candidate
+# only when it finds this attestation, signed by this workflow on main, naming
+# the tagged commit and complete coverage (tools/acceptance-policy.json).
+#
+# Inputs:
+#   rc_tag    the candidate tag, e.g. v0.8.0-rc.1
+#   coverage  JSON: {"platforms":[...],"providers":[...],"kinds":[...],
+#             "drills":[{"id":"client-held","result":"passed"},...]}
+#   evidence  JSON array of references to the evidence (run notes, logs, URLs)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: Release candidate tag, e.g. v0.8.0-rc.1
+        required: true
+        type: string
+      coverage:
+        description: Coverage JSON (platforms, providers, kinds, drills)
+        required: true
+        type: string
+      evidence:
+        description: JSON array of evidence references
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: acceptance-${{ inputs.rc_tag }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/irashack/molebridge
+  OIDC_ISSUER: https://token.actions.githubusercontent.com
+
+jobs:
+  attest:
+    name: Attest live acceptance
+    # The attestation's signer identity names this workflow at refs/heads/main;
+    # a run from any other ref would carry a different identity and be refused
+    # at promotion, so it does not run.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check the inputs
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RC_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' ||
+            { echo "::error::rc_tag must look like v0.8.0-rc.1"; exit 1; }
+      - name: Check out the candidate's source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The policy and the predicate writer are the candidate's own.
+          ref: refs/tags/${{ inputs.rc_tag }}
+          persist-credentials: false
+      - name: Log in to ghcr.io
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Install crane
+        uses: ./.github/actions/install-release-tools
+        with:
+          crane: "true"
+      - name: Resolve and verify the candidate
+        id: rc
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse "refs/tags/$RC_TAG^{commit}")
+          digest=$(crane digest "$IMAGE:$RC_TAG")
+          build_id="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/$RC_TAG"
+          # The digest must be the candidate's own build of this commit.
+          gh attestation verify "oci://$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" \
+            --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" \
+            --source-digest "$commit" --predicate-type https://slsa.dev/provenance/v1 --format json > provenance.json
+          sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
+            --identity "$build_id" --issuer "$OIDC_ISSUER" --digest "$digest" --commit "$commit" --image "$IMAGE"
+          # The bundle that was tested is the candidate's release asset.
+          gh release download "$RC_TAG" --pattern "molebridge-$RC_TAG.tar.gz" --dir bundle
+          gh attestation verify "bundle/molebridge-$RC_TAG.tar.gz" --repo "$GITHUB_REPOSITORY" \
+            --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" >/dev/null
+          bundle_sha=$(sha256sum "bundle/molebridge-$RC_TAG.tar.gz" | cut -d' ' -f1)
+          {
+            echo "commit=$commit"
+            echo "digest=$digest"
+            echo "bundle_sha=$bundle_sha"
+          } >> "$GITHUB_OUTPUT"
+      - name: Write the predicate
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+          COVERAGE: ${{ inputs.coverage }}
+          EVIDENCE: ${{ inputs.evidence }}
+          COMMIT: ${{ steps.rc.outputs.commit }}
+          DIGEST: ${{ steps.rc.outputs.digest }}
+          BUNDLE_SHA: ${{ steps.rc.outputs.bundle_sha }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$COVERAGE" > coverage.json
+          printf '%s' "$EVIDENCE" > evidence.json
+          sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --tag "$RC_TAG" \
+            --image "$IMAGE" --digest "$DIGEST" --bundle-name "molebridge-$RC_TAG.tar.gz" --bundle-sha256 "$BUNDLE_SHA" \
+            --coverage coverage.json --evidence evidence.json > predicate.json
+          jq . predicate.json
+      - name: Attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.rc.outputs.digest }}
+          predicate-type: https://github.com/irashack/molebridge/attestations/live-acceptance/v1
+          predicate-path: predicate.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Verify what was just attested, with the promotion policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.rc.outputs.commit }}
+          DIGEST: ${{ steps.rc.outputs.digest }}
+        run: |
+          set -euo pipefail
+          identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/acceptance.yml@refs/heads/main"
+          # The attestation can take a moment to become searchable.
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+              --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
+              --predicate-type https://github.com/irashack/molebridge/attestations/live-acceptance/v1 \
+              --format json > acceptance.json; then
+              break
+            fi
+            [ "$attempt" -lt 5 ] || { echo "::error::the attestation cannot be verified"; exit 1; }
+            sleep 10
+          done
+          sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
+            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$COMMIT" --image "$IMAGE"

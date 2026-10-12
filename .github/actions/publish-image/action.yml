@@ -1,0 +1,143 @@
+name: Publish, sign and attest the image
+description: >
+  Builds the root Dockerfile for linux/amd64 and linux/arm64, pushes the index
+  as <image>:<tag>, signs the index digest with cosign (keyless), attests build
+  provenance for the index digest, and attests a syft SBOM against each
+  architecture's manifest digest. The calling job needs packages: write,
+  id-token: write and attestations: write. It runs inside the caller's job, so
+  every signature carries the caller's workflow identity.
+
+inputs:
+  image:
+    description: Fully qualified untagged image name, lowercase
+    required: true
+  tag:
+    description: Tag to push
+    required: true
+  dist-dir:
+    description: Directory (under the workspace) that receives the SBOM files
+    default: dist
+
+outputs:
+  digest:
+    description: Index digest (sha256:...)
+    value: ${{ steps.manifests.outputs.digest }}
+  amd64:
+    description: linux/amd64 manifest digest
+    value: ${{ steps.manifests.outputs.amd64 }}
+  arm64:
+    description: linux/arm64 manifest digest
+    value: ${{ steps.manifests.outputs.arm64 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      with:
+        platforms: arm64
+    - name: Set up Buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    - name: Log in to ghcr.io
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - name: Install cosign, syft and crane
+      uses: ./.github/actions/install-release-tools
+      with:
+        cosign: "true"
+        syft: "true"
+        crane: "true"
+    - name: Refuse to overwrite a published tag
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        if crane manifest "$IMAGE:$TAG" >/dev/null 2>&1; then
+          echo "::error::$IMAGE:$TAG already exists; published tags are immutable. Cut a new candidate tag."
+          exit 1
+        fi
+    - name: Build and push the index
+      id: build
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ inputs.image }}:${{ inputs.tag }}
+        # The index holds exactly the two image manifests; provenance and SBOMs
+        # are attested below, bound to the signing identity.
+        provenance: false
+        sbom: false
+        labels: |
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.version=${{ inputs.tag }}
+    - name: Resolve the architecture manifests
+      id: manifests
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ steps.build.outputs.digest }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'
+        crane manifest "$IMAGE@$DIGEST" > index.json
+        jq -e '.mediaType == "application/vnd.oci.image.index.v1+json" and (.manifests | length == 2)' index.json >/dev/null
+        amd64=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' index.json)
+        arm64=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' index.json)
+        rm index.json
+        printf '%s' "$amd64" | grep -Eq '^sha256:[0-9a-f]{64}$'
+        printf '%s' "$arm64" | grep -Eq '^sha256:[0-9a-f]{64}$'
+        {
+          echo "digest=$DIGEST"
+          echo "amd64=$amd64"
+          echo "arm64=$arm64"
+        } >> "$GITHUB_OUTPUT"
+    - name: Sign the index digest
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        DIGEST: ${{ steps.manifests.outputs.digest }}
+      run: cosign sign --yes "$IMAGE@$DIGEST"
+    - name: Attest build provenance for the index digest
+      uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.manifests.outputs.digest }}
+        push-to-registry: true
+        create-storage-record: false
+    - name: SBOM for each architecture
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        AMD64: ${{ steps.manifests.outputs.amd64 }}
+        ARM64: ${{ steps.manifests.outputs.arm64 }}
+        DIST: ${{ inputs.dist-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$DIST"
+        syft scan "registry:$IMAGE@$AMD64" -o "spdx-json=$DIST/sbom-linux-amd64.spdx.json"
+        syft scan "registry:$IMAGE@$ARM64" -o "spdx-json=$DIST/sbom-linux-arm64.spdx.json"
+    # actions/attest-sbom is deprecated in favor of actions/attest with
+    # sbom-path, which it wraps; the attestation is the same.
+    - name: Attest the linux/amd64 SBOM
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.manifests.outputs.amd64 }}
+        sbom-path: ${{ inputs.dist-dir }}/sbom-linux-amd64.spdx.json
+        push-to-registry: true
+        create-storage-record: false
+    - name: Attest the linux/arm64 SBOM
+      uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+      with:
+        subject-name: ${{ inputs.image }}
+        subject-digest: ${{ steps.manifests.outputs.arm64 }}
+        sbom-path: ${{ inputs.dist-dir }}/sbom-linux-arm64.spdx.json
+        push-to-registry: true
+        create-storage-record: false
