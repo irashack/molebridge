@@ -54,9 +54,11 @@ type Server struct {
 	Log   io.Writer
 	logMu sync.Mutex
 
-	now   func() time.Time
-	mono  func() time.Time
-	dial  DialFunc
+	now  func() time.Time
+	mono func() time.Time
+	dial DialFunc
+	// probe times one relay address; tests replace it.
+	probe func(ip string) *float64
 	files fs.FS
 
 	csrfSecret []byte
@@ -80,11 +82,13 @@ type relayCacheEntry struct {
 
 // Options are the parts of a Server a test replaces.
 type Options struct {
-	Now   func() time.Time
-	Mono  func() time.Time
-	Dial  DialFunc
-	Log   io.Writer
-	Files fs.FS
+	Now  func() time.Time
+	Mono func() time.Time
+	// AuthClock is the sign-in clock (default: Now).
+	AuthClock func() time.Time
+	Dial      DialFunc
+	Log       io.Writer
+	Files     fs.FS
 	// HTTPClient is the client for the issuer (nil: oidc.NewIssuerClient()).
 	HTTPClient *http.Client
 }
@@ -111,6 +115,9 @@ func NewServer(cfg *Config, opt Options) *Server {
 	if s.files == nil {
 		s.files = static.Files
 	}
+	s.probe = func(ip string) *float64 {
+		return probeTCPRTT(s.dial, ip, probePort, probeTimeout, probeAttempts, s.mono)
+	}
 	s.csrfSecret = make([]byte, 32)
 	if _, err := rand.Read(s.csrfSecret); err != nil {
 		panic(err)
@@ -123,7 +130,11 @@ func NewServer(cfg *Config, opt Options) *Server {
 		for i, e := range cfg.Exits {
 			ids[i] = e.ID
 		}
-		s.Auth = oidc.NewAuthenticator(cfg.Settings.Auth, ids, opt.Now, opt.HTTPClient)
+		authClock := opt.AuthClock
+		if authClock == nil {
+			authClock = opt.Now
+		}
+		s.Auth = oidc.NewAuthenticator(cfg.Settings.Auth, ids, authClock, opt.HTTPClient)
 	}
 	return s
 }

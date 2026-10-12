@@ -186,7 +186,7 @@ func (s *Server) measureLatency(relays *providers.Entries, hostnames []string, f
 				defer wg.Done()
 				for i := range jobs {
 					info, _ := relays.Get(own[i].hostname)
-					results[i] = probeTCPRTT(s.dial, info.IPv4AddrIn, probePort, probeTimeout, probeAttempts, s.mono)
+					results[i] = s.probe(info.IPv4AddrIn)
 				}
 			}()
 		}
