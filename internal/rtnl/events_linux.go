@@ -12,9 +12,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// receiver is the part of *netlink.Conn a Subscriber uses.
+type receiver interface {
+	Receive() ([]netlink.Message, error)
+	SetReadDeadline(time.Time) error
+	Close() error
+}
+
 // Subscriber receives rtnetlink multicast notifications.
 type Subscriber struct {
-	c *netlink.Conn
+	c receiver
 }
 
 // groups are the multicast groups the contract depends on: rule, route, link

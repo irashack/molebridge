@@ -5,8 +5,8 @@ package contract
 // tools/test_gluetun_transition.py (gluetun_transition_status). Where the
 // Python fed `ip -j` JSON, these build decoded rules with the helpers in
 // helpers_test.go; tests of JSON-only quirks (a prefix that is a string, an
-// ipproto that is a list) have no typed counterpart and are noted in
-// PARITY.md.
+// ipproto that is a list) have no typed counterpart: a decoded rule cannot be
+// malformed that way.
 
 import (
 	"fmt"

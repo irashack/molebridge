@@ -30,11 +30,19 @@ type Options struct {
 	ReadBuffer int
 }
 
+// nlConn is the part of *netlink.Conn a Conn uses, so tests can script the
+// kernel's replies.
+type nlConn interface {
+	Execute(netlink.Message) ([]netlink.Message, error)
+	SetDeadline(time.Time) error
+	Close() error
+}
+
 // Conn is a NETLINK_ROUTE request socket. It is safe for concurrent use;
 // requests are serialized.
 type Conn struct {
 	mu      sync.Mutex
-	c       *netlink.Conn
+	c       nlConn
 	timeout time.Duration
 }
 

@@ -1,5 +1,15 @@
 package mutator
 
+// The mutation owner against a fake kernel. Ported from
+// tools/test_host_and_routing.py (the routing-initialization tests of
+// routing/10-exit-routing --install: test_routing_initialization_blocks_before_replacing_rules,
+// test_routing_rerun_keeps_the_local_delivery_rule,
+// test_routing_installs_the_exact_local_delivery_rule,
+// test_failed_local_delivery_rule_keeps_the_kernel_rule,
+// test_ipv4_only_tunnel_gets_no_ipv6_return_path_rule,
+// test_failed_routing_init_leaves_guard_and_never_marks_ready) and from the
+// reconcile rows of tools/check-routing.sh.
+
 import (
 	"context"
 	"errors"
