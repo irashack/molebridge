@@ -56,6 +56,11 @@ func (l *logCollector) logf(format string, a ...any) {
 
 func start(t *testing.T, k *fakeKernel, spec contract.Spec, mod ...func(*Options)) *Mutator {
 	t.Helper()
+	return startWith(t, k, spec, mod...)
+}
+
+func startWith(t *testing.T, k Kernel, spec contract.Spec, mod ...func(*Options)) *Mutator {
+	t.Helper()
 	o := Options{Kernel: k, Spec: spec, GuardRepairs: !spec.Config.IsGluetun(), OpTimeout: 2 * time.Second, IdleStep: 10 * time.Millisecond}
 	for _, f := range mod {
 		f(&o)

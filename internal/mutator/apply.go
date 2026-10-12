@@ -79,10 +79,17 @@ func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []
 		}
 	}
 	rebuilt := map[uint32]bool{}
+	// Adds that failed. A rule one priority earlier with the same selectors
+	// is the copy that protects while the expected rule is missing (see
+	// rebuild); it is not removed as a stray until the expected rule is back.
+	failedAdd := map[string]bool{}
 	for _, a := range p.Rules {
 		switch a.Kind {
 		case contract.Add:
 			ch, err := tx.addRule(a.Rule)
+			if err != nil {
+				failedAdd[copyKey(a.Priority, a.Rule)] = true
+			}
 			note(ch, err, fmt.Sprintf("could not restore %s rule %d", f, a.Priority))
 			if ch {
 				tx.Logf("molebridge: added %s rule %d", f, a.Priority)
@@ -100,6 +107,10 @@ func (tx *Tx) apply(spec contract.Spec, p contract.Plan) (mutations int, errs []
 				tx.Logf("molebridge: rebuilt %s rule %d", f, a.Priority)
 			}
 		case contract.Del:
+			if failedAdd[copyKey(a.Priority+1, a.Rule)] {
+				tx.Logf("molebridge: keeping %s rule %d: it protects while rule %d cannot be restored", f, a.Priority, a.Priority+1)
+				continue
+			}
 			ch, err := tx.delRule(a.Rule)
 			if err != nil && len(spec.RulesAt(f, a.Priority)) == 0 {
 				// The attributes were refused (a selector the kernel will
@@ -190,13 +201,23 @@ func (tx *Tx) rebuild(spec contract.Spec, f rtnl.Family, priority uint32) (mutat
 			firstErr = opErr(fmt.Sprintf("could not restore %s rule %d", f, priority), aerr)
 		}
 	}
-	for _, cp := range copies {
-		ch, _ := tx.delRule(cp)
-		if ch {
-			mutations++
+	// The copies protect until the expected rules are confirmed back: if any
+	// re-add failed they stay, and the next pass adds the missing rule before
+	// it removes the copy as the stray it then is.
+	if firstErr == nil {
+		for _, cp := range copies {
+			ch, _ := tx.delRule(cp)
+			if ch {
+				mutations++
+			}
 		}
 	}
 	return mutations, firstErr
 }
 
 func (tx *Tx) stillAlive() bool { return tx.ctx.Err() == nil }
+
+// copyKey identifies a rule's selectors and action at a priority.
+func copyKey(priority uint32, r rtnl.Rule) string {
+	return fmt.Sprintf("%d %q", priority, r.Items())
+}
