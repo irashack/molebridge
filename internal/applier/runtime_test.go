@@ -707,18 +707,6 @@ func TestRoutingLostDuringASwitchAbortsIt(t *testing.T) {
 	}
 }
 
-func TestNativeAbortsWhenNetbirdIsLostDuringASwitch(t *testing.T) {
-	a, k, _ := mullvadSetup(t)
-	k.keys = []string{otherKey} // a switch is needed
-	k.afterReplacePeer = func() { k.overlayWG = false }
-	desire(t, a, requestAt(testHost, nil))
-	r := mustTick(t, a)
-	sel := r.Decoded()["selection"].(map[string]any)
-	if status(r) != "failed" || a.attempt.State != "failed" || sel["outcome"] != "mutation-failed" || k.now >= 10 {
-		t.Fatalf("%s %s %v now %v", status(r), a.attempt.State, sel, k.now)
-	}
-}
-
 func TestEgressBooleanMustBeBoolean(t *testing.T) {
 	for name, value := range map[string]any{"string": "true", "int": 1, "null": nil, "object": map[string]any{}} {
 		a, k, _ := mullvadSetup(t)

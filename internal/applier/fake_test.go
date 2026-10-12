@@ -20,6 +20,7 @@ import (
 	"github.com/irashack/molebridge/internal/egress"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/netx"
+	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/validate"
 )
 
@@ -109,9 +110,10 @@ type kernel struct {
 	nftAlwaysFail  bool
 	guardInstalled int
 
-	addrErr error
-	logs    []string
-	pushed  []string
+	addrErr  error
+	insights []any // each insights call takes the next answer; the last repeats
+	logs     []string
+	pushed   []string
 }
 
 func newKernel(t testing.TB) *kernel {
@@ -344,19 +346,32 @@ func removeString(list []string, value string) []string {
 
 func (k *kernel) Fetch(_ context.Context, req netx.Request) (netx.Response, error) {
 	k.reqs = append(k.reqs, req)
-	if _, query, ok := strings.Cut(req.URL, "/external?"); ok {
-		k.pushed = append(k.pushed, query)
-		return netx.Response{Status: 200}, nil
-	}
 	for _, hook := range k.hooks {
 		if err := hook(req); err != nil {
 			return netx.Response{}, err
 		}
 	}
+	if _, query, ok := strings.Cut(req.URL, "/external?"); ok {
+		k.pushed = append(k.pushed, query)
+		return netx.Response{Status: 200}, nil
+	}
 	return k.handler(req)
 }
 
 func (k *kernel) defaultHandler(req netx.Request) (netx.Response, error) {
+	if req.URL == providers.NordInsightsURL {
+		if req.Family != 4 || req.BindInterface != k.exit.ExitIf || req.MaxBytes != 16384 || req.Timeout != 10*time.Second {
+			k.t.Errorf("insights request %+v", req)
+		}
+		answer := k.insights[0]
+		if len(k.insights) > 1 {
+			k.insights = k.insights[1:]
+		}
+		if text, isText := answer.(string); isText {
+			return netx.Response{Status: 200, Body: []byte(text)}, nil
+		}
+		return jsonBody(answer), nil
+	}
 	if response, handled, err := k.mullvadOrEcho(req); handled {
 		return response, err
 	}
@@ -666,7 +681,8 @@ func withPublished(a *Applier, dir string) *[]string {
 	var statuses []string
 	a.publish = func(r *Record) error {
 		statuses = append(statuses, r.Get("status").(string))
-		return jsonfile.Write(ResultPath(dir), r, jsonfile.Options{Public: true})
+		// The supervisor writes the file, with its own owner_record check.
+		return jsonfile.Write(ResultPath(dir), a.judged(r), jsonfile.Options{Public: true})
 	}
 	return &statuses
 }

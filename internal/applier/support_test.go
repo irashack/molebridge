@@ -3,6 +3,7 @@ package applier
 import (
 	"context"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -87,3 +88,5 @@ func contains2(s, sub string) bool { return strings.Contains(s, sub) }
 func isURL(substr string) func(r netx.Request) bool {
 	return func(r netx.Request) bool { return strings.Contains(r.URL, substr) }
 }
+
+func readTestFile(path string) ([]byte, error) { return os.ReadFile(path) }
