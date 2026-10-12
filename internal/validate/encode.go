@@ -82,7 +82,7 @@ func MarshalJSON(v any) ([]byte, error) {
 // v may hold nil, bool, string, any integer or float type, *big.Int, slices,
 // arrays, Obj, map[string]T (keys sorted), structs (fields in declaration
 // order, named and omitted by their `json` tag), pointers, and values that
-// implement ObjectMarshaler. A nil slice or map is null.
+// implement ObjectMarshaler. A nil slice or map is null, a nil Obj is {}.
 func EncodeJSON(w io.Writer, v any) error {
 	e := &encoder{w: w, buf: make([]byte, 0, chunkSize)}
 	if err := e.value(reflect.ValueOf(v), 0); err != nil {
@@ -187,12 +187,13 @@ func (e *encoder) value(v reflect.Value, depth int) error {
 	case reflect.String:
 		return e.str(v.String())
 	case reflect.Slice:
+		if v.Type() == objType {
+			// A nil Obj is an empty object, not null.
+			return e.object(v.Interface().(Obj), depth)
+		}
 		if v.IsNil() {
 			e.WriteString("null")
 			return e.err
-		}
-		if v.Type() == objType {
-			return e.object(v.Interface().(Obj), depth)
 		}
 		fallthrough
 	case reflect.Array:
