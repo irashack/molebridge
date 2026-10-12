@@ -22,6 +22,7 @@ import (
 
 func piaRig(t *testing.T) *rig {
 	return newRig(t, func(o *rigOptions) {
+		o.pia = true
 		o.spec = func(s contract.Spec) contract.Spec {
 			return contract.Spec{Config: s.Config, LeaveReturnPath: map[rtnl.Family]bool{rtnl.V4: true, rtnl.V6: true}}
 		}
@@ -37,6 +38,12 @@ func TestPIAInitializationInstallsNoReturnPathRuleAndBlocksIPv6(t *testing.T) { 
 				t.Errorf("%s: an addressless config installed %q", f, l)
 			}
 		}
+	}
+	// The interface has an address no transaction has registered: that is not
+	// a verified state, however intact the guards are.
+	time.Sleep(150 * time.Millisecond)
+	if r.healthy() || r.mut.Ready() {
+		t.Error("a live tunnel address without its return-path pair was declared healthy")
 	}
 	// The tunnel carries IPv4 only: the IPv6 table holds the fallback alone.
 	out, _ := r.exit.TryIP("-6", "route", "show", "table", fmt.Sprint(table))

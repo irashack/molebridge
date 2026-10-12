@@ -2,6 +2,7 @@ package rtnl
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -28,3 +29,6 @@ func IsNotExist(err error) bool {
 func Timeout(err error) bool {
 	return errors.Is(err, os.ErrDeadlineExceeded)
 }
+
+// ErrDeadline is returned when an operation's deadline has passed.
+var ErrDeadline = fmt.Errorf("rtnl: operation deadline exceeded: %w", os.ErrDeadlineExceeded)

@@ -56,6 +56,11 @@ func (l *logCollector) logf(format string, a ...any) {
 
 func start(t *testing.T, k *fakeKernel, spec contract.Spec, mod ...func(*Options)) *Mutator {
 	t.Helper()
+	return startWith(t, k, spec, mod...)
+}
+
+func startWith(t *testing.T, k Kernel, spec contract.Spec, mod ...func(*Options)) *Mutator {
+	t.Helper()
 	o := Options{Kernel: k, Spec: spec, GuardRepairs: !spec.Config.IsGluetun(), OpTimeout: 2 * time.Second, IdleStep: 10 * time.Millisecond}
 	for _, f := range mod {
 		f(&o)
@@ -1090,4 +1095,26 @@ func TestAnOperationThatEndsItsGoroutineDoesNotEndTheOwner(t *testing.T) {
 	if err := m.Do(context.Background(), "after", func(tx *Tx) error { return nil }); err != nil {
 		t.Fatalf("the owner died: %v", err)
 	}
+}
+
+// A look at a kernel that kept changing is no proof that the contract holds,
+// and the temporary guard stays until a stable look shows it.
+func TestAnUnstableSnapshotGivesNoVerdict(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.unstable = true
+	res, err := m.ReconcileNow(context.Background(), "x")
+	if err == nil || res.Verified || res.ContractHolds || m.Ready() {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// Repairs are still made on it: they are safe, and churn must not starve them.
+	_ = k.DelRulePriority(4, 96)
+	res, _ = m.ReconcileNow(context.Background(), "y")
+	if !res.Repaired || res.Verified {
+		t.Fatalf("%+v", res)
+	}
+	if _, ok := priorities(k, rtnl.V4)[96]; !ok {
+		t.Error("the rule was not restored")
+	}
+	k.unstable = false
+	repairs(t, m, k, spec)
 }

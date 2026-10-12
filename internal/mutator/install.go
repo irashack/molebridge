@@ -2,6 +2,7 @@ package mutator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -119,9 +120,18 @@ func hasExact(rules []rtnl.Rule, want rtnl.Rule) bool {
 //
 // change is called with the pairs in place; it changes the address (and may
 // touch nothing else the contract names). old may be the zero Addr for a
-// first registration. If change fails the new pair is taken out again and the
-// expected state returns to what it was; if it succeeds but a later step
-// fails, the new address stays expected.
+// first registration, and old == next is a transaction that must not take
+// anything away.
+//
+// Fail-closed under partial failure. change may fail at any step, and so may
+// any request the transaction makes. What a failure leaves is decided from
+// the kernel, never from what the callback was supposed to have done: after
+// change returns, success or not, the addresses on the tunnel interface are
+// read back, and every address that is live there, and every address that was
+// protected before, keeps its pair. A pair comes out only for an address
+// that the read shows is gone and that was not protected before: the new
+// pair of an address that never arrived, the old pair of an address that has
+// left. If the read itself fails, both pairs stay.
 //
 // The owner is never held across a provider call: register with the
 // provider first, then call this with the address it returned.
@@ -131,57 +141,125 @@ func (m *Mutator) ChangeReturnPath(ctx context.Context, f rtnl.Family, old, next
 		if before.Config.IsGluetun() || before.Config.IsSidecar() {
 			return fmt.Errorf("the return-path address is the native backend's")
 		}
-		both := before.Clone()
-		both.LeaveReturnPath[f] = false
-		both.ReturnPath[f] = nil
-		if old.IsValid() && old != next {
-			both.ReturnPath[f] = append(both.ReturnPath[f], old)
+		if !next.IsValid() || (f == rtnl.V4) != next.Is4() || (old.IsValid() && (f == rtnl.V4) != old.Is4()) {
+			return fmt.Errorf("the %s return-path address is not an address of that family", f)
 		}
-		both.ReturnPath[f] = append(both.ReturnPath[f], next)
+		// Start from everything that is protected now (a failed change before
+		// this one may have left more than the caller knows of), plus old and
+		// next. Protection is only ever pruned later, on a stable look.
+		both := withReturnPath(before, f, dedupe(append(append([]netip.Addr(nil), before.ReturnPath[f]...), old, next)...))
 		tx.SetSpec(both)
 		res := tx.reconcile("install the new return-path pair")
 		if !res.ContractHolds {
-			backOut(tx, before, f, next)
-			return fmt.Errorf("the new %s return-path rules could not be confirmed: %w", f, orUnverified(res.Err))
+			// The new pair may be partly in. Whether it stays depends only on
+			// whether its address is live.
+			return errors.Join(
+				fmt.Errorf("the new %s return-path rules could not be confirmed: %w", f, orUnverified(res.Err)),
+				tx.settle(before, both, f, old, next, true))
 		}
-		if err := change(tx); err != nil {
-			backOut(tx, before, f, next)
-			return err
+		cerr := change(tx)
+		if cerr == nil {
+			// The exit table's default route comes back (changing the address
+			// removed the routes through the interface) while both pairs are
+			// still expected; only then may an old pair go.
+			if res = tx.reconcile("restore the exit route"); !res.ContractHolds {
+				cerr = fmt.Errorf("the %s routing could not be confirmed after the address change: %w", f, orUnverified(res.Err))
+			}
 		}
-		// The address is changed. The exit table's default route comes back
-		// (changing the address removed the routes through the interface)
-		// while both pairs are still expected, then the old pair goes.
-		res = tx.reconcile("restore the exit route")
-		if !res.ContractHolds {
-			return fmt.Errorf("the %s routing could not be confirmed after the address change: %w", f, orUnverified(res.Err))
-		}
-		final := both.Clone()
-		final.ReturnPath[f] = []netip.Addr{next}
-		tx.SetSpec(final)
-		res = tx.reconcile("remove the old return-path pair")
-		if !res.ContractHolds {
-			return fmt.Errorf("the %s routing could not be confirmed after the address change: %w", f, orUnverified(res.Err))
-		}
-		return nil
+		return errors.Join(cerr, tx.settle(before, both, f, old, next, cerr != nil))
 	})
 }
 
-// backOut returns the expected state to what it was and takes the new pair out
-// of the kernel. When the earlier state left rules 94 and 98 uncompared, the
-// pass would not look at them, so they are removed by name.
-func backOut(tx *Tx, before contract.Spec, f rtnl.Family, next netip.Addr) {
-	pair := before.Clone()
-	pair.LeaveReturnPath[f] = false
-	pair.ReturnPath[f] = []netip.Addr{next}
-	tx.SetSpec(before)
-	for _, r := range pair.Rules(f) {
-		if (r.Priority == contract.PrioReturnPath || r.Priority == contract.PrioBackstop) && r.Src.Addr() == next {
-			if _, err := tx.delRule(r); err != nil {
-				tx.Logf("molebridge: could not remove the new %s return-path rule %d: %v", f, r.Priority, err)
+func dedupe(addrs ...netip.Addr) []netip.Addr {
+	var out []netip.Addr
+	for _, a := range addrs {
+		if a.IsValid() && !containsAddr(out, a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func containsAddr(s []netip.Addr, a netip.Addr) bool {
+	for _, x := range s {
+		if x == a {
+			return true
+		}
+	}
+	return false
+}
+
+func withReturnPath(s contract.Spec, f rtnl.Family, addrs []netip.Addr) contract.Spec {
+	out := s.Clone()
+	out.LeaveReturnPath[f] = false
+	out.ReturnPath[f] = append([]netip.Addr(nil), addrs...)
+	return out
+}
+
+// settleLooks is how many times settle tries for a snapshot the kernel held
+// still for.
+const settleLooks = 3
+
+// settle decides, from the kernel, which return-path pairs survive a
+// transaction, and removes the others. failed says the transaction did not
+// complete: then everything protected before stays protected too.
+//
+// Only a stable look may shrink protection: an Unstable snapshot may omit an
+// address that is live, so on one nothing is pruned, both expected sets stay
+// and the pairs with them.
+func (tx *Tx) settle(before, both contract.Spec, f rtnl.Family, old, next netip.Addr, failed bool) error {
+	var snap *rtnl.Snapshot
+	var err error
+	for i := 0; i < settleLooks; i++ {
+		if snap, err = tx.Snapshot(); err != nil {
+			// Cannot tell what is live: everything stays, as it is expected now.
+			return opErr("read the tunnel addresses back; the return-path pairs stay", err)
+		}
+		if !snap.Unstable {
+			break
+		}
+	}
+	if snap.Unstable {
+		return errors.New("the kernel kept changing; the return-path pairs stay until a stable look can prune them")
+	}
+	var keep []netip.Addr
+	if link, ok := snap.Link(both.Config.ExitIf); ok {
+		for _, a := range snap.Addrs[f] {
+			if a.Index == link.Index && a.Global() {
+				keep = append(keep, a.Local.Addr())
 			}
 		}
 	}
-	tx.reconcile("take the new return-path pair out")
+	if failed {
+		keep = append(keep, before.ReturnPath[f]...)
+		if old.IsValid() {
+			keep = append(keep, old)
+		}
+	} else {
+		keep = append(keep, next)
+	}
+	keep = dedupe(keep...)
+	final := withReturnPath(both, f, keep)
+	tx.SetSpec(final)
+	res := tx.reconcile("settle the return-path pairs")
+	if !res.ContractHolds {
+		return fmt.Errorf("the %s return-path rules could not be settled: %w", f, orUnverified(res.Err))
+	}
+	// Nothing new survived: the earlier state, including leaving the pair to
+	// its owner, is restored.
+	if failed && subsetOf(keep, before.ReturnPath[f], old) {
+		tx.SetSpec(before)
+	}
+	return nil
+}
+
+func subsetOf(set, of []netip.Addr, extra netip.Addr) bool {
+	for _, a := range set {
+		if !containsAddr(of, a) && a != extra {
+			return false
+		}
+	}
+	return true
 }
 
 func orUnverified(err error) error {
