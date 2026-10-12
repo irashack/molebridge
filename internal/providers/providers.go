@@ -304,6 +304,16 @@ func (p *Provider) Clone() *Provider {
 	return &c
 }
 
+// Clone returns a copy of the registry's entry for id, for tests and trials
+// that register a variant with Replace. It panics for an unknown id.
+func Clone(id string) *Provider {
+	p, err := Get(id)
+	if err != nil {
+		panic(err)
+	}
+	return p.Clone()
+}
+
 // SetServerName replaces the server-name check of a (cloned) entry.
 func (p *Provider) SetServerName(pattern string, valid func(string) bool) {
 	p.ServerNamePattern, p.serverName = pattern, valid
