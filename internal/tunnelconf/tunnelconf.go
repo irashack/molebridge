@@ -77,7 +77,7 @@ func (c *Conf) GoString() string { return c.String() }
 // Families names what the config carries, as `--check-config` prints it:
 // families, never addresses.
 func (c *Conf) Families() string {
-	families := "no address (the applier sets it)"
+	families := "no address (the exit sets it)"
 	if c.Addr4.IsValid() {
 		families = "an IPv4 address"
 	}
@@ -501,9 +501,9 @@ func Load(dir, exitIf string, provider Provider, table uint32) (*Conf, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		// A directory this process may not search hides the file: on rootful
-		// Docker that is a missing DAC_READ_SEARCH, not a missing config.
+		// Docker that is a missing DAC_OVERRIDE, not a missing config.
 		if errors.Is(err, syscall.EACCES) {
-			return nil, fileErr("the tunnel config directory %s can't be searched (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)", dir)
+			return nil, fileErr("the tunnel config directory %s can't be searched (on Docker the exit container needs DAC_OVERRIDE to read a mode-0600 tunnel config, and the Compose files grant it; see docs/setup.md)", dir)
 		}
 		return nil, fileErr("the tunnel config %s is missing; %s", path, hint)
 	}
@@ -515,7 +515,7 @@ func Load(dir, exitIf string, provider Provider, table uint32) (*Conf, error) {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, fileErr("the tunnel config %s is not a regular file", path)
 		}
-		return nil, fileErr("the tunnel config %s can't be read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)", path)
+		return nil, fileErr("the tunnel config %s can't be read (on Docker the exit container needs DAC_OVERRIDE to read a mode-0600 tunnel config, and the Compose files grant it; see docs/setup.md)", path)
 	}
 	defer f.Close()
 	// One byte past the limit says "too large" without reading a huge file.

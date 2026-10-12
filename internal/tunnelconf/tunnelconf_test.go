@@ -92,7 +92,7 @@ func TestGeneratedConfigsAreAccepted(t *testing.T) { // test_generated_configs_a
 	}{
 		"mullvad dual stack": {Mullvad, mullvad, "an IPv4 address and an IPv6 address"},
 		"mullvad IPv4":       {Mullvad, mullvad4, "an IPv4 address"},
-		"pia":                {PIA, piaConf, "no address (the applier sets it)"},
+		"pia":                {PIA, piaConf, "no address (the exit sets it)"},
 		"nordvpn":            {NordVPN, nordvpnConf, "an IPv4 address"},
 	} {
 		conf, msg := check(t, c.text, c.provider)
@@ -394,7 +394,7 @@ func TestUnreadableFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := Load(dir, "mullvad", Mullvad, table)
-	if err == nil || !strings.Contains(err.Error(), "can't be read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)") {
+	if err == nil || !strings.Contains(err.Error(), "can't be read (on Docker the exit container needs DAC_OVERRIDE to read a mode-0600 tunnel config, and the Compose files grant it; see docs/setup.md)") {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(dir, 0o000); err != nil {

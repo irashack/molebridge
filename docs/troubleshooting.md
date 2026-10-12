@@ -99,13 +99,15 @@ line endings). A config for another interface name is ignored, with
 ignored; only mullvad.conf is used`.
 
 **`molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf can't be
-read (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)`.**
-Container root can't read your mode-0600 file. The message names a capability
-the 0.8.0 exit doesn't use: the Compose files grant `DAC_OVERRIDE`, which is
-what lets container root read it, and an override that drops `DAC_OVERRIDE`
-breaks the start. When the container can't search `tunnel/wg_confs` itself, the
-line reads `molebridge-exit: the tunnel config directory /config/wg_confs can't
-be searched (on Docker the container needs DAC_READ_SEARCH; see docs/setup.md)`.
+read (on Docker the exit container needs DAC_OVERRIDE to read a mode-0600 tunnel
+config, and the Compose files grant it; see docs/setup.md)`.**
+Container root can't read your mode-0600 file. The Compose files grant
+`DAC_OVERRIDE`, which is what lets container root read it, and an override that
+drops `DAC_OVERRIDE` breaks the start. When the container can't search
+`tunnel/wg_confs` itself, the line reads `molebridge-exit: the tunnel config
+directory /config/wg_confs can't be searched (on Docker the exit container needs
+DAC_OVERRIDE to read a mode-0600 tunnel config, and the Compose files grant it;
+see docs/setup.md)`.
 A container root remapped to another host ID needs read access of its own; see
 [setup](setup.md#3-create-the-tunnel-config).
 

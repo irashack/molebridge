@@ -73,7 +73,7 @@ func TestRefusalMessages(t *testing.T) {
 		{map[string]string{"OVERLAY6_CIDR": "::1/129"}, "invalid IPv6 prefix"},
 		{map[string]string{"OVERLAY6_CIDR": "2001:db8::1::/64"}, "invalid OVERLAY6_CIDR"},
 		{map[string]string{"OVERLAY6_CIDR": "2001:db8:g::/64"}, "invalid OVERLAY6_CIDR"},
-		{map[string]string{"TUNNEL_BACKEND": "other"}, "TUNNEL_BACKEND must be wireguard or gluetun"},
+		{map[string]string{"TUNNEL_BACKEND": "other"}, "TUNNEL_BACKEND must be native or gluetun"},
 		{map[string]string{"EXIT_KIND": "other"}, "EXIT_KIND must be overlay or sidecar"},
 	}
 	for _, c := range cases {
@@ -97,6 +97,17 @@ func TestNativeDefaults(t *testing.T) {
 	c, err = ConfigFromEnv(env(base(map[string]string{"EXIT_IF": "", "EXIT_TABLE": ""})))
 	if err != nil || c.ExitIf != "mullvad" || c.Table != 51821 || c.Overlay6.IsValid() {
 		t.Fatalf("%+v %v", c, err)
+	}
+	// EXIT_IF's default follows the backend: mullvad natively, wg0 with gluetun
+	// (as the NetBird profile check and the sidecar already had it); "native" is
+	// the Compose files' spelling of the native backend.
+	for _, tc := range []struct{ backend, want string }{
+		{"", "mullvad"}, {"wireguard", "mullvad"}, {"native", "mullvad"}, {"gluetun", "wg0"},
+	} {
+		m := base(map[string]string{"TUNNEL_BACKEND": tc.backend, "EXIT_IF": ""})
+		if c, err = ConfigFromEnv(env(m)); err != nil || c.ExitIf != tc.want {
+			t.Errorf("TUNNEL_BACKEND=%q: EXIT_IF %q, %v; want %q", tc.backend, c.ExitIf, err, tc.want)
+		}
 	}
 	if c, err = ConfigFromEnv(env(base(map[string]string{"OVERLAY_CIDR": "192.0.2.7/32"}))); err != nil || c.Overlay != netip.MustParsePrefix("192.0.2.7/32") {
 		t.Fatalf("a host overlay range: %+v %v", c, err)

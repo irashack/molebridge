@@ -41,13 +41,16 @@ const GluetunMark uint32 = 51820
 
 // Defaults of the settings.
 const (
-	DefaultOverlayIf   = "wt0"
-	DefaultExitIf      = "mullvad"
-	DefaultExitTable   = 51821
-	DefaultHostIf      = "eth0"
-	DefaultHostTable   = 51822
-	DefaultControlMark = "0x1bd00"
-	DefaultInterval    = 30 * time.Second
+	DefaultOverlayIf = "wt0"
+	DefaultExitIf    = "mullvad"
+	// DefaultGluetunExitIf is EXIT_IF's default with the gluetun backend:
+	// gluetun's own tunnel interface.
+	DefaultGluetunExitIf = "wg0"
+	DefaultExitTable     = 51821
+	DefaultHostIf        = "eth0"
+	DefaultHostTable     = 51822
+	DefaultControlMark   = "0x1bd00"
+	DefaultInterval      = 30 * time.Second
 )
 
 // Config is the validated routing configuration (RoutingConfig).
@@ -289,11 +292,14 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, refuse("EXIT_KIND must be overlay or sidecar")
 	}
 	backend := Backend(env.get("TUNNEL_BACKEND", string(Native)))
+	if backend == "native" {
+		backend = Native // the spelling the Compose files use
+	}
 	if kind == Sidecar {
 		if backend != Gluetun {
 			return Config{}, refuse("EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun")
 		}
-		exitIf := env.get("EXIT_IF", "wg0")
+		exitIf := env.get("EXIT_IF", DefaultGluetunExitIf)
 		if !validGluetunInterface(exitIf) {
 			return Config{}, refuse("with gluetun, EXIT_IF may hold only letters, digits and underscores")
 		}
@@ -301,13 +307,20 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return Config{Kind: Sidecar, Backend: Gluetun, ExitIf: exitIf}, nil
 	}
 	if backend != Native && backend != Gluetun {
-		return Config{}, refuse("TUNNEL_BACKEND must be wireguard or gluetun")
+		return Config{}, refuse("TUNNEL_BACKEND must be native or gluetun")
+	}
+	// The tunnel interface's default is the backend's: mullvad natively, wg0
+	// (gluetun's) with gluetun, as the NetBird profile check and the sidecar
+	// have it.
+	defaultExitIf := DefaultExitIf
+	if backend == Gluetun {
+		defaultExitIf = DefaultGluetunExitIf
 	}
 	c := Config{
 		Kind:      Overlay,
 		Backend:   backend,
 		OverlayIf: env.get("OVERLAY_IF", DefaultOverlayIf),
-		ExitIf:    env.get("EXIT_IF", DefaultExitIf),
+		ExitIf:    env.get("EXIT_IF", defaultExitIf),
 	}
 	if !ValidInterfaceName(c.OverlayIf) || !ValidInterfaceName(c.ExitIf) {
 		return Config{}, refuse("invalid interface name")

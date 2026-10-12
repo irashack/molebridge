@@ -253,7 +253,7 @@ docker compose run --rm --no-deps exit check-config
 ```
 
 It prints `molebridge-exit: configuration accepted (/config/wg_confs/mullvad.conf: an IPv4 address and an IPv6 address)`
-(or `an IPv4 address`, or for PIA `no address (the applier sets it)`) and
+(or `an IPv4 address`, or for PIA `no address (the exit sets it)`) and
 `NetBird gate: configuration accepted`, or the one line naming the setting,
 file or NetBird configuration it refused
 ([troubleshooting](troubleshooting.md#startup)). It changes no routing and
