@@ -56,10 +56,29 @@ func (r Rule) IifDetached() bool { return r.Flags&FIBRuleIifDetached != 0 }
 // OifDetached reports that the oif names an interface that does not exist.
 func (r Rule) OifDetached() bool { return r.Flags&FIBRuleOifDetached != 0 }
 
-// ExtraFlags returns flag bits that are neither bookkeeping (permanent,
-// find-saddr), nor the invert and detached bits the contract understands.
+// bookkeepingFlags are the only flag bits that do not change which packets a
+// rule matches or what it does with them, and so are ignored when rules are
+// compared and are never sent:
+//
+//   - FIB_RULE_PERMANENT: the kernel marks rules it must not let userspace
+//     delete (net/core/fib_rules.c, fib_nl_delrule answers EPERM); it says who
+//     may remove the rule, not which packets it takes.
+//   - FIB_RULE_IIF_DETACHED and FIB_RULE_OIF_DETACHED: derived from whether
+//     the named interface exists (net/core/fib_rules.c, attach_rules and
+//     detach_rules, run from the netdevice notifier); the rule is defined
+//     by its interface name.
+//
+// Every other bit is semantic: FIB_RULE_INVERT negates the selectors;
+// FIB_RULE_UNRESOLVED marks a goto whose target is missing, which then does
+// not jump; FIB_RULE_FIND_SADDR makes an IPv6 rule look up the source address
+// the packet would get (net/ipv6/fib6_rules.c), which changes what the rule
+// matches; and a bit this package has never heard of is assumed to matter.
+const bookkeepingFlags = FIBRulePermanent | FIBRuleIifDetached | FIBRuleOifDetached
+
+// ExtraFlags returns the semantic flag bits other than FIB_RULE_INVERT, which
+// has its own accessor. Two rules differ if their ExtraFlags do.
 func (r Rule) ExtraFlags() uint32 {
-	return r.Flags &^ (FIBRulePermanent | FIBRuleInvert | FIBRuleIifDetached | FIBRuleOifDetached | FIBRuleFindSaddr)
+	return r.Flags &^ (bookkeepingFlags | FIBRuleInvert)
 }
 
 // unsetSuppress is how the kernel reports a rule without a suppressor.
@@ -225,7 +244,7 @@ func (r Rule) Marshal() []byte {
 		hdr[4] = tableCompat
 	}
 	hdr[7] = r.Action
-	native.PutUint32(hdr[8:12], r.Flags&^(FIBRulePermanent|FIBRuleIifDetached|FIBRuleOifDetached|FIBRuleFindSaddr))
+	native.PutUint32(hdr[8:12], r.Flags&^bookkeepingFlags)
 	b := hdr
 	if r.Dst.IsValid() {
 		b = appendAttr(b, fraDst, addrBytes(r.Dst.Addr()))
