@@ -200,7 +200,7 @@ config, brings the link up and puts the default route into the exit table.
 `PostUp` and `PreDown` are read as the route operations they stand for and are
 never executed. If bring-up fails, or the interface is later missing or down,
 the worker retries after 2 seconds, then 4, doubling up to 60, and checks the
-interface every second. Meanwhile the exit isn't ready, the namespace NetBird
+interface every 2 seconds. Meanwhile the exit isn't ready, the namespace NetBird
 shares isn't replaced, and forwarded traffic hits the exit table's fallback.
 The log says `molebridge-exit: tunnel bring-up failed (<reason>); retrying in <n> s`,
 with the failing step and the kernel's error as the reason.
@@ -346,6 +346,11 @@ health holds (a fresh completed check and an intact namespace). `health`
 passes while the heartbeat is no more than 15 seconds old on the boot clock.
 A failed provider verification never fails it: that is the verdict's question
 ([readiness, monitoring and the health check](#readiness-monitoring-and-the-health-check)).
+When the heartbeat can't be written, the worker says why, at most once a minute
+for each reason: `molebridge-exit: not operational: <reason>`, where the reason is
+`the NetBird profile check refused`, `NetBird has not been started yet`,
+`the routing contract is not verified`, `NetBird is not running` or `the pipeline
+reports the namespace is not intact (<what>)`.
 
 ### Capabilities, and why
 
@@ -502,7 +507,7 @@ namespace; [testing](testing.md#080) records what has run.
 | Rule 98 | Rule 94 |
 | The fallback, tunnel up | The tunnel's default route |
 | The fallback, tunnel down | Rule 97 for forwarded traffic; rule 98 for tunnel-sourced ICMP, which finds nothing at 94 and falls through to it |
-| The tunnel interface | The fallback; the worker recreates the interface within about a second plus the bring-up |
+| The tunnel interface | The fallback; the worker recreates the interface within about 2 seconds plus the bring-up |
 
 An **inserted bypass**, any extra rule at priorities 0–98 (such as `lookup
 main` at 50, or the kernel's priority-0 `lookup local` put back), a rule
