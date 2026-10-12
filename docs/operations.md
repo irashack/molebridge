@@ -45,7 +45,7 @@ provider than the panel is configured for.
   state: ok (connected)
   reasons: none
   egress tier: provider
-  checks: routing=pass traffic_protection=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass app_attachment=n/a
+  checks: routing=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass traffic_protection=pass app_attachment=n/a
   heartbeat: fresh (3 s old)
   lease: held, 27 s to expiry
   ```
