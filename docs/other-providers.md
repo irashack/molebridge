@@ -8,6 +8,15 @@ covered by automated tests and have had no live pass. This page is about
 native support. There's no generic "bring your own WireGuard config" mode,
 because each provider handles keys, server lists and switching differently.
 
+Providers gluetun supports but Molebridge doesn't list (AirVPN and
+ProtonVPN, for example) can't be used in 0.8.0 either: the exit refuses a
+`PROVIDER` that isn't in its registry. Earlier releases ran any gluetun
+WireGuard provider in a form without server selection; 0.8.0 doesn't, because
+the exit always runs the provider logic
+([gluetun as a NetBird exit](gluetun-netbird-exit.md)). Adding one means a
+registry entry and a parser for gluetun's list of its servers, and the live
+checks below.
+
 Some other providers could be added if people want them. If you'd use one,
 open an issue saying which, and whether you could help test it. Interest is
 what decides whether a provider gets attempted.
@@ -56,7 +65,7 @@ and a server list that can be fetched without a browser.
 |---|---|---|---|---|---|
 | **Surfshark** (through gluetun today) | A key made or uploaded in the dashboard. Automating registration takes the account password through an unofficial API, and keys expire | Public, with keys (`api.surfshark.com/v4/server/clusters`) | `surfshark.com/api/v1/server/user` | No | Likely a dashboard-made key, with Molebridge warning before it expires. Automatic renewal would mean storing the account password. |
 | **IVPN** (through gluetun today) | Your own public key, added in the client area | Public (`api.ivpn.net/v5/servers.json`) | `api.ivpn.net/v4/geo-lookup` | Removed in 2023 | Technically close to Mullvad. |
-| **AirVPN** | A per-device config from the client area's generator; there is an official API keyed per user | Public status list; all servers share one public key | `airvpn.org/api/whatismyip/` | Yes: static ports reserved in the client area | Needs preshared-key support (the config converter drops it today), a way to identify the server other than its shared public key, and live testing of the config and forwarding. It would suit people who want port forwarding. |
+| **AirVPN** | A per-device config from the client area's generator; there is an official API keyed per user | Public status list; all servers share one public key | `airvpn.org/api/whatismyip/` | Yes: static ports reserved in the client area | Needs preshared-key support (`prepare-config` drops it today), a way to identify the server other than its shared public key, and live testing of the config and forwarding. It would suit people who want port forwarding. |
 
 ### Harder
 

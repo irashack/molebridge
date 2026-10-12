@@ -8,93 +8,144 @@ private route in [SECURITY.md](SECURITY.md), not an issue.
 
 The project's rules are in [AGENTS.md](AGENTS.md); they apply to people as
 much as to coding agents. Two matter most for a pull request. First, changes
-to routing, the tunnel config, Compose networking or the applier need the
+to routing, the tunnel config, Compose networking or the exit need the
 live checks in [verification](docs/verification.md), because CI can't tell
 you that a real client fails closed. Second, update the docs your change
 affects in the same pull request.
 
 ## Where things are
 
-- `applier/`: the applier. `apply.py` holds the admission pipeline, the
-  inspection and the status record; `attempt.py` the persisted attempt
-  (`state/applier/attempt.json`); one module per provider family
-  (`pia.py`, `nordvpn.py`, `gluetun_applier.py`).
-- `molebridge/`: code shared by the applier, the panel and the tools.
-  `verdict.py` judges a status record for every reader; `providers.py` is the
-  provider registry; `routing.py` the routing contract's checks, including
-  gluetun's reconnection states.
-- `panel/`: Switchyard, standard library only. `panel/js-tests/` tests
-  `panel/static/panel.js` with Node's own runner, against the panel's
-  answers for `panel/fixtures/`, and runs 0.6.1's script
-  (`panel/fixtures/panel-0.6.1.js`) against a 0.7 panel.
-- `routing/`: the routing image and the guard scripts.
-- `tools/`: the host helpers (`molebridge.py`), the routing and image
-  drills, `check-sidecar-doctor.py`, and the Python tests (`test_*.py`;
-  `test_verdict.py`, `test_pipeline.py`, `test_gluetun_transition.py`,
-  `test_sidecar_applier.py` and `test_sidecar_tools.py` cover the status,
-  the pipeline and the sidecar).
-- `compose.yaml`, `compose.pia.yaml`, `compose.nordvpn.yaml`,
-  `compose.gluetun.yaml` and `compose.sidecar.yaml`: the supported Compose
-  forms, with `.env.example` and `.env.sidecar.example`.
+Molebridge is one Go module, `github.com/irashack/molebridge`, Go 1.27 (the
+Dockerfile builds with `golang:1.27.1-alpine`). It uses the standard library
+wherever it reaches, plus the short list in `vendor/modules.txt` (netlink,
+WireGuard control, nftables), which is vendored and committed. A new module needs
+a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
+
+- `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
+  `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
+  `gluetun-auth`, `gluetun-post-rules`, `fix-blacklist`); each role is one file.
+- `internal/exit/`: the exit container's process: the supervisor, the worker, the
+  lease, the NetBird child, status publication and the stop sequence.
+- `internal/contract/`: the routing contract: expected rules and routes, the diff and
+  its ordered repair, the status judgments, the post-rules. `internal/rtnl/` speaks
+  rtnetlink (a lossless rule decoder and the multicast groups), `internal/mutator/` is
+  the single owner of every kernel change, `internal/watch/` the event loop,
+  `internal/tunnel/` the native WireGuard bring-up and the cleanup, `internal/nft/`
+  reads NetBird's nftables objects.
+- `internal/applier/`: the provider pipeline: the admission pipeline, the egress
+  checks, the status record, and one provider per family (Mullvad, PIA, NordVPN,
+  gluetun). `internal/attempt/` is the persisted attempt
+  (`state/applier/attempt.json`), `internal/verdict/` judges a status record for every
+  reader, `internal/providers/` is the provider registry and the catalogue parsers,
+  `internal/egress/` the tunnel-tier checks.
+- `internal/nbprofile/` checks NetBird's settings and stored profile and holds the
+  `fix-blacklist` repair; `internal/tunnelconf/` validates the tunnel config;
+  `internal/gluetunauth/` is gluetun's role file and API key.
+- `internal/panel/` is Switchyard, with `internal/panel/oidc/` for sign-in. Its
+  front end is `panel/static/`, dependency-free; `panel/js-tests/` tests
+  `panel/static/panel.js` with Node's own runner against the panel's answers for the
+  fixtures in `panel/fixtures/`.
+- `internal/tools/` holds the setup tools' code; `internal/state/`, `internal/validate/`,
+  `internal/jsonfile/`, `internal/netx/` and `internal/bootclock/` are the shared
+  strict I/O, validation, HTTP client and boot clock.
+- `internal/drill/` and `internal/nstest/` are the namespace drills (below).
+- `routing/gluetun-preflight` is the one shell script left: it runs inside gluetun's
+  container. `tools/` holds the release and image scripts (`make-bundle.sh`,
+  `check-bundle.sh`, `check-image.sh`, `check-compose.sh`, `release-notes.sh` and the
+  acceptance tooling) and `tools/fixtures/` the data tests share.
+- `compose.yaml`, `compose.gluetun.yaml` and `compose.sidecar.yaml`: the supported
+  Compose forms, with `.env.example`, `.env.gluetun.example` and `.env.sidecar.example`.
+
+Every test file ported from the 0.7 Python suite names its Python file in its header
+comment, and its test names stay recognizably close to the Python ones, so the two can be
+compared. Tests reuse `tools/fixtures/` and `panel/fixtures/` by relative path.
 
 ## Checks
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install pytest==9.1.1 PyYAML==6.0.3
-.venv/bin/python -m pytest -q panel tools
+gofmt -l $(git ls-files '*.go' ':(exclude)vendor')    # prints nothing
+go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go test -count=1 ./...
+MOLEBRIDGE_PANEL=go node --test panel/js-tests/*.test.js
 
-scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh"
-for script in $scripts; do
-  sh -n "$script"
+sh -n routing/gluetun-preflight && shellcheck -x -S warning routing/gluetun-preflight
+sh tools/test-gluetun-preflight.sh
+docker compose --env-file .env.example -f compose.yaml config --quiet
+for provider in mullvad pia nordvpn; do
+  PROVIDER=$provider EXIT_IF=$provider docker compose --env-file .env.example -f compose.yaml config --quiet
 done
-shellcheck -x -S warning $scripts
-docker compose --env-file .env.example config --quiet
-docker compose --env-file .env.example -f compose.yaml -f compose.pia.yaml config --quiet
-docker compose --env-file .env.example -f compose.yaml -f compose.nordvpn.yaml config --quiet
-docker compose --env-file .env.example -f compose.gluetun.yaml config --quiet
+docker compose --env-file .env.gluetun.example -f compose.gluetun.yaml config --quiet
 docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
-PYTHON=.venv/bin/python node --test panel/js-tests/*.test.js
+sh tools/check-compose.sh
+sh tools/check-doc-links.sh
 ```
 
-The panel script tests need Node 18 or later and nothing from npm; they ask
-Python for the panel's own answers (`PYTHON`, `python3` by default).
+The panel script tests need Node 18 or later and nothing from npm; with
+`MOLEBRIDGE_PANEL=go` they ask the Go toolchain (run from anywhere inside the checkout) for
+the panel's own answers.
 
-On Linux with Docker and kernel WireGuard, two more need root or a privileged
-container: the routing drills in throwaway namespaces, and the routing image's
-life cycle (start, repair, tunnel loss, every stop). CI runs both:
+The release tooling has its own scripts and tests, which CI runs: `tools/test-make-bundle.sh`,
+`tools/test-check-bundle.sh`, `tools/test-gen-third-party.sh`, `tools/test-release-notes.sh`,
+`tools/test-verify-acceptance.sh` and `tools/test-make-acceptance-predicate.sh`, plus
+`sh tools/check-reproducible.sh` (two builds of the binary for amd64 and arm64 must hash equal;
+the image is not claimed reproducible) and `sh tools/gen-third-party.sh --check`. After any
+change to `vendor/`, run `sh tools/gen-third-party.sh` and commit `THIRD_PARTY.md`.
+
+### The namespace drills
+
+Anything that touches the routing, the tunnel, the mutation owner or the lease needs the
+drills, which run the whole stack against a real kernel in disposable network namespaces.
+They are Go tests behind the build tag `drill`:
 
 ```sh
-sudo env ROUTING_SH="busybox sh" sh tools/check-routing.sh
-docker build --tag molebridge-wireguard:dev --file routing/Dockerfile .
-sh tools/check-exit-image.sh molebridge-wireguard:dev
+sh internal/nstest/drill.sh                 # all of ./internal/..., in a privileged container
+sh internal/nstest/drill.sh -count=1 ./internal/drill   # arguments are go test's
 ```
 
-The gluetun tests include two that check Molebridge's server selection
-against gluetun's own bundled server list. They are skipped unless you point
-them at `internal/storage/servers.json` in a checkout of gluetun v3.41.3:
+The script builds `molebridge-drill:local` (the Go toolchain image plus iproute2, nftables and
+iputils) and runs `go test -tags drill` in it with `--privileged`. Namespaces are created inside
+that container only. It needs Docker, and never touches your host's network. On a Linux machine
+you can run the same tests directly as root with `go test -tags drill -count=1 ./internal/...`;
+CI does that on the runner, which is a disposable VM. The drills cover every single-fault row of
+the drift table with a 250 ms repair assertion, both address families, wrong-action and
+extra-selector rules, event loss by flood, the PIA address transaction, a hung and a crashed
+worker with the namespace held by another container, and the stop budget
+([architecture](docs/architecture.md#drift-and-repair)).
+
+Tests never touch the network beyond loopback: they use `httptest`, fakes and fixtures, and never
+read anything under `~/.config`, `~/.ssh`, a keychain or a secret store. A test that adds a new side
+effect (a file, a process, a socket) mocks it first.
+
+### Running the panel by hand
+
+The panel needs only a state directory. With the self-check off (it is for exactly this; never on
+a deployed panel), a fake exit's records in `state/applier` and a scratch port:
 
 ```sh
-GLUETUN_SERVERS_JSON=/path/to/gluetun/internal/storage/servers.json \
-  .venv/bin/python -m pytest -q tools/test_gluetun_client.py -k reference_catalogue
+MOLEBRIDGE_PANEL_ISOLATION_CHECK=off MOLEBRIDGE_PANEL_LISTEN=127.0.0.1:8099 \
+  STATE_DIR=/tmp/panel-state PROVIDER=mullvad go run ./cmd/molebridge panel
 ```
 
-CI also builds both images and checks what they contain, and runs the
-sidecar doctor's namespace probe and recovery against Docker with a busybox
-in gluetun's place (`python3 tools/check-sidecar-doctor.py`, which needs
-Docker with Compose and pulls pinned images); see
-`.github/workflows/ci.yml`.
+`panel/fixtures/` has the records the tests use. Set `PANEL_THEME=light` or `PANEL_STYLE=dashboard`
+to see the other looks.
 
-On a disposable Linux host, `sudo sh tools/check-routing.sh` runs the routing
-failure drills in isolated network namespaces, with no accounts or real
-endpoints. It needs `ip`, `ping`, `python3` and `nft`; without `nft` the native repair
-drills fail, so install it and read any `SKIP` lines. With BusyBox, `mawk` and `gawk` installed it also runs the
-NetBird gate's JSON reader under each awk. CI runs the same drills on every
-push.
+## Building the image
 
-To work on the panel's look, `python3 tools/preview-panel.py` serves it on
-`127.0.0.1:8099` against two fake exits, one Mullvad and one PIA. `--exits
-mullvad,pia,nordvpn,mullvad-gluetun,surfshark` adds NordVPN and two exits on
-the gluetun backend. Add `--live` to load the native providers' real server
-lists, `--theme light` or `--style dashboard` to see the other looks, and
-`--fail pia` to see a failed switch.
+The release image is built and signed by GitHub Actions on a tag; you don't need to build it to run
+Molebridge. To build the same image from a checkout:
+
+```sh
+docker build --tag molebridge:dev --file Dockerfile .
+sh tools/check-image.sh molebridge:dev linux/amd64    # what the image contains
+```
+
+It cross-compiles the binary with `CGO_ENABLED=0 GOFLAGS=-mod=vendor` (so the `vendor/` directory is
+the dependency list) and adds the NetBird client from the release archive pinned in the `Dockerfile`,
+checked against the SHA-256 committed there. `docker compose build exit` builds the same image under the
+name the Compose file uses (`ghcr.io/irashack/molebridge:<tag>`), so `docker compose up -d` then runs your
+build instead of pulling. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
+`netbird_<version>_checksums.txt`, and reading the checks in `internal/nbprofile` against the new release's
+source. The base images are pinned by tag and index digest; update them deliberately and run the
+[verification](docs/verification.md) afterward.
