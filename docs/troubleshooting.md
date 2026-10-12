@@ -617,10 +617,10 @@ lease or NetBird's kernel mode went missing while a switch was being verified
 ([gluetun's reconnection](architecture.md#gluetuns-reconnection-during-a-switch) says what
 gluetun may do without causing this). The switch is tried again on the backoff, but only
 once the gates pass; until then the panel shows "Waiting for tunnel and overlay routing;
-request will retry automatically. Run recovery if this persists." Recovery is
-[recreating the exit](operations.md#recovery): the message was written when 0.7 had a
-recovery command, and the exit repairs routing by itself, so look at the exit's log first
-(`not ready:` and the repairer's lines).
+request will retry automatically. If this persists, recreate the exit
+(docs/operations.md#recovery)." Recovery is [recreating the exit](operations.md#recovery),
+and the exit repairs routing by itself, so look at the exit's log first (`not ready:` and
+the repairer's lines).
 
 **"The last switch was interrupted; retrying automatically."** The exit stopped during a
 switch, or lost the answer to its change. At start it inspected the tunnel first, found
@@ -683,12 +683,11 @@ server list doesn't name. See [egress tiers](architecture.md#egress-tiers).
 selection is saved and will be applied once the exit has a current catalogue. If this
 persists, the provider's API is unreachable from the exit.
 
-**"Routing protection is incomplete; run the recovery helper."** A routing rule or fallback
-route is missing, the lease isn't live, or the local-delivery rule was replaced. The message
-predates 0.8.0: there is no recovery helper now. The exit repairs rules itself within
-milliseconds, so this normally clears on the next check. If it persists, read the exit's log
-(`not ready:` and the repairer's lines), and `docker compose exec exit molebridge status`
-for `lease: lapsed`; a native exit whose lease isn't held has stopped renewing it
+**"Routing protection is incomplete; see docs/operations.md#recovery."** A routing rule or
+fallback route is missing, the lease isn't live, or the local-delivery rule was replaced. The
+exit repairs rules itself within milliseconds, so this normally clears on the next check. If
+it persists, read the exit's log (`not ready:` and the repairer's lines), and
+`docker compose exec exit molebridge status` for `lease: lapsed`; a native exit whose lease isn't held has stopped renewing it
 ([why the exit stopped itself](#why-the-exit-stopped-itself)). For the gluetun forms it can
 also mean the exit was left in an old namespace: [recreate](operations.md#recovery) gluetun
 and the exit together.

@@ -4,6 +4,9 @@
 // with the Go applier's after the supervisor's owner_record check is in
 // place: member order, nesting, null and empty values, messages and the
 // selection record. Timestamps are replaced by a placeholder on both sides.
+// The one pending message that named the recovery helper was reworded for 0.8.0
+// ("If this persists, recreate the exit (docs/operations.md#recovery).") and
+// edited in the golden to match.
 package applier
 
 import (

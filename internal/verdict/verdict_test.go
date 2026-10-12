@@ -402,7 +402,7 @@ func TestTheTunnelTierCountsOnlyWhereTheProviderHasNoStrongerCheck(t *testing.T)
 
 func TestAFreshFailureWinsOverWhatWasntMeasured(t *testing.T) {
 	// Inspection stops at a routing failure without measuring egress.
-	stopped := rec(t, map[string]any{"status": "failed", "message": "Routing protection is incomplete; run the recovery helper."})
+	stopped := rec(t, map[string]any{"status": "failed", "message": "Routing protection is incomplete; see docs/operations.md#recovery."})
 	stopped["checks"].(map[string]any)["routing"] = map[string]any{"state": "fail", "at": at(5), "fallback": true}
 	stopped["checks"].(map[string]any)["traffic_protection"] = map[string]any{"state": "fail", "at": at(5), "from": "routing"}
 	stopped["checks"].(map[string]any)["egress"] = map[string]any{"state": "unknown"}
