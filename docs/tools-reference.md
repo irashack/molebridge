@@ -1,0 +1,370 @@
+# File tools reference
+
+Molebridge's setup and repair tools are roles of the one image, run as a
+throwaway container: `ghcr.io/irashack/molebridge:<tag> <tool> [arguments]`.
+Nothing is installed on the host and no Python is needed. The role is always
+the first argument; it is never guessed from the environment. Each tool takes
+its inputs and outputs as explicit paths *inside the container*, so every
+invocation mounts them. Replace `<tag>` with the release you run.
+
+This page is the reference. Where the tools sit in the setup order is in
+[setup.md](setup.md).
+
+## Running a tool
+
+**Docker.** Run as yourself so private files are never owned by root:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/<host dir>:/out" \
+  ghcr.io/irashack/molebridge:<tag> <tool> ...
+```
+
+**Rootless Podman.** Leave `--user` out. The default user-namespace mapping
+turns the container's root into you, so the files are yours:
+
+```sh
+podman run --rm -v "$PWD/<host dir>:/out" \
+  ghcr.io/irashack/molebridge:<tag> <tool> ...
+```
+
+On an SELinux host add `:z` to each Podman mount (`-v "$PWD/dir:/out:z"`). A
+rootful Podman run takes the Docker form.
+
+Rules that hold for every tool:
+
+- The tools write only to the paths you give them. If you forget a mount, the
+  tool writes inside the container and the file is gone when it exits, while
+  the message still names the path you gave. Check that the file appeared on
+  the host.
+- Private files are mode `0600`, written to a temporary file in the same
+  directory and renamed into place, so a reader sees the old file or the new
+  one. A failure leaves no temporary file behind.
+- No tool prints a key, token, API key or any text taken from a file it read.
+  Messages are fixed text, with only the paths and setting names you supplied.
+- Exit status: `0` success, `1` a refusal, `2` a usage error. `-h` or `--help`
+  prints the tool's help and exits `0`.
+- A tool never reads the network except `nordvpn-key`, which makes the one
+  request described below.
+
+Settings that a tool reads from the environment are passed with `-e NAME=value`.
+An `--env-file` works only when its lines are plain `NAME=value`: Docker does
+not strip quotes or an `export` prefix, so a Compose `.env` written that way
+must be edited or the values passed with `-e`.
+
+| Tool | Writes | Environment | Section |
+|---|---|---|---|
+| `prepare-config` | `<out>/mullvad.conf` or `<out>/pia.conf` (0600) | `EXIT_TABLE` | [below](#prepare-config) |
+| `nordvpn-key` | `<out>/nordvpn.conf` (0600) | `EXIT_TABLE` | [below](#nordvpn-key) |
+| `gluetun-auth` | `<dir>/auth.toml`, `<dir>/api_key` (0600) | none | [below](#gluetun-auth) |
+| `gluetun-post-rules` | `<dir>/post-rules.txt` (0644) | routing settings | [below](#gluetun-post-rules) |
+| `fix-blacklist` | the NetBird profile, in place | `EXIT_IF`, `TUNNEL_BACKEND`, `NB_STATE_DIR` | [below](#fix-blacklist) |
+| `check-config` | nothing | the exit's settings | [below](#check-config) |
+
+## prepare-config
+
+Turns a WireGuard config downloaded from Mullvad into Molebridge's tunnel
+config, or creates a new PIA tunnel config with a fresh private key.
+
+```
+molebridge prepare-config DOWNLOADED.conf OUTPUT
+molebridge prepare-config --pia OUTPUT
+```
+
+**Mullvad.**
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  -v "$HOME/Downloads/mullvad.conf:/in.conf:ro" \
+  ghcr.io/irashack/molebridge:<tag> prepare-config /in.conf /out/mullvad.conf
+```
+
+The same with `podman run --rm` and no `--user`. The output name must be
+`<EXIT_IF>.conf`; the exit reads `tunnel/wg_confs/mullvad.conf` by default.
+
+- Input: the file Mullvad's WireGuard configuration generator produced, at most
+  64 KiB and valid UTF-8. Only the private key, the tunnel addresses and the
+  first peer are kept. The first value of a repeated key wins; sections other
+  than `[Interface]` and the first `[Peer]` are ignored. The `DNS` line is
+  dropped on purpose (clients keep their own resolvers).
+- Output: mode `0600`, replaced atomically if it exists, parent directories
+  created. It has `MTU = 1420`, `Table = off` and the two route hooks for the
+  exit table, which the exit reads as route operations and never runs as shell.
+  The downloaded server becomes the starting peer with
+  `PersistentKeepalive = 25`; the panel changes it later.
+- `EXIT_TABLE` (default `51821`) sets the table in the hooks. Pass
+  `-e EXIT_TABLE=<n>` only if you changed it for the exit; the exit refuses a
+  config written for another table.
+- Requirements, each a refusal: a canonical 32-byte base64 `PrivateKey` and
+  `PublicKey`; an `Address` with exactly one IPv4 host address and at most one
+  IPv6 host address (`/32` and `/128`); an IPv4 `Endpoint` with a port from 1 to
+  65535; `EXIT_TABLE` from 256 to 2147483647.
+- Prints `wrote OUTPUT (mode 0600); delete DOWNLOADED now`. The names are the
+  in-container paths. Delete the original file on the host.
+
+**PIA.** Creates a new config with a new private key and no address or peer;
+the exit registers the key with PIA and sets both for each region.
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  ghcr.io/irashack/molebridge:<tag> prepare-config --pia /out/pia.conf
+```
+
+- The key is 32 bytes from the system random source, clamped as `wg genkey`
+  does. It is never printed.
+- An existing OUTPUT is never overwritten.
+- Prints `wrote OUTPUT (mode 0600)`.
+
+Messages (standard error, exit status 1; each starts `error: `):
+
+| Message | Cause |
+|---|---|
+| `Interface PrivateKey is missing or is not a WireGuard key` | no key, or not 32-byte canonical base64 |
+| `Peer PublicKey is missing or is not a WireGuard key` | same, for the peer |
+| `Interface Address is not valid` | an address that does not parse |
+| `Interface Address has no IPv4 tunnel address` | no IPv4 address |
+| `Interface Address has more than one address in a family` | two IPv4 or two IPv6 addresses |
+| `Interface Address must be host addresses (/32 and /128)` | a subnet prefix |
+| `Peer Endpoint must be an IPv4 address and port` | hostname, IPv6 or no port |
+| `Peer Endpoint port must be 1..65535` | port out of range |
+| `EXIT_TABLE must be an unreserved table number (256..2147483647)` | bad `EXIT_TABLE` |
+| `the downloaded config is larger than 64 KiB` | input too large |
+| `the downloaded config is not valid UTF-8` | input not text |
+| `<OUTPUT> exists; keep it, or remove it deliberately to make a new key` | `--pia` with an existing file |
+| `open <path>: <reason>` | the input cannot be opened |
+
+Usage errors (`usage: molebridge prepare-config DOWNLOADED.conf OUTPUT` and
+`       molebridge prepare-config --pia OUTPUT`) exit `2`.
+
+## nordvpn-key
+
+Fetches your NordLynx private key with a NordVPN access token and writes
+Molebridge's tunnel config for NordVPN. Create the token in your Nord Account
+under NordVPN, Advanced settings, Get access token.
+
+```
+molebridge nordvpn-key TOKEN_FILE OUTPUT
+molebridge nordvpn-key - OUTPUT
+```
+
+From a token file (mode `0600` or stricter on the host):
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  -v "$PWD/nordvpn-token:/token:ro" \
+  ghcr.io/irashack/molebridge:<tag> nordvpn-key /token /out/nordvpn.conf
+```
+
+From standard input (the container needs `-i`):
+
+```sh
+printf %s "$TOKEN" | docker run --rm -i --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  ghcr.io/irashack/molebridge:<tag> nordvpn-key - /out/nordvpn.conf
+```
+
+The same with `podman run` and no `--user`. A bind-mounted file keeps its host
+mode, so `chmod 600` the token file first.
+
+- The token is never read from a command-line argument or the environment. As a
+  file it must be a regular file (not a symlink), mode `0600` or stricter; from
+  standard input it is read up to 512 bytes. It is 1 to 256 printable ASCII
+  characters without a quote or backslash, with one trailing newline allowed.
+- The one request: `GET https://api.nordvpn.com/v1/users/services/credentials`
+  with HTTP Basic credentials `token:<token>`. No proxy from the environment is
+  used, TLS 1.2 or later is required, redirects are not followed, the whole
+  request has a 20 second deadline and the response is limited to 64 KiB. Only
+  the `nordlynx_private_key` field of the response is used.
+- Output: created exclusively with mode `0600` (never overwritten, a symlink is
+  refused), parent directories created. It carries the key and the NordLynx
+  address `10.5.0.2/32` but no peer; the exit sets the peer when you pick a
+  server. `EXIT_TABLE` (default `51821`) is read as for `prepare-config`.
+- Prints one line, `wrote the NordVPN tunnel config (mode 0600)`, and nothing
+  else. Delete the token file, or revoke the token in your Nord Account, when it
+  succeeds: only the key is needed afterwards.
+
+Messages (standard error, exit status 1; each starts `error: `):
+
+| Message | Cause |
+|---|---|
+| `the output file exists; keep it, or remove it deliberately` | OUTPUT exists, even as a dangling symlink |
+| `the token could not be read` | the file is missing, a symlink, or unreadable |
+| `the token file is not a regular file` | a directory, FIFO or device |
+| `the token file must be mode 0600 or stricter` | group or other bits set |
+| `the token is too long` | more than 512 bytes |
+| `the token is not valid` | not printable ASCII, or empty |
+| `the request to NordVPN failed` | network error, HTTP status 400 or above, timeout, oversize response |
+| `the NordVPN response is not valid` | not strict JSON |
+| `the NordVPN response has no usable key` | no valid `nordlynx_private_key` |
+| `the output file could not be created` | the directory cannot be created or the file opened |
+| `the tunnel config could not be written` | any other failure, including a bad `EXIT_TABLE` |
+
+The image carries the CA certificates the request needs. A usage error exits
+`2` with `usage: molebridge nordvpn-key TOKEN_FILE|- OUTPUT`.
+
+## gluetun-auth
+
+Writes gluetun's control-server role file and the exit's copy of its API key,
+both mode `0600`, from one key generated here (32 random bytes, URL-safe
+base64, 43 characters). The key is never printed. Needed for the gluetun
+backend and the gluetun sidecar.
+
+```
+molebridge gluetun-auth [--rotate] DIR
+```
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/secrets/gluetun:/out" \
+  ghcr.io/irashack/molebridge:<tag> gluetun-auth /out
+```
+
+The same with `podman run` and no `--user`. The Compose files read
+`./secrets/gluetun/auth.toml` (gluetun's role file) and
+`./secrets/gluetun/api_key` (the exit's copy), so `DIR` is that directory.
+
+- Output: `DIR/auth.toml`, exactly one role named `molebridge` with `auth =
+  "apikey"`, the key, and these five routes and no others: `PUT
+  /v1/vpn/settings`, `GET /v1/vpn/status`, `GET /v1/publicip/ip`, `GET
+  /v1/updater/status`, `PUT /v1/updater/status`. `DIR/api_key` holds the same
+  key and a newline. `DIR` is created with mode `0700` if it does not exist.
+  `routing/gluetun-preflight` refuses to start gluetun with any other role
+  file.
+- With both files present nothing changes (exit status `0`). With one present,
+  the tool refuses until you pass `--rotate`. `--rotate` replaces both with a
+  new key; recreate gluetun and the exit container afterwards so both use it.
+- Symlinks are refused: `DIR` itself, `api_key` and `auth.toml`.
+
+Messages (the refusals go to standard error with exit status 1; everything
+else to standard output):
+
+| Message | Cause |
+|---|---|
+| `Wrote <DIR>/auth.toml and <DIR>/api_key (mode 0600, key not shown); recreate gluetun and the exit container to use them.` | written |
+| `<DIR>/auth.toml and api_key already exist; --rotate replaces them.` | both exist, nothing changed |
+| `FAIL Only one of <DIR>/api_key and auth.toml exists; run gluetun-auth --rotate to write both again.` | one file only |
+| `FAIL <DIR> and its files must not be symlinks.` | a symlink |
+| `FAIL unable to inspect local configuration.` | any operating-system error; its text is withheld |
+
+Usage error: `usage: molebridge gluetun-auth [--rotate] DIR`, exit `2`.
+
+## gluetun-post-rules
+
+Writes gluetun's post-rules file, the iptables accepts an overlay exit needs
+under gluetun's DROP policies, from the routing settings. Needed for the
+gluetun backend only; a sidecar must not have the file
+(`routing/gluetun-preflight` refuses to start gluetun if it is mounted).
+
+```
+molebridge gluetun-post-rules [--ipv4-only] DIR
+```
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/gluetun:/out" \
+  -e OVERLAY_CIDR=<your NetBird range> \
+  ghcr.io/irashack/molebridge:<tag> gluetun-post-rules /out
+```
+
+The same with `podman run` and no `--user`. The Compose file mounts
+`./tunnel/gluetun/post-rules.txt` into gluetun, so `DIR` is `./tunnel/gluetun`.
+
+Settings, validated exactly as the exit validates them. An unset or empty
+setting is its default, as in Compose's `${NAME:-default}`:
+
+| Variable | Default |
+|---|---|
+| `OVERLAY_CIDR` | none; required |
+| `OVERLAY6_CIDR` | none; optional |
+| `OVERLAY_IF` | `wt0` |
+| `EXIT_IF` | `wg0` |
+| `EXIT_TABLE` | `51821` |
+| `HOST_IF` | `eth0` |
+| `HOST_TABLE` | `51822` |
+| `CONTROL_MARK` | `0x1bd00` |
+| `NB_WIREGUARD_PORT` | `51820` |
+
+Pass the same values your `.env` gives the Compose project; the tool does not
+read `.env`.
+
+- Output: `DIR/post-rules.txt`, mode `0644` (gluetun reads it as another user),
+  replaced atomically. Eight rule lines (`iptables` and `ip6tables`): forward
+  overlay to tunnel and back for established connections, accept output on the
+  host interface, accept NetBird's WireGuard port in. `--ipv4-only` leaves the
+  `ip6tables` lines out, for a host where gluetun finds no `ip6tables`. Every
+  line is one gluetun's chain parser accepts.
+- The file is regenerated, never edited. Recreate gluetun to apply it.
+- A symlinked `DIR`, a symlinked `post-rules.txt` and a non-regular file there
+  are refused. The settings are validated before anything is created.
+
+Messages:
+
+| Message | Cause |
+|---|---|
+| `Wrote <DIR>/post-rules.txt; recreate gluetun to apply it.` | written |
+| `FAIL Invalid gluetun routing settings; check OVERLAY_CIDR, CONTROL_MARK, HOST_IF, EXIT_IF, EXIT_TABLE, HOST_TABLE and NB_WIREGUARD_PORT in the environment passed with -e or --env-file (docs/configuration.md).` | any setting is invalid; no value is echoed |
+| `FAIL <DIR>/post-rules.txt must be a regular file; remove what is there.` | a symlink, directory or device |
+| `FAIL unable to inspect local configuration.` | any operating-system error |
+
+Refusals exit `1`. Usage error: `usage: molebridge gluetun-post-rules
+[--ipv4-only] DIR`, exit `2`.
+
+## fix-blacklist
+
+Adds the tunnel interface to the interface blacklist of the stored NetBird
+profile, for an exit that refused to start because the profile lacks it. Run it
+with the exit **stopped**. It is operator-invoked and never runs by itself. The
+daemon created the identity files, so the tool runs as their owner.
+
+```
+molebridge fix-blacklist
+```
+
+Docker, as the owner of the profile (find the uid and gid with `ls -ln` on the
+volume's `default.json`, or on the legacy `config.json`):
+
+```sh
+docker run --rm --user <owner uid>:<owner gid> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<wireguard|gluetun> \
+  -v <identity volume>:/var/lib/netbird \
+  ghcr.io/irashack/molebridge:<tag> fix-blacklist
+```
+
+Rootless Podman:
+
+```sh
+podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<wireguard|gluetun> \
+  -v <identity volume>:/var/lib/netbird \
+  ghcr.io/irashack/molebridge:<tag> fix-blacklist
+```
+
+For a legacy profile at `/etc/netbird/config.json`, add the containing
+directory: `-v <legacy directory>:/etc/netbird`. It takes no arguments; the
+settings are the exit's non-secret ones, so it resolves the same profile the
+daemon will load: `TUNNEL_BACKEND` (`wireguard`, the default, or `gluetun`),
+`EXIT_IF` (default `mullvad`, `wg0` with gluetun) and `NB_STATE_DIR` (default
+`/var/lib/netbird`).
+
+It refuses without changing anything when the daemon is running, when the
+active profile is not the default, when no identity exists (it never creates
+one), when the JSON is malformed
+or ambiguous, or when it cannot preserve the file's mode, owner and group. It
+reproduces NetBird's default filling when the list is absent, null or empty,
+keeps every operator exclusion and every other field byte for byte, and
+replaces the file atomically.
+
+Prints `fix-blacklist: added the tunnel interface <if> to the interface
+blacklist of the stored NetBird profile <path>` or `fix-blacklist: the stored
+NetBird profile <path> already excludes the tunnel interface <if>; nothing
+changed`. Refusals go to standard error with exit status `1`; a usage error
+exits `2`.
+
+## check-config
+
+`check-config` validates a tunnel config against the exit's grammar without
+touching the network, so a bad file is found before the exit starts. It is
+registered by the exit role's code, not by the file tools above; its
+invocation and messages are documented with the exit when that role lands.

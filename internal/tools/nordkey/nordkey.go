@@ -52,7 +52,8 @@ when you pick a server. The exit table comes from EXIT_TABLE (default 51821).
 Prints one fixed line and no token, key or response. Delete the token file, or
 revoke the token in your Nord Account, once this succeeds: only the key is
 needed afterwards. Both paths are inside the container, so mount them, and
-run as yourself so the output is not owned by root:
+run as yourself so the output is not owned by root (on rootless Podman drop
+--user: the default mapping makes the container's root you):
 
   docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD/tunnel/wg_confs:/out" -v "$PWD/nordvpn-token:/token:ro" \

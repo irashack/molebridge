@@ -60,8 +60,8 @@ Run it as yourself so the output is not owned by root:
   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/tunnel/wg_confs:/out" \
     ghcr.io/irashack/molebridge:<tag> prepare-config --pia /out/pia.conf
 
-On rootless Podman drop --user and add --userns=keep-id (the container user
-is then you).
+On rootless Podman drop --user: the default mapping makes the container's root
+you, so the files are yours.
 `
 
 // -- parsing ---------------------------------------------------------------

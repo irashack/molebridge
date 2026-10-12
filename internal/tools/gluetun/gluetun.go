@@ -58,7 +58,8 @@ container so both use the new key.
   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/secrets/gluetun:/out" \
     ghcr.io/irashack/molebridge:<tag> gluetun-auth --rotate /out
 
-On rootless Podman drop --user and add --userns=keep-id.
+On rootless Podman drop --user: the default mapping makes the container's root
+you, so the files are yours.
 `
 
 // PostRulesHelp documents the mounts and settings of gluetun-post-rules.
@@ -82,7 +83,8 @@ ip6tables. Recreate gluetun afterwards to apply the file.
     -e OVERLAY_CIDR=100.64.0.0/10 \
     ghcr.io/irashack/molebridge:<tag> gluetun-post-rules /out
 
-On rootless Podman drop --user and add --userns=keep-id.
+On rootless Podman drop --user: the default mapping makes the container's root
+you, so the files are yours.
 `
 
 // parseArgs reads "[--flag ...] DIR". The flags may come before or after DIR.
