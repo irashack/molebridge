@@ -138,8 +138,9 @@ NetBird. In 0.7 the tunnel key and the provider logic were in different
 containers; in 0.8.0 they are in one process tree, which is what lets the
 exit own the whole fail-closed property, but it means that split is gone.
 What remains is exit versus panel. The exit's root filesystem is read-only;
-it writes its state directory, `/run` and `/var/log/netbird` (both tmpfs), and
-bounded scratch space. It validates everything it reads: server lists, API
+it writes its state directory, the `netbird-data` volume and two tmpfs mounts:
+`/run`, which holds its runtime files and scratch space, and `/var/log/netbird`.
+It validates everything it reads: server lists, API
 answers, the tunnel config, the stored NetBird profile, desired-state files,
 and the panel's requests.
 

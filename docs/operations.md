@@ -254,7 +254,10 @@ that you can roll back by putting 0.7's files back.
    ```
 
    Keep the same `COMPOSE_PROJECT_NAME` (the default is `molebridge`): it names
-   the identity volume, `<project>_netbird-data`.
+   the identity volume, `<project>_netbird-data`. Your tunnel config carries over
+   as it is: the exit checks the grammar 0.7's generators wrote. That check is a
+   port of 0.7's, not yet run against a 0.7-generated file on a live host, and
+   `check-config` (step 5) tells you before anything changes.
 2. **Edit `.env` against the new `.env.example`.** What changed:
    - `COMPOSE_FILE=compose.yaml:compose.pia.yaml` and `...compose.nordvpn.yaml`
      are gone, with those files. Set `PROVIDER` and `EXIT_IF` instead, and remove
