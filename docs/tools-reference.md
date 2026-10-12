@@ -5,7 +5,14 @@ throwaway container: `ghcr.io/irashack/molebridge:<tag> <tool> [arguments]`.
 Nothing is installed on the host and no Python is needed. The role is always
 the first argument; it is never guessed from the environment. Each tool takes
 its inputs and outputs as explicit paths *inside the container*, so every
-invocation mounts them. Replace `<tag>` with the release you run.
+invocation mounts them. Replace `<tag>` with the release you run, ideally the
+exact reference your Compose file pins (tag and digest), so the tool is the
+image you verified: [setup](setup.md#2-configure) sets `IMAGE` to it, and the
+commands there use `"$IMAGE"` where this page shows the reference.
+
+The image's other roles are not tools: `exit` and `panel` are the two
+containers, `health` is the exit's container health check, and `status` prints the
+exit's verdict from inside it ([operations](operations.md#health)).
 
 This page is the reference. Where the tools sit in the setup order is in
 [setup.md](setup.md).
@@ -327,7 +334,7 @@ volume's `default.json`, or on the legacy `config.json`):
 
 ```sh
 docker run --rm --user <owner uid>:<owner gid> \
-  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<wireguard|gluetun> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
   -v <identity volume>:/var/lib/netbird \
   ghcr.io/irashack/molebridge:<tag> fix-blacklist
 ```
@@ -336,7 +343,7 @@ Rootless Podman:
 
 ```sh
 podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
-  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<wireguard|gluetun> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
   -v <identity volume>:/var/lib/netbird \
   ghcr.io/irashack/molebridge:<tag> fix-blacklist
 ```
@@ -344,7 +351,8 @@ podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
 For a legacy profile at `/etc/netbird/config.json`, add the containing
 directory: `-v <legacy directory>:/etc/netbird`. It takes no arguments; the
 settings are the exit's non-secret ones, so it resolves the same profile the
-daemon will load: `TUNNEL_BACKEND` (`wireguard`, the default, or `gluetun`),
+daemon will load: `TUNNEL_BACKEND` (`native`, the default, or `gluetun`; the older
+spelling `wireguard` is accepted too),
 `EXIT_IF` (default `mullvad`, `wg0` with gluetun) and `NB_STATE_DIR` (default
 `/var/lib/netbird`).
 
@@ -364,7 +372,29 @@ exits `2`.
 
 ## check-config
 
-`check-config` validates a tunnel config against the exit's grammar without
-touching the network, so a bad file is found before the exit starts. It is
-registered by the exit role's code, not by the file tools above; its
-invocation and messages are documented with the exit when that role lands.
+Validates what the exit validates when it starts, with the exit's own environment, and
+changes nothing: the routing settings, `PROVIDER` against the backend and kind, the tunnel
+config (native exits: the grammar, the table and the file's type and size), NetBird's
+environment and stored profile, the interface blacklist, and that `state/applier` is
+writable by the process. It does not create the state directory, which the exit does at a
+real start, and it makes no network request.
+
+```
+molebridge check-config
+```
+
+It takes no arguments; the settings are the exit's, so run it through Compose, which
+supplies them, the mounts and the capabilities:
+
+```sh
+docker compose run --rm --no-deps exit check-config
+```
+
+(For the gluetun forms, start gluetun first: the exit joins its namespace.) On success it
+prints, for a native exit,
+`molebridge-exit: configuration accepted (/config/wg_confs/<EXIT_IF>.conf: an IPv4 address and an IPv6 address)`
+(or `an IPv4 address`, or `no address (the applier sets it)` for PIA), and for the other kinds
+`molebridge-exit: configuration accepted`; then, for an overlay exit,
+`NetBird gate: configuration accepted`. A refusal is the one line the exit would print at start,
+on standard error, with exit status `1` ([troubleshooting](troubleshooting.md#startup)). A usage error
+(`usage: molebridge check-config (settings come from the environment)`) exits `2`.
