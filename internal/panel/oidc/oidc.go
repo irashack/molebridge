@@ -1176,3 +1176,11 @@ func (a *Authenticator) pruneConsumed(now float64) {
 		a.consumed.Remove(front)
 	}
 }
+
+// SessionCount is how many sessions are held, expired ones included until
+// the next sign-in prunes them.
+func (a *Authenticator) SessionCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.sessions)
+}

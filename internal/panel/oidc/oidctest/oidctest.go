@@ -235,3 +235,17 @@ func (f *Issuer) RequestsSeen() []Request {
 	defer f.mu.Unlock()
 	return append([]Request(nil), f.Requests...)
 }
+
+// LastToken is the ID token the issuer most recently handed out.
+func (f *Issuer) LastToken() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.LastIDToken
+}
+
+// SeenRequests is how many requests the issuer received.
+func (f *Issuer) SeenRequests() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Requests)
+}
