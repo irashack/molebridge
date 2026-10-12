@@ -13,17 +13,17 @@ import (
 )
 
 // The panel checks its own isolation at start (plan: "Upgrade from 0.7.x"):
-// no capabilities, not uid 0 unless PANEL_USER says so, and every exit state
+// no capabilities, not uid 0 unless PANEL_ALLOW_ROOT=1, and every exit state
 // mount read-only except the panel directory. It cannot see what else was
 // mounted into it, so credential-mount separation stays a host check
 // (documented with its command in docs/operations.md).
 //
-// How the panel learns what PANEL_USER says: the Compose file passes it into
-// the panel's environment as PANEL_USER, the same value it gives to `user:`.
-// uid 0 is accepted only when that variable is present and names uid 0
-// ("0", "0:0" or "0:<gid>"), which is the documented override for a rootless
-// engine, where container root is the host user. A non-root PANEL_USER does
-// not excuse a root process: the two must agree.
+// How the panel learns that root is deliberate: the Compose file passes
+// PANEL_ALLOW_ROOT into the panel's environment (empty unless the operator
+// set it, and empty counts as unset). uid 0 is accepted only when it is
+// exactly "1", the operator's statement that root in this container is the
+// host user on a rootless engine (PANEL_USER=0:0). Any other value, or none,
+// refuses a root process.
 
 // IsolationOffEnv switches the self-check off. It exists for the Node tests
 // and for running the panel by hand outside a container; the Compose file
@@ -35,7 +35,7 @@ const IsolationOffEnv = "MOLEBRIDGE_PANEL_ISOLATION_CHECK"
 const (
 	refuseCapabilities = "the panel must run with no capabilities (cap_drop: [ALL]); its effective capability set is not empty"
 	refuseCapUnknown   = "the panel cannot read its capability set from /proc/self/status, so it cannot show it has none"
-	refuseRoot         = "the panel must not run as root; set PANEL_USER to the uid:gid that owns state/panel (0:0 only on a rootless engine, and only explicitly)"
+	refuseRoot         = "the panel must not run as root; set PANEL_USER to the uid:gid that owns state/panel (on a rootless engine, PANEL_USER=0:0 with PANEL_ALLOW_ROOT=1)"
 	refuseMounts       = "an exit's applier state must be mounted read-only into the panel; only its panel directory may be writable"
 	refuseMountUnknown = "the panel cannot tell whether an exit's applier state is mounted read-only"
 )
@@ -56,16 +56,9 @@ type IsolationInputs struct {
 	// not be read.
 	CapEff    uint64
 	CapKnown  bool
-	PanelUser string // PANEL_USER from the environment ("" when unset)
+	AllowRoot string // PANEL_ALLOW_ROOT from the environment ("" when unset)
 	// Applier lists every exit's applier directory.
 	Applier []MountState
-}
-
-// panelUserIsRoot reports whether PANEL_USER explicitly names uid 0.
-func panelUserIsRoot(value string) bool {
-	uid, _, _ := strings.Cut(strings.TrimSpace(value), ":")
-	n, err := strconv.Atoi(uid)
-	return err == nil && n == 0 && strings.TrimLeft(uid, "0") == ""
 }
 
 // CheckIsolation returns the fixed refusals that apply to the inputs, in a
@@ -78,7 +71,7 @@ func CheckIsolation(in IsolationInputs) []string {
 	case in.CapEff != 0:
 		refusals = append(refusals, refuseCapabilities)
 	}
-	if in.UID == 0 && !panelUserIsRoot(in.PanelUser) {
+	if in.UID == 0 && in.AllowRoot != "1" {
 		refusals = append(refusals, refuseRoot)
 	}
 	writable, unknown := false, false
@@ -126,7 +119,7 @@ func DefaultProbe() IsolationProbe {
 
 // Gather builds the inputs for a panel with the given exits.
 func (p IsolationProbe) Gather(env map[string]string, exits []Exit, stateDir string) IsolationInputs {
-	in := IsolationInputs{UID: p.UID(), PanelUser: env["PANEL_USER"]}
+	in := IsolationInputs{UID: p.UID(), AllowRoot: env["PANEL_ALLOW_ROOT"]}
 	if f, err := os.Open(p.StatusPath); err == nil {
 		in.CapEff, in.CapKnown = ParseCapEff(f)
 		f.Close()

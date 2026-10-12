@@ -15,7 +15,7 @@ import (
 )
 
 func okInputs() IsolationInputs {
-	return IsolationInputs{UID: 1000, CapKnown: true, PanelUser: "1000:1000",
+	return IsolationInputs{UID: 1000, CapKnown: true,
 		Applier: []MountState{{Label: "a", Known: true, ReadOnly: true}, {Label: "b", Known: true, ReadOnly: true}}}
 }
 
@@ -29,18 +29,16 @@ func TestCheckIsolation(t *testing.T) {
 		{"capabilities refuse", func(in *IsolationInputs) { in.CapEff = 0x1 }, []string{refuseCapabilities}},
 		{"the full set refuses", func(in *IsolationInputs) { in.CapEff = 0x1ffffffffff }, []string{refuseCapabilities}},
 		{"an unreadable set refuses", func(in *IsolationInputs) { in.CapKnown = false }, []string{refuseCapUnknown}},
-		{"root without PANEL_USER refuses", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "" }, []string{refuseRoot}},
-		{"root with a non-root PANEL_USER refuses", func(in *IsolationInputs) { in.UID = 0 }, []string{refuseRoot}},
-		{"root with PANEL_USER=0:0 starts", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "0:0" }, nil},
-		{"root with PANEL_USER=0 starts", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "0" }, nil},
-		{"root with PANEL_USER=00:0 starts", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "00:0" }, nil},
-		{"root with PANEL_USER=10:0 refuses", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "10:0" }, []string{refuseRoot}},
-		{"root with PANEL_USER=root refuses", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "root" }, []string{refuseRoot}},
-		{"PANEL_USER=0:0 does not excuse capabilities", func(in *IsolationInputs) { in.UID = 0; in.PanelUser = "0:0"; in.CapEff = 1 }, []string{refuseCapabilities}},
+		{"root without PANEL_ALLOW_ROOT refuses", func(in *IsolationInputs) { in.UID = 0 }, []string{refuseRoot}},
+		{"root with PANEL_ALLOW_ROOT=1 starts", func(in *IsolationInputs) { in.UID = 0; in.AllowRoot = "1" }, nil},
+		{"root with PANEL_ALLOW_ROOT=true refuses", func(in *IsolationInputs) { in.UID = 0; in.AllowRoot = "true" }, []string{refuseRoot}},
+		{"root with PANEL_ALLOW_ROOT=0 refuses", func(in *IsolationInputs) { in.UID = 0; in.AllowRoot = "0" }, []string{refuseRoot}},
+		{"PANEL_ALLOW_ROOT does not matter for a non-root uid", func(in *IsolationInputs) { in.AllowRoot = "1" }, nil},
+		{"PANEL_ALLOW_ROOT=1 does not excuse capabilities", func(in *IsolationInputs) { in.UID = 0; in.AllowRoot = "1"; in.CapEff = 1 }, []string{refuseCapabilities}},
 		{"a writable applier mount refuses", func(in *IsolationInputs) { in.Applier[1].ReadOnly = false }, []string{refuseMounts}},
 		{"an unknown mount refuses", func(in *IsolationInputs) { in.Applier[0].Known = false }, []string{refuseMountUnknown}},
 		{"everything wrong says everything", func(in *IsolationInputs) {
-			in.UID, in.PanelUser, in.CapEff = 0, "", 1
+			in.UID, in.CapEff = 0, 1
 			in.Applier[0].ReadOnly = false
 		}, []string{refuseCapabilities, refuseRoot, refuseMounts}},
 	}
@@ -58,7 +56,7 @@ func TestCheckIsolation(t *testing.T) {
 
 func TestRefusalsNameNothingFromTheEnvironment(t *testing.T) {
 	in := okInputs()
-	in.UID, in.PanelUser, in.CapEff = 0, "secret-looking-value", 1
+	in.UID, in.AllowRoot, in.CapEff = 0, "secret-looking-value", 1
 	in.Applier[0] = MountState{Label: "/srv/private/path", Known: true}
 	for _, refusal := range CheckIsolation(in) {
 		for _, leaked := range []string{"secret-looking-value", "/srv/private/path"} {
@@ -110,11 +108,11 @@ func TestVerifyIsolationGathersEveryExit(t *testing.T) {
 	probe := fakeProbe(t, "CapEff:\t0000000000000000\n", 1000, map[string]bool{
 		"/state/mine/applier": true, "/state/a/applier": true})
 	var warn bytes.Buffer
-	if err := VerifyIsolation(map[string]string{"PANEL_USER": "1000:1000"}, exits, "/state", probe, &warn); err != nil {
+	if err := VerifyIsolation(map[string]string{}, exits, "/state", probe, &warn); err != nil {
 		t.Fatalf("VerifyIsolation = %v", err)
 	}
 	probe.ReadOnly = func(dir string) (bool, error) { return dir != "/state/a/applier", nil }
-	err := VerifyIsolation(map[string]string{"PANEL_USER": "1000:1000"}, exits, "/state", probe, &warn)
+	err := VerifyIsolation(map[string]string{}, exits, "/state", probe, &warn)
 	var refused *ErrIsolation
 	if !errors.As(err, &refused) || len(refused.Refusals) != 1 || refused.Refusals[0] != refuseMounts {
 		t.Fatalf("VerifyIsolation = %v", err)
