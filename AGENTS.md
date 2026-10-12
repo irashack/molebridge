@@ -1,7 +1,7 @@
 # Working on Molebridge
 
 Read `README.md` and `docs/architecture.md` first. Molebridge is MIT-licensed;
-the bundled font keeps its own licence. Create releases or tags
+the bundled font keeps its own license. Create releases or tags
 only when the owner asks. Handle suspected vulnerabilities through the private
 route in `SECURITY.md`, never in a public issue or commit message.
 
@@ -24,33 +24,45 @@ route in `SECURITY.md`, never in a public issue or commit message.
 
 - **Fail-closed:** forwarded client traffic must never egress anywhere but the
   tunnel. Changes to routing, the tunnel config, compose networking or the
-  applier need the checks in `docs/verification.md`, run on a real host, before
+  exit need the checks in `docs/verification.md`, run on a real host, before
   a claim that they work.
-- **Privilege split:** the panel holds no capabilities, never runs `wg`, `ip` or
-  subprocesses, and only writes the desired server name. The applier validates
-  everything it reads and never mounts the tunnel config.
+- **Privilege split:** the panel is its own container, holds no capabilities,
+  never runs `wg`, `ip` or subprocesses, and only writes the desired server
+  name; it checks its own isolation at start and refuses to run otherwise.
+  The exit container is the only one with `NET_ADMIN`, the tunnel key and the
+  provider credentials. Its binary starts no shell: the only programs it
+  runs are the pinned NetBird client and its own worker and cleanup roles.
 - **Untrusted input:** Mullvad's relay list, PIA's region list and API
   responses, NordVPN's server list, gluetun's `servers.json` and control
-  server answers, the tunnel config the routing image reads, desired-state
-  files and form posts are untrusted. Validate before use; escape before rendering.
+  server answers, the tunnel config, the stored NetBird profile,
+  desired-state files and form posts are untrusted. Validate before use
+  (bounded reads, strict UTF-8, duplicate JSON keys refused); escape before
+  rendering.
 - **Exits only:** Molebridge never ships its own tunnel for other containers'
-  traffic; that is gluetun's job. The routing image carries no provider
-  protocols, server catalogues or credentials.
+  traffic; that is gluetun's job. The image holds no credentials: keys,
+  logins and tokens come from files you mount.
 - **Honest status:** state what was tested and where. Untested platforms, and
   behavior described but not verified, say so.
 
 ## Changes
 
 - Pin images to exact releases with multi-arch digests; update deliberately.
-- The panel stays Python standard library only; front-end code stays
-  dependency-free.
-- Validate in proportion to impact: `pytest -q panel tools`,
-  `node --test panel/js-tests/*.test.js` for the panel script, `sh -n` and
-  `shellcheck` on shell scripts, and `docker compose config` against
-  `.env.example`, alone and with `compose.pia.yaml`, `compose.nordvpn.yaml`
-  and `compose.gluetun.yaml`, and `compose.sidecar.yaml` against
-  `.env.sidecar.example`. Update the docs a
-  change affects in the same commit.
+- The panel and the exit are Go. Use the standard library wherever it
+  reaches; the only modules are the vendored set in `vendor/modules.txt`
+  (netlink, WireGuard control, nftables), and a new one needs a reason in
+  the commit message. Front-end code (`panel/static/`) stays dependency-free.
+- Validate in proportion to impact: `gofmt -l`, `go vet ./...` and
+  `go test ./...`; the namespace drills (`internal/nstest/drill.sh`, which
+  needs Docker and runs privileged in a throwaway container) for anything
+  that touches routing, the tunnel or the mutation owner;
+  `MOLEBRIDGE_PANEL=go node --test panel/js-tests/*.test.js` for the panel
+  script; `sh -n` and `shellcheck` on the shell scripts, `routing/gluetun-preflight`
+  among them; and `docker compose config` against `.env.example` (with
+  `PROVIDER` set to each of `mullvad`, `pia` and `nordvpn`),
+  `compose.gluetun.yaml` against `.env.gluetun.example` and
+  `compose.sidecar.yaml` against `.env.sidecar.example` (`tools/check-compose.sh`
+  checks the trust boundary as Compose resolves it). Update the docs a change
+  affects in the same commit, and run `sh tools/check-doc-links.sh`.
 
 ## Writing docs
 

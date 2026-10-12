@@ -202,10 +202,13 @@ jobs:
           persist-credentials: false
       - name: Shell scripts
         run: |
-          scripts="tools/make-bundle.sh tools/check-bundle.sh tools/check-image.sh tools/check-reproducible.sh tools/gen-third-party.sh tools/verify-acceptance.sh tools/make-acceptance-predicate.sh tools/release-notes.sh tools/test-make-bundle.sh tools/test-check-bundle.sh tools/test-gen-third-party.sh tools/test-verify-acceptance.sh tools/test-make-acceptance-predicate.sh tools/test-release-notes.sh"
+          scripts="tools/check-doc-links.sh tools/make-bundle.sh tools/check-bundle.sh tools/check-image.sh tools/check-reproducible.sh tools/gen-third-party.sh tools/verify-acceptance.sh tools/make-acceptance-predicate.sh tools/release-notes.sh tools/test-make-bundle.sh tools/test-check-bundle.sh tools/test-gen-third-party.sh tools/test-verify-acceptance.sh tools/test-make-acceptance-predicate.sh tools/test-release-notes.sh"
           for script in $scripts; do sh -n "$script"; done
           # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
+      - name: Documentation links
+        # Every relative link and #anchor in the Markdown files resolves.
+        run: sh tools/check-doc-links.sh
       - name: Bundle generator
         run: sh tools/test-make-bundle.sh
       - name: Bundle install check

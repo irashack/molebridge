@@ -1,12 +1,16 @@
 # Operations
 
-Commands assume Docker Compose from the repository root. Rootless Podman has
-its own section below: the `doctor` and `recover` helpers can run through
-podman-compose, but only the commands given there have been tested.
+Commands assume Docker Compose from the directory you extracted the bundle
+into. Rootless Podman has its own section [below](#rootless-podman); where a
+Podman command differs from the Docker one, it is given there. The exit
+container is `<project>-exit` and the panel `<project>-switchyard`, with
+`molebridge` as the project name unless you set `COMPOSE_PROJECT_NAME`.
+Nothing in 0.8.0 needs Python or a helper on the host: the commands here are
+the engine's own and the image's roles.
 
 ## Health
 
-The applier rewrites `state/applier/result.json` about once a minute. Every
+The exit publishes `state/applier/result.json` about once a minute. Every
 reader judges it the same way ([the verdict](architecture.md#the-verdict)),
 and the exit counts as connected only when the record is fresh, names the
 server you selected (or `SERVER`), and every check its kind requires has
@@ -22,9 +26,7 @@ passed in the last 150 seconds:
   kernel firewall in place;
 - every routing rule and fallback route in place, including the
   local-delivery rule that replaces the kernel's priority-0 rule;
-- with the default backend, a live [owner
-  record](architecture.md#the-owner-record) from the `wireguard` container,
-  in the applier's own namespace.
+- with a native exit, a live lease: the supervisor's `owner_record` check.
 
 A [gluetun sidecar](gluetun-sidecar.md) has no NetBird or routing checks.
 A record older than 150 seconds, malformed or dated in the future counts as
@@ -34,43 +36,53 @@ provider than the panel is configured for.
 - `/healthz` on the panel only checks that the panel process is up.
 - `/readyz` returns 200 for a fresh, verified connection and 503 otherwise.
   Point your monitoring at this one.
-- `python3 tools/molebridge.py doctor` checks the Compose configuration
-  (including the NetBird settings the entrypoint gate refuses), file
-  permissions, the identity volume, that every container in the exit's
-  namespace shares it (three with the default backend, four with gluetun), the ICE blacklist, the NetBird gate's own checks of its
-  settings and stored profiles, and the applier's own checks. The last of
-  those, `verified <provider> egress`, is the verdict against the applier's
-  own `SERVER` or selection, with the reasons when it fails, such as
-  `FAIL The applier reports: verified Mullvad egress - egress-failed (docs/troubleshooting.md).`
-  The doctor doesn't prove
-  that client traffic is forwarded; [verification](verification.md) does
-  that.
-- The applier's container health check is operational only: a fresh
-  completed check, `ok` or `failed`, and an intact namespace (the tunnel
-  interface, routing protection and NetBird's mode; for a sidecar, gluetun's
-  control server answering and exactly one peer). An exit that is up but
-  not verified, on another server than `SERVER`, or without a peer stays
-  healthy; the panel, `/readyz` and the doctor report it, and the applier
-  repairs a missing peer itself. If your engine or a supervisor kills
-  unhealthy containers, killing the applier would only delay that repair. Before 0.7.0 the health check also failed when the exit
-  wasn't on its `SERVER`.
+- `docker compose exec exit molebridge status` prints the verdict from inside
+  the exit: the state and label, the reason codes, the egress tier, every
+  check's state, the heartbeat's age and the lease. It exits 0 only when the
+  state is `ok`, and 1 otherwise. For example:
+
+  ```text
+  state: ok (connected)
+  reasons: none
+  egress tier: provider
+  checks: routing=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass traffic_protection=pass app_attachment=n/a
+  heartbeat: fresh (3 s old)
+  lease: held, 27 s to expiry
+  ```
+
+  `status` reads the exit's own files only. It does not prove that client
+  traffic is forwarded ([verification](verification.md) does that), and it
+  does not make the checks that need the engine or the host: that
+  containers share the namespace, or that the files on the host have the
+  right permissions ([host checks](#host-checks)). Its `app_attachment` stays
+  `n/a` or `not-checked`.
+- The exit container's health check is operational only: the worker's
+  heartbeat is fresh (at most 15 seconds old), which the worker writes every
+  5 seconds while the tunnel interface exists, the contract holds, NetBird is
+  running and a completed check, `ok` or `failed`, is less than 150 seconds
+  old. An exit that is up but not verified, on another server than `SERVER`,
+  or without a peer stays healthy; the panel, `/readyz` and `status` report it,
+  and the exit repairs a missing peer itself. If your engine or a supervisor
+  kills unhealthy containers, killing the exit would only delay that repair.
+  A hung worker is not the health check's job: the supervisor's lease stops
+  NetBird and the container itself ([the lease](architecture.md#the-lease)).
 
 ### Gatus
 
 To push health to [Gatus](https://gatus.io), set `GATUS_URL` and
 `GATUS_ENDPOINT`, and put `GATUS_TOKEN=…` in `secrets/applier.env` (mode 0600).
 Use HTTPS unless the connection is local and trusted. In Gatus, treat a
-missing push as a failure: a stopped applier can't report that it's down.
+missing push as a failure: a stopped exit can't report that it's down.
 
-The applier pushes the [verdict](architecture.md#the-verdict) against its
+The exit pushes the [verdict](architecture.md#the-verdict) against its
 own target, so it agrees with the panel and `/readyz`; anything but `ok` is
-a failure, with the applier's message or the verdict's label as the error.
+a failure, with the exit's message or the verdict's label as the error.
 It pushes after each periodic check and each outcome of a switch, never
 while a switch is in progress, so an ordinary switch isn't a failed sample.
 
 ## Retries
 
-The applier retries by itself
+The exit retries by itself
 ([the admission pipeline](architecture.md#the-admission-pipeline)):
 
 - **A change that failed** (the peer update, PIA's registration, gluetun's
@@ -100,186 +112,427 @@ for it to finish.", so wait for it first.
 
 An exit with `SERVER` set has no Retry. Changing `SERVER` is a new target.
 To retry the same configured server before its backoff is up, stop the
-applier, delete its attempt record and start it again. The applier then
+exit, delete its attempt record and start it again. The exit then
 inspects first: the configured server already live is re-checked, anything
 else is switched at once.
 
 ```sh
-docker compose stop applier
+docker compose stop exit
 rm state/applier/attempt.json
-docker compose start applier
+docker compose start exit
 ```
 
-`state/applier/attempt.json` holds the applier's current attempt: the
+`state/applier/attempt.json` holds the exit's current attempt: the
 target and why, its state, the backoff step, when to act next, and the last
 refused panel request. It is written before every change, so a restart
 resumes it instead of repeating a change blindly. Deleting it while the
-applier is stopped is safe: a missing or unreadable record starts idle, with
-the backoff from the start, and the applier inspects the live server before
+exit is stopped is safe: a missing or unreadable record starts idle, with
+the backoff from the start, and the exit inspects the live server before
 it changes anything, unless the panel's request is less than 150 seconds
 old. A refused request is then tried once more, and refused again if
-nothing changed. Don't edit it while the applier runs.
+nothing changed. Don't edit it while the exit runs.
 
 ## Recovery
 
-Recreating `wireguard` alone leaves `netbird` and `applier` in the old network
-namespace, where they carry no traffic; the same goes for `gluetun` and the
-three containers that join it. Docker doesn't restart unhealthy containers on
-its own. The recovery helper recreates them all together, with the panel:
+An exit repairs most things by itself, and stops and restarts itself when its
+worker stops answering ([the lease](architecture.md#the-lease)). There is no
+recovery helper in 0.8.0. What you do by hand is recreate containers, and the
+rule that decides which ones is about network namespaces.
+
+**Why it matters.** A container that joins another's network namespace
+(`network_mode: service:gluetun`) stays in the namespace the owner had when it
+joined. If the owner is recreated, or restarted in a way that gives it a new
+namespace, the dependents stay behind in the old one, where they carry no
+traffic. The engine doesn't restart them for it. So you recreate the owner and
+every dependent together.
+
+**A native exit** owns its namespace alone: the panel is on its own network.
+To apply a change in `.env` or an override, or to restart the whole exit:
 
 ```sh
-python3 tools/molebridge.py recover
+docker compose up -d --force-recreate exit
 ```
 
-It checks the configuration, the files and the identity volume first, and
-builds both local images before touching the running exit, so a failed build
-changes nothing. It then stops the namespace users, recreates the containers
-(four with the default backend, five with gluetun), waits up to 180 seconds
-for them to become healthy, then polls for up to about 180 seconds more for
-the applier to verify the exit (with the gluetun backend it may first put
-your last server back), and runs doctor.
-A failure names the step, or the applier's checks that still fail.
-Its exit status is `0` when the exit is recovered and verified; `3` when it
-is recovered and operational but not verified, that is every check passed but
-the applier's `verified ...` egress check, named in a line such as
-`UNVERIFIED Recovered and operational, but not verified: verified Mullvad egress.`;
-and `1` when recovery failed. The [gluetun sidecar](gluetun-sidecar.md#recovery)
-uses the same three. With the gluetun
-backend it recreates `gluetun`, `guard`, `netbird`, `applier` and the panel.
-It never deletes a volume or enrolls a new peer. If it fails after
-recreating, the exit hasn't passed every check, but the containers it
-recreated keep running and the tunnel may carry traffic; read the reported
-failure and the panel's status before you rely on the exit, fix the problem,
-and run it again. Keep a way into the host that doesn't depend on this
-exit.
+A stop takes up to 13 seconds of the 15 the Compose files allow
+([the stop sequence](architecture.md#the-stop-sequence)); the rules and the
+fallback stay until the container is gone, and the new container installs them
+before it starts the tunnel. The NetBird identity stays in the `netbird-data`
+volume.
 
-NetBird won't start until the routing guards exist, on every start, including
-after a host reboot, and with the default backend its gate stops NetBird when
-the exit's owner record or the guards go
-([architecture](architecture.md#netbirds-gate)). An applier stranded in an
-old namespace reports unhealthy, so the problem is visible, but only
-recovery fixes it.
+**The gluetun forms** have a namespace owner, `gluetun`, and dependents:
 
-Stopping or recreating `wireguard` takes up to about 7 seconds: its
-entrypoint brings the tunnel down and leaves the routing rules in place.
-`compose.yaml` gives `wireguard` and `netbird` 15 seconds each before the
-engine kills them.
+```sh
+docker compose up -d --force-recreate
+```
+
+recreates every service in the project, which covers `gluetun`, `exit` and
+`switchyard`. That is not always every dependent. Applications in a Compose
+file of your own, and any container started by hand or from another project
+with `--network container:<gluetun>`, are dependents too and must be recreated
+after gluetun. To list every container that currently joins gluetun, including
+ones outside the project (this prints names and a network mode, nothing
+else; run it before you recreate anything):
+
+```sh
+GLUETUN_ID=$(docker inspect -f '{{.Id}}' molebridge-gluetun)
+docker ps -aq | xargs docker inspect -f '{{.Name}} {{.HostConfig.NetworkMode}}' | grep "container:$GLUETUN_ID"
+```
+
+For a sidecar, `SIDECAR_APPS` names the applications you declared. The
+sidecar's `compose.apps.yaml` services are in the project when it is listed in
+`COMPOSE_FILE`; services you run elsewhere need their own recreate command, in
+the order gluetun first, then the dependents.
+
+**Then check, in this order.** Recovery has succeeded in two different senses,
+and only the second is about traffic:
+
+1. *Operational.* The containers are healthy (`docker compose ps`), and every
+   dependent is in gluetun's current namespace. That second part is not
+   visible from inside any container; use the
+   [attachment procedure](#checking-that-containers-share-gluetuns-namespace).
+2. *Verified.* `docker compose exec exit molebridge status` reports
+   `state: ok`. After a recreation the exit starts from its saved selection,
+   which can take a few minutes: a first check, then the egress check. With
+   gluetun it may first put your last server back.
+
+A recreated exit is not proof that traffic is verified, and an application in
+the old namespace can look healthy while carrying nothing. Keep a way into the
+host that doesn't depend on this exit.
 
 ## Upgrades
 
-Read the [changelog](../CHANGELOG.md) first. Then:
+Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8:
+
+1. [Verify the new download](setup.md#1-download-and-verify) as for a first
+   install. The signature covers the bundle's Compose files and the image, not
+   your `.env` or overrides.
+2. Compare the new example environment with yours, and replace the Compose
+   files and the preflight script. Your `.env`, `state/`, `tunnel/`, `secrets/`
+   and the `netbird-data` volume stay:
+
+   ```sh
+   mkdir ../molebridge-new && tar -xzf molebridge-<tag>.tar.gz -C ../molebridge-new --strip-components=1
+   diff .env.example ../molebridge-new/.env.example      # new or changed settings
+   cp ../molebridge-new/compose*.yaml .
+   cp ../molebridge-new/.env*.example .
+   mkdir -p routing && cp ../molebridge-new/routing/gluetun-preflight routing/
+   ```
+
+   If you keep local Compose overrides, check them against the new files.
+3. `docker compose pull`, then `docker compose up -d`. The Compose files pin
+   the image by tag and digest, so this pulls the one you verified. NetBird
+   updates arrive inside the image, as a new Molebridge release.
+4. After any change to routing or the image, run the
+   [verification](verification.md) drills again.
+
+To roll back, put the previous bundle's files back and run the same two
+commands. State files have stayed readable across releases so far, but take
+the [backup](#backups) first in case one changes.
+
+### Upgrading from 0.7.x
+
+0.8.0 keeps your state directory, the selections, PIA's registrations and the
+NetBird peer's identity, and replaces everything around them: one signed
+image instead of three local builds, two containers instead of four, no Python
+on the host. A 0.7.0 Switchyard reads a 0.8.0 exit's status, so the order is
+the same as before: **Switchyard first** if you run a separate one, then the
+exits in any order.
+
+Upgrading from 0.6.x or earlier directly has not been tried; go to 0.7.0
+first, with its own documentation.
+
+**Before you start**, as for any upgrade: [back up](#backups), and note
+that you can roll back by putting 0.7's files back.
+
+1. **Verify the 0.8.0 download** ([setup](setup.md#1-download-and-verify)) and
+   extract it somewhere new. Don't extract over the 0.7 checkout; 0.8.0 needs
+   none of it. Copy in what carries over:
+
+   ```sh
+   cp ~/molebridge-0.7/.env .
+   cp -a ~/molebridge-0.7/state ~/molebridge-0.7/tunnel ~/molebridge-0.7/secrets .
+   ```
+
+   Keep the same `COMPOSE_PROJECT_NAME` (the default is `molebridge`): it names
+   the identity volume, `<project>_netbird-data`. Your tunnel config carries over
+   as it is: the exit checks the grammar 0.7's generators wrote. That check is a
+   port of 0.7's, not yet run against a 0.7-generated file on a live host, and
+   `check-config` (step 5) tells you before anything changes.
+2. **Edit `.env` against the new `.env.example`.** What changed:
+   - `COMPOSE_FILE=compose.yaml:compose.pia.yaml` and `...compose.nordvpn.yaml`
+     are gone, with those files. Set `PROVIDER` and `EXIT_IF` instead, and remove
+     `COMPOSE_FILE` unless you use a gluetun form.
+   - `PUID`, `PGID` and `OWNER_RECORD` are not read.
+   - `ROUTING_RECONCILE_INTERVAL` now defaults to 30, not 2: a notification
+     starts a repair at once, and the interval is the fallback.
+   - `GUARD_GRACE` is now the lease's length, with the same range, 5 to 30.
+   - `PANEL_ALLOW_ROOT=1` is needed with `PANEL_USER=0:0` on rootless Podman.
+   - A rootless engine's `PANEL_USER=0:0` is otherwise as before.
+3. **Move your overrides.** Settings you put on `wireguard`, `netbird`,
+   `applier`, `guard` or `control-panel` in a `compose.override.yaml` belong on
+   `exit` (the first four) and `switchyard` (the last) now. A Quadlet unit or a
+   Compose file of your own needs the same changes `compose.yaml` shows: one
+   `exit` unit with `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`, read-only, with
+   tmpfs on `/run` and `/var/log/netbird`, `stop_grace_period` 15 seconds, and the
+   `netbird-data` volume at `/var/lib/netbird`.
+4. **Check the identity volume is the one you mean.** An empty volume would
+   enroll a new peer. The exit says so at start (the line is in
+   [NetBird and its checks](architecture.md#netbird-and-its-checks)), but check
+   first:
+
+   ```sh
+   docker volume inspect -f '{{.Name}} {{.CreatedAt}}' molebridge_netbird-data
+   docker run --rm -v molebridge_netbird-data:/data:ro \
+     docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e \
+     ls -ln /data
+   ```
+
+   You should see `default.json`, the peer's profile, with an owner and a recent
+   modification time. (Use `podman` for both on rootless Podman.) Don't print the file.
+5. **Stop 0.7 and start 0.8.0.** From the 0.7 directory, `docker compose down`
+   (without `-v`: the identity volume is the peer), then from the new one:
+
+   ```sh
+   docker compose run --rm --no-deps exit check-config
+   docker compose up -d
+   docker compose logs exit
+   ```
+
+   `check-config` reports a refused setting or tunnel config without changing
+   anything. A stored profile that lacks the tunnel interface in its ICE
+   blacklist is refused here with the repair tool named
+   ([below](#netbird-interface-blacklist)); a peer enrolled with 0.7's Compose
+   file already has it.
+6. **Check** `docker compose exec exit molebridge status`, the panel, and the
+   [host checks](#host-checks) below. Your selection is kept: with no attempt
+   record the exit inspects the live server before it applies `SERVER` or a
+   panel request older than 150 seconds, and changes it only if it isn't that
+   server. A panel request newer than 150 seconds is applied even when its server is
+   already live. PIA and NordVPN start without a peer and get the saved selection
+   applied again; Mullvad starts on its config's server and is changed only when
+   that isn't the selection.
+7. **Remove what 0.7 left.** The `exit-run` volume (`docker volume rm
+   molebridge_exit-run`), and the images 0.7 built locally (`docker image ls |
+   grep molebridge` lists them). Keep the `netbird-data` volume.
+
+**What the exit checks at start.** It reports before it changes anything, with
+one line per refusal and nothing taken from a secret file: that the provider,
+backend and kind agree; that the tunnel config (native only) is a regular
+readable file, not a symlink, within 4 KiB, with no NUL or carriage return, and
+in the exact grammar the tools write, with its table the same as `EXIT_TABLE`;
+that `state/applier` exists and is writable; that `NB_INTERFACE_NAME` is
+`OVERLAY_IF`; that NetBird's environment and stored profile are the supported
+ones and the profile excludes the tunnel interface; what it found of the
+NetBird identity; for gluetun, that the control server listens on loopback only
+and the API key file is a regular file of mode 0600 or stricter; and, as a
+warning, the namespace's `icmp_errors_use_inbound_ifaddr` sysctl. It does not
+check the mode of the tunnel config or of the PIA credential files: they are
+only read, and a wrong mode is yours to check ([below](#host-checks)).
+
+#### Host checks
+
+The exit and the panel check what they can see from inside their own
+containers. These they can't, so they are steps you take, each with its
+command. The signed bundle authenticates the stock Compose files, not local
+overrides or the files on your host.
+
+- **Permissions of the files that reach a container through `env_file`, and
+  of the secrets mounted only into gluetun.** They should be mode 0600, owned
+  by you:
+
+  ```sh
+  stat -c '%a %U %n' secrets/netbird.env secrets/applier.env \
+    secrets/gluetun/wireguard_private_key secrets/gluetun/auth.toml secrets/gluetun/api_key 2>/dev/null
+  stat -c '%a %U %n' tunnel/wg_confs/*.conf secrets/pia/*
+  ```
+
+  (On macOS and the BSDs use `stat -f '%Lp %Su %N'`.) A file that doesn't exist
+  for your provider is simply not listed.
+- **Credential-mount separation: the panel must not mount a credential.** The
+  panel can't see what else was mounted into it. This fails if any tunnel,
+  credential or gluetun secret directory is among its mounts (the one
+  documented exception is the OIDC client secret file, which you mount on
+  purpose):
+
+  ```sh
+  docker inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' molebridge-switchyard |
+    grep -E '/(tunnel|secrets)(/|$)' && echo 'FAIL: the panel mounts a credential' || echo 'ok'
+  ```
+- **gluetun starts through the retained preflight.** In the gluetun forms,
+  gluetun's entrypoint must be the wrapper, in the expected mode. A stock
+  gluetun entrypoint would apply a default control-server role:
+
+  ```sh
+  docker inspect -f '{{json .Config.Entrypoint}}' molebridge-gluetun
+  # ["/bin/sh","/usr/local/bin/molebridge-gluetun-preflight","/gluetun-entrypoint"]
+  docker inspect -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}' molebridge-gluetun | grep preflight
+  stat -c '%a %U' routing/gluetun-preflight    # 755 from the bundle
+  ```
+- **Provider agreement.** In a gluetun form the exit's `PROVIDER` must be
+  `gluetun-` plus gluetun's `VPN_SERVICE_PROVIDER`. Read only those two
+  fields, from the resolved deployment and from the running containers.
+  Don't run `docker compose config` without selecting a field: it expands the
+  `env_file`s, including the setup key.
+
+  ```sh
+  docker compose config --format json | jq -r '.services.exit.environment.PROVIDER, .services.gluetun.environment.VPN_SERVICE_PROVIDER'
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' molebridge-exit | grep '^PROVIDER='
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' molebridge-gluetun | grep '^VPN_SERVICE_PROVIDER='
+  ```
+
+  A mismatch (an exit that selects `gluetun-nordvpn` servers beside a gluetun
+  that connects to Surfshark) is refused by nothing else; fix one of the two.
+- **Published ports.** Nothing may publish gluetun's control server, port
+  8000, and the only published port on a native exit is the panel's, on
+  loopback:
+
+  ```sh
+  docker port molebridge-gluetun
+  docker port molebridge-switchyard    # 127.0.0.1:8095 by default
+  ```
+- **The identity volume is the intended one** (step 4 above), before any
+  recovery that might leave it empty.
+- **Every dependent shares the namespace** (the next section), for the gluetun
+  forms.
+
+### Checking that containers share gluetun's namespace
+
+For a gluetun overlay exit or a sidecar, the owner is `gluetun` and the exit
+and your applications are dependents. The engine's record of a dependent
+(`container:<id>`) names the owner by id, and an id survives a restart that
+gives the owner a new namespace, so the record isn't proof. The test compares
+the **namespace objects themselves**: a throwaway probe container joins each
+member in turn, by id, and reads its own `/proc/self/ns/net`. It needs
+nothing from your applications' images, not even a shell, because the probe is
+the one that runs. It reads each member's id and start time before and after,
+so a restart in the middle can't pass, and it fails on a member that is
+missing or stopped.
+
+Put this in a file and run `sh attach.sh gluetun-container member...`. Set
+`ENGINE=podman` for rootless Podman. List the exit and each application:
 
 ```sh
-git fetch --tags && git checkout <new release>
-docker compose pull netbird control-panel
-python3 tools/molebridge.py recover
+#!/bin/sh
+# usage: attach.sh <owner container> <member container>...
+set -u
+ENGINE=${ENGINE:-docker}
+OWNER=$1; shift
+PROBE=docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+"$ENGINE" pull -q "$PROBE" >/dev/null || exit 1
+snapshot() {
+  for c in "$OWNER" "$@"; do
+    "$ENGINE" inspect -f '{{.Id}} {{.State.StartedAt}} {{.State.Running}}' "$c" 2>/dev/null ||
+      { echo "FAIL $c is missing" >&2; return 1; }
+  done
+}
+ns_of() {
+  "$ENGINE" run --rm --pull never --network "container:$1" --cap-drop ALL --read-only \
+    --security-opt no-new-privileges --entrypoint readlink "$PROBE" /proc/self/ns/net
+}
+before=$(snapshot "$@") || exit 1
+echo "$before" | grep -q ' false$' && { echo "FAIL a container is not running" >&2; exit 1; }
+owner_ns=$(ns_of "$(echo "$before" | sed -n 1p | cut -d' ' -f1)") || exit 1
+status=0; i=1
+for c in "$@"; do
+  i=$((i + 1))
+  ns=$(ns_of "$(echo "$before" | sed -n "${i}p" | cut -d' ' -f1)") ||
+    { echo "FAIL cannot read the namespace of $c" >&2; status=1; continue; }
+  if [ "$ns" = "$owner_ns" ]; then echo "PASS $c is in $OWNER's namespace"
+  else echo "FAIL $c is not in $OWNER's current namespace"; status=1; fi
+done
+after=$(snapshot "$@") || exit 1
+[ "$before" = "$after" ] || { echo "FAIL a container changed while the check ran; run it again" >&2; status=1; }
+exit $status
 ```
 
-Recovery rebuilds the routing and applier images. An uncached rebuild can pick
-up newer Alpine and Debian packages; to refresh them on purpose, run `docker
-compose build --no-cache wireguard applier` first (with the gluetun backend,
-`docker compose build --no-cache guard applier`). Keep `.env`, `state/`, `tunnel/`, `secrets/` and the
-`netbird-data` volume.
+For example, `sh attach.sh molebridge-gluetun molebridge-exit my-downloader`.
+Every line must be `PASS`. A `FAIL ... is not in ...'s current namespace` means
+that member was left behind: recreate gluetun and the member together
+([recovery](#recovery)). On Docker this was run against throwaway containers,
+including an owner restarted under the same id (the case the check exists
+for), a stopped member and a missing one; see [testing](testing.md#080). On rootless Podman it
+has not been run in this form; the probe is the same one the 0.7 sidecar
+doctor used there.
 
-Compare `.env.example` with the previous release's (`git diff <old>..<new> --
-.env.example`) for new or changed settings. If you keep local Compose
-overrides, check them against the new `compose.yaml`. After any change to
-routing, images or the applier, run the [verification](verification.md)
-drills again.
+## NetBird interface blacklist
 
-### From 0.6.x to 0.7.0
+When the exit refuses to start with a line that ends `stop the exit and run
+fix-blacklist (docs/operations.md#netbird-interface-blacklist)`, the NetBird
+peer's stored profile lacks the tunnel interface in its `IFaceBlackList`, so
+NetBird would offer the tunnel as a connection candidate
+([why that matters](architecture.md#netbird-and-its-checks)). This happens to a
+peer enrolled before the tunnel interface was blacklisted, or re-enrolled without
+`NB_EXTRA_IFACE_BLACKLIST`. Environment variables can't change a stored profile;
+`fix-blacklist` does, and nothing else does it for you: the exit never rewrites
+the identity file unless you run the tool.
 
-0.7.0 changes the status record the applier writes
-([the status record](architecture.md#the-status-record)). A 0.7 panel reads
-both the new record and 0.6's; a 0.6 panel can't read the new one.
+**Two prerequisites.**
 
-1. **Upgrade the panel first.** For a [separate
-   Switchyard](switchyard.md#several-exits-in-one-panel), update its
-   checkout and recreate its container. Its exits keep showing correctly
-   while they still run 0.6; their checks show as "not reported
-   individually". An exit's bundled `control-panel` runs from the exit's
-   own checkout, so `recover` upgrades it together with that exit.
-2. **Then the exits, in any order**, each with `recover` as above.
+1. **The exit is stopped.** `docker compose stop exit`. The daemon must not be
+   running while the file is replaced. The tool looks for a daemon it can see,
+   but it runs in its own container and can't see one in the exit's, so this is
+   on you.
+2. **The identity volume is the one you mean.** The tool never creates an
+   identity (it refuses when there is none), but check you are about to edit the
+   right peer's profile. The volume name is `<project>_netbird-data`.
 
-If an exit is upgraded first, a 0.6 panel shows it as failed, "verification
-failed", while it is in fact connected, because the new record lacks the
-fields 0.6 checked; `/readyz` on that panel answers 503. Nothing else goes
-wrong, and upgrading the panel clears it.
-
-A 0.6 page already open in a browser keeps running 0.6's script against the
-upgraded panel until it reloads. For one release the panel keeps what that
-script reads (`view` in `/api/status`, and 0.6's diagnostic fields derived
-from the new checks), so the state, its label and the "tunnel checks only"
-note stay right. Diagnostics are not: a confirmation that wasn't measured
-shows as `false`, and an unmeasured routing check or fallback shows blank.
-"Not applicable", "not checked" and the named checks need a reload, which
-the next page load brings, since the script's address changes with its
-content. `view` and the derived fields go after 0.7.
-
-An exit upgraded in place keeps your selection: with no attempt record yet,
-the applier inspects the live server before it applies `SERVER`, gluetun's
-restore target or a panel request older than 150 seconds, and changes it
-only if it isn't that server. A panel request newer than 150 seconds is
-applied even when its server is already live. Recovery recreates the
-tunnel from its config: PIA and NordVPN start without a peer and get the
-selection applied again; Mullvad starts on its config's server and is
-changed only when that isn't the selection. The applier's container health
-check no longer fails when the exit isn't verified or isn't on `SERVER`
-([health](#health)); monitoring that relied on that should read `/readyz`
-or Gatus instead. A `compose.gluetun.yaml` of your own must drop the names
-0.7.0 removed ([below](#from-05x-to-the-routing-image)).
-
-### From 0.5.x to the routing image
-
-The `wireguard` container no longer uses LinuxServer's WireGuard image:
-Molebridge builds its own from Alpine, with its own entrypoint
-([architecture](architecture.md#start-supervision-and-stop)). Before you
-recover, build it and check your tunnel config with it, while the old exit
-keeps running:
+**Find who owns the profile.** The tool must run as the identity files' owner,
+because the daemon created them and the tool preserves owner, group and mode.
+Read the numeric owner of `default.json` (names only; the file is not printed):
 
 ```sh
-docker compose build wireguard
-docker compose run --rm --no-deps wireguard --check-config
+docker run --rm -v molebridge_netbird-data:/data:ro \
+  docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e \
+  ls -ln /data
 ```
 
-The config is now checked against what the generators write
-([the tunnel config](configuration.md#the-tunnel-config)); a hand-edited one
-may be refused, and the message names the line. Then recover as above. What
-changes:
+The third and fourth columns are the owner uid and gid. For a legacy profile, at
+`/etc/netbird/config.json`, read its directory the same way.
 
-- **`PUID` and `PGID`** are no longer read. Leave them in `.env` or delete
-  them.
-- **`compose.yaml`**: `wireguard` drops every capability except `NET_ADMIN`
-  and `DAC_READ_SEARCH`, runs read-only with a tmpfs on `/run`, and gets 15
-  seconds to stop. A new named volume, `exit-run`, carries the owner record;
-  Compose creates it. `netbird` now gets `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
-  `EXIT_IF` and `EXIT_TABLE`, mounts `routing/contract-rules` and `exit-run`
-  read-only, runs with `init: true` and gets 15 seconds to stop. `applier`
-  mounts `exit-run` read-only. NetBird is pinned at 0.80.0.
-- **Your own units or overrides.** If you run the containers from your own
-  Compose file or Quadlet units, make the same changes. A `netbird` without
-  the routing settings refuses to start with `OVERLAY_CIDR is not set for
-  NetBird; compose.yaml passes the routing settings to it
-  (docs/operations.md#upgrades)`. An override that relies on LinuxServer's
-  init, `/custom-cont-init.d` or `/config` files other than `wg_confs` no
-  longer applies.
-- **The gluetun backend**: `guard` runs the image's own entrypoint, and
-  `netbird` mounts `routing/contract-rules`, the new name of
-  `routing/gluetun-rules`. 0.6.x kept the old name,
-  `/custom-cont-init.d/10-exit-routing` in the image and the `GLUETUN_RULES`
-  setting as aliases; 0.7.0 removed them. A `compose.gluetun.yaml` of your own
-  that still uses them must mount `routing/contract-rules` at
-  `/usr/local/bin/molebridge-contract-rules`, run the image's entrypoint and
-  rename any `GLUETUN_RULES` to `CONTRACT_RULES`, or NetBird's gate refuses to
-  start with `the guard's rule definitions are missing (<file>)`.
+**Docker**, with the owner's uid and gid in place of `<owner uid>:<owner gid>`,
+your `EXIT_IF`, and `native` or `gluetun` for the backend:
 
-The routing image has had live passes on rootless Podman, at
-[`0086fac`](testing.md#the-routing-image-on-rootless-podman-at-0086fac) and
-[0.7.0](testing.md#070-on-rootless-podman-at-d5a234a), and none on Docker.
+```sh
+docker run --rm --user <owner uid>:<owner gid> \
+  -e PROVIDER=<provider> -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
+  -v molebridge_netbird-data:/var/lib/netbird \
+  "$IMAGE" fix-blacklist
+```
 
-To roll back, check out the previous release and run `recover` the same way.
-State files have stayed readable across releases so far, but take the
-[backup](#backups) first in case one changes.
+**Rootless Podman:**
+
+```sh
+podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
+  -e PROVIDER=<provider> -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
+  -v molebridge_netbird-data:/var/lib/netbird \
+  "$IMAGE" fix-blacklist
+```
+
+For a **legacy profile** (NetBird copies `/etc/netbird/config.json` into the default
+profile when the default is absent), add the profile's containing directory so the
+replacement can be atomic: `-v <legacy directory>:/etc/netbird`. The settings are the
+exit's non-secret ones, so the tool resolves the same profile the daemon will load.
+`$IMAGE` is the reference from your `compose.yaml` (`IMAGE=$(awk '/^ *image:/ {print $2; exit}' compose.yaml)`).
+
+What it does, and refuses: it adds the tunnel interface to the list, keeps every
+operator exclusion and every other field byte for byte, and reproduces NetBird's
+default list when yours is absent, null or empty (NetBird fills its defaults only
+into an empty list, so adding one entry to an empty list would suppress them). It
+replaces the file atomically with the original's mode, owner and group, and prints
+`fix-blacklist: added the tunnel interface <if> to the interface blacklist of the stored NetBird profile <path>`
+(or `... already excludes the tunnel interface <if>; nothing changed`). It
+changes nothing, and says why, when the daemon is visible, when the active
+profile isn't the default, when there is no identity, when the JSON is malformed or
+ambiguous, or when it cannot give the replacement the original's owner and group
+(run it as the owner then). The full messages are in [the tools
+reference](tools-reference.md#fix-blacklist) and
+[troubleshooting](troubleshooting.md#startup).
+
+Then start the exit: `docker compose up -d exit`. After `netbird up` the exit reads
+the profile again and admits traffic only if the entry is there. To see the result
+without printing the profile, check the direct path:
+`docker compose exec exit netbird status -d` should show `P2P` for a device on a
+direct connection.
 
 ## Backups
 
@@ -288,16 +541,14 @@ The state worth keeping is small:
 | What | Why | If lost |
 |---|---|---|
 | `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
-| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the applier registers it again on its own. NordVPN: run `tools/nordvpn-key.py` again with a new access token |
+| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the exit registers it again on its own. NordVPN: run `nordvpn-key` again with a new access token |
 | `secrets/` | Setup key, PIA login, Gatus token; with gluetun, the provider's WireGuard key, the role file and the API key | Re-create them; for gluetun, `gluetun-auth --rotate` writes a new role file and key |
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
-The `exit-run` volume holds only the owner record, which the `wireguard`
-container rewrites every 2 seconds; there's nothing in it to back up.
 `state/applier/` rebuilds itself, including `attempt.json` ([retries](#retries)),
 except one file with the gluetun backend:
-`gluetun-selection.json` remembers the last server the applier put, the
+`gluetun-selection.json` remembers the last server the exit put, the
 last one live after a change and the last one it verified, which it puts
 back after gluetun restarts when the panel's request is absent or was
 refused. Without it, the request in
@@ -306,15 +557,15 @@ lost. Saved and recent servers in
 the panel live in each browser, not on the exit. The key files, `secrets/` and
 the volume are secrets: back them up only to encrypted storage.
 
-The volume is the one item that isn't a plain file. Stop `netbird` so the copy
+The volume is the one item that isn't a plain file. Stop the exit so the copy
 is consistent, then archive it (the volume name is `<project>_netbird-data`,
 `molebridge_netbird-data` by default):
 
 ```sh
-docker compose stop netbird
+docker compose stop exit
 docker run --rm -v molebridge_netbird-data:/data:ro -v "$PWD":/backup \
   docker.io/library/busybox tar czf /backup/netbird-data.tgz -C /data .
-docker compose start netbird
+docker compose start exit
 ```
 
 On Podman, `podman volume export molebridge_netbird-data > netbird-data.tar`
@@ -387,24 +638,23 @@ falls back.
 That design can't work on this exit now in any case. The exit no longer
 answers anything addressed to itself that arrives over NetBird: a packet
 that arrives on the overlay interface never reaches a process on the exit
-([architecture](architecture.md#netbird-requirements)). A NetBird nameserver
+([architecture](architecture.md#netbird-and-its-checks)). A NetBird nameserver
 group served by the exit therefore gets no answers. Point NetBird's
 nameservers at a resolver somewhere else.
 
 ## Direct connections
 
-Check how devices reach the exit with `docker compose exec netbird netbird
+Check how devices reach the exit with `docker compose exec exit netbird
 status -d`. `P2P` is good. `Relayed` works, but it adds a relay server's round
 trip to every packet.
 
 The exit peer must keep ICE off the tunnel interface
-([setup step 5](setup.md#5-keep-ice-off-the-tunnel-interface)); doctor checks
-it. To see what a peer is doing, raise the log level, read the local and
+([the blacklist](#netbird-interface-blacklist)); the exit checks it at start. To see what a peer is doing, raise the log level, read the local and
 remote candidates, then put it back:
 
 ```sh
-docker compose exec netbird netbird debug log level debug
-docker compose exec netbird netbird debug log level info
+docker compose exec exit netbird debug log level debug
+docker compose exec exit netbird debug log level info
 ```
 
 Treat candidate addresses as private.
@@ -420,16 +670,16 @@ slowly, and nothing reports a fault.
 
 The fix is to get a UDP port to the peer and tell NetBird to use and advertise
 it. How you get the port there depends on the engine. Put the change for
-`wireguard` in a `compose.override.yaml`. Compose reads that file
-automatically unless `COMPOSE_FILE` is set, as it is for PIA and NordVPN; then
-add it to the list
-(`COMPOSE_FILE=compose.yaml:compose.pia.yaml:compose.override.yaml`).
+`exit` in a `compose.override.yaml`. Compose reads that file
+automatically unless `COMPOSE_FILE` is set, as it is for the gluetun forms; then
+add it to the list (`COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`).
 
-**Docker:** publish the port on the `wireguard` service.
+**Docker:** publish the port on the `exit` service (or, with gluetun, on the
+`gluetun` service, which owns the namespace).
 
 ```yaml
 services:
-  wireguard:
+  exit:
     ports:
       - "51825:51825/udp"
 ```
@@ -437,13 +687,13 @@ services:
 **Rootless Podman with pasta:** don't publish the port. Publishing it holds
 the host port, so pasta can't bind it for NetBird's outgoing STUN; remote
 devices stay relayed and only devices on the same LAN connect directly. Give
-`wireguard` its own pasta network that forwards the port instead, with
+`exit` its own pasta network that forwards the port instead, with
 `network_mode` and no `ports:` entry for that port. Use your host's LAN
 address in place of `198.51.100.10`:
 
 ```yaml
 services:
-  wireguard:
+  exit:
     network_mode: "pasta:-4,-a,10.0.2.100,-n,24,-g,10.0.2.2,-I,eth0,-u,198.51.100.10/51825:51825"
 ```
 
@@ -458,16 +708,16 @@ The pasta options are:
   address only.
 
 The namespace gets no `--map-host-loopback`, so it can't reach the host's
-loopback. Nothing else may share `wireguard`'s network for this to work.
-`netbird` and `applier` join its namespace, and `control-panel` is already on
-its own network.
+loopback. With the native exit nothing else shares the exit's network
+namespace, and the panel is on its own network. With the gluetun form, put the
+`network_mode` on `gluetun`, which owns the namespace the exit joins.
 
-Recreate the stack so the change applies (`recover`, or the Podman commands
-below), then set NetBird's side, using your `EXIT_IF` in place of `mullvad`:
+Recreate the exit so the change applies ([recovery](#recovery)), then set
+NetBird's side, using your `EXIT_IF` in place of `mullvad`:
 
 ```sh
-docker compose exec netbird netbird down
-docker compose exec netbird netbird up \
+docker compose exec exit netbird down
+docker compose exec exit netbird up \
   --extra-iface-blacklist mullvad \
   --wireguard-port 51825 \
   --external-ip-map 198.51.100.10/eth0
@@ -483,8 +733,8 @@ docker compose exec netbird netbird up \
 - The remote candidate may show as `prflx`. Rootless port forwarding rewrites
   the source address, and ICE handles that; it isn't a fault.
 
-What was tested: on Debian with passt 0.0~git20261002 and Podman 5.8.6, with
-the `wireguard` container as a Quadlet unit using the `Network=pasta:` form of
+What was tested, at 0.7.0: on Debian with passt 0.0~git20261002 and Podman 5.8.6, with
+the routing container as a Quadlet unit using the `Network=pasta:` form of
 the options above. One pasta process then owns
 the port. NetBird's outgoing STUN leaves from a socket bound to the LAN
 address and port, the STUN server reported the public mapping on that same
@@ -496,23 +746,19 @@ out`; and NetBird showed a P2P pair. A LAN client connected directly. On
 host and server-reflexive (`srflx`) candidates, to two exits set up this way,
 one Mullvad and one NordVPN, and held it through a speed test. The
 podman-compose form shown above, Docker with this method, and rootless Docker
-are untested.
+are untested, and so is all of it at 0.8.0, where the exit container owns the
+namespace that the routing container did.
 
 ## Rootless Podman
 
-Tested on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64. The
-helpers in `tools/molebridge.py` can run through podman-compose
-(`--engine podman`, or `MOLEBRIDGE_ENGINE=podman`, reading its configuration
-with PyYAML), but that hasn't run on a live Podman host yet, so the commands
-below remain the tested way. The gluetun
-backend's `gluetun-post-rules` doesn't call the engine: it reads `.env`
-directly and works the same under Podman. Replace
-`molebridge` with your `COMPOSE_PROJECT_NAME` if you changed it.
+Tested at 0.7.0 on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64;
+not retested at 0.8.0. Replace `molebridge` with your `COMPOSE_PROJECT_NAME` if
+you changed it.
 
-Before the first start, load the kernel module and set `PANEL_USER=0:0`
-([requirements](prerequisites.md#rootless-podman)).
+Before the first start, load the kernel module and set `PANEL_USER=0:0` and
+`PANEL_ALLOW_ROOT=1` ([requirements](prerequisites.md#rootless-podman)).
 
-With the gluetun backend, the applier refuses `secrets/gluetun/api_key` if its
+With the gluetun backend, the exit refuses `secrets/gluetun/api_key` if its
 mode allows anything beyond `0600`, so a group-readable file with an ACL
 doesn't work. Under podman-compose the container's root is your own user, and
 the file `gluetun-auth` writes works as it is. If you remap the container's
@@ -520,63 +766,38 @@ root to another host ID, as some Quadlet setups do, the file must belong to
 that ID with mode `0600`.
 
 **Setup** is [setup](setup.md) with `podman-compose` in place of `docker
-compose`:
+compose` and `podman run` in place of `docker run` (leave out `--user`: the
+default mapping turns the container's root into you):
 
 ```sh
-podman-compose build wireguard applier
-podman-compose up -d wireguard netbird applier
-podman logs molebridge-wireguard 2>&1 | grep -e 10-exit-routing -e molebridge-exit
+podman-compose run --rm --no-deps exit check-config
+podman-compose up -d
+podman logs molebridge-exit 2>&1 | grep -e 'molebridge-exit' -e 'NetBird gate'
 ```
 
-**Upgrade or recover.** Build first, so a failed build leaves the exit
-running, then recreate all four together:
+**Upgrade or recover.** Recreate both together:
 
 ```sh
-podman-compose pull netbird control-panel
-podman-compose build wireguard applier
-podman-compose up -d --force-recreate wireguard netbird applier control-panel
+podman-compose pull
+podman-compose up -d --force-recreate
 ```
 
-With the gluetun backend, build `guard applier` and recreate `gluetun guard
-netbird applier control-panel` instead; recreate all five together, since a
-new `gluetun` container is a new namespace.
+With the gluetun backend, recreate everything that joins gluetun's namespace, in
+the order gluetun first ([recovery](#recovery)), since a new `gluetun` container
+is a new namespace.
 
-podman-compose has no `--wait`, so check health yourself. The three
-`readlink` values must be identical, and `--doctor` prints five PASS/FAIL
-lines:
+podman-compose has no `--wait`, so check health yourself, then the status:
 
 ```sh
-for c in wireguard netbird applier control-panel; do
+for c in exit switchyard; do
   podman inspect --format '{{.State.Health.Status}}' molebridge-$c
 done
-for c in wireguard netbird applier; do
-  podman exec molebridge-$c readlink /proc/self/ns/net
-done
-podman exec molebridge-applier python -m applier.apply --doctor
+podman exec molebridge-exit molebridge status
 ```
 
-With the gluetun backend, check health for `gluetun guard netbird applier
-control-panel`, compare the namespace of `gluetun guard netbird applier` (all
-four must match), and expect seven PASS/FAIL lines from `--doctor`.
-
-`--doctor` doesn't check the ICE blacklist. Read that one field from the peer
-profile yourself. The same file holds the peer's private key, so print
-nothing else from it:
-
-```sh
-awk '/"IFaceBlackList"/ {p=1} p {print} p && /\]|null/ {exit}' \
-  "$(podman volume inspect molebridge_netbird-data --format '{{.Mountpoint}}')/default.json"
-```
-
-Nor does it run the NetBird gate's checks of NetBird's settings and stored
-profiles. Run them in the `netbird` container; they print one line,
-`NetBird gate: configuration accepted` or the reason for a refusal (see
-[troubleshooting](troubleshooting.md#startup)), and nothing from the
-profiles:
-
-```sh
-podman exec molebridge-netbird sh /usr/local/bin/molebridge-wait-for-guards --check-config
-```
+With the gluetun backend, also run the [attachment procedure](#checking-that-containers-share-gluetuns-namespace)
+with `ENGINE=podman`, and use `podman ps -aq | xargs podman inspect -f '{{.Name}} {{.HostConfig.NetworkMode}}'`
+in place of the `docker` form to list every container that joins gluetun.
 
 Never run `down -v`: the named volume is the peer's identity.
 
@@ -608,11 +829,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now molebridge.service
 ```
 
-Set `WorkingDirectory` to your checkout. On the tested host, a reboot brought
-the exit back healthy in 76 seconds with no intervention. That's one reboot
-on one host, so check health and the namespaces after a reboot anyway.
-Podman doesn't act on failing healthchecks: a stranded `netbird` or `applier`
-stays stranded until you recreate all four.
+Set `WorkingDirectory` to your install directory. On the tested host, a reboot
+brought the 0.7.0 exit back healthy in 76 seconds with no intervention. That's
+one reboot on one host, so check health and the namespaces after a reboot
+anyway. Podman doesn't act on failing healthchecks: a hung exit is stopped by
+its own supervisor, but a dependent stranded in an old namespace stays stranded
+until you recreate it together with its owner.
 
 Expect relayed devices on rootless Podman until you follow
 [exits on a private container network](#exits-on-a-private-container-network).
@@ -620,19 +842,19 @@ Expect relayed devices on rootless Podman until you follow
 ## Rotating keys
 
 **Mullvad.** Generate a config for a new device on mullvad.net, run
-`tools/prepare-tunnel-config.py` on it, then `recover`. Once the exit works,
-remove the old device on mullvad.net.
+`prepare-config` on it ([tools](tools-reference.md#prepare-config)), then
+recreate the exit. Once the exit works, remove the old device on mullvad.net.
 
 **PIA.** Move `tunnel/wg_confs/pia.conf` aside, run
-`tools/prepare-tunnel-config.py --pia`, then `recover`. The applier registers
+`prepare-config --pia`, then recreate the exit. The exit registers
 the new key in the saved region on its own. To change the PIA password, rewrite
-`secrets/pia/password` and restart the applier.
+`secrets/pia/password` and restart the exit.
 
 **NordVPN.** NordVPN's API returns the account's one NordLynx key; how to make
 it issue a new one hasn't been checked. To rebuild the config, move
-`tunnel/wg_confs/nordvpn.conf` aside, run `tools/nordvpn-key.py` with a new
-access token as in [setup](setup.md#2-create-the-tunnel-config), then
-`recover`. The applier applies the saved server again on its own.
+`tunnel/wg_confs/nordvpn.conf` aside, run `nordvpn-key` with a new
+access token as in [setup](setup.md#3-create-the-tunnel-config), then
+recreate the exit. The exit applies the saved server again on its own.
 
 ## Removing
 

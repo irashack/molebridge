@@ -13,6 +13,19 @@ says what it would take as far as we know today.
   gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
   had one live pass, NordVPN on rootless Podman; [testing](docs/testing.md)
   records the gaps that keep it experimental.
+- **One signed image, pull and run** (0.8.0, experimental, not yet live-tested):
+  the Python and shell were ported to one Go binary, published as a signed
+  multi-architecture image with a signed Compose bundle, so there is nothing to
+  build and no Python on the host ([setup](docs/setup.md),
+  [architecture](docs/architecture.md)).
+- **Repair driven by the kernel's notifications** (0.8.0): a changed rule or
+  route starts a repair at once, and the 30-second pass is the fallback
+  ([drift and repair](docs/architecture.md#drift-and-repair)).
+- **Running without Switchyard** (0.8.0, partly): the panel is its own
+  container, so `docker compose up -d exit` starts an exit alone, and
+  `molebridge status` reads the verdict from inside it
+  ([health](docs/operations.md#health)). The Compose files still define the
+  panel, and an exit with `SERVER` set has not been run this way on a live host.
 
 ## Backlog
 
@@ -25,13 +38,6 @@ choice (the primary target) from the server it applies, so a backup would
 go through the same gates and checks. What it takes: rules for when to fail
 over and when to return, which backups are acceptable, how the panel shows
 it, and a live pass.
-
-### Running without Switchyard
-
-An exit whose server is set in configuration (`SERVER`) needs the panel
-only to show its status. Running such exits without any panel would need
-another place to read the verdict, such as the doctor or monitoring alone,
-and Compose files without the panel container.
 
 ### Verifying a sidecar's tunnel-tier egress
 

@@ -1,7 +1,9 @@
 # Requirements
 
 Everything here is needed before [setup](setup.md). Where something has only
-been tested in one configuration, this page says so.
+been tested in one configuration, this page says so. Nothing in 0.8.0 has
+had a live pass yet ([testing](testing.md#080)); the "tested" statements
+below are about earlier releases and say which.
 
 ## Host
 
@@ -9,81 +11,83 @@ been tested in one configuration, this page says so.
   Internet connection until they deselect it.
 - **Linux with kernel WireGuard** (5.6 or later, or an older kernel with the
   module installed). Molebridge uses the kernel implementation only; there is
-  no userspace fallback. PIA also needs nftables support in the kernel
-  (`nf_tables`), which current distribution kernels include.
+  no userspace fallback.
+- **nftables in the kernel** (`nf_tables`, which current distribution kernels
+  include). The image has no iptables, so NetBird uses its nftables firewall,
+  and the exit's own PIA port-forwarding rules are nftables too. The exit
+  fails its `netbird` check without NetBird's firewall in place. That NetBird
+  starts on the nftables path in this image is a design assumption that the
+  live passes at 0.8.0 are to confirm.
+- **Docker Engine with Compose 2.24 or later, or rootless Podman with
+  podman-compose.** The Compose files use `env_file` entries with
+  `required: false` and bind mounts that must exist, which older Compose
+  versions don't read.
 
 | Runtime | Status |
 |---|---|
-| Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64 | Tested: long-running, reboot and clean install |
-| macOS with OrbStack, Apple silicon | Tested in an earlier live pass |
-| Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not yet tested end to end |
+| Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64 | Tested at 0.7.0: long-running, reboot and clean install |
+| Debian, rootless Podman 5.8 with Quadlet units | Tested at 0.7.0: client-held drills ([testing](testing.md#070-on-rootless-podman-at-d5a234a)). This repository ships no Quadlet units |
+| macOS with OrbStack, Apple silicon | Tested in earlier live passes, up to 0.7.0 |
+| Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not tested end to end at any version |
 | Docker Desktop | Untested |
 | Windows | Not supported |
 
-- **amd64 or arm64.** All pinned images are multi-arch.
-- **Python 3.10 or later on the host**, for `tools/prepare-tunnel-config.py`
-  and the `doctor` and `recover` helpers. The containers bring their own
-  Python. NordVPN's key setup, `tools/nordvpn-key.py`, also needs `curl` and
-  the usual CA certificates on the host.
-- **Build access on first setup.** Two small images are built locally from
-  pinned bases. The routing image installs `bash`, `iproute2`,
-  `wireguard-tools` and `tini` from Alpine's signed repositories, and the
-  applier installs `wg`, `ip`, `curl` and `nft` from Debian's.
-- **Resources.** Measured at 0.7.0's code (`d5a234a`) on the tested rootless
-  Podman host while idle, from the containers' cgroup counters over two
-  minutes and over the 34 hours since they started
-  ([testing](testing.md#resources-at-070-on-rootless-podman)):
-  - A Mullvad exit's four containers use about 100 MB of RAM: NetBird about
-    54 MB, the applier and the panel about 22 MB each, the routing container
-    about 2 MB. Their peaks over the 34 hours were 83, 60, 48 and 14 MB.
-  - The same stack uses 6 to 8 % of one CPU core. The routing container's
-    repair pass, every `ROUTING_RECONCILE_INTERVAL` seconds, is 2.5 to 3.6 %
-    at the default 2: about 50 to 70 ms of CPU per pass, mostly system time
-    for the commands it starts. A longer interval runs the same pass less
-    often and repairs later. NetBird is 1.5 to 2.2 %, the applier 1.3 to
-    1.4 % and the panel under 1 %. WireGuard encryption comes on top and
-    scales with traffic.
-  - An exit without its own panel (three containers) uses about 70 MB and
-    5 to 7 % of a core. NordVPN's applier holds about 80 MB more (103 MB,
-    peak 155 MB) for its server list. A gluetun exit uses about 215 MB
-    (gluetun 100, the applier 59, NetBird 54, the guard 3) and 9 to 12 %,
-    the guard's pass being 4.7 to 6.5 %.
-  - Images: the routing image 14 MB, the applier 145 MB (124 MB of it the
-    `python:3.14.7-slim` base the panel also runs from, so shared), NetBird
-    0.80.0 102 MB; about 260 MB in all, 330 MB with gluetun v3.41.3's 68 MB.
-  - The Compose memory limits add up to 896 MiB for the Mullvad stack,
-    1,280 MiB with NordVPN's larger applier limit, and 1,216 MiB with the
-    gluetun backend. No peak reached a limit; gluetun's 157 MB of 256 MiB
-    came closest.
+- **amd64 or arm64.** The image is a multi-architecture index; the Compose
+  files pin it by digest.
+- **No Python on the host.** The setup and repair tools run from the same
+  image as throwaway containers ([tools reference](tools-reference.md)). The
+  Python 3.10 requirement of 0.7 is gone. You do need `cosign` and the GitHub
+  CLI (`gh`) once, to [verify the download](setup.md#1-download-and-verify),
+  and `jq` for the acceptance check. Nothing is built locally unless you choose
+  to ([CONTRIBUTING](../CONTRIBUTING.md#building-the-image)).
+- **Resources.** 0.8.0's targets, which are not measurements, for a native
+  exit with no client traffic: the exit container, NetBird included, idles at
+  0.5 % of one core or less and 70 MB or less, the image is 80 MB or less
+  unpacked, and a single deleted or inserted rule is repaired within 250 ms
+  of the event in the CI drill. The measured figures, and the method they
+  are measured by, are to be recorded in [testing](testing.md#080) once the
+  live passes have run. For comparison, 0.7.0 measured on the tested rootless
+  Podman host while idle ([testing](testing.md#resources-at-070-on-rootless-podman)):
+  a Mullvad exit's four containers used about 100 MB of RAM and 6 to 8 % of
+  one core, most of the processor time the routing container's repair pass
+  every 2 seconds and NetBird, and its images took about 260 MB. 0.8.0 does
+  not run a pass every 2 seconds: a netlink event triggers the repair, and
+  the full pass is a fallback every `ROUTING_RECONCILE_INTERVAL` seconds
+  (30 by default). The Compose files limit the exit container to 512 MiB
+  and the panel to 128 MiB. The exit's limit is NordVPN's: its server list is
+  about 8 MB of JSON, downloaded and parsed every six hours and capped at
+  32 MiB, and a list near the cap takes about 300 MB to parse. It is a
+  ceiling, not a reservation.
 - **Upload bandwidth.** Every device's traffic crosses the host twice, in from
   the device and out to the provider. The host's upload speed is the ceiling
   for everyone using the exit.
 
 ### Rootless Podman
 
-Two things differ from Docker:
+Three things differ from Docker:
 
 1. **The kernel modules must already be loaded.** A rootless container can't
-   load `wireguard`, and `wg-quick` then fails with no useful message. Load it
-   now and at every boot:
+   load `wireguard`. Load it now and at every boot:
 
    ```sh
    sudo modprobe wireguard
    echo wireguard | sudo tee /etc/modules-load.d/wireguard.conf
    ```
 
-   For PIA, check that `nf_tables` is loaded too (`lsmod | grep nf_tables`).
-   Hosts that use nftables for their own firewall already have it.
+   Check that `nf_tables` is loaded too (`lsmod | grep nf_tables`). Hosts that
+   use nftables for their own firewall already have it.
 
-2. **Set `PANEL_USER=0:0`.** Rootless Podman maps container root to your own
-   user, so that's the user that can read the state directory. The panel still
-   runs with no capabilities.
+2. **Set `PANEL_USER=0:0` and `PANEL_ALLOW_ROOT=1`.** Rootless Podman maps
+   container root to your own user, so that's the user that can read the state
+   directory. The panel still runs with no capabilities, and it refuses to run
+   as uid 0 unless `PANEL_ALLOW_ROOT=1` says you mean it
+   ([the panel's isolation check](configuration.md#the-panels-isolation-check)).
+3. **NET_RAW is not granted by default.** The Compose files add it; an
+   override that drops it makes NetBird fail with `failed to create ipv4 raw
+   socket: operation not permitted`.
 
-`tools/molebridge.py doctor` and `recover` can run through podman-compose
-(`--engine podman`, with PyYAML), but that path hasn't had a live pass;
-[operations](operations.md#rootless-podman) gives the tested Podman
-commands. For containers to start at boot you
-also need a lingering systemd user unit, shown there too.
+For containers to start at boot you also need a lingering systemd user unit,
+shown in [operations](operations.md#rootless-podman).
 
 ## Network
 
@@ -93,12 +97,14 @@ you want direct NetBird connections from a rootless or bridged setup (see
 
 | To | Why |
 |---|---|
+| `ghcr.io` | Pulling the image, once, and again for each upgrade |
+| Sigstore's public services, GitHub's API and release assets | Verifying the download once ([setup](setup.md#1-download-and-verify)); needed on the machine you verify from, not on the exit |
 | Your NetBird management, signal and relay servers, and STUN | The exit peer; see NetBird's [firewall requirements](https://docs.netbird.io/about-netbird/faq#what-firewall-ports-should-i-open-to-use-net-bird) |
 | Mullvad: UDP 51820 to relays; HTTPS to `api.mullvad.net`; TCP 443 to relays | Tunnel, server list, latency probes |
 | Mullvad, through the tunnel: HTTPS to `ipv4.am.i.mullvad.net` and `ipv6.am.i.mullvad.net` | Egress checks |
 | PIA: HTTPS to `serverlist.piaservers.net` and `www.privateinternetaccess.com`; TCP 1337 to PIA servers; the UDP port each server assigns | Server list, login, key registration, tunnel |
 | PIA, through the tunnel: HTTPS to `www.privateinternetaccess.com`; TCP 19999 to the server (port forwarding only) | Egress check, port forwarding |
-| NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list (and, once from the host at setup, the key), latency probes |
+| NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list, latency probes. The `nordvpn-key` tool makes its one request to `api.nordvpn.com` from the throwaway container at setup |
 | NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
 | gluetun backend: what gluetun needs for its provider, including its server list updater and DNS, which go through the tunnel | Tunnel, server list |
 | gluetun backend with FastestVPN, IVPN, Surfshark or Windscribe: HTTPS to `api.ipify.org` and `ipv4.icanhazip.com` (and `api6.ipify.org`, `ipv6.icanhazip.com` for IPv6), through the tunnel and from the host | The tunnel checks, which compare the address seen through the tunnel with the host's own |
@@ -108,9 +114,12 @@ people. Some forbid it.
 
 ## NetBird
 
-- **A NetBird account**, either NetBird Cloud or self-hosted. Only
-  self-hosted 0.78 and 0.79 have been tested. The account needs admin access,
-  because you will create groups, a policy, a setup key and a route.
+- **A NetBird account**, either NetBird Cloud or self-hosted. The image
+  carries the NetBird client at the version pinned in its `Dockerfile`
+  (0.80.0 at this writing); NetBird updates arrive as Molebridge patch
+  releases. Only self-hosted servers at 0.78 and 0.79 have been tried, with
+  0.79 clients; NetBird Cloud has not. The account needs admin access, because
+  you will create groups, a policy, a setup key and a route.
 - **Clients that support exit nodes.** Current iOS, Android, macOS, Windows
   and Linux clients do.
 - **The account's peer network range**, for example NetBird's default `100.64.0.0/10`. It's in
@@ -133,7 +142,7 @@ people. Some forbid it.
 - **An access policy** from `exit-users` to `exit-nodes`. ICMP alone is
   enough: NetBird connects peers that a policy links. The exit doesn't answer
   pings to its own overlay address, because nothing arriving over NetBird is
-  delivered to the exit itself ([architecture](architecture.md#netbird-requirements)).
+  delivered to the exit itself ([architecture](architecture.md#netbird-and-its-checks)).
 - **A setup key** for the peer's first enrollment: one-off, auto-assigning
   `exit-nodes`, with a short expiry.
 - **The exit-node route**, created during setup: network `0.0.0.0/0`, routing
@@ -146,9 +155,8 @@ people. Some forbid it.
   give `exit-nodes` DNS nameservers, don't route domain resources or domain
   routes through it, and don't turn on Rosenpass for it. None of them is
   supported on the exit peer: overlay traffic is never delivered to the exit
-  itself, so they don't work there. NetBird's entrypoint gate refuses to
-  start the peer with Rosenpass on
-  ([troubleshooting](troubleshooting.md#startup)).
+  itself, so they don't work there. The exit refuses to start NetBird with
+  Rosenpass on ([troubleshooting](troubleshooting.md#startup)).
 
 On phones, turn off *Force relay connection* in the NetBird app (Settings →
 Advanced). It's on by default to save battery, and it routes all exit traffic
@@ -177,11 +185,11 @@ and cut throughput by more than half.
 ### PIA
 
 - **An active account**, with its username (`p` followed by digits) and
-  password. The applier keeps both on the host, in mode-0600 files, and uses
+  password. The exit keeps both on the host, in mode-0600 files, and uses
   them to register the tunnel key every time it switches. Two-factor
   authentication doesn't get in the way: PIA's token API accepts the password
   alone.
-- Nothing to download: `tools/prepare-tunnel-config.py --pia` generates the key.
+- Nothing to download: `prepare-config --pia` generates the key.
 - PIA carries IPv4 only. See [providers](providers.md) for what else differs,
   and for port forwarding.
 
@@ -192,13 +200,13 @@ client-held fail-closed drills at 0.7.0; see [testing](testing.md#070-on-rootles
 
 - **An active account** with NordVPN's VPN service.
 - **An access token**, from your Nord Account: NordVPN, then Advanced
-  settings, then "Get access token". `tools/nordvpn-key.py` uses it once, at
+  settings, then "Get access token". `nordvpn-key` uses it once, at
   setup, to fetch the account's NordLynx private key; the exit never stores
   it. The private key is the same on every server.
-- **More memory for the applier.** Parsing NordVPN's server list every six
+- **Memory for the server list.** Parsing NordVPN's server list every six
   hours took about 70 MB in a local test with a synthetic list of today's
-  size, and about 300 MB at the 32 MiB limit; `compose.nordvpn.yaml` raises
-  the applier's limit from 128 MB to 512 MB.
+  size, and about 300 MB at the 32 MiB limit. The Compose files' 512 MiB limit
+  for the exit container is sized for it.
 - NordVPN carries IPv4 only. See [providers](providers.md#how-nordvpn-differs).
 
 ## Panel access

@@ -18,7 +18,7 @@ Switching needs a CSRF token tied to a cookie, and, when the browser sends an
 This needs nothing but SSH access to the host: no domain, certificate or
 proxy. It's the simplest option for a laptop. It doesn't suit phones.
 
-1. Start the panel on the host (`docker compose up -d control-panel`).
+1. Start the panel on the host (`docker compose up -d switchyard`).
 2. On your laptop:
 
    ```sh
@@ -85,9 +85,10 @@ and then show each person only the exits their groups allow. It is off unless
 you set `PANEL_OIDC_ISSUER`. With that unset the panel behaves as described
 above: no login.
 
-This has unit and integration tests against a fake issuer and one live pass
-with Pocket ID v2.16.0, as an admin; see
-[testing](testing.md#sign-in-pass-at-62a0170).
+This has unit and integration tests against a fake issuer and, at 0.7.0, one live
+pass with Pocket ID v2.16.0, as an admin; see
+[testing](testing.md#sign-in-pass-at-62a0170). The Go panel of 0.8.0 has had no
+live sign-in yet ([testing](testing.md#080)).
 
 You still need something in front of the panel that serves it over https.
 The sign-in cookies are marked `Secure`, and the panel itself listens on plain
@@ -132,8 +133,10 @@ described above will do; it doesn't need to authenticate.
 5. **Give the panel container a route to the identity provider.** The panel
    makes HTTPS requests to it; see [what the panel sends to the
    provider](architecture.md#sign-in). It uses the container's own CA store, so
-   a provider with a private CA needs that CA in the image.
-6. Recreate the panel (`docker compose up -d control-panel`) and open
+   a provider with a private CA needs that CA added: mount a CA bundle that
+   includes it and set `SSL_CERT_FILE` to its path, which Go reads. That has
+   not been tried.
+6. Recreate the panel (`docker compose up -d --force-recreate switchyard`) and open
    `PANEL_PUBLIC_URL`. It should send you to the provider, and back.
 
 The panel stops at start if the settings are incomplete or unsafe, and says

@@ -4,13 +4,105 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased — 0.8.0
+
+**Experimental, and not a 1.0.** A rewrite for adoption: one signed image,
+pull and run. The Python and shell are ported to one Go binary; the exit is two
+containers instead of four; nothing is built locally and there is no Python on
+the host. The routing contract, the status record (schema 2), the verdict, the
+admission pipeline, the state files and the panel's wording are unchanged, so
+a 0.7.0 Switchyard reads a 0.8.0 exit. **Nothing in 0.8.0 has had a live pass
+yet** ([testing](docs/testing.md#080)). Upgrade by following
+[upgrading from 0.7.x](docs/operations.md#upgrading-from-07x): **Switchyard
+first**, then the exits; the state directory and the `netbird-data` volume carry
+over, the Compose files do not.
+
+**Install: pull and run.**
+- The image `ghcr.io/irashack/molebridge` (amd64 and arm64) is built and published
+  by GitHub Actions on a release tag, signed with cosign (keyless), with SLSA
+  build provenance and a per-architecture SBOM. A release is promoted from a
+  release candidate without rebuilding, and only if a maintainer's acceptance
+  run attested that the exact image passed the live drills. The release bundle
+  (the Compose files pinned to the image by tag and digest, the `.env` examples
+  and `routing/gluetun-preflight`) is signed and attested too. The verification
+  order is in [setup](docs/setup.md#1-download-and-verify).
+- One role per argument: `exit`, `panel`, `health`, `status`, `check-config`,
+  `prepare-config`, `nordvpn-key`, `gluetun-auth`, `gluetun-post-rules` and
+  `fix-blacklist`. The setup tools run as throwaway containers
+  (`docker run --rm`), as yourself, writing only the paths you mount
+  ([tools](docs/tools-reference.md)). The Python 3.10 requirement is gone.
+- `doctor` and `recover` are removed. Start-time checks in the exit, `molebridge
+  status` and documented host checks replace the first; `docker compose up -d
+  --force-recreate` and a documented attachment procedure replace the second
+  ([operations](docs/operations.md#recovery)).
+- One `compose.yaml` for the native providers, with `PROVIDER` selecting the
+  provider (`compose.pia.yaml` and `compose.nordvpn.yaml` are gone), plus
+  `compose.gluetun.yaml` and `compose.sidecar.yaml`. `.env.example` has eighteen
+  settings, down from thirty-six; the rest are overrides with defaults in the
+  code ([configuration](docs/configuration.md)).
+
+**The exit container.**
+- `molebridge exit` is PID 1 and a supervisor: it reaps orphans, forks a worker
+  that holds the routing contract and runs the provider logic, and starts the
+  NetBird client, which is now inside the image (a pinned release, checked against
+  a hash committed in the `Dockerfile`). `netbird`, `wireguard`, `applier` and
+  `guard` are no longer containers.
+- A progress lease replaces the gate in front of NetBird and the owner-record file
+  and its `exit-run` volume. The worker may renew every 2 seconds only while the
+  mutation owner, the kernel watcher and (gluetun) the mark and log monitors are
+  making progress; if the supervisor sees no accepted renewal for `GUARD_GRACE`
+  seconds (30 by default, 5 to 30), it stops NetBird, removes the interfaces it
+  owns and exits non-zero so the restart policy starts the container again. The stop
+  sequence has a 15-second budget; the exit status follows why it stopped
+  ([the lease](docs/architecture.md#the-lease)).
+- The `owner_record` check keeps its meaning for native exits and carries an
+  `expires_at`. The supervisor, not the worker, writes `result.json`, republishes
+  that check every 2 seconds, and on a lapsed lease or a dead worker writes a failure
+  record ("exit owner stopped responding"), so a 0.7.0 reader sees the failure within
+  the lapse time.
+- The tunnel is brought up through the kernel's netlink interfaces: no `wg-quick`, no
+  `wireguard-tools`, no `bash`, no shell at all. `PostUp` and `PreDown` stay in the
+  config the tools write, are checked, and are read as route operations, never run.
+- Repair is driven by the kernel's rule, route, link and address notifications, with a
+  full pass every `ROUTING_RECONCILE_INTERVAL` seconds as the fallback. The default is
+  now 30 (was 2), the range 2 to 60 and any whole number (was an even one); at 0.7 this
+  pass was the repair.
+- Capabilities: `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE` (`DAC_READ_SEARCH` is gone).
+- NetBird's settings, stored profile and ICE blacklist are checked before the daemon
+  starts and the blacklist again after `netbird up`. A profile without the tunnel
+  interface in its blacklist is refused, and the new `fix-blacklist` tool repairs it
+  ([operations](docs/operations.md#netbird-interface-blacklist)). When no identity is
+  found the exit says it will enroll a new peer.
+- gluetun: the 0.7 gate's checks run in the exit: NetBird's fallback from advanced
+  routing is read from its log, the overlay interface's mark is sampled every 2 seconds,
+  and gluetun's control server must listen on loopback only. `routing/gluetun-preflight`
+  stays, with an explicit mode from `MOLEBRIDGE_KIND` on the gluetun service
+  (`overlay` requires the post-rules, `sidecar` refuses to start gluetun while they are
+  mounted). **The 0.7 standalone form (three containers, no panel or server logic, any
+  gluetun WireGuard provider) is gone:** the exit always runs the provider logic and
+  accepts only the six registered gluetun providers.
+- Switchyard is Go, in its own container. It checks its own isolation at start (no
+  capabilities, not uid 0 unless `PANEL_ALLOW_ROOT=1`, the exit's state read-only) and
+  refuses to run otherwise.
+
+**Messages that changed.** Refusals now come from the Go binary: for example
+`ROUTING_RECONCILE_INTERVAL must be 2..60 seconds`, and the tunnel-config refusal ends
+`regenerate it with prepare-config (docs/setup.md)`. The line a NetBird refusal prints
+still begins `NetBird gate:`. [Troubleshooting](docs/troubleshooting.md) quotes the
+current ones.
+
+**Tested.** Unit, fuzz and namespace-drill suites in CI; see
+[testing](docs/testing.md#080) for what they cover, and for the live passes that are
+still to do (Docker Engine on Linux, rootless Podman with Quadlet, NetBird Cloud, one exit
+per provider, the gluetun exit and the sidecar, and the upgrade from 0.7.0).
+
 ## 0.7.0 (2026-10-11)
 
 One status record, one judgment of it, and one way to change servers; and
 an experimental second exit kind, the **gluetun sidecar**. Upgrade
 **Switchyard (the panel) first**, then the exits in any order: a 0.6 panel
 reads a 0.7 exit's healthy record as "verification failed"
-([operations](docs/operations.md#from-06x-to-070)).
+("From 0.6.x to 0.7.0" in `docs/operations.md` at the v0.7.0 tag).
 
 **Status: schema 2 and one verdict.**
 - The applier's `state/applier/result.json` now carries `schema: 2`, the exit
@@ -175,7 +267,7 @@ one NordVPN); no live exit has run this release.
   brings the tunnel up under supervision, retrying after 2 seconds and
   doubling to 60 while the container stays up and not ready, and stops
   within about 7 seconds, leaving the rules in place. Only `<EXIT_IF>.conf`
-  is used. See [architecture](docs/architecture.md#start-supervision-and-stop).
+  is used. See "Start, supervision and stop" in `docs/architecture.md` at the v0.6.0 tag.
 - **The tunnel config is checked against what the generators write.**
   `DNS`, `PreUp`, `PostDown`, `SaveConfig`, `FwMark`, a `Table` other than
   `off` and any other field are refused with a message that names the line
@@ -200,7 +292,7 @@ one NordVPN); no live exit has run this release.
   `exit-run` volume every 2 seconds. NetBird's gate and the applier count it
   as live only from the same boot and network namespace and at most 6
   seconds old; without it the applier reports `routing_ok` false and its
-  health check fails. See [the owner record](docs/architecture.md#the-owner-record).
+  health check fails. See "The owner record" in `docs/architecture.md` at the v0.6.0 tag; 0.8.0 replaced the file (below).
 - **NetBird's gate stays in front of NetBird on native exits too.** It waits
   for the owner record and the whole contract, runs NetBird as its child in
   its own process group, and stops it as soon as the owner record isn't live
@@ -310,9 +402,9 @@ Compose files are unchanged from 0.5.0.
 - **gluetun exits look like gluetun.** In the provider style, an exit on the
   gluetun backend takes gluetun's dark slate, with the provider behind it as
   the accent: Mullvad's yellow, NordVPN's blue, Surfshark's teal, and a
-  colour each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
+  color each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
   NordVPN exit through gluetun looked like the native one, and the other four
-  providers had no colours at all, so their pages lost their card
+  providers had no colors at all, so their pages lost their card
   backgrounds.
 - **Switchyard finishes a switch in place.** The page no longer reloads when
   a switch completes or fails, or when another tab switches the exit: the
@@ -337,7 +429,7 @@ Compose files are unchanged from 0.5.0.
   applier's real limit (90 seconds with gluetun, not "about a minute").
   Arming a region on a phone no longer adds a line. Servers from gluetun's
   list show their country's flag. Sign-in and error pages in the provider
-  style now have their colours.
+  style now have their colors.
 - **Documentation review.** Corrections across the guides after a review
   against the code: recreating gluetun's namespace with `recover` after
   rotating its key or changing its post-rules, which verification steps
@@ -501,8 +593,7 @@ for this release.
   profile, or when the stored profile names a WireGuard interface other than
   `OVERLAY_IF`. The applier's health check and the doctor fail unless the
   overlay interface is a kernel WireGuard link and NetBird's kernel firewall
-  is in place; `result.json` gains `netbird_native`. See
-  [architecture](docs/architecture.md#netbird-requirements).
+  is in place; `result.json` gains `netbird_native`. See "NetBird requirements" in `docs/architecture.md` at the v0.6.0 tag.
 - **Rosenpass, NetBird SSH, DNS nameservers and domain routes are not
   supported on the exit peer.** Leave them off for it; Rosenpass stops NetBird
   from starting. See [requirements](docs/prerequisites.md#netbird).
