@@ -10,6 +10,94 @@ history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
 switcher revisions were replaced by a rebase merge, also with identical trees:
 `07c7b41` → `56ac2cc` and `0d518e4` → `40c461c`.
 
+Sections below the 0.8.0 one record what ran at earlier revisions, and use the
+container and tool names of those releases (`wireguard`, `netbird`, `applier`,
+`control-panel`, `tools/molebridge.py doctor`). They are the history of what was
+tested, not instructions; the current commands are in the other pages.
+
+## 0.8.0
+
+**No live pass has run at 0.8.0.** Nothing here has been shown on a real exit,
+a real client or a real provider. This section says what has run so far, in
+development and in CI, and what has not. The last part is a placeholder for the
+live acceptance results; it is empty until those exist, and an empty cell is
+not a pass.
+
+### Run so far
+
+Not live: unit and fuzz tests, namespace drills against a real kernel in
+disposable namespaces, and checks of the image and the release tooling.
+
+| What | How | Where and when |
+|---|---|---|
+| Unit tests, table-driven, ported from the 0.7 Python suite | `go test -count=1 ./...` | Passed on macOS (darwin/arm64), Go 1.27.1, at the merge of the exit process into `feat/v0.8.0` (`60ac63c`), 2026-10-12. 1,130 test functions run in that build. The tree holds 1,239; the rest are Linux-only files and the drill-tagged tests, which that build does not compile or run |
+| Status records and verdicts compared with the Python code's | `internal/applier` golden tests, `internal/verdict` and `internal/egress` against records the Python code produced | Part of the same run. Records generated from the Python applier at the last commit before the port are compared byte for byte; the verdict is compared on records mutated at random |
+| Fuzz targets: the tunnel config, the NetBird profile and its repair, the rule decoder, JSON decoding, the provider catalogues, the panel's form posts and sign-in input, the verdict, the egress answers and the attempt record | 25 targets | Run as ordinary tests over their seed corpora in the same run. No fuzzing campaign has been run |
+| The panel script | `MOLEBRIDGE_PANEL=go node --test panel/js-tests/*.test.js` | 11 tests passed on the same machine and day. The Go panel's answers are fed to the unchanged script |
+| Compose forms | `sh tools/check-compose.sh` | Passed on the same machine and day: the three forms against their example environments, `.env.example` having 18 settings, each read by its Compose file, who sees which secret |
+| Namespace drills | `go test -tags drill`, in a privileged container (`internal/nstest/drill.sh`) or on a CI runner | Not run by the author of this page. CI is configured to run them; read the workflow runs, not this page, for their result. 59 drill-tagged test functions: every single-fault row of the drift table with the 250 ms assertion, both families, tunnel loss and recreation, the PIA address transaction, event loss by flood, the gluetun rules, a frozen and a wedged worker, a crashed worker with the namespace held, a NetBird that dies, a profile without the tunnel exclusion, and the stop budget |
+| The attachment procedure ([operations](operations.md#checking-that-containers-share-gluetuns-namespace)) | On Docker (OrbStack), against two throwaway busybox containers, one joined to the other | 2026-10-12. An attached member passed. After the owner was restarted under the same id, the member failed with "is not in ...'s current namespace". A stopped member, and a missing one, failed. Not run on rootless Podman, or against a real gluetun |
+| Release tooling | The bundle generator and checker, the release notes, the acceptance policy and predicate, the third-party notice generator, the reproducible-binary check | Scripts and tests are in CI. Not run by the author of this page |
+| Documentation links | `sh tools/check-doc-links.sh` | Every relative link and anchor in the documentation resolved at the commit this section was written |
+
+CI is also configured to build both architectures of the image and check what
+they contain (`tools/check-image.sh`), but the image has not been published or
+signed for a release yet, so the verification in [setup](setup.md#1-download-and-verify)
+has not been run against a real release.
+
+### Not tested at 0.8.0
+
+All of the following are open, and each is a gate for the release:
+
+- A native exit with a client held on it through the fail-closed drills, for each
+  of Mullvad, PIA and NordVPN, on Docker Engine on Linux (new), rootless Podman
+  with Quadlet units, and with NetBird Cloud (new). That includes the lease drills:
+  a frozen worker, a wedged mutation owner and a crashed worker with the namespace
+  held by another container, checked with packets on a live exit.
+- The gluetun exit and the gluetun sidecar on live hosts, and the repair of a
+  stranded namespace dependent.
+- Installing from the signed bundle on a clean host, and the upgrade from 0.7.x
+  keeping the selection, PIA's registrations and the NetBird peer's identity.
+- That NetBird starts on its nftables path in the image, which has no iptables, on
+  the kernels the README supports.
+- The smallest capability set. `DAC_OVERRIDE` is what the Compose files grant;
+  whether anything less would do was not tested.
+- The resource targets: an idle native exit at 0.5 % of one core or less and
+  70 MB or less for the exit container, and an image of 80 MB or less unpacked. The
+  image size is checked statically by `tools/check-image.sh`; the CPU and memory
+  figures are not measured.
+- The Go panel's sign-in against a real identity provider. Sign-in has had one live
+  pass, with the Python panel at 0.7.0.
+- The `fix-blacklist` repair against a real enrolled peer's profile, including under a
+  remapped user.
+- Phones during failure drills; PIA port forwarding against PIA itself.
+
+### Live acceptance (pending)
+
+**Placeholder. To be filled in after the live acceptance runs; nothing below is a
+result.** Record the date, the revision and image digest, the operating system and
+architecture, the container runtime and Compose versions, the provider, the NetBird
+server and client versions, the client device, the checks run and their outcome, the
+address families tested, recovery timings, and the checks skipped, separating isolated
+namespace results from live client results, as [below](#validating-a-new-revision)
+describes. Keep real hostnames, addresses, peer IDs, account numbers and keys out of
+the record.
+
+| Platform | Provider or kind | Drills | Revision | Date | Result |
+|---|---|---|---|---|---|
+| Docker Engine on Linux | Mullvad, PIA, NordVPN | clean install from the bundle; client held through the fail-closed drills | pending | pending | pending |
+| Rootless Podman with Quadlet | Mullvad, PIA, NordVPN | the same, and the upgrade from 0.7.x | pending | pending | pending |
+| NetBird Cloud (free account) | one native exit | clean install; client held | pending | pending | pending |
+| Either runtime | gluetun overlay exit | client held; a switch; a gluetun restart; the attachment procedure | pending | pending | pending |
+| Either runtime | gluetun sidecar | a switch; a gluetun restart; the attachment procedure | pending | pending | pending |
+
+### Resources at 0.8.0 (pending)
+
+**Placeholder.** Measure by the 0.7.0 method ([below](#resources-at-070-on-rootless-podman)):
+a 120-second window sampled every 5 seconds and the total since start, from the container's
+cgroup `cpu.stat` and `memory.current`, on an exit with no client traffic, with the exit
+container including NetBird as one figure. Not measured yet.
+
 ## macOS / OrbStack pass
 
 Apple silicon, self-hosted NetBird 0.78, simulated client routing plus one real
@@ -147,7 +235,7 @@ At `56ac2cc`:
   - Saved stayed hidden until a server was pinned.
   - The Mullvad-owned filter narrowed the list.
   - An opened country showed its Fastest row.
-  - Escape cancelled an armed switch.
+  - Escape canceled an armed switch.
   - Both themes rendered correctly at desktop width and at 390 px.
 - One switch to another server in the same city showed switch progress and
   reached connected about 2.4 s after the confirming click.
@@ -620,7 +708,7 @@ Per stack: a Mullvad or PIA exit with its own panel, 6 to 8 % and 93 to
 14.0 MB, the applier 145.4 MB (124 MB of it the `python:3.14.7-slim` base,
 shared with the panel), NetBird 0.80.0 102.3 MB, gluetun v3.41.3 67.9 MB.
 
-## Not yet tested
+## Not yet tested (as of 0.7.0)
 
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
   foreground mode, other profiles and config paths) on a running peer. Unit

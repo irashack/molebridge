@@ -402,9 +402,9 @@ Compose files are unchanged from 0.5.0.
 - **gluetun exits look like gluetun.** In the provider style, an exit on the
   gluetun backend takes gluetun's dark slate, with the provider behind it as
   the accent: Mullvad's yellow, NordVPN's blue, Surfshark's teal, and a
-  colour each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
+  color each for FastestVPN, IVPN and Windscribe. Before, a Mullvad or
   NordVPN exit through gluetun looked like the native one, and the other four
-  providers had no colours at all, so their pages lost their card
+  providers had no colors at all, so their pages lost their card
   backgrounds.
 - **Switchyard finishes a switch in place.** The page no longer reloads when
   a switch completes or fails, or when another tab switches the exit: the
@@ -429,7 +429,7 @@ Compose files are unchanged from 0.5.0.
   applier's real limit (90 seconds with gluetun, not "about a minute").
   Arming a region on a phone no longer adds a line. Servers from gluetun's
   list show their country's flag. Sign-in and error pages in the provider
-  style now have their colours.
+  style now have their colors.
 - **Documentation review.** Corrections across the guides after a review
   against the code: recreating gluetun's namespace with `recover` after
   rotating its key or changing its post-rules, which verification steps
