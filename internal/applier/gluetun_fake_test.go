@@ -162,6 +162,10 @@ type glKernel struct {
 
 	// reconnecting, when set, is the Python Reconnecting kernel's state.
 	rc *reconnecting
+	// linkScript, when set, answers GluetunLinks' tunnel (a test scripting the
+	// interface changing under a sample).
+	linkScript func() TunnelLink
+	lastIndex  uint32
 }
 
 func newGlKernel(t testing.TB, c contract.Config) *glKernel {
@@ -298,6 +302,11 @@ func (g *glKernel) handle(req netx.Request) (netx.Response, error) {
 func (g *glKernel) GluetunLinks(context.Context) (GluetunLinks, error) {
 	g.record("GluetunLinks")
 	g.advance()
+	if g.linkScript != nil {
+		link := g.linkScript()
+		g.lastIndex = link.Index
+		return GluetunLinks{Tunnel: link, HostIndex: glHostIfIndex}, nil
+	}
 	if g.rc != nil {
 		return g.rc.links(), nil
 	}
@@ -307,10 +316,21 @@ func (g *glKernel) GluetunLinks(context.Context) (GluetunLinks, error) {
 	return GluetunLinks{Tunnel: TunnelLink{Present: true, Up: g.tunnelUp, Index: glTunnelIfIndex}, HostIndex: glHostIfIndex}, nil
 }
 
+// tunnelIndex is the index the tunnel route names: the interface's current one.
+func (g *glKernel) tunnelIndex() uint32 {
+	switch {
+	case g.rc != nil:
+		return g.rc.ifindex
+	case g.linkScript != nil:
+		return g.lastIndex
+	}
+	return glTunnelIfIndex
+}
+
 func (g *glKernel) exitRoutes(f rtnl.Family, tunnelRoute bool) []rtnl.Route {
 	routes := []rtnl.Route{contract.FallbackRoute(f, g.c.Table)}
 	if f == rtnl.V4 && tunnelRoute {
-		routes = append([]rtnl.Route{contract.TunnelRoute(f, g.c.Table, glTunnelIfIndex)}, routes...)
+		routes = append([]rtnl.Route{contract.TunnelRoute(f, g.c.Table, g.tunnelIndex())}, routes...)
 	}
 	return routes
 }
