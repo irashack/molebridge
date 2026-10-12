@@ -429,7 +429,7 @@ func (w *worker) tunnelLoop(tun *tunnel.Manager, obs *rtnl.Conn) {
 		w.tunnelUp.Store(up)
 		if !up && !time.Now().Before(next) {
 			w.logf("bringing the tunnel up")
-			err := w.mut.Do(w.ctx, "bring the tunnel up", func(tx *mutator.Tx) error { return tun.Up(w.tunnelParams()) })
+			err := w.mut.Do(w.ctx, "bring the tunnel up", func(tx *mutator.Tx) error { return tun.UpContext(tx.Context(), w.tunnelParams()) })
 			if err != nil {
 				if w.ctx.Err() != nil {
 					return

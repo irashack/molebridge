@@ -3,8 +3,10 @@
 package exit
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
 	"github.com/irashack/molebridge/internal/tunnel"
@@ -63,7 +65,9 @@ func RunCleanup(args []string, env map[string]string, stderr io.Writer) int {
 		return 1
 	}
 	defer m.Close()
-	if err := m.Cleanup(b, exitIf, overlayIf); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if err := m.CleanupContext(ctx, b, exitIf, overlayIf); err != nil {
 		fmt.Fprintf(stderr, prefix+"cleanup: %v\n", err)
 		return 1
 	}

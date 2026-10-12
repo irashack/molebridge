@@ -89,7 +89,9 @@ type lab struct {
 	fakeDir, confDir        string
 }
 
-func (l *lab) path(parts ...string) string { return filepath.Join(append([]string{l.dir}, parts...)...) }
+func (l *lab) path(parts ...string) string {
+	return filepath.Join(append([]string{l.dir}, parts...)...)
+}
 
 // newLab builds the namespaces: the exit, the host path to "outside" (where
 // the destination answers, and where a leak would be counted) and the client
@@ -420,7 +422,7 @@ func TestDrillStartToReady(t *testing.T) {
 	var v4, links string
 	for _, line := range l.trace() {
 		if i := strings.Index(line, " rule-4 "); i >= 0 {
-			v4 += line[i+8:] + "\n"
+			v4 += strings.ReplaceAll(line[i+8:], " [detached]", "") + "\n"
 		}
 		if i := strings.Index(line, " links "); i >= 0 {
 			links = line[i+7:]

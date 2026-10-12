@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vishvananda/netlink"
+	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/irashack/molebridge/internal/applier"
@@ -132,8 +133,10 @@ func (k *KernelSystem) OverlayKernelWireGuard(_ context.Context) (bool, error) {
 }
 
 // NetbirdFirewallPresent is whether NetBird's nftables table or chains exist.
-func (k *KernelSystem) NetbirdFirewallPresent(_ context.Context) (bool, error) {
-	chains, err := nft.ListChains(0)
+func (k *KernelSystem) NetbirdFirewallPresent(ctx context.Context) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	chains, err := nft.ListChainsContext(ctx, 0)
 	if err != nil {
 		return false, err
 	}
@@ -209,8 +212,12 @@ func (k *KernelSystem) OwnerGeneration(_ context.Context) string {
 	return ""
 }
 
-func (k *KernelSystem) device() (*wgtypes.Device, error) {
-	d, err := k.Tun.Wg().Device(k.exitIf())
+func (k *KernelSystem) device(ctx context.Context) (*wgtypes.Device, error) {
+	var d *wgtypes.Device
+	err := k.Tun.WgDo(ctx, func(c *wgctrl.Client) (e error) {
+		d, e = c.Device(k.exitIf())
+		return
+	})
 	if err != nil {
 		return nil, fmt.Errorf("WireGuard interface %s: %w", k.exitIf(), err)
 	}
@@ -218,8 +225,8 @@ func (k *KernelSystem) device() (*wgtypes.Device, error) {
 }
 
 // Peers are the tunnel's peer public keys.
-func (k *KernelSystem) Peers(_ context.Context) ([]string, error) {
-	d, err := k.device()
+func (k *KernelSystem) Peers(ctx context.Context) ([]string, error) {
+	d, err := k.device(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -231,8 +238,8 @@ func (k *KernelSystem) Peers(_ context.Context) ([]string, error) {
 }
 
 // LatestHandshakes are the peers' last handshake times in Unix seconds.
-func (k *KernelSystem) LatestHandshakes(_ context.Context) (map[string]int64, error) {
-	d, err := k.device()
+func (k *KernelSystem) LatestHandshakes(ctx context.Context) (map[string]int64, error) {
+	d, err := k.device(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +255,8 @@ func (k *KernelSystem) LatestHandshakes(_ context.Context) (map[string]int64, er
 }
 
 // Endpoints are the peers' endpoints, "(none)" for a peer without one.
-func (k *KernelSystem) Endpoints(_ context.Context) (map[string]string, error) {
-	d, err := k.device()
+func (k *KernelSystem) Endpoints(ctx context.Context) (map[string]string, error) {
+	d, err := k.device(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -265,8 +272,8 @@ func (k *KernelSystem) Endpoints(_ context.Context) (map[string]string, error) {
 }
 
 // PublicKey is the interface's own public key; the private key is not read.
-func (k *KernelSystem) PublicKey(_ context.Context) (string, error) {
-	d, err := k.device()
+func (k *KernelSystem) PublicKey(ctx context.Context) (string, error) {
+	d, err := k.device(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -277,13 +284,15 @@ func (k *KernelSystem) PublicKey(_ context.Context) (string, error) {
 // An empty public key in add means remove only.
 func (k *KernelSystem) ReplacePeer(ctx context.Context, remove []string, add applier.PeerConfig) error {
 	return k.Mut.Do(ctx, "change the tunnel peer", func(tx *mutator.Tx) error {
-		wg := k.Tun.Wg()
+		configure := func(cfg wgtypes.Config) error {
+			return k.Tun.WgDo(tx.Context(), func(c *wgctrl.Client) error { return c.ConfigureDevice(k.exitIf(), cfg) })
+		}
 		for _, r := range remove {
 			key, err := wgtypes.ParseKey(r)
 			if err != nil {
 				return errors.New("invalid peer key")
 			}
-			if err := wg.ConfigureDevice(k.exitIf(), wgtypes.Config{Peers: []wgtypes.PeerConfig{{PublicKey: key, Remove: true}}}); err != nil {
+			if err := configure(wgtypes.Config{Peers: []wgtypes.PeerConfig{{PublicKey: key, Remove: true}}}); err != nil {
 				return fmt.Errorf("remove a peer: %w", err)
 			}
 		}
@@ -313,7 +322,7 @@ func (k *KernelSystem) ReplacePeer(ctx context.Context, remove []string, add app
 			d := time.Duration(add.KeepaliveSec) * time.Second
 			pc.PersistentKeepaliveInterval = &d
 		}
-		if err := wg.ConfigureDevice(k.exitIf(), wgtypes.Config{Peers: []wgtypes.PeerConfig{pc}}); err != nil {
+		if err := configure(wgtypes.Config{Peers: []wgtypes.PeerConfig{pc}}); err != nil {
 			return fmt.Errorf("set the peer: %w", err)
 		}
 		return nil

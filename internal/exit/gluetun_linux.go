@@ -89,7 +89,7 @@ func (m *gluetunMonitors) stop(reason string) {
 func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {
 	for {
 		value := "absent"
-		mark, err := m.tun.Fwmark(m.overlayIf)
+		mark, err := m.tun.FwmarkContext(ctx, m.overlayIf)
 		if err == nil {
 			if mark == 0 {
 				value = "off"
