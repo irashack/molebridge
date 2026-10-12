@@ -6,6 +6,7 @@ package privfile
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -51,8 +52,12 @@ func Write(path string, content []byte, mode os.FileMode) error {
 	return nil
 }
 
-// ErrExists is returned by WriteNew when the path is already taken.
-var ErrExists = errors.New("the output file exists")
+// ErrExists is returned by WriteNew when the path is already taken, and
+// ErrCreate (wrapped, so errors.Is finds it) when it cannot be created.
+var (
+	ErrExists = errors.New("the output file exists")
+	ErrCreate = errors.New("the output file could not be created")
+)
 
 // WriteNew creates path with mode 0600 and never replaces what is there: the
 // file is opened with O_EXCL and O_NOFOLLOW, so an existing file, a symbolic
@@ -60,14 +65,14 @@ var ErrExists = errors.New("the output file exists")
 // created first. A partial file is removed on failure.
 func WriteNew(path string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrCreate, err)
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return ErrExists
 		}
-		return err
+		return fmt.Errorf("%w: %v", ErrCreate, err)
 	}
 	fail := func(err error) error {
 		f.Close()
