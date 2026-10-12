@@ -144,7 +144,10 @@ func (m *Mutator) ChangeReturnPath(ctx context.Context, f rtnl.Family, old, next
 		if !next.IsValid() || (f == rtnl.V4) != next.Is4() || (old.IsValid() && (f == rtnl.V4) != old.Is4()) {
 			return fmt.Errorf("the %s return-path address is not an address of that family", f)
 		}
-		both := withReturnPath(before, f, dedupe(old, next))
+		// Start from everything that is protected now (a failed change before
+		// this one may have left more than the caller knows of), plus old and
+		// next. Protection is only ever pruned later, on a stable look.
+		both := withReturnPath(before, f, dedupe(append(append([]netip.Addr(nil), before.ReturnPath[f]...), old, next)...))
 		tx.SetSpec(both)
 		res := tx.reconcile("install the new return-path pair")
 		if !res.ContractHolds {
@@ -193,14 +196,31 @@ func withReturnPath(s contract.Spec, f rtnl.Family, addrs []netip.Addr) contract
 	return out
 }
 
+// settleLooks is how many times settle tries for a snapshot the kernel held
+// still for.
+const settleLooks = 3
+
 // settle decides, from the kernel, which return-path pairs survive a
 // transaction, and removes the others. failed says the transaction did not
 // complete: then everything protected before stays protected too.
+//
+// Only a stable look may shrink protection: an Unstable snapshot may omit an
+// address that is live, so on one nothing is pruned, both expected sets stay
+// and the pairs with them.
 func (tx *Tx) settle(before, both contract.Spec, f rtnl.Family, old, next netip.Addr, failed bool) error {
-	snap, err := tx.Snapshot()
-	if err != nil {
-		// Cannot tell what is live: both pairs stay, as they are expected now.
-		return opErr("read the tunnel addresses back; both return-path pairs stay", err)
+	var snap *rtnl.Snapshot
+	var err error
+	for i := 0; i < settleLooks; i++ {
+		if snap, err = tx.Snapshot(); err != nil {
+			// Cannot tell what is live: everything stays, as it is expected now.
+			return opErr("read the tunnel addresses back; the return-path pairs stay", err)
+		}
+		if !snap.Unstable {
+			break
+		}
+	}
+	if snap.Unstable {
+		return errors.New("the kernel kept changing; the return-path pairs stay until a stable look can prune them")
 	}
 	var keep []netip.Addr
 	if link, ok := snap.Link(both.Config.ExitIf); ok {

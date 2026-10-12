@@ -73,6 +73,10 @@ type piaHarness struct {
 	t    *testing.T
 	// observed: the first violation seen at an observation point.
 	violation string
+	// unstableAt injects an Unstable, address-less snapshot: from the n-th on
+	// (0 = never), or only the n-th when onlyOne.
+	unstableAt int
+	onlyOne    bool
 }
 
 func newPIAHarness(t *testing.T, sc piaScenario) *piaHarness {
@@ -136,6 +140,9 @@ func (h *piaHarness) run(failStep int, failMutation int, persistent bool, failTa
 		}
 		return nil
 	}
+	h.k.unstableFn = func(n int) bool {
+		return h.unstableAt > 0 && (n == h.unstableAt || !h.onlyOne && n > h.unstableAt)
+	}
 	h.observe("start")
 	err = h.m.ChangeReturnPath(context.Background(), rtnl.V4, h.sc.old, h.sc.next, func(tx *Tx) error {
 		for i, st := range h.sc.steps {
@@ -160,7 +167,7 @@ func (h *piaHarness) finalChecks(label string, err error) {
 	t := h.t
 	t.Helper()
 	h.k.hook = nil
-	h.k.fail, h.k.takeFail = nil, nil
+	h.k.fail, h.k.takeFail, h.k.unstableFn = nil, nil, nil
 	if h.violation != "" {
 		t.Errorf("%s: %s", label, h.violation)
 	}
@@ -325,4 +332,123 @@ func TestARebuildThatCannotRestoreKeepsItsCopies(t *testing.T) {
 	// which is then a stray, comes out.
 	k.fail = nil
 	repairs(t, m, k, spec)
+}
+
+// readyMeansProtected: whenever the mutator says it is ready, no live address
+// is without its pair in the kernel.
+func (h *piaHarness) readyMeansProtected(label string) {
+	h.t.Helper()
+	if !h.m.Ready() {
+		return
+	}
+	rules := h.k.rules[rtnl.V4]
+	for _, a := range h.k.liveAddrs(rtnl.V4, "mullvad") {
+		has94, has98 := false, false
+		for _, r := range rules {
+			if r.Src.IsValid() && r.Src.Addr() == a {
+				has94 = has94 || r.Priority == 94
+				has98 = has98 || r.Priority == 98
+			}
+		}
+		if !has94 || !has98 {
+			h.t.Errorf("%s: ready while %s lacks its pair (94 %v, 98 %v)", label, a, has94, has98)
+		}
+	}
+}
+
+// Unstable snapshots (flagged, and missing the interface addresses) injected at
+// every snapshot of the change, alone and from then on, with the callback
+// failing at every step: protection only ever grows on such evidence.
+func TestUnstableSnapshotsNeverCostAProtection(t *testing.T) {
+	for _, sc := range piaScenarios() {
+		clean := newPIAHarness(t, sc)
+		if _, err := clean.run(-1, 0, false, 0); err != nil {
+			t.Fatal(err)
+		}
+		takes := clean.k.takes
+		for n := 1; n <= takes+2; n++ {
+			for _, onlyOne := range []bool{true, false} {
+				for step := -1; step <= len(sc.steps); step++ {
+					h := newPIAHarness(t, sc)
+					h.unstableAt, h.onlyOne = n, onlyOne
+					_, err := h.run(step, 0, false, 0)
+					label := fmt.Sprintf("%s, snapshot %d unstable (only=%v), callback fails at %d", sc.name, n, onlyOne, step)
+					h.finalChecks(label, err)
+					h.readyMeansProtected(label)
+					// A later pass on a stable kernel reaches a verdict that is true.
+					h.k.unstableFn = nil
+					if _, rerr := h.m.ReconcileNow(context.Background(), "later"); rerr != nil {
+						_ = rerr
+					}
+					h.finalChecks(label+", then a stable pass", err)
+					h.readyMeansProtected(label + ", then a stable pass")
+				}
+			}
+		}
+	}
+}
+
+// A change that failed after its address arrived leaves that address
+// protected; the next change must start from it, not from {old, next}.
+func TestTheNextChangeStartsFromEverythingProtected(t *testing.T) {
+	a11, a12, a13 := netip.MustParseAddr("203.0.113.11"), netip.MustParseAddr("203.0.113.12"), netip.MustParseAddr("203.0.113.13")
+	for _, unstableFrom := range []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12} {
+		for _, onlyOne := range []bool{true, false} {
+			for _, firstUnstable := range []bool{false, true} {
+				sc := piaScenario{name: "A to B fails, then A to C", old: a11, next: a12}
+				h := newPIAHarness(t, sc)
+				h.k.hook = h.observe
+				if firstUnstable {
+					// The first change's settling look is unstable: B stays expected
+					// although nothing proved it live, and the second change must
+					// still start from it.
+					h.k.unstableFn = func(n int) bool { return n >= 4 }
+				}
+				// A -> B: B arrives, then the change fails.
+				err := h.m.ChangeReturnPath(context.Background(), rtnl.V4, a11, a12, func(tx *Tx) error {
+					h.k.setAddr(rtnl.V4, "mullvad", a12, true)
+					h.observe("B arrived")
+					return errors.New("the peer could not be set")
+				})
+				if err == nil {
+					t.Fatal("no error")
+				}
+				// A -> C: the interface still has A and B. The pair of B must be
+				// there before, during and after, whatever the snapshots say.
+				h.k.takes = 0
+				h.k.unstableFn = nil
+				h.k.unstableFn = func(n int) bool { return unstableFrom > 0 && (n == unstableFrom || !onlyOne && n > unstableFrom) }
+				err = h.m.ChangeReturnPath(context.Background(), rtnl.V4, a11, a13, func(tx *Tx) error {
+					h.k.setAddr(rtnl.V4, "mullvad", a13, true)
+					h.observe("C arrived")
+					h.k.setAddr(rtnl.V4, "mullvad", a11, false)
+					h.observe("A left")
+					return nil
+				})
+				label := fmt.Sprintf("back to back, unstable from %d (only=%v, first change unstable=%v)", unstableFrom, onlyOne, firstUnstable)
+				h.finalChecks(label, err)
+				h.readyMeansProtected(label)
+				if h.violation != "" {
+					t.Errorf("%s: %s", label, h.violation)
+				}
+				h.k.unstableFn = nil
+				if _, rerr := h.m.ReconcileNow(context.Background(), "later"); rerr != nil {
+					t.Errorf("%s: %v", label, rerr)
+				}
+				// B is still live: its pair stays; A is gone: its pair goes (stable evidence).
+				got := map[netip.Addr]int{}
+				for _, r := range h.k.rules[rtnl.V4] {
+					if r.Priority == 94 || r.Priority == 98 {
+						got[r.Src.Addr()]++
+					}
+				}
+				if got[a12] != 2 || got[a13] != 2 {
+					t.Errorf("%s: pairs %v: B and C are live and must have theirs", label, got)
+				}
+				if err == nil && got[a11] != 0 && unstableFrom == 0 && !firstUnstable {
+					t.Errorf("%s: A left and kept its pair: %v", label, got)
+				}
+			}
+		}
+	}
 }

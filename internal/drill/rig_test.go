@@ -159,6 +159,12 @@ type rigOptions struct {
 	// source wraps the event source (to stall the watcher).
 	source func(watch.Source) watch.Source
 	guard  *bool
+	// pia: the exit has the addressless PIA config. Its tunnel carries no
+	// IPv6, so the IPv6 address the topology gave the interface goes, and the
+	// rig does not wait for a verdict: the IPv4 address that is live has no
+	// pair until a transaction registers it, which is exactly the state in
+	// which Verified must not be true.
+	pia bool
 }
 
 func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
@@ -179,6 +185,9 @@ func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
 	r.spec = contract.Spec{Config: cfg, ReturnPath: map[rtnl.Family][]netip.Addr{rtnl.V4: {tunnel4}, rtnl.V6: {tunnel6}}}
 	if o.spec != nil {
 		r.spec = o.spec(r.spec)
+	}
+	if o.pia {
+		r.exit.TryIP("-6", "addr", "flush", "dev", exitIf, "scope", "global")
 	}
 	// The order the worker uses: subscribe before the first look at the
 	// kernel, so no change between the dump and the watch is missed.
@@ -233,7 +242,9 @@ func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
 	})
 	// The tunnel's default route comes from the first pass that sees the
 	// interface up; wait for it so the rig starts connected.
-	r.waitHealthy(2 * time.Second)
+	if !o.pia {
+		r.waitHealthy(2 * time.Second)
+	}
 	return r
 }
 

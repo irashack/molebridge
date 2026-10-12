@@ -223,7 +223,7 @@ func (tx *Tx) reconcile(reason string) (res PassResult) {
 			}
 		}
 		for _, f := range families {
-			n, errs := tx.apply(spec, plans[f])
+			n, errs := tx.apply(spec, plans[f], !snap.Unstable)
 			if n > 0 {
 				res.Repaired = true
 				res.Mutations += n

@@ -227,3 +227,48 @@ func TestGluetunRepairsWithoutTheTemporaryGuard(t *testing.T) {
 		}
 	}
 }
+
+// gluetun's rule 94 follows the address observed on the tunnel interface. A
+// snapshot that kept changing may leave the address out; it must not cost the
+// rule.
+func TestGluetunUnstableSnapshotNeverRemovesRule94(t *testing.T) {
+	k := gluetunKernel()
+	m := start(t, k, glSpec())
+	if err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	has94 := func() bool {
+		for _, r := range k.rules[4] {
+			if r.Priority == 94 {
+				return true
+			}
+		}
+		return false
+	}
+	if !has94() {
+		t.Fatal("rule 94 missing after install")
+	}
+	k.unstableFn = func(int) bool { return true }
+	mark := len(k.log)
+	for i := 0; i < 3; i++ {
+		res, _ := m.ReconcileNow(context.Background(), "x")
+		if res.Verified || m.Ready() {
+			t.Fatalf("a verdict on an unstable look: %+v", res)
+		}
+	}
+	for _, l := range k.log[mark:] {
+		if len(l) >= 3 && (l[:3] == "del" || l[:6] == "delprio" || l[:5] == "route" && len(l) > 9 && l[6:9] == "del") {
+			t.Errorf("a removal on unstable evidence: %q", l)
+		}
+	}
+	if !has94() {
+		t.Fatal("rule 94 was removed on an unstable snapshot")
+	}
+	// On a stable look the rule follows an address that really changed.
+	k.unstableFn = nil
+	k.addrs[4][0].Local = netip.MustParsePrefix("10.64.0.9/32")
+	res, err := m.ReconcileNow(context.Background(), "y")
+	if err != nil || !res.Verified {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
