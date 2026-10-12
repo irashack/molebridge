@@ -143,12 +143,44 @@ func TestLeaseExpiryComesFromTheSupervisorsClock(t *testing.T) {
 	if l.Held() || !l.Lapsed() {
 		t.Fatal("the lease must have lapsed at 505 s")
 	}
-	// A late renewal with fresh loops is a new acceptance, not a retroactive one.
-	if _, err := l.Accept(renew(gen, 2, loops())); err != nil {
+	// Expiry is irreversible within a generation: a late renewal with fresh
+	// loops, and a late record, revive nothing.
+	if _, err := l.Accept(renew(gen, 2, loops())); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("a renewal after the expiry must be refused: %v", err)
+	}
+	if l.Held() || !l.Lapsed() {
+		t.Fatal("the lease is back after a late renewal")
+	}
+	if l.AcceptStatus(gen, 9) {
+		t.Fatal("a record after the expiry must be dropped")
+	}
+	// Even a clock that is somehow earlier again (it is not) cannot undo it.
+	c.now -= 10 * time.Second
+	if !l.Lapsed() {
+		t.Fatal("the lapse is sticky")
+	}
+	// A new generation (a new worker) starts afresh.
+	gen2, _ := l.NewGeneration()
+	c.now += 10 * time.Second
+	if _, err := l.Accept(renew(gen2, 1, loops())); err != nil {
+		t.Fatalf("a new generation: %v", err)
+	}
+}
+
+func TestExpiryIsFoundByTheMessageItself(t *testing.T) {
+	// A renewal that arrives after the deadline but before the supervisor's
+	// next timer event finds the lease lapsed; it is not a race to be won.
+	c := &fakeClock{now: 100 * time.Second}
+	l, gen := newTestLease(c, 5*time.Second, nativeBounds)
+	if _, err := l.Accept(renew(gen, 1, map[string]time.Duration{LoopMutator: c.now, LoopWatcher: c.now})); err != nil {
 		t.Fatal(err)
 	}
-	if !l.Held() {
-		t.Fatal("held again after an accepted renewal")
+	c.now += 5 * time.Second // exactly the deadline
+	if _, err := l.Accept(renew(gen, 2, map[string]time.Duration{LoopMutator: c.now, LoopWatcher: c.now})); err == nil {
+		t.Fatal("accepted at the deadline")
+	}
+	if !l.Lapsed() {
+		t.Fatal("not lapsed")
 	}
 }
 

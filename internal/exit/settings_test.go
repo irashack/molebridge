@@ -181,7 +181,13 @@ func TestChildEnvironments(t *testing.T) {
 		"NB_SETUP_KEY": "SETUPVALUE", "NB_HOSTNAME": "x", "WT_FOO": "1", "GATUS_TOKEN": "TOKENVALUE", "PATH": "/bin",
 		"PIA_USER": "u", "TZ": "UTC", "HOME": "/root", "STATE_DIR": "/state",
 	}
-	nb := strings.Join(ChildEnvNetBird(env, "/run/tmp"), "\n")
+	nb := strings.Join(ChildEnvNetBird(env, "/run/tmp", true), "\n")
+	if strings.Contains(strings.Join(ChildEnvNetBird(env, "/run/tmp", false), "\n"), "SETUPVALUE") {
+		t.Error("only `netbird up` gets the setup key")
+	}
+	if c := strings.Join(CleanupEnv(env), "\n"); strings.Contains(c, "TOKENVALUE") || strings.Contains(c, "SETUPVALUE") || strings.Contains(c, "STATE_DIR") {
+		t.Errorf("the cleanup gets interface names only: %s", c)
+	}
 	for _, bad := range []string{"GATUS_TOKEN", "TOKENVALUE", "PIA_USER", "STATE_DIR"} {
 		if strings.Contains(nb, bad) {
 			t.Errorf("NetBird must not get %s", bad)

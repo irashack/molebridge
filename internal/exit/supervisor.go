@@ -70,7 +70,10 @@ type Supervisor struct {
 	lease  *Lease
 	pub    *publisher
 	nb     *nbManager
-	stderr io.Writer
+	stderr io.Writer // never blocks: see boundedLog
+	log    *boundedLog
+	// leaseOut writes the lease file off the deadline path.
+	leaseOut *coalescer
 
 	events chan event
 	done   chan struct{}
@@ -109,7 +112,8 @@ func New(c Config) *Supervisor {
 	if c.Timing == (Timing{}) {
 		c.Timing = DefaultTiming()
 	}
-	s := &Supervisor{c: c, s: c.Settings, stderr: &lockedWriter{w: c.Stderr},
+	log := newBoundedLog(c.Stderr, 512)
+	s := &Supervisor{c: c, s: c.Settings, stderr: log, log: log, leaseOut: newCoalescer(),
 		events: make(chan event, 256), done: make(chan struct{}), warned: map[string]time.Time{}}
 	bounds := c.Bounds
 	if bounds == nil {
@@ -151,6 +155,14 @@ func (s *Supervisor) Lease() *Lease { return s.lease }
 // Run is the supervisor: it starts the worker, holds the lease, starts NetBird
 // when told and runs the stop sequence. It returns the process's exit status.
 func (s *Supervisor) Run() int {
+	code := s.run()
+	// The log is a bounded queue behind a sink that may be stuck: give it a
+	// moment to land, never longer.
+	s.log.Flush(300 * time.Millisecond)
+	return code
+}
+
+func (s *Supervisor) run() int {
 	defer close(s.done)
 	if s.c.Reaper == nil {
 		_ = proc.BecomeSubreaper()
@@ -176,7 +188,8 @@ func (s *Supervisor) Run() int {
 	}
 	if s.s.Overlay() {
 		tmp := filepath.Join(s.s.RunDir, "tmp")
-		s.nb = &nbManager{reaper: s.reap, bin: s.c.NetBirdBin, env: ChildEnvNetBird(s.s.Env, tmp),
+		s.nb = &nbManager{reaper: s.reap, bin: s.c.NetBirdBin, clock: s.c.Clock,
+			env: ChildEnvNetBird(s.s.Env, tmp, false), envUp: ChildEnvNetBird(s.s.Env, tmp, true),
 			logPath: watchLogPath(s.s.Env), out: s.stderr, timing: s.c.Timing,
 			emit: func(e nbEvent) { s.push(evNB{e}) }}
 	}
@@ -335,6 +348,11 @@ func (s *Supervisor) handle(e event) (reason, detail string) {
 	case evNB:
 		return s.handleNB(e.e)
 	case evWorkerMsg:
+		// Expiry is checked before any message is processed: a renewal or a
+		// record that arrives after the deadline revives nothing.
+		if s.lease.Lapsed() {
+			return ReasonLapsed, "the lease expired before the worker's message was processed"
+		}
 		return s.handleMsg(e.m)
 	}
 	return "", ""
@@ -405,8 +423,11 @@ func (s *Supervisor) maybeStartNetBird() {
 	if s.nb == nil || s.stopping || !s.wantNB || !s.lease.Held() || s.nb.Active() {
 		return
 	}
-	if s.nb.Start() {
+	if info, ok := s.nb.Start(); ok {
 		s.logf("starting NetBird")
+		// The launch's log offset and start time go to the worker now, before
+		// the daemon exists: its monitors count from the launch.
+		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: info.launch, State: NBLaunching, LogOffset: info.offset, AtBootNs: int64(info.at)})
 	}
 }
 
@@ -417,7 +438,7 @@ func (s *Supervisor) handleNB(e nbEvent) (string, string) {
 	switch e.kind {
 	case nbStarted:
 		s.logf("NetBird is up (launch %d)", e.launch)
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStarted, LogOffset: e.offset})
+		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStarted, LogOffset: e.offset, AtBootNs: int64(s.c.Clock())})
 	case nbFailed:
 		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBFailed})
 		return ReasonNetBird, "NetBird could not be started: " + e.detail
@@ -430,7 +451,8 @@ func (s *Supervisor) handleNB(e nbEvent) (string, string) {
 	return "", ""
 }
 
-// leaseFile is the small file `molebridge status` reads.
+// writeLeaseFile queues the small file `molebridge status` reads. The write
+// happens on a goroutine of its own.
 func (s *Supervisor) writeLeaseFile() {
 	expiry, ok := s.lease.Expiry()
 	state := "starting"
@@ -444,7 +466,8 @@ func (s *Supervisor) writeLeaseFile() {
 	}
 	obj := validate.Members("state", state, "generation", s.gen,
 		"expiry_boot_ns", int64(expiry), "updated_boot_ns", int64(s.c.Clock()), "grace_s", int(s.s.Grace/time.Second))
-	_ = jsonfile.Write(s.s.PathLease(), obj, jsonfile.Options{Public: true})
+	path := s.s.PathLease()
+	s.leaseOut.Submit(func() { _ = jsonfile.Write(path, obj, jsonfile.Options{Public: true}) }, s.stopping)
 }
 
 // stopSequence is the plan's timeline, budget 15 seconds:
@@ -463,13 +486,8 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	s.stopping = true
 	s.wantNB = false
 	s.lease.Revoke()
-	if requested {
-		s.pub.Close()
-	} else {
-		s.pub.Failure(s.c.Wall())
-	}
-	s.writeLeaseFile()
-	s.logf("stopping (%s)", reason)
+	// The signals go first. Nothing before them touches a file, a pipe that
+	// can fill, or a log: every write below is queued off this goroutine.
 	if s.nb != nil {
 		s.nb.Close()
 		s.nb.TermAll()
@@ -477,6 +495,13 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	if s.worker != nil {
 		s.send(Msg{Type: TypeStop})
 	}
+	if requested {
+		s.pub.Close()
+	} else {
+		s.pub.Failure(s.c.Wall())
+	}
+	s.writeLeaseFile()
+	s.logf("stopping (%s)", reason)
 
 	alive := func() (worker, netbird bool) {
 		if s.worker != nil {
@@ -520,10 +545,24 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	}
 
 	// The cleanup is an executor independent of the failed worker, and never
-	// runs beside a mutator that survived.
-	if !workerLeft {
+	// runs beside a mutator that survived: not beside the worker, and not
+	// beside a NetBird process either, which could recreate the overlay link
+	// the cleanup is deleting. With either left, it is reported incomplete.
+	if !workerLeft && !nbLeft {
 		if err := s.cleanup(at(tm.CleanupEnd)); err != nil {
 			left = append(left, err.Error())
+		}
+	} else {
+		left = append(left, "the cleanup (not run while a process of this exit survives)")
+	}
+	// The failure record and the lease file were queued at T+0; give them the
+	// rest of the budget to land, and no more.
+	if rest := time.Until(at(tm.ExitBy)); rest > 0 {
+		if rest > time.Second {
+			rest = time.Second
+		}
+		if !s.pub.Wait(rest) {
+			s.logf("the status record could not be written in time (is the state volume stuck?)")
 		}
 	}
 	code := 1
@@ -565,8 +604,7 @@ func (s *Supervisor) cleanup(deadline time.Time) error {
 	if args == nil {
 		args = []string{"exit", "--cleanup", "--backend", s.s.BackendName(), "--kind", s.s.Kind()}
 	}
-	env := WorkerEnv(s.s.Env)
-	p, err := s.reap.Start(proc.Spec{Path: s.c.Self, Args: append([]string{"molebridge"}, args...), Env: env,
+	p, err := s.reap.Start(proc.Spec{Path: s.c.Self, Args: append([]string{"molebridge"}, args...), Env: CleanupEnv(s.s.Env),
 		Stderr: osStderr(s.c.Stderr), Stdout: osStderr(s.c.Stderr)})
 	if err != nil {
 		return errors.New("the cleanup (could not start)")

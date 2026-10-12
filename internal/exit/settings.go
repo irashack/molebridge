@@ -344,13 +344,19 @@ func checkStateDir(stateDir string, create bool) error {
 	return nil
 }
 
-// ChildEnvNetBird is the environment the NetBird processes get: NB_* and WT_*
+// ChildEnvNetBird is the environment a NetBird command gets: NB_* and WT_*
 // variables, PATH, HOME, TZ and TMPDIR, with NB_LOG_FILE's default filled in.
-// Pipeline secrets (the Gatus token, PIA's files) never reach NetBird.
-func ChildEnvNetBird(env map[string]string, tmpDir string) []string {
+// Pipeline secrets (the Gatus token, PIA's files) never reach NetBird, and the
+// enrollment secret (NB_SETUP_KEY, WT_SETUP_KEY) reaches only the command that
+// enrolls: withSetupKey is true for `netbird up` alone, not for the daemon or
+// the liveness probes.
+func ChildEnvNetBird(env map[string]string, tmpDir string, withSetupKey bool) []string {
 	out := map[string]string{}
 	for k, v := range env {
 		if strings.HasPrefix(k, "NB_") || strings.HasPrefix(k, "WT_") {
+			if (k == "NB_SETUP_KEY" || k == "WT_SETUP_KEY") && !withSetupKey {
+				continue
+			}
 			out[k] = v
 		}
 	}
@@ -366,6 +372,19 @@ func ChildEnvNetBird(env map[string]string, tmpDir string) []string {
 		out["NB_LOG_FILE"] = DefaultNetBirdLog
 	}
 	out["TMPDIR"] = tmpDir
+	return flatten(out)
+}
+
+// CleanupEnv is the cleanup child's environment: the names of the interfaces
+// it removes and nothing else. It touches no secret and reads no file.
+func CleanupEnv(env map[string]string) []string {
+	out := map[string]string{}
+	for _, k := range []string{"EXIT_IF", "OVERLAY_IF", "NB_INTERFACE_NAME", "TUNNEL_BACKEND", "EXIT_KIND", "TZ"} {
+		if v, ok := env[k]; ok {
+			out[k] = v
+		}
+	}
+	out["PATH"] = "/usr/local/bin:/usr/bin:/bin"
 	return flatten(out)
 }
 
