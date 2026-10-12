@@ -37,6 +37,9 @@ type fakeKernel struct {
 	hook func(op string)
 	// fail returns an error for an operation; op is e.g. "add 4 95".
 	fail func(op string) error
+	// lie returns true for an add the kernel acknowledges without installing
+	// the rule (a request that "succeeds" and is not there when read back).
+	lie func(op string) bool
 	// delay makes every request take this long.
 	delay time.Duration
 
@@ -150,6 +153,10 @@ func (k *fakeKernel) AddRule(r rtnl.Rule) error {
 	if err := k.record(op); err != nil {
 		k.mu.Unlock()
 		return err
+	}
+	if k.lie != nil && k.lie(op) {
+		k.mu.Unlock()
+		return nil
 	}
 	for _, x := range k.rules[r.Family] {
 		if withoutInvert(x) == withoutInvert(r) {
