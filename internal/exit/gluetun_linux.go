@@ -37,7 +37,10 @@ type gluetunMonitors struct {
 
 	fwProgress, logProgress atomic.Int64
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// cur is the newest launch the supervisor announced; events of older
+	// launches are ignored.
+	cur      launchInfo
 	launched bool
 	launchAt time.Duration
 	lastGood time.Duration
@@ -67,17 +70,44 @@ func (w *worker) startGluetunMonitors(tun *tunnel.Manager) error {
 func (m *gluetunMonitors) newLaunch(launch int, logOffset int64, at time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if launch < m.cur.launch {
+		return
+	}
 	if now := m.w.clock(); at <= 0 || at > now {
 		at = now
 	}
-	m.launched, m.launchAt, m.lastGood, m.lastSeen = true, at, at, "nothing"
-	m.scanner = newLogScanner(m.logPath, logOffset)
+	m.cur = launchInfo{launch: launch, offset: logOffset, at: at}
+	m.arm()
 }
 
-func (m *gluetunMonitors) endLaunch() {
-	m.mu.Lock()
-	m.launched, m.scanner = false, nil
-	m.mu.Unlock()
+// arm starts the accounting for the current launch from its own start.
+func (m *gluetunMonitors) arm() {
+	m.launched, m.launchAt, m.lastGood, m.lastSeen = true, m.cur.at, m.cur.at, "nothing"
+	m.scanner = newLogScanner(m.logPath, m.cur.offset)
+}
+
+// event applies a supervisor report about NetBird to the monitors, by launch
+// identity: launching arms the accounting of its launch; started for the
+// current launch re-arms it if something had disarmed it; stopped or failed
+// disarms only the launch it is about. A report of an older launch changes
+// nothing.
+func (m *gluetunMonitors) event(msg Msg) {
+	switch msg.State {
+	case NBLaunching:
+		m.newLaunch(msg.Launch, msg.LogOffset, time.Duration(msg.AtBootNs))
+	case NBStarted:
+		m.mu.Lock()
+		if msg.Launch == m.cur.launch && !m.launched {
+			m.arm()
+		}
+		m.mu.Unlock()
+	case NBStopped, NBFailed:
+		m.mu.Lock()
+		if msg.Launch == m.cur.launch {
+			m.launched, m.scanner = false, nil
+		}
+		m.mu.Unlock()
+	}
 }
 
 // stop is fatal to the generation, as `stop` was in wait-for-guards: NetBird

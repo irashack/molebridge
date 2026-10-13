@@ -131,26 +131,65 @@ func TestSettingsRefusals(t *testing.T) {
 }
 
 func TestFirstEnrollmentNeedsTheTunnelOnTheBlacklistSetting(t *testing.T) {
-	want := "NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface mullvad"
-	for _, tt := range []struct {
-		value string
-		ok    bool
+	covered := "NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface mullvad"
+	tests := []struct {
+		name         string
+		nb, wt       string
+		wantErr      string // "" accepted
+		unsetNB, set bool
 	}{
-		{"mullvad", true}, {"mull", true}, {"docker0,mullvad", true}, {"m", true}, {"wg,mullvad", true},
-		{"", false}, {"docker0", false}, {"mullvad0", false}, {"Mullvad", false}, {" mullvad", false}, {",", false},
-	} {
-		f := newFixture(t)
-		f.env["NB_EXTRA_IFACE_BLACKLIST"] = tt.value
-		_, err := f.load()
-		if tt.ok && err != nil {
-			t.Errorf("%q: %v", tt.value, err)
-		}
-		if !tt.ok && (err == nil || !strings.Contains(err.Error(), want)) {
-			t.Errorf("%q: %v", tt.value, err)
-		}
+		{name: "exactly", nb: "mullvad"},
+		{name: "a prefix", nb: "mull"},
+		{name: "one letter", nb: "m"},
+		{name: "second of two", nb: "docker0,mullvad"},
+		{name: "default group", nb: "wg,mullvad"},
+		{name: "a quoted entry", nb: `"mullvad"`},
+		{name: "quoted among others", nb: `docker0,"mullvad"`},
+		{name: "a quoted comma is one entry", nb: `"dummy,mullvad,other"`, wantErr: covered},
+		{name: "quoted comma beside a good entry", nb: `"dummy,x",mullvad`},
+		{name: "a doubled quote inside quotes", nb: `"a""b",mullvad`},
+		{name: "only unrelated", nb: "docker0", wantErr: covered},
+		{name: "longer than the interface", nb: "mullvad0", wantErr: covered},
+		{name: "case matters", nb: "Mullvad", wantErr: covered},
+		{name: "a leading space is part of the entry", nb: " mullvad", wantErr: covered},
+		{name: "a trailing space is part of the entry", nb: "mullvad ,docker0", wantErr: covered},
+		{name: "a space after the comma is part of the entry", nb: "docker0, mullvad", wantErr: covered},
+		{name: "empty text", nb: "", wantErr: covered},
+		{name: "empty text in the old name only", nb: "", wt: "mullvad"},
+		{name: "empty field", nb: "docker0,,mullvad", wantErr: "has an empty entry"},
+		{name: "only a comma", nb: ",", wantErr: "has an empty entry"},
+		{name: "a bare quote", nb: `mull"vad`, wantErr: "is not a list NetBird can read"},
+		{name: "an unterminated quote", nb: `"mullvad`, wantErr: "is not a list NetBird can read"},
+		{name: "text after a closing quote", nb: `"mullvad"x`, wantErr: "is not a list NetBird can read"},
+		{name: "only the old name", wt: "mullvad", unsetNB: true},
+		{name: "old and new are joined", wt: "docker0", nb: "mullvad"},
+		{name: "old name unreadable", wt: `"x`, nb: "mullvad", wantErr: "WT_EXTRA_IFACE_BLACKLIST is not a list NetBird can read"},
+		{name: "a newline ends the record", nb: "docker0\nmullvad", wantErr: covered},
+		{name: "neither set", unsetNB: true, wantErr: covered},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			if tt.unsetNB {
+				delete(f.env, "NB_EXTRA_IFACE_BLACKLIST")
+			} else {
+				f.env["NB_EXTRA_IFACE_BLACKLIST"] = tt.nb
+			}
+			if tt.wt != "" {
+				f.env["WT_EXTRA_IFACE_BLACKLIST"] = tt.wt
+			}
+			_, err := f.load()
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
 	}
 	// With a stored profile the setting is not consulted: the profile is.
 	f := newFixture(t)
+	f.env["NB_EXTRA_IFACE_BLACKLIST"] = `"x`
 	delete(f.env, "NB_EXTRA_IFACE_BLACKLIST")
 	p := filepath.Join(f.env["NB_STATE_DIR"], "default.json")
 	if err := os.WriteFile(p, []byte(`{"WgIface":"wt0","IFaceBlackList":["wg","mullvad"]}`), 0o600); err != nil {
@@ -158,6 +197,22 @@ func TestFirstEnrollmentNeedsTheTunnelOnTheBlacklistSetting(t *testing.T) {
 	}
 	if _, err := f.load(); err != nil {
 		t.Errorf("an enrolled peer: %v", err)
+	}
+}
+
+// The parser is NetBird's: the text goes through the same library calls.
+func TestTheBlacklistReaderIsPflagsReader(t *testing.T) {
+	for _, in := range []string{"", "a", "a,b", `"a,b"`, `a,"b,c",d`, `"a""b"`, `a,,b`, "a\nb"} {
+		got, err := readAsCSV(in)
+		if err != nil {
+			t.Errorf("%q: %v", in, err)
+			continue
+		}
+		want := map[string][]string{"": {}, "a": {"a"}, "a,b": {"a", "b"}, `"a,b"`: {"a,b"}, `a,"b,c",d`: {"a", "b,c", "d"},
+			`"a""b"`: {`a"b`}, "a,,b": {"a", "", "b"}, "a\nb": {"a"}}[in]
+		if strings.Join(got, "|") != strings.Join(want, "|") || len(got) != len(want) {
+			t.Errorf("%q: %q, want %q", in, got, want)
+		}
 	}
 }
 

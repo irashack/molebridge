@@ -47,6 +47,7 @@ type harness struct {
 	mu      sync.Mutex
 	written []map[string]any
 	writes  int
+	sup     *Supervisor
 }
 
 func newHarness(t *testing.T, workerMode, cleanupMode string) *harness {
@@ -75,7 +76,7 @@ func newHarness(t *testing.T, workerMode, cleanupMode string) *harness {
 		"NB_SETUP_KEY": "SETUPVALUE", "GATUS_TOKEN": "TOKENVALUE"}
 	h.s = s
 	h.cfg = Config{
-		Settings: s, Reaper: testReaper, Self: self,
+		Settings: s, Reaper: reaperFor(t), Self: self,
 		WorkerArgs:  []string{"fake-worker", workerMode},
 		CleanupArgs: []string{"fake-cleanup", cleanupMode, h.trace},
 		Signals:     h.sigs, Stderr: os.Stderr,
@@ -99,6 +100,7 @@ func newHarness(t *testing.T, workerMode, cleanupMode string) *harness {
 // run starts the supervisor and returns its exit code on a channel.
 func (h *harness) run() <-chan int {
 	sup := New(h.cfg)
+	h.sup = sup
 	done := make(chan int, 1)
 	go func() { done <- sup.Run() }()
 	return done
@@ -491,5 +493,96 @@ func TestMessagesAfterTheExpiryStopTheExit(t *testing.T) {
 	}
 	if sup.lease.Held() {
 		t.Fatal("held")
+	}
+}
+
+// Process creation can stall (a hung exec). The supervisor's deadline path
+// takes no lock that a creation in flight holds: with a liveness probe stuck
+// in the middle of being started, the lease still lapses on time, NetBird's
+// daemon still gets TERM, and the exit still ends within its budget.
+func TestAStalledSpawnNeverDelaysTheStop(t *testing.T) {
+	h := newHarness(t, "freeze", "ok")
+	stall, entered := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { close(stall) })
+	h.cfg.nbHook = func(stage string) {
+		if stage == "spawn status --check live" {
+			once.Do(func() { close(entered) })
+			<-stall
+		}
+	}
+	done := h.run()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no probe was started")
+	}
+	// The daemon runs; the next liveness probe never gets going. Renewals keep
+	// arriving (Active() is asked on each) until the worker freezes.
+	if !h.waitTrace("worker frozen", 10*time.Second) {
+		t.Fatal("never froze")
+	}
+	frozen := time.Now()
+	if !h.waitTrace("netbird terminated", 10*time.Second) {
+		t.Fatal("NetBird got no TERM: the deadline path waited on the stalled creation")
+	}
+	if took := time.Since(frozen); took > h.s.Grace+1500*time.Millisecond {
+		t.Errorf("TERM %v after the freeze, grace is %v", took, h.s.Grace)
+	}
+	if code := h.wait(done, 15*time.Second); code == 0 {
+		t.Error("exit status")
+	}
+}
+
+// A worker that stops reading its pipe fills it, and the supervisor's writer
+// goroutine blocks; the deadline path never writes to that pipe.
+func TestAWorkerThatStopsReadingItsPipeDelaysNothing(t *testing.T) {
+	h := newHarness(t, "freeze", "ok")
+	done := h.run()
+	if !h.waitTrace("worker frozen", 10*time.Second) {
+		t.Fatal("never froze")
+	}
+	frozen := time.Now()
+	start := time.Now()
+	for i := 0; i < 20000; i++ {
+		h.sup.send(Msg{Type: TypeAck, Gen: h.sup.gen, Seq: uint64(i), ExpiryBootNs: 1})
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Errorf("20000 sends took %v: a send must never wait on the pipe", took)
+	}
+	if !h.waitTrace("netbird terminated", 10*time.Second) {
+		t.Fatal("NetBird got no TERM")
+	}
+	if took := time.Since(frozen); took > h.s.Grace+1500*time.Millisecond {
+		t.Errorf("TERM %v after the freeze", took)
+	}
+	if code := h.wait(done, 15*time.Second); code == 0 {
+		t.Error("exit status")
+	}
+}
+
+// Events of an older launch change nothing: the manager marks a launch inactive
+// before its stopped event reaches the loop, so a newer launch can already run.
+func TestAStaleStoppedEventIsDropped(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	sup := New(h.cfg)
+	sup.nb = &nbManager{launch: 2, active: true, closed: false}
+	sup.toW = make(chan Msg, 8)
+	sup.gen = strings.Repeat("a", 32)
+	for _, kind := range []nbKind{nbStopped, nbStarted, nbFailed, nbExited} {
+		if reason, _ := sup.handleNB(nbEvent{kind: kind, launch: 1}); reason != "" {
+			t.Errorf("kind %d of launch 1 stops the exit: %q", kind, reason)
+		}
+	}
+	select {
+	case m := <-sup.toW:
+		t.Fatalf("a message was sent to the worker for an old launch: %+v", m)
+	default:
+	}
+	// The current launch's started event carries its launch and start time.
+	sup.handleNB(nbEvent{kind: nbStarted, launch: 2, offset: 7, at: 5 * time.Second})
+	m := <-sup.toW
+	if m.State != NBStarted || m.Launch != 2 || m.LogOffset != 7 || m.AtBootNs != int64(5*time.Second) {
+		t.Fatalf("%+v", m)
 	}
 }

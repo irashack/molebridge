@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -64,6 +65,8 @@ type nbEvent struct {
 	launch int
 	detail string
 	offset int64
+	// at is the boot-clock time the launch began.
+	at time.Duration
 }
 
 // nbManager runs NetBird's 0.80.0 entrypoint sequence itself: `netbird service
@@ -90,7 +93,10 @@ type nbManager struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	procs    []*proc.Process
-	// hook, when set (tests), is called at stages of a launch's sequence.
+	// pending counts process creations in flight.
+	pending atomic.Int32
+	// hook, when set (tests), is called at stages of a launch's sequence and
+	// right before each process creation.
 	hook func(stage string)
 }
 
@@ -157,6 +163,9 @@ type launchInfo struct {
 // Start begins a launch. It reports false when the supervisor is stopping or a
 // launch is already running or being stopped.
 func (m *nbManager) Start() (launchInfo, bool) {
+	// Read before the lock is taken: a stat of the log must not be held under
+	// the lock the deadline path takes.
+	offset, at := fileSize(m.logPath), m.clock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed || m.active || m.stopping {
@@ -167,7 +176,7 @@ func (m *nbManager) Start() (launchInfo, bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.done = make(chan struct{})
-	info := launchInfo{launch: m.launch, offset: fileSize(m.logPath), at: m.clock()}
+	info := launchInfo{launch: m.launch, offset: offset, at: at}
 	go m.run(ctx, info, m.done)
 	return info, true
 }
@@ -258,6 +267,9 @@ func (m *nbManager) KillAll() {
 // Alive reports whether any NetBird process is left (unreaped, or a group
 // member still around).
 func (m *nbManager) Alive() bool {
+	if m.pending.Load() > 0 {
+		return true
+	}
 	for _, p := range m.snapshot() {
 		select {
 		case <-p.Reaped():
@@ -285,11 +297,19 @@ func (m *nbManager) waitGone(d time.Duration) bool {
 var errClosed = errors.New("the supervisor is stopping or the launch was cancelled; NetBird is not started")
 
 // spawn starts a NetBird program in a group of its own, its output copied
-// line by line to the supervisor's log (when copyOutput), and tracks it. It
-// starts nothing unless the manager is open and the launch is still the
-// current, uncancelled one, checked under the lock Stop and Close cancel
-// under: a cancelled launch can never start a process nobody supervises.
-// env is the command's own environment.
+// line by line to the supervisor's log (when copyOutput), and tracks it.
+//
+// Process creation can stall (a hung exec on a sick filesystem, a fork that
+// waits on memory), and the supervisor's deadline path takes m.mu: Active,
+// Close, Stop and the stop sequence's signalling. So no lock is held while the
+// process is created. The launch is checked under the lock first (open, still
+// the current launch, not cancelled) and a creation in flight is counted
+// (Alive reports it, so nothing is called finished, and no cleanup runs,
+// beside it); the lock is released for the fork; and the lock is taken again to
+// attach the pid. If the launch was cancelled or the manager closed in the
+// meantime, the late child is killed at once, by its group, before anything
+// else happens to it: a cancelled launch never leaves a process nobody
+// supervises. env is the command's own environment.
 func (m *nbManager) spawn(ctx context.Context, launch int, args []string, env []string, copyOutput bool) (*proc.Process, error) {
 	path, err := lookPath(args[0], env)
 	if err != nil {
@@ -305,24 +325,34 @@ func (m *nbManager) spawn(ctx context.Context, launch int, args []string, env []
 		spec.Stdout, spec.Stderr = w, w
 		defer w.Close()
 	}
-	m.mu.Lock()
-	if m.closed || m.launch != launch || ctx.Err() != nil {
-		m.mu.Unlock()
+	if !m.admit(ctx, launch) {
 		if r != nil {
 			r.Close()
 		}
 		return nil, errClosed
 	}
-	p, err := m.reaper.Start(spec)
-	if err == nil {
-		m.procs = append(m.procs, p)
+	defer m.pending.Add(-1)
+	if m.hook != nil {
+		m.hook("spawn " + strings.Join(args[1:], " "))
 	}
-	m.mu.Unlock()
+	p, err := m.reaper.Start(spec)
 	if err != nil {
 		if r != nil {
 			r.Close()
 		}
 		return nil, err
+	}
+	m.mu.Lock()
+	// Tracked before anything else, so Alive and the stop sequence see it.
+	m.procs = append(m.procs, p)
+	cancelled := m.closed || m.launch != launch || ctx.Err() != nil
+	m.mu.Unlock()
+	if cancelled {
+		_ = p.KillGroup()
+		if r != nil {
+			r.Close()
+		}
+		return nil, errClosed
 	}
 	if r != nil {
 		go func() {
@@ -331,6 +361,17 @@ func (m *nbManager) spawn(ctx context.Context, launch int, args []string, env []
 		}()
 	}
 	return p, nil
+}
+
+// admit counts a process creation in flight if the launch may still start one.
+func (m *nbManager) admit(ctx context.Context, launch int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.launch != launch || ctx.Err() != nil {
+		return false
+	}
+	m.pending.Add(1)
+	return true
 }
 
 // probe runs a short NetBird command (status check), killing its group if it
@@ -449,7 +490,7 @@ func (m *nbManager) run(ctx context.Context, info launchInfo, done chan struct{}
 	if ctx.Err() != nil {
 		return
 	}
-	m.emit(nbEvent{kind: nbStarted, launch: launch, offset: offset})
+	m.emit(nbEvent{kind: nbStarted, launch: launch, offset: offset, at: info.at})
 	select {
 	case <-svc.Reaped():
 		ws, _ := svc.Status()

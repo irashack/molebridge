@@ -1,6 +1,7 @@
 package exit
 
 import (
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"os"
@@ -290,7 +291,11 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 			// it does not decide what is forwarded for clients, which the routing
 			// contract already confines. The worker still reads the profile again
 			// after `netbird up` and stops NetBird if the entry is not effective.
-			if !coversInterface(env["NB_EXTRA_IFACE_BLACKLIST"], cfg.ExitIf) {
+			entries, err := netbirdExtraBlacklist(env)
+			if err != nil {
+				return nil, err
+			}
+			if !coversInterface(entries, cfg.ExitIf) {
 				return nil, refuse("NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface %s (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it", cfg.ExitIf)
 			}
 		}
@@ -305,12 +310,55 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	return s, nil
 }
 
-// coversInterface applies NetBird's blacklist rule to a comma-separated list:
-// an entry matches an interface whose name begins with it
-// (client/internal/stdnet/filter.go, strings.HasPrefix). Entries are taken as
-// written: no trimming, and an empty entry matches nothing.
-func coversInterface(list, iface string) bool {
-	for _, entry := range strings.Split(list, ",") {
+// netbirdExtraBlacklist is the list `netbird up` ends up with for
+// --extra-iface-blacklist when the environment sets it, read as NetBird 0.80.0
+// reads it (client/cmd/root.go SetFlagsFromEnvVars, spf13/pflag's
+// StringSliceVar): for the old WT_ name and then the NB_ name, a variable that
+// is present (even empty) is given to the flag, whose value is Go's
+// encoding/csv reading of the text, one record, no trimming, no lazy quotes;
+// the first value replaces the default and the second is appended to it. A
+// value NetBird cannot parse is logged by NetBird and ignored, so it names no
+// interface at all: here it is a refusal.
+//
+// An empty entry is refused too. NetBird compares with strings.HasPrefix, to
+// which an empty entry is a prefix of every name, so it would blacklist every
+// interface, the overlay's own addresses included, and leave NetBird unable to
+// connect; nobody writes it on purpose.
+func netbirdExtraBlacklist(env map[string]string) ([]string, error) {
+	var out []string
+	for _, name := range []string{"WT_EXTRA_IFACE_BLACKLIST", "NB_EXTRA_IFACE_BLACKLIST"} {
+		v, set := env[name]
+		if !set {
+			continue
+		}
+		entries, err := readAsCSV(v)
+		if err != nil {
+			return nil, refuse("%s is not a list NetBird can read (comma-separated, with CSV quoting); NetBird would ignore it", name)
+		}
+		for _, e := range entries {
+			if e == "" {
+				return nil, refuse("%s has an empty entry, which NetBird reads as every interface", name)
+			}
+		}
+		out = append(out, entries...)
+	}
+	return out, nil
+}
+
+// readAsCSV is pflag's: the empty text is an empty list, anything else is the
+// first record of an encoding/csv reader with its defaults.
+func readAsCSV(val string) ([]string, error) {
+	if val == "" {
+		return []string{}, nil
+	}
+	return csv.NewReader(strings.NewReader(val)).Read()
+}
+
+// coversInterface applies NetBird's blacklist rule to parsed entries: an entry
+// matches an interface whose name begins with it
+// (client/internal/stdnet/filter.go, strings.HasPrefix).
+func coversInterface(entries []string, iface string) bool {
+	for _, entry := range entries {
 		if entry != "" && strings.HasPrefix(iface, entry) {
 			return true
 		}
