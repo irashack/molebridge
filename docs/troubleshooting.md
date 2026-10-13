@@ -747,8 +747,8 @@ reported as connected in this state. The exit found one of these:
   show `table ip netbird` (NetBird's nftables backend) or `table ip filter` holding chains
   named `NETBIRD-…`. The check looks for those names, so a renamed table
   (`NB_NFTABLES_TABLE`) fails it. The image has no iptables, so NetBird uses nftables; the
-  kernel needs `nf_tables` ([requirements](prerequisites.md#host)). That NetBird starts on
-  that path in this image is a design assumption the live passes at 0.8.0 are to confirm.
+  kernel needs `nf_tables` ([requirements](prerequisites.md#host)). The 0.8.0 live pass saw
+  NetBird on that path ([testing](testing.md#080)).
 
 ## Clients
 

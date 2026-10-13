@@ -63,9 +63,9 @@ reads a 0.8.0 exit ([changelog](../CHANGELOG.md)). What moved:
 - **One binary, one signed image.** The Python applier and panel and the
   routing shell scripts are Go in `cmd/molebridge`, selected by role. The
   native stack is two containers (`exit` and `switchyard`) where 0.7 had
-  four, and nothing is built on your host. The only shell script that still
-  runs in a container is `routing/gluetun-preflight`, gluetun's entrypoint
-  wrapper.
+  four, and nothing is built on your host. The only shell script that runs
+  at runtime is `routing/gluetun-preflight`, gluetun's entrypoint wrapper;
+  the rest are release and test tooling in `tools/`.
 - **A supervisor and a worker instead of a gate.** In 0.7 the tunnel key and
   the provider logic were in different containers, with a gate and an
   owner-record file between the routing owner and NetBird. Now one process
@@ -190,6 +190,9 @@ the boot clock, and checks the lease deadline on its own timer.
 
 1. The settings were validated by the supervisor before the worker started.
    A refusal exits with status 1 and one line, before anything changes. The
+   provider's own settings (the gluetun API key file, control URL and updater
+   period; PIA's port-forwarding settings) are read later, after step 4 and
+   before NetBird starts; a refusal there also exits with status 1. The
    supervisor also creates `state/applier` if it is missing and writes and
    removes a probe file there, so an unwritable state directory is a refusal
    too ([troubleshooting](troubleshooting.md#startup)).
@@ -887,7 +890,7 @@ default role that includes `PUT /v1/vpn/status`, so `compose.gluetun.yaml`
 binds it in a way that makes Compose fail when it is missing. gluetun logs
 a role file it can't decode with an excerpt of the offending line, which
 could include the key, so gluetun starts through `routing/gluetun-preflight`,
-the one shell script left in the project: a short busybox `sh` script that runs
+the one runtime shell script in the project: a short busybox `sh` script that runs
 inside gluetun's container as its entrypoint wrapper on every start,
 including restart-policy restarts. It accepts only the exact file
 `gluetun-auth` writes and refuses anything else with a fixed message that
@@ -1120,7 +1123,7 @@ IPv4 endpoint, and keeps the last good catalog when the file fails to
 parse, as it does while gluetun rewrites it in place. It checks the file
 every minute and reads it again when it changed, or at least every six
 hours. gluetun dates each provider's data when it last changed; the panel
-and `molebridge status` show that date and call the data stale after 30 days.
+shows that date and calls the data stale after 30 days.
 gluetun's updater refreshes it every `GLUETUN_UPDATER_PERIOD` (24 hours by
 default), first one period after gluetun starts, so a fresh install would
 list gluetun's built-in data, which is from 2024 for NordVPN in v3.41.3.
@@ -1793,9 +1796,9 @@ S256 must be among them.
 token from the token endpoint's answer, over a TLS connection it has verified
 against the container's CA store. OpenID Connect Core 1.0 section 3.1.3.7
 allows the client to rely on TLS server validation instead of checking the
-signature when the token comes directly from the token endpoint. The standard
-library has no RSA or elliptic-curve signature verification, so the panel uses
-that allowance and stays free of a dependency. It does refuse a token whose
+signature when the token comes directly from the token endpoint. The panel
+uses that allowance, so it never fetches, caches or rotates the provider's
+signing keys (its JWKS). It does refuse a token whose
 header says `none` or whose signature part is empty, but it does not verify the
 signature. It checks that:
 

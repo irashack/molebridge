@@ -1,6 +1,5 @@
-# Molebridge with gluetun as the tunnel backend. EXPERIMENTAL: one live pass,
-# with NordVPN on Docker; see docs/architecture.md#gluetun-backend and
-# docs/testing.md#gluetun-backend-pass-at-a3bb14f.
+# Molebridge with gluetun as the tunnel backend. EXPERIMENTAL; see
+# docs/gluetun-netbird-exit.md, and docs/testing.md#080 for what was tested.
 #
 # Use this file instead of compose.yaml, not on top of it:
 #   COMPOSE_FILE=compose.gluetun.yaml   (in .env)

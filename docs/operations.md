@@ -362,8 +362,8 @@ putting 0.7's files back and starting them: the state files stayed readable.
 
 ### What the exit checks at start
 
-It reports before it changes anything, with one line per refusal and nothing
-taken from a secret file: that the provider, backend and kind agree; that the
+Most checks run before the exit changes anything, with one line per refusal
+and nothing taken from a secret file. They check that the provider, backend and kind agree; that the
 tunnel config (native only) is a regular readable file, not a symlink, within
 4 KiB, with no NUL or carriage return, and in the exact grammar the tools write,
 with its table the same as `EXIT_TABLE`; that `state/applier` exists and is
@@ -371,13 +371,17 @@ writable; that `NB_INTERFACE_NAME` is `OVERLAY_IF`; that NetBird's environment
 and stored profile are the supported ones and the profile excludes the tunnel
 interface (or, with no profile yet, that `NB_EXTRA_IFACE_BLACKLIST` names it);
 what it found of the NetBird identity; for gluetun, that the control server
-listens on loopback only and the API key file is a regular file of mode 0600 or
-stricter; and, as a warning, the namespace's `icmp_errors_use_inbound_ifaddr`
-sysctl. It does not check the mode of the tunnel config or of the PIA credential
+listens on loopback only; and, as a warning, the namespace's
+`icmp_errors_use_inbound_ifaddr` sysctl. The provider's own settings are read
+later, after the routing rules are installed and before NetBird starts: the
+gluetun API key file (a regular file of mode 0600 or stricter), the control
+URL and `GLUETUN_UPDATER_PERIOD`, and PIA's `PIA_PORT_FORWARD` settings. A
+refusal there logs `applier: invalid configuration or unavailable state` and
+the reason, and the exit stops with nothing admitted. It does not check the mode of the tunnel config or of the PIA credential
 files: they are only read, and a wrong mode is yours to check
 ([below](#host-checks)). The messages are in
-[troubleshooting](troubleshooting.md#startup). `check-config` makes the checks
-that need no running exit.
+[troubleshooting](troubleshooting.md#startup). `check-config` makes the first set of checks only; it does not
+read the provider's settings.
 
 ### Host checks
 

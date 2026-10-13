@@ -1,5 +1,5 @@
-# The gluetun sidecar (EXIT_KIND=sidecar). EXPERIMENTAL: no live pass yet;
-# see docs/gluetun-sidecar.md.
+# The gluetun sidecar (EXIT_KIND=sidecar). EXPERIMENTAL; see
+# docs/gluetun-sidecar.md, and docs/testing.md#080 for what was tested.
 #
 # Use this file instead of compose.yaml, not on top of it:
 #   COMPOSE_FILE=compose.sidecar.yaml   (in .env, from .env.sidecar.example)
