@@ -8,3 +8,6 @@ tunnel/gluetun/
 *.conf
 !internal/**/testdata/**/*.conf
 .claude/settings.local.json
+
+# Compiled test binaries (go test -c)
+*.test

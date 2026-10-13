@@ -21,7 +21,7 @@
     <text x="56" y="72" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">SELF-HOSTED NETBIRD EXIT NODE</text>
     <text x="52" y="146" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
     <text x="56" y="192" fill="#b8c0e0" font-size="26">Your NetBird network, out through any VPN.</text>
-    <text x="56" y="272" fill="#a5adcb" font-size="13" letter-spacing="1.4">MULLVAD · PIA · NORDVPN · SIX MORE VIA GLUETUN</text>
+    <text x="56" y="272" fill="#a5adcb" font-size="13" letter-spacing="1.4">MULLVAD · PIA · NORDVPN · FOUR MORE VIA GLUETUN</text>
     <text x="1144" y="272" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">FAILS CLOSED · DOCKER OR PODMAN</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
