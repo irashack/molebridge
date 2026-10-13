@@ -2,8 +2,17 @@
 
 Run these on your own host before relying on the exit, and again after
 changing routing, the tunnel config, Compose networking or the image.
-[Testing](testing.md) records which checks have run and on which platforms; at
-0.8.0 none of the live ones have yet.
+[Testing](testing.md) records which checks have run and on which platforms. At
+0.8.0, and only on rootless Podman with Quadlet:
+
+- **Ran live**, from inside the exit's namespace with no client device: the
+  repair drills (rules 1, 95 and 97 in IPv4, rule 97 in IPv6, the exit table's
+  tunnel route, and a foreign rule at priority 96), tunnel loss, and a frozen
+  worker, on native Mullvad, PIA and NordVPN exits. The gluetun exits were
+  upgraded from 0.7.0 and reported healthy, but were not drilled.
+- **Not run at 0.8.0**: the drills with a client holding the exit (last run at
+  0.7.0), the other rows of the drill tables below, the status drills, the
+  client checks, PIA port forwarding, and everything on Docker Engine.
 
 Keep an independent host access path. Do not share raw addresses or peer
 information from diagnostics. Never run `wg showconf`, `wg show ... dump` or
@@ -174,22 +183,21 @@ exit's log while you run them: `docker compose logs -f exit`.
 | Drill | Break (in the shell) | Expect |
 |---|---|---|
 | Tunnel down | `ip link del mullvad` | The probe fails until the exit brings the tunnel back by itself: `molebridge-exit: bringing the tunnel up`, then `molebridge-exit: tunnel up`. |
-| IPv4 route deleted | `ip route del default dev mullvad table 51821` | The probe fails on the unreachable fallback until the repair logs `molebridge-exit: molebridge: IPv4 tunnel route through mullvad restored`. |
-| IPv6 route deleted (dual-stack Mullvad only) | `ip -6 route del default dev mullvad table 51821` | The same for IPv6: `molebridge-exit: molebridge: IPv6 tunnel route through mullvad restored`. |
-| IPv4 lookup rule deleted | `ip rule del priority 95` | The probe fails on rule 97 until `molebridge-exit: molebridge: added IPv4 rule 95`. |
-| IPv6 lookup rule deleted | `ip -6 rule del priority 95` | The same for IPv6: `molebridge-exit: molebridge: added IPv6 rule 95`. |
-| Terminal rule deleted | `ip rule del priority 97` | The probe keeps working through rule 95 and the tunnel; then `molebridge-exit: molebridge: added IPv4 rule 97`. |
-| Fallback deleted | `ip route del unreachable default metric 4096 table 51821` | The probe keeps working through the tunnel route; then `molebridge-exit: molebridge: IPv4 unreachable fallback in table 51821 restored`. |
-| Return path deleted (Mullvad, NordVPN) | `ip rule del priority 94` | Until `molebridge-exit: molebridge: added IPv4 rule 94`, `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` in the shell fails as unreachable (rule 98) instead of naming the host's interface. |
-| Inserted bypass | `ip rule add lookup main priority 50` | Removed by the repair: `molebridge-exit: molebridge: removed IPv4 rule 50: from all lookup main`. Nothing is promised about traffic before that. |
+| IPv4 route deleted | `ip route del default dev mullvad table 51821` | The probe fails on the unreachable fallback until the repair logs `molebridge-exit: IPv4 tunnel route through mullvad restored`. |
+| IPv6 route deleted (dual-stack Mullvad only) | `ip -6 route del default dev mullvad table 51821` | The same for IPv6: `molebridge-exit: IPv6 tunnel route through mullvad restored`. |
+| IPv4 lookup rule deleted | `ip rule del priority 95` | The probe fails on rule 97 until `molebridge-exit: added IPv4 rule 95`. |
+| IPv6 lookup rule deleted | `ip -6 rule del priority 95` | The same for IPv6: `molebridge-exit: added IPv6 rule 95`. |
+| Terminal rule deleted | `ip rule del priority 97` | The probe keeps working through rule 95 and the tunnel; then `molebridge-exit: added IPv4 rule 97`. |
+| Fallback deleted | `ip route del unreachable default metric 4096 table 51821` | The probe keeps working through the tunnel route; then `molebridge-exit: IPv4 unreachable fallback in table 51821 restored`. |
+| Return path deleted (Mullvad, NordVPN) | `ip rule del priority 94` | Until `molebridge-exit: added IPv4 rule 94`, `ip route get 198.51.100.1 from <tunnel IPv4 address> ipproto icmp` in the shell fails as unreachable (rule 98) instead of naming the host's interface. |
+| Inserted bypass | `ip rule add lookup main priority 50` | Removed by the repair: `molebridge-exit: removed IPv4 rule 50: from all lookup main`. Nothing is promised about traffic before that. |
 | Wrong action at a protected priority | `ip rule del priority 97; ip rule add iif wt0 lookup main priority 97` | The rule is corrected and the change logged. Until then, forwarded traffic is held by rule 95 and the exit table, not by 97. |
 | Worker hung | `docker exec molebridge-exit pkill -STOP -f 'exit --work[e]r'`, and leave it | The tunnel and NetBird keep forwarding while the lease lasts. After `GUARD_GRACE` seconds `molebridge-exit: stopping (lease lapsed)` appears, NetBird is stopped (TERM at once, KILL at 6 seconds), the tunnel and overlay interfaces are removed, the container exits with status 1 and its restart policy starts it again. The panel shows the exit as failed, "exit owner stopped responding", within the lapse time, and `/readyz` returns 503. |
 | NetBird killed | `docker exec molebridge-exit pkill -KILL -x netbird` | The supervisor notices (`molebridge-exit: NetBird stopped unexpectedly: ...`), runs the stop sequence and exits with status 1; the restart policy starts a clean container. |
 | Container stopped | `docker compose stop exit` | The probe fails, the exit's log has `molebridge-exit: stopping (requested)` and ends `molebridge-exit: stopped (requested, exit 0); the routing guards stay in place`. Restore with `docker compose up -d exit`. |
 
-On PIA, rules 94 and 98 belong to the PIA transaction, which puts a deleted one back
-within one pass of the exit's loop (normally 5 seconds, longer during a switch or
-periodic check), without a log line. After each drill, confirm provider egress returns
+On PIA, rules 94 and 98 exist only once registration has supplied the tunnel address;
+from then on the exit repairs them like the others. After each drill, confirm provider egress returns
 on the supported families. After the tunnel-down drill, the exit reapplies the saved
 server or region when the interface returns. A failed switch is retried by itself on
 its backoff, and clears at a later check when its server is live and verified
@@ -276,8 +284,10 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8095/readyz
 docker compose exec exit molebridge status | head -n 2
 ```
 
-Add `?exit=<id>` on a panel serving several exits. `ok` / `connected` goes with `/readyz` 200 and `state: ok
-(connected)`; anything else goes with 503 and `state:` followed by the same label and reason codes.
+Add `?exit=<id>` on a panel serving several exits. `ok` / `connected` goes with `/readyz` 200 (body `ready`) and
+`state: ok (connected)` from `molebridge status`; anything else goes with 503 (body `not ready`) and a `state:` line
+from `molebridge status` with the same label, followed by a `reasons:` line with the reason codes. The panel's
+`/readyz` body carries no reasons; `/api/status` and `molebridge status` do.
 
 ### Status drills
 
