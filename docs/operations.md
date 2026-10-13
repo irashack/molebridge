@@ -498,11 +498,10 @@ exit $status
 For example, `sh attach.sh molebridge-gluetun molebridge-exit my-downloader`.
 Every line must be `PASS`. A `FAIL ... is not in ...'s current namespace` means
 that member was left behind: recreate gluetun and the member together
-([recovery](#recovery)). The procedure was run on Docker against throwaway
-containers, including an owner restarted under the same id (the case the check
-exists for), a stopped member and a missing one; [testing](testing.md#080) does
-not record that run. On rootless Podman it has not been run in this form; the
-probe is the same one the 0.7 sidecar doctor used there.
+([recovery](#recovery)). Name every member explicitly: a list built from
+`docker compose ps -q` leaves out stopped containers, so they would never be
+checked. This script is new in 0.8.0 and no run of it is recorded in
+[testing](testing.md#080), on Docker or on Podman.
 
 ## NetBird interface blacklist
 
