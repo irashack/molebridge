@@ -131,7 +131,7 @@ func TestAHealthyContractHasNoEscape(t *testing.T) {
 		if v := s.Violations(); len(v) != 0 {
 			t.Errorf("%s: %v", name, v)
 		}
-		pts := allPoints(s)
+		pts, _ := allPoints(s)
 		if len(pts) < 100 {
 			t.Errorf("%s: only %d points", name, len(pts))
 		}
@@ -538,4 +538,116 @@ func indexOf(rs []rtnl.Rule, priority uint32) int {
 		}
 	}
 	return -1
+}
+
+// Round 8: a selector the model can evaluate is evaluated per point. A TOS-16
+// ICMP protection at priority 50 stops only TOS-16 ICMP; other TOS values
+// already escape to main (94/98 are missing), and they used to excuse the new
+// escape of the TOS-16 traffic that deleting rule 50 opens.
+func TestATOSQualifiedProtectionIsNotExcusedByOtherTOSValues(t *testing.T) {
+	s := nativeState(t)
+	protect := rtnl.Rule{Family: rtnl.V4, Priority: 50, Action: rtnl.FRActUnreachable, IPProto: rtnl.Some(uint8(1)), Src: netip.PrefixFrom(tunnel4, 32), Tos: 16}
+	s = s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule {
+		return append(filter(r, func(x rtnl.Rule) bool { return x.Priority != 94 && x.Priority != 98 }), protect)
+	})
+	if len(s.Violations()) == 0 {
+		t.Fatal("the premise: ICMP of other TOS values escapes")
+	}
+	after, ok := s.WithoutRule(protect)
+	if !ok {
+		t.Fatal("nothing deleted")
+	}
+	v := Worsens(s, after)
+	if len(v) == 0 {
+		t.Fatal("deleting the TOS-16 protection was approved")
+	}
+	for _, x := range v {
+		if !strings.Contains(x.Packet, "tos 0x10") {
+			t.Errorf("the opened packet is not the TOS-16 traffic: %v", x)
+		}
+	}
+}
+
+// Ports, uid and l3mdev are evaluated too.
+func TestPortUIDAndVRFSelectorsAreEvaluatedPerPoint(t *testing.T) {
+	for name, attr := range map[string]rtnl.RawAttr{"source ports": rtnl.PortRangeAttr(true, 1000, 2000), "destination ports": rtnl.PortRangeAttr(false, 1000, 2000), "uid": rtnl.UIDRangeAttr(1000, 2000)} {
+		s := nativeState(t)
+		// Overlay traffic in the range is stopped by a rule at 40; 95 and 97 are gone.
+		only := rtnl.Rule{Family: rtnl.V4, Priority: 40, Action: rtnl.FRActUnreachable, IifName: "wt0", Unknown: []rtnl.RawAttr{attr}}
+		s = s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule {
+			return append(filter(r, func(x rtnl.Rule) bool { return x.Priority != 95 && x.Priority != 97 }), only)
+		})
+		after, _ := s.WithoutRule(only)
+		v := Worsens(s, after)
+		if len(v) == 0 {
+			t.Errorf("%s: the protection of the range was not seen", name)
+			continue
+		}
+		// Only traffic in the range is protected, so only that gains an escape.
+		if name == "uid" {
+			continue
+		}
+		for _, x := range v {
+			if !strings.Contains(x.Packet, "ports") {
+				t.Errorf("%s: %v", name, x)
+			}
+		}
+	}
+	// l3mdev: a rule for flows in a VRF; the flows outside it do not match.
+	s := nativeState(t)
+	vrf := rtnl.Rule{Family: rtnl.V4, Priority: 40, Action: rtnl.FRActToTbl, Table: rtnl.TableMain, IifName: "wt0", L3Mdev: rtnl.Some(uint8(1))}
+	a := s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule { return append(r, vrf) })
+	if v := a.Violations(); len(v) == 0 {
+		t.Error("a rule for flows in a VRF that sends them to the main table is not an escape")
+	} else {
+		for _, x := range v {
+			if !strings.Contains(x.Packet, "in a VRF") {
+				t.Errorf("flows outside a VRF were caught by a VRF rule: %v", x)
+			}
+		}
+	}
+}
+
+// Conditions are kept: the same place reached under the other assumption about
+// a rule the model cannot decide is another outcome.
+func TestTheSameEscapeUnderADifferentAssumptionIsNew(t *testing.T) {
+	s := nativeState(t)
+	// A rule the model cannot decide ahead of the barriers: with it, outcomes
+	// carry its condition.
+	murky := rtnl.Rule{Family: rtnl.V4, Priority: 30, Action: rtnl.FRActToTbl, Table: rtnl.TableMain, IifName: "wt0", Unknown: []rtnl.RawAttr{{Type: 99, Data: []byte{1}}}}
+	a := s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule { return append(r, murky) })
+	// Deleting 95 and 97 leaves the murky rule the only thing that routes overlay traffic.
+	b := a.without(rtnl.V4, 95)
+	if v := Worsens(a, b); len(v) != 0 {
+		t.Errorf("97 backs up 95: %v", v)
+	}
+	c := b.without(rtnl.V4, 97)
+	if v := Worsens(b, c); len(v) == 0 {
+		t.Error("deleting the last barrier behind a rule the model cannot decide was approved")
+	}
+}
+
+// Two barriers the model cannot decide are each a way out of the escape: with
+// both unsure to apply, the packet escapes to main only if neither does. Take
+// one away and it escapes if the other does not - the same place, a weaker
+// condition, so a new outcome. Judging the place alone would excuse it.
+func TestAWeakerConditionForTheSameEscapeIsRefused(t *testing.T) {
+	s := nativeState(t)
+	murky := func(prio uint32, typ uint16) rtnl.Rule {
+		return rtnl.Rule{Family: rtnl.V4, Priority: prio, Action: rtnl.FRActUnreachable, IifName: "wt0", Unknown: []rtnl.RawAttr{{Type: typ, Data: []byte{1}}}}
+	}
+	m1, m2 := murky(30, 99), murky(40, 98)
+	s = s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule {
+		return append(filter(r, func(x rtnl.Rule) bool { return x.Priority != 95 && x.Priority != 97 }), m1, m2)
+	})
+	if len(s.Violations()) == 0 {
+		t.Fatal("the premise: with neither barrier applying, overlay traffic escapes")
+	}
+	after, ok := s.WithoutRule(m1)
+	if !ok {
+		t.Fatal("nothing deleted")
+	}
+	if v := Worsens(s, after); len(v) == 0 {
+		t.Error("deleting one of two uncertain barriers was approved")
+	}
 }

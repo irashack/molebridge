@@ -17,7 +17,7 @@ import (
 // interface, its addresses, its neighbors, then up.
 func (r *rig) recreate(up bool) {
 	r.t.Helper()
-	r.exit.IP("link", "add", exitIf, "type", "veth", "peer", "name", "tunnel0", "netns", r.tun.Name)
+	r.exit.Veth(exitIf, r.tun, "tunnel0")
 	r.tun.IP("link", "set", "tunnel0", "address", "02:00:00:00:03:02")
 	r.tun.IP("addr", "add", "203.0.113.2/24", "dev", "tunnel0")
 	r.tun.IP("-6", "addr", "add", "2001:db8:3::2/64", "dev", "tunnel0", "nodad")

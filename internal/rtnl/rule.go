@@ -442,3 +442,63 @@ func (r Rule) String() string {
 	}
 	return b.String()
 }
+
+// Attribute numbers of selectors the codec keeps raw (linux/fib_rules.h).
+const (
+	fraUIDRange   = 20
+	fraSportRange = 23
+	fraDportRange = 24
+	fraDSCP       = 25
+)
+
+// Ext is the selectors of a rule that Unknown holds in raw form and that the
+// policy model can evaluate exactly: a uid range (FRA_UID_RANGE, two host-order
+// u32), source and destination port ranges (FRA_SPORT_RANGE, FRA_DPORT_RANGE,
+// two host-order u16), and a DSCP (FRA_DSCP, one byte). Other is set when the
+// rule carries any other attribute, or one of these with the wrong shape: those
+// selectors cannot be evaluated, and the rule may or may not apply.
+type Ext struct {
+	UID, Sport, Dport *[2]uint32
+	DSCP              *uint8
+	Other             bool
+}
+
+// Ext decodes the raw attributes of the rule.
+func (r Rule) Ext() Ext {
+	var e Ext
+	for _, a := range r.Unknown {
+		switch {
+		case a.Type == fraUIDRange && len(a.Data) == 8:
+			e.UID = &[2]uint32{native.Uint32(a.Data[0:4]), native.Uint32(a.Data[4:8])}
+		case (a.Type == fraSportRange || a.Type == fraDportRange) && len(a.Data) == 4:
+			p := &[2]uint32{uint32(native.Uint16(a.Data[0:2])), uint32(native.Uint16(a.Data[2:4]))}
+			if a.Type == fraSportRange {
+				e.Sport = p
+			} else {
+				e.Dport = p
+			}
+		case a.Type == fraDSCP && len(a.Data) == 1:
+			v := a.Data[0]
+			e.DSCP = &v
+		default:
+			e.Other = true
+		}
+	}
+	return e
+}
+
+// UIDRangeAttr, PortRangeAttr and DSCPAttr build the raw attributes (tests and
+// tools that need a rule with such a selector).
+func UIDRangeAttr(start, end uint32) RawAttr {
+	return RawAttr{Type: fraUIDRange, Data: native.AppendUint32(native.AppendUint32(nil, start), end)}
+}
+
+func PortRangeAttr(source bool, start, end uint16) RawAttr {
+	t := uint16(fraDportRange)
+	if source {
+		t = fraSportRange
+	}
+	return RawAttr{Type: t, Data: native.AppendUint16(native.AppendUint16(nil, start), end)}
+}
+
+func DSCPAttr(v uint8) RawAttr { return RawAttr{Type: fraDSCP, Data: []byte{v}} }

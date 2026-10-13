@@ -1034,50 +1034,72 @@ func TestASilentChangeBetweenTwoLooksIsNotStable(t *testing.T) {
 	}
 }
 
-func TestARuleTwiceInOneDumpIsNeverStable(t *testing.T) {
+// A rule that is really there twice is not instability: the kernel refuses an
+// identical rule only for a request with NLM_F_EXCL, and `ip rule restore`
+// sends none. Both looks show it twice, so the snapshot says so and stable, and
+// the owner can remove the duplicate through its deletion check.
+func TestARuleReallyThereTwiceIsAStableSnapshotWithBothCopies(t *testing.T) {
+	for name, churn := range map[string]*fakeChurn{"with a subscription": {}, "without": nil} {
+		c, _ := newFake(t, func(n int, r request) [][]byte {
+			if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
+				return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+			}
+			return ordinary(n, r)
+		})
+		if churn != nil {
+			c.churn = churn
+		}
+		s, err := c.Take(Interest{})
+		if err != nil || s.Unstable {
+			t.Fatalf("%s: %+v %v", name, s, err)
+		}
+		if n := len(s.Rules[V4]); n != 2 {
+			t.Errorf("%s: %d rules, want the rule twice", name, n)
+		}
+	}
+}
+
+// A repeat shown by two looks in a row but not by the confirming ones is still
+// an artifact: a rule really there twice is in every look.
+func TestARepeatThatTheConfirmingLooksDoNotShowIsInstability(t *testing.T) {
 	churn := &fakeChurn{}
+	var v4 atomic.Int32
 	c, _ := newFake(t, func(n int, r request) [][]byte {
-		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
-			// Every look repeats rule 95, as the kernel's unlocked dump does
-			// when the list changes under it: identical in both looks and still wrong.
-			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule && r.data[0] == 2 {
+			if v4.Add(1) <= 2 { // the first two looks
+				return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+			}
+			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
 		}
 		return ordinary(n, r)
 	})
 	c.churn = churn
 	s, err := c.Take(Interest{})
-	if err != nil || !s.Unstable {
-		t.Fatalf("a dump with a rule twice was returned stable: %+v %v", s, err)
-	}
-	// Without a subscription too.
-	c2, _ := newFake(t, func(n int, r request) [][]byte {
-		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
-			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
-		}
-		return ordinary(n, r)
-	})
-	if s, err := c2.Take(Interest{}); err != nil || !s.Unstable {
-		t.Fatalf("without a subscription: %+v %v", s, err)
+	if err != nil || s.Unstable || len(s.Rules[V4]) != 1 {
+		t.Fatalf("%+v %v", s, err)
 	}
 }
 
-func TestRulesThatDifferInTheirPriorityOrSelectorsAreNotRepeats(t *testing.T) {
-	a := Rule{Family: V4, Priority: 95, Action: FRActUnreachable, IifName: "wt0"}
-	b := a
-	b.IifName = "wt1"
-	c := a
-	c.Priority = 96
-	d := a
-	d.Protocol = Some(uint8(3))
-	for name, r := range map[string]Rule{"selector": b, "priority": c, "installer": d} {
-		if err := inconsistent(&Snapshot{Rules: map[Family][]Rule{V4: {a, r}}}); err != nil {
-			t.Errorf("%s: %v", name, err)
+// A repeat that is in one look and not in the other is an artifact of the dump.
+func TestARepeatInOneLookOnlyIsInstability(t *testing.T) {
+	churn := &fakeChurn{}
+	var rules atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
+			if rules.Add(1) == 1 { // the first family of the first look repeats a rule
+				return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+			}
+			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
 		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil || s.Unstable {
+		t.Fatalf("%+v %v", s, err)
 	}
-	e := a
-	e.Flags |= FIBRuleInvert // the kernel refuses an add that differs only in this
-	if inconsistent(&Snapshot{Rules: map[Family][]Rule{V4: {a, e}}}) == nil {
-		t.Error("rules alike but for the invert flag are not a repeat")
+	if n := len(s.Rules[V4]); n != 1 {
+		t.Errorf("the snapshot kept the repeat: %d rules", n)
 	}
 }
 

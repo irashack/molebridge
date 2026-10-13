@@ -27,7 +27,11 @@ func (c *Conn) Take(in Interest) (*Snapshot, error) { return c.TakeContext(conte
 // deadline covers every dump and every retry, and cancellation is checked
 // between dumps.
 //
-// A snapshot is taken twice and used only if the two agree. If any dump is marked
+// A snapshot is taken twice and used only if the two agree, multiplicity
+// included: a rule that is really there twice (ip rule restore adds each rule
+// again; the kernel refuses an identical rule only on a request with
+// NLM_F_EXCL) is in both looks twice, and one that is in one look only is an
+// artifact of the dump, so the looks disagree. If any dump is marked
 // NLM_F_DUMP_INTR (on an entry or on NLMSG_DONE), or the request stream has to
 // be replaced because a reply was lost, late or out of sequence, everything
 // read so far is discarded and the whole snapshot is taken again on the
@@ -92,9 +96,20 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 					lastSnap = s
 					continue
 				}
-				if !reflect.DeepEqual(s, again) || inconsistent(again) != nil {
+				if !reflect.DeepEqual(s, again) {
 					lastSnap, last = again, ErrInconsistent
 					continue
+				}
+				if hasRepeats(again) {
+					// A rule twice is real (ip rule restore does it) or an
+					// artifact of the dump; real ones are in every look.
+					if more, merr := c.confirmRepeats(ctx, in, again); merr != nil || !more {
+						if merr != nil && !errors.Is(merr, errInterrupted) && !(IsStreamError(merr) && !errors.Is(merr, os.ErrDeadlineExceeded)) {
+							return nil, merr
+						}
+						lastSnap, last = again, ErrInconsistent
+						continue
+					}
 				}
 				// Every change to the rules holds the rtnl lock from the moment it
 				// updates the list until it has notified, and the dump holds
@@ -138,7 +153,17 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 			}
 			var again *Snapshot
 			if again, err = c.takeOnce(ctx, in); err == nil {
-				if reflect.DeepEqual(s, again) && inconsistent(again) == nil {
+				if reflect.DeepEqual(s, again) {
+					if hasRepeats(again) {
+						if more, merr := c.confirmRepeats(ctx, in, again); merr != nil || !more {
+							if merr != nil && !errors.Is(merr, errInterrupted) && !(IsStreamError(merr) && !errors.Is(merr, os.ErrDeadlineExceeded)) {
+								return nil, merr
+							}
+							lastSnap = again
+							last = ErrInconsistent
+							continue
+						}
+					}
 					if eerr := c.expired(ctx); eerr != nil {
 						return nil, eerr
 					}
@@ -190,27 +215,28 @@ func IsKernelRefusal(err error) bool {
 	return errors.As(err, &ke)
 }
 
-// inconsistent reports a snapshot that cannot be what the kernel held: the FIB
-// rule dump of the kernels measured repeats a rule when the list changes
-// under it, and the kernel never holds two rules alike (rule_exists refuses
-// the second), so a rule twice in one dump is an artifact of the dump.
-func inconsistent(s *Snapshot) error {
-	for f, rules := range s.Rules {
+// repeatLooks is how many more looks must show a rule twice before it is
+// believed.
+const repeatLooks = 2
+
+// hasRepeats reports a rule that is in the snapshot more than once: two rules
+// of one priority and the same selectors, action and installer.
+func hasRepeats(s *Snapshot) bool {
+	for _, rules := range s.Rules {
 		seen := map[string]bool{}
 		for _, r := range rules {
 			k := ruleIdentity(r)
 			if seen[k] {
-				return fmt.Errorf("%w: the %s rule dump holds %s twice", ErrInconsistent, f, k)
+				return true
 			}
 			seen[k] = true
 		}
 	}
-	return nil
+	return false
 }
 
-// ruleIdentity is what the kernel compares to call two rules the same: the
-// priority, every selector and the action, and who installed it; not the
-// invert flag, nor the detached markers.
+// ruleIdentity is what the kernel compares to call two rules alike: the
+// priority, every selector and the action, and who installed it.
 func ruleIdentity(r Rule) string {
 	var items []string
 	for _, it := range r.Items() {
@@ -219,6 +245,23 @@ func ruleIdentity(r Rule) string {
 		}
 	}
 	return fmt.Sprintf("%d %v proto %d", r.Priority, items, r.Protocol.V)
+}
+
+// confirmRepeats takes more looks and says whether they all agree with the
+// snapshot. The dump of the kernels measured repeats a rule when the list
+// changes under it and nothing in the dump says so; a rule that is really
+// there twice is in every look, an artifact is not.
+func (c *Conn) confirmRepeats(ctx context.Context, in Interest, s *Snapshot) (bool, error) {
+	for i := 0; i < repeatLooks; i++ {
+		more, err := c.takeOnce(ctx, in)
+		if err != nil {
+			return false, err
+		}
+		if !reflect.DeepEqual(s, more) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // expired reports ErrDeadline once the operation's deadline (the context's or
