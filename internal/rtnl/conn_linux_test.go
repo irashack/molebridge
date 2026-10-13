@@ -130,6 +130,31 @@ func (k *fakeKernelEnd) open() (transport, error) {
 	return &fileTransport{f: conn}, nil
 }
 
+// dumps counts the dump requests only (a snapshot also sends one barrier).
+func (k *fakeKernelEnd) dumps() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := 0
+	for _, r := range k.requests {
+		if r.flags&nlmDump == nlmDump {
+			n++
+		}
+	}
+	return n
+}
+
+func (k *fakeKernelEnd) barriers() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	n := 0
+	for _, r := range k.requests {
+		if r.typ == rtmNewLink {
+			n++
+		}
+	}
+	return n
+}
+
 func (k *fakeKernelEnd) count() int { k.mu.Lock(); defer k.mu.Unlock(); return len(k.requests) }
 
 func newFake(t *testing.T, h kernelFn) (*Conn, *fakeKernelEnd) {
@@ -581,8 +606,8 @@ func TestASnapshotDuringWhichTheKernelChangedIsTakenAgain(t *testing.T) {
 	if err != nil || s.Unstable {
 		t.Fatalf("%+v %v", s, err)
 	}
-	if got := k.count(); got != 7+7 {
-		t.Fatalf("%d dumps: one snapshot discarded, one kept", got)
+	if got := k.dumps(); got != 14+14 {
+		t.Fatalf("%d dumps: one pair of looks discarded, one kept", got)
 	}
 }
 
@@ -596,8 +621,8 @@ func TestChangesElsewhereDoNotSpoilASnapshot(t *testing.T) {
 	})
 	c.churn = churn
 	s, err := c.Take(Interest{Tables: []uint32{51821}})
-	if err != nil || s.Unstable || k.count() != 7 {
-		t.Fatalf("%+v %v (%d dumps)", s, err, k.count())
+	if err != nil || s.Unstable || k.dumps() != 14 {
+		t.Fatalf("%+v %v (%d dumps)", s, err, k.dumps())
 	}
 	// A route in a table the snapshot reads, or a link or address change, does.
 	for _, e := range []Event{{Kind: EventRoute, Table: 51821}, {Kind: EventLink, Name: "wg0"}, {Kind: EventAddr}, {Kind: EventRoute, Table: 254, Err: errors.New("undecodable")}} {
@@ -635,8 +660,8 @@ func TestLostChangeNotificationsSpoilTheSnapshotToo(t *testing.T) {
 	})
 	c.churn = churn
 	s, err := c.Take(Interest{})
-	if err != nil || s.Unstable || k.count() != 14 {
-		t.Fatalf("%+v %v (%d dumps)", s, err, k.count())
+	if err != nil || s.Unstable || k.dumps() != 28 {
+		t.Fatalf("%+v %v (%d dumps)", s, err, k.dumps())
 	}
 }
 
@@ -974,5 +999,140 @@ func TestInterruptEndsARequestInFlightAndTheNextOneReconnects(t *testing.T) {
 	stalled.Store(false)
 	if err := c.SetLinkUp(7); err != nil {
 		t.Fatalf("after the interrupt: %v", err)
+	}
+}
+
+// ---- finding: a change whose notification is late is not a stable snapshot ----
+
+// The kernel's rule dump takes no lock, and the changer updates the list before
+// it notifies: a dump can see a change whose notification reaches the
+// subscription after the drain that follows the dump. Silence on the
+// subscription is then not stability. Two looks that agree, and a dump that
+// holds no rule twice, are.
+func TestASilentChangeBetweenTwoLooksIsNotStable(t *testing.T) {
+	churn := &fakeChurn{} // never says a word
+	var dumps atomic.Int32
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
+			// The first look of the first snapshot sees one rule more than the second.
+			if dumps.Add(1) <= 2 {
+				return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 96, nlmMulti), doneMsg(r.seq, 0)}
+			}
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Unstable {
+		t.Fatalf("a settled kernel gave an unstable snapshot: %+v", s)
+	}
+	if n := len(s.Rules[V4]); n != 2 {
+		t.Errorf("the snapshot is the disagreeing look, not the agreeing one: %v", s.Rules[V4])
+	}
+}
+
+func TestARuleTwiceInOneDumpIsNeverStable(t *testing.T) {
+	churn := &fakeChurn{}
+	c, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
+			// Every look repeats rule 95, as the kernel's unlocked dump does
+			// when the list changes under it: identical in both looks and still wrong.
+			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil || !s.Unstable {
+		t.Fatalf("a dump with a rule twice was returned stable: %+v %v", s, err)
+	}
+	// Without a subscription too.
+	c2, _ := newFake(t, func(n int, r request) [][]byte {
+		if r.flags&nlmDump == nlmDump && r.typ == rtmGetRule {
+			return [][]byte{ruleEntry(r.seq, 95, nlmMulti), ruleEntry(r.seq, 95, nlmMulti), doneMsg(r.seq, 0)}
+		}
+		return ordinary(n, r)
+	})
+	if s, err := c2.Take(Interest{}); err != nil || !s.Unstable {
+		t.Fatalf("without a subscription: %+v %v", s, err)
+	}
+}
+
+func TestRulesThatDifferInTheirPriorityOrSelectorsAreNotRepeats(t *testing.T) {
+	a := Rule{Family: V4, Priority: 95, Action: FRActUnreachable, IifName: "wt0"}
+	b := a
+	b.IifName = "wt1"
+	c := a
+	c.Priority = 96
+	d := a
+	d.Protocol = Some(uint8(3))
+	for name, r := range map[string]Rule{"selector": b, "priority": c, "installer": d} {
+		if err := inconsistent(&Snapshot{Rules: map[Family][]Rule{V4: {a, r}}}); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	e := a
+	e.Flags |= FIBRuleInvert // the kernel refuses an add that differs only in this
+	if inconsistent(&Snapshot{Rules: map[Family][]Rule{V4: {a, e}}}) == nil {
+		t.Error("rules alike but for the invert flag are not a repeat")
+	}
+}
+
+// The barrier orders late notifications before the drain: a change that is
+// under way when the looks end has notified by the time the barrier is
+// acknowledged, so the drain that follows sees it.
+func TestALateNotificationIsSeenBecauseTheBarrierWaitsForIt(t *testing.T) {
+	churn := &fakeChurn{}
+	var barriers atomic.Int32
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.typ == rtmNewLink && r.flags&nlmDump != nlmDump {
+			// The changer was between updating the list and notifying; the
+			// barrier takes the lock after it, so its notification is queued
+			// before the barrier is acknowledged.
+			if barriers.Add(1) == 1 {
+				churn.push(Event{Kind: EventRule, Family: V4})
+			}
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	s, err := c.Take(Interest{})
+	if err != nil || s.Unstable {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if k.barriers() != 2 || k.dumps() != 28 {
+		t.Errorf("%d barriers, %d dumps: the first pair of looks should have been discarded", k.barriers(), k.dumps())
+	}
+	// The barrier is the no-op RTM_NEWLINK for the loopback: no attribute, no flag.
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, r := range k.requests {
+		if r.typ == rtmNewLink {
+			if len(r.data) != 16 || native.Uint32(r.data[4:8]) != 1 || native.Uint32(r.data[8:12]) != 0 || native.Uint32(r.data[12:16]) != 0 {
+				t.Errorf("barrier payload %x", r.data)
+			}
+		}
+	}
+}
+
+func TestAKernelThatRefusesTheBarrierGetsALongerDrainAndIsNotAskedAgain(t *testing.T) {
+	churn := &fakeChurn{}
+	c, k := newFake(t, func(n int, r request) [][]byte {
+		if r.typ == rtmNewLink && r.flags&nlmDump != nlmDump {
+			return [][]byte{frame(nlmsgError, 0, r.seq, errnoBody(syscall.EPERM))}
+		}
+		return ordinary(n, r)
+	})
+	c.churn = churn
+	for i := 0; i < 3; i++ {
+		if s, err := c.Take(Interest{}); err != nil || s.Unstable {
+			t.Fatalf("%+v %v", s, err)
+		}
+	}
+	if k.barriers() != 1 {
+		t.Errorf("the refused barrier was sent %d times", k.barriers())
 	}
 }

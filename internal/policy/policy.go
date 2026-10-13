@@ -177,7 +177,14 @@ type Outcome struct {
 	Kind  outKind
 	Table uint32
 	Dev   uint32
+	// By identifies the rule whose action ended the walk (its priority and
+	// selectors), so that two paths to the same place through different rules
+	// are different outcomes when two states are compared.
+	By string
 }
+
+// same ignores By: where the packet ends, not which rule sent it there.
+func (o Outcome) same(x Outcome) bool { o.By, x.By = "", ""; return o == x }
 
 func (o Outcome) String() string {
 	switch o.Kind {
@@ -272,12 +279,10 @@ func matches(r rtnl.Rule, p packet) tri {
 	if known != no && r.Dst.IsValid() && r.Dst.Bits() > 0 && !r.Dst.Contains(p.dst) {
 		known = no
 	}
-	if known != no && r.FwMark.OK {
-		mask := uint32(0xffffffff)
-		if r.FwMask.OK {
-			mask = r.FwMask.V
-		}
-		if (r.FwMark.V^p.mark)&mask != 0 {
+	if known != no {
+		// As fib_rule_match: (packet mark ^ rule mark) & mask; a dumped rule
+		// can carry the mask alone (see EffectiveMark).
+		if mark, mask := r.EffectiveMark(); (mark^p.mark)&mask != 0 {
 			known = no
 		}
 	}
@@ -417,7 +422,7 @@ func (s State) walk(p packet) []Outcome {
 	n := len(rules)
 	// sets[i] are the outcomes of the walk that arrives at rule i.
 	sets := make([][]Outcome, n+1)
-	sets[n] = []Outcome{{Kind: stopped}} // no rule answered: the lookup fails
+	sets[n] = []Outcome{{Kind: stopped, By: "end"}} // no rule answered: the lookup fails
 	union := func(a, b []Outcome) []Outcome {
 		out := append([]Outcome(nil), a...)
 		for _, o := range b {
@@ -442,15 +447,19 @@ func (s State) walk(p packet) []Outcome {
 			continue
 		}
 		var taken []Outcome
+		by := ruleKey(r)
 		switch r.Action {
 		case rtnl.FRActToTbl:
 			outs, fall := s.lookup(r, p)
+			for k := range outs {
+				outs[k].By = by
+			}
 			taken = outs
 			if fall {
 				taken = union(taken, sets[i+1])
 			}
 		case rtnl.FRActUnreachable, rtnl.FRActProhibit, rtnl.FRActBlackhole:
-			taken = []Outcome{{Kind: stopped}}
+			taken = []Outcome{{Kind: stopped, By: by}}
 		case rtnl.FRActGoto:
 			taken = sets[i+1] // an unresolved goto falls through
 			if r.Goto.OK {
@@ -474,3 +483,6 @@ func (s State) walk(p packet) []Outcome {
 	}
 	return sets[0]
 }
+
+// ruleKey names a rule by its priority and selectors.
+func ruleKey(r rtnl.Rule) string { return fmt.Sprintf("%d %v", r.Priority, r.Items()) }
