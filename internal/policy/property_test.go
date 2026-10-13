@@ -372,7 +372,7 @@ func TestAnEscapeOfAnyConcretePacketIsAViolationOfSomePoint(t *testing.T) {
 // model must have said so.
 func TestAnApprovedDeletionOpensNothingTheOracleCanFind(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261016))
-	opened, approved := 0, 0
+	approved := 0
 	for i := 0; i < 600; i++ {
 		s := randomState(rng, t)
 		f := families[rng.Intn(2)]
@@ -408,7 +408,6 @@ func TestAnApprovedDeletionOpensNothingTheOracleCanFind(t *testing.T) {
 			// rules, so only compare when the same coins cannot differ: states
 			// whose rules have no coin-dependent selector.
 			if cl.allows(before) && !cl.allows(afterO) && !hasCoinRules(s, f) {
-				opened++
 				t.Fatalf("state %d: deleting %s opened %v to %v (class %q) and the model approved", i, del.String(), p, afterO, cl.name)
 			}
 		}
