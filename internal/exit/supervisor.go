@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,8 +52,13 @@ type Config struct {
 	Write func(path string, v any) error
 	// Bounds replaces the loops and bounds the lease supervises (tests).
 	Bounds map[string]time.Duration
-	// nbHook is the NetBird manager's test hook.
-	nbHook func(stage string)
+	// nbHook is the NetBird manager's test hook; cleanupHook is called on the
+	// cleanup child's creation goroutine ("create", before the fork, and "late",
+	// with the process of a child that attached after the deadline).
+	nbHook      func(stage string)
+	cleanupHook func(stage string, p *proc.Process)
+	// hardExit ends the process (os.Exit; tests replace it).
+	hardExit func(code int)
 }
 
 type event interface{}
@@ -89,6 +95,9 @@ type Supervisor struct {
 	// what survived the reaping deadline.
 	testFinal func() (worker, netbird bool)
 
+	// exitBy is the absolute deadline of the stop sequence's exit.
+	exitBy time.Time
+
 	wantNB      bool
 	stopping    bool
 	lastPublish time.Time
@@ -117,6 +126,9 @@ func New(c Config) *Supervisor {
 	}
 	if c.Timing == (Timing{}) {
 		c.Timing = DefaultTiming()
+	}
+	if c.hardExit == nil {
+		c.hardExit = os.Exit
 	}
 	log := newBoundedLog(c.Stderr, 512)
 	s := &Supervisor{c: c, s: c.Settings, stderr: log, log: log, leaseOut: newCoalescer(),
@@ -163,8 +175,16 @@ func (s *Supervisor) Lease() *Lease { return s.lease }
 func (s *Supervisor) Run() int {
 	code := s.run()
 	// The log is a bounded queue behind a sink that may be stuck: give it a
-	// moment to land, never longer.
-	s.log.Flush(300 * time.Millisecond)
+	// moment to land, never past the exit deadline.
+	wait := 300 * time.Millisecond
+	if !s.exitBy.IsZero() {
+		if rest := time.Until(s.exitBy); rest < wait {
+			wait = rest
+		}
+	}
+	if wait > 0 {
+		s.log.Flush(wait)
+	}
 	return code
 }
 
@@ -493,6 +513,16 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	t0 := time.Now()
 	at := func(d time.Duration) time.Time { return t0.Add(d) }
 	tm := s.c.Timing
+	s.exitBy = at(tm.ExitBy)
+	// Whatever blocks, the process ends: every wait below is bounded by the
+	// absolute exit deadline, and this is the guarantee behind that, a quarter
+	// second later, for a wait nobody thought of. It exits non-zero: the stop
+	// did not finish by the book.
+	hard := time.AfterFunc(tm.ExitBy+250*time.Millisecond, func() {
+		s.log.Flush(20 * time.Millisecond)
+		s.c.hardExit(1)
+	})
+	defer hard.Stop()
 	s.stopping = true
 	s.wantNB = false
 	s.lease.Revoke()
@@ -563,7 +593,7 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	// beside a NetBird process either, which could recreate the overlay link
 	// the cleanup is deleting. With either left, it is reported incomplete.
 	if !workerLeft && !nbLeft {
-		if err := s.cleanup(at(tm.CleanupEnd)); err != nil {
+		if err := s.cleanup(at(tm.CleanupEnd), at(tm.ExitBy)); err != nil {
 			left = append(left, err.Error())
 		}
 	} else {
@@ -611,26 +641,76 @@ func (s *Supervisor) drain(d time.Duration) {
 	}
 }
 
-// cleanup runs `molebridge exit --cleanup` and waits for it until the
-// deadline, then kills its group.
-func (s *Supervisor) cleanup(deadline time.Time) error {
+// cleanup runs `molebridge exit --cleanup` and waits for it until the absolute
+// deadline, then kills its group. Creating the child is part of the work the
+// deadline bounds: it happens on a goroutine of its own, so a fork or exec that
+// stalls costs the stop sequence the time to the deadline and nothing more. A
+// child that attaches after the deadline is killed on the spot (and reaped by
+// the reaper), never adopted, never waited for. Waiting after the deadline is
+// capped by hard, the exit deadline.
+func (s *Supervisor) cleanup(deadline, hard time.Time) error {
 	args := s.c.CleanupArgs
 	if args == nil {
 		args = []string{"exit", "--cleanup", "--backend", s.s.BackendName(), "--kind", s.s.Kind()}
 	}
-	p, err := s.reap.Start(proc.Spec{Path: s.c.Self, Args: append([]string{"molebridge"}, args...), Env: CleanupEnv(s.s.Env),
-		Stderr: osStderr(s.c.Stderr), Stdout: osStderr(s.c.Stderr)})
-	if err != nil {
-		return errors.New("the cleanup (could not start)")
+	type made struct {
+		p   *proc.Process
+		err error
 	}
-	left := time.Until(deadline)
-	if left < 500*time.Millisecond {
-		left = 500 * time.Millisecond
+	var mu sync.Mutex
+	abandoned := false
+	result := make(chan made, 1)
+	go func() {
+		if h := s.c.cleanupHook; h != nil {
+			h("create", nil)
+		}
+		p, err := s.reap.Start(proc.Spec{Path: s.c.Self, Args: append([]string{"molebridge"}, args...), Env: CleanupEnv(s.s.Env),
+			Stderr: osStderr(s.c.Stderr), Stdout: osStderr(s.c.Stderr)})
+		mu.Lock()
+		late := abandoned
+		mu.Unlock()
+		if late && err == nil {
+			_ = p.KillGroup()
+			if h := s.c.cleanupHook; h != nil {
+				h("late", p)
+			}
+			return
+		}
+		result <- made{p, err}
+	}()
+	t := time.NewTimer(time.Until(deadline))
+	defer t.Stop()
+	var p *proc.Process
+	select {
+	case m := <-result:
+		if m.err != nil {
+			return errors.New("the cleanup (could not start)")
+		}
+		p = m.p
+	case <-t.C:
+		mu.Lock()
+		abandoned = true
+		mu.Unlock()
+		// The goroutine may have delivered in the same instant.
+		select {
+		case m := <-result:
+			if m.err == nil {
+				_ = m.p.KillGroup()
+			}
+		default:
+		}
+		return errors.New("the cleanup (it could not be started in time)")
 	}
-	ws, ok := p.Wait(left)
+	ws, ok := p.Wait(time.Until(deadline))
 	if !ok {
 		_ = p.KillGroup()
-		p.WaitGone(500 * time.Millisecond)
+		grace := time.Until(hard)
+		if grace > 500*time.Millisecond {
+			grace = 500 * time.Millisecond
+		}
+		if grace > 0 {
+			p.WaitGone(grace)
+		}
 		return errors.New("the cleanup (it ran past its time)")
 	}
 	if p.GroupAlive() {

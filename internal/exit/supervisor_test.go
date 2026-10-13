@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/proc"
 )
 
 const fakeNetBird = `#!/bin/sh
@@ -585,4 +586,85 @@ func TestAStaleStoppedEventIsDropped(t *testing.T) {
 	if m.State != NBStarted || m.Launch != 2 || m.LogOffset != 7 || m.AtBootNs != int64(5*time.Second) {
 		t.Fatalf("%+v", m)
 	}
+}
+
+// The cleanup child's creation is bounded by the cleanup deadline like the rest
+// of its work: a stalled fork cannot hold the stop sequence past ExitBy, a stop
+// that missed its deadline never exits 0, and the child that finally attaches
+// is killed and reaped, not adopted.
+func TestAStalledCleanupCreationEndsAtTheDeadlineNonZero(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	release := make(chan struct{})
+	late := make(chan *proc.Process, 1)
+	h.cfg.cleanupHook = func(stage string, p *proc.Process) {
+		switch stage {
+		case "create":
+			<-release
+		case "late":
+			late <- p
+		}
+	}
+	done := h.run()
+	if !h.waitTrace("worker ready", 10*time.Second) {
+		t.Fatal("not ready")
+	}
+	h.sigs <- syscall.SIGTERM
+	start := time.Now()
+	code := h.wait(done, 10*time.Second)
+	took := time.Since(start)
+	if code == 0 {
+		t.Fatal("a requested stop that missed its cleanup deadline must not exit 0")
+	}
+	// Reaping took a moment first; the exit is at ExitBy, not a second later.
+	if took > h.cfg.Timing.ExitBy+400*time.Millisecond {
+		t.Errorf("exit after %v, ExitBy is %v", took, h.cfg.Timing.ExitBy)
+	}
+	if index(h.traceLines(), "cleanup ok") >= 0 {
+		t.Error("the cleanup ran")
+	}
+	close(release)
+	select {
+	case p := <-late:
+		select {
+		case <-p.Reaped():
+		case <-time.After(5 * time.Second):
+			t.Fatal("the late child was not reaped")
+		}
+		if ws, _ := p.Status(); !ws.Signaled() || ws.Signal() != syscall.SIGKILL {
+			t.Errorf("the late child ended with %v, want KILL", ws)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the late child never attached")
+	}
+}
+
+// Whatever else blocks on the stop path, the process ends: the watchdog behind
+// the absolute exit deadline fires, non-zero.
+func TestTheExitDeadlineHoldsWhateverBlocks(t *testing.T) {
+	h := newHarness(t, "good", "ok")
+	release := make(chan struct{})
+	fired := make(chan int, 1)
+	h.cfg.hardExit = func(code int) { fired <- code }
+	sup := New(h.cfg)
+	sup.testFinal = func() (bool, bool) { <-release; return false, false }
+	done := make(chan int, 1)
+	go func() { done <- sup.Run() }()
+	if !h.waitTrace("worker ready", 10*time.Second) {
+		t.Fatal("not ready")
+	}
+	h.sigs <- syscall.SIGTERM
+	start := time.Now()
+	select {
+	case code := <-fired:
+		if code == 0 {
+			t.Error("the watchdog exits non-zero")
+		}
+		if took := time.Since(start); took > h.cfg.Timing.ExitBy+time.Second {
+			t.Errorf("fired after %v", took)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the watchdog never fired")
+	}
+	close(release)
+	h.wait(done, 10*time.Second)
 }
