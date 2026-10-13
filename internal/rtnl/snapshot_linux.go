@@ -9,6 +9,8 @@ import (
 	"os"
 	"reflect"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // maxSnapshotAttempts bounds how many times a whole snapshot is taken again
@@ -72,13 +74,57 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 			// checked here: by the notifications that arrived while it was
 			// taken, or, without a subscription, by a second look that agrees.
 			if churn != nil {
+				// The notification for a change can reach the subscription after
+				// the dump that saw it (the changer is between updating the
+				// list and notifying, and the dump takes no lock), so silence
+				// proves little; a second look that agrees, and a dump that
+				// holds no rule twice, are what make the snapshot stable.
+				again, aerr := c.takeOnce(ctx, in)
+				if aerr != nil {
+					switch {
+					case errors.Is(aerr, errInterrupted):
+						last = ErrInconsistent
+					case IsStreamError(aerr) && !errors.Is(aerr, os.ErrDeadlineExceeded):
+						last = aerr
+					default:
+						return nil, aerr
+					}
+					lastSnap = s
+					continue
+				}
+				if !reflect.DeepEqual(s, again) || inconsistent(again) != nil {
+					lastSnap, last = again, ErrInconsistent
+					continue
+				}
+				// Every change to the rules holds the rtnl lock from the moment it
+				// updates the list until it has notified, and the dump holds
+				// nothing: a request that takes the lock returns only after every
+				// change that was under way has notified, so the drain that
+				// follows sees them all. Without the barrier a notification
+				// can be later than any drain.
+				if berr := c.barrier(ctx); berr != nil {
+					switch {
+					case IsStreamError(berr) && !errors.Is(berr, os.ErrDeadlineExceeded):
+						last = berr
+						lastSnap = again
+						continue
+					case berr != nil && !IsKernelRefusal(berr):
+						return nil, berr
+					}
+					// The kernel will not take the barrier (a namespace without
+					// the privilege, say): the drain below waits longer instead.
+					if errors.Is(berr, unix.EPERM) || errors.Is(berr, unix.EACCES) || errors.Is(berr, unix.EOPNOTSUPP) ||
+						errors.Is(berr, unix.ENODEV) || errors.Is(berr, unix.EINVAL) || errors.Is(berr, unix.ENOSYS) {
+						c.noBarrier.Store(true)
+					}
+				}
 				changed, cerr := c.settleChurn(ctx, churn, in, true)
 				switch {
 				case cerr == nil && !changed:
 					if eerr := c.expired(ctx); eerr != nil {
 						return nil, eerr
 					}
-					return s, nil
+					return again, nil
 				case cerr != nil && !errors.Is(cerr, errObservation):
 					return nil, cerr // out of time: no snapshot is returned after the deadline
 				case cerr != nil:
@@ -87,12 +133,12 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 				default:
 					last = ErrInconsistent
 				}
-				lastSnap = s
+				lastSnap = again
 				continue
 			}
 			var again *Snapshot
 			if again, err = c.takeOnce(ctx, in); err == nil {
-				if reflect.DeepEqual(s, again) {
+				if reflect.DeepEqual(s, again) && inconsistent(again) == nil {
 					if eerr := c.expired(ctx); eerr != nil {
 						return nil, eerr
 					}
@@ -123,6 +169,56 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 		return lastSnap, nil
 	}
 	return nil, fmt.Errorf("rtnl: no consistent snapshot after %d attempts: %w", maxSnapshotAttempts, last)
+}
+
+// barrier sends a request the kernel handles under the rtnl lock and that
+// changes nothing: RTM_NEWLINK for the loopback interface with no attribute and
+// no flag to change. It is acknowledged once the lock was taken, that is, once
+// every change that held it has finished and notified.
+func (c *Conn) barrier(ctx context.Context) error {
+	if c.noBarrier.Load() {
+		return &kernelError{errno: unix.EPERM, message: "the barrier was refused earlier"}
+	}
+	_, _, err := c.exchange(ctx, rtmNewLink, nlmRequest|nlmAck, ifinfo(1, 0, 0))
+	return err
+}
+
+// IsKernelRefusal reports an error the kernel answered a request with, which
+// leaves the request stream intact.
+func IsKernelRefusal(err error) bool {
+	var ke *kernelError
+	return errors.As(err, &ke)
+}
+
+// inconsistent reports a snapshot that cannot be what the kernel held: the FIB
+// rule dump of the kernels measured repeats a rule when the list changes
+// under it, and the kernel never holds two rules alike (rule_exists refuses
+// the second), so a rule twice in one dump is an artifact of the dump.
+func inconsistent(s *Snapshot) error {
+	for f, rules := range s.Rules {
+		seen := map[string]bool{}
+		for _, r := range rules {
+			k := ruleIdentity(r)
+			if seen[k] {
+				return fmt.Errorf("%w: the %s rule dump holds %s twice", ErrInconsistent, f, k)
+			}
+			seen[k] = true
+		}
+	}
+	return nil
+}
+
+// ruleIdentity is what the kernel compares to call two rules the same: the
+// priority, every selector and the action, and who installed it; not the
+// invert flag, nor the detached markers.
+func ruleIdentity(r Rule) string {
+	var items []string
+	for _, it := range r.Items() {
+		if it != "not" {
+			items = append(items, it)
+		}
+	}
+	return fmt.Sprintf("%d %v proto %d", r.Priority, items, r.Protocol.V)
 }
 
 // expired reports ErrDeadline once the operation's deadline (the context's or
@@ -206,7 +302,11 @@ func (c *Conn) settleChurn(ctx context.Context, churn churnSource, in Interest, 
 		if cerr := c.expired(ctx); cerr != nil {
 			return false, cerr
 		}
-		until := time.Now().Add(time.Millisecond)
+		quiet := time.Millisecond
+		if c.noBarrier.Load() {
+			quiet = 5 * time.Millisecond // nothing orders the notifications before this read
+		}
+		until := time.Now().Add(quiet)
 		if !dl.IsZero() && dl.Before(until) {
 			until = dl
 		}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -131,8 +132,10 @@ func (t *netlinkTransport) close() error                  { return t.c.Close() }
 // requests are serialized. Close may be called from another goroutine to
 // unblock a request in flight.
 type Conn struct {
-	opts Options
-	dial func() (transport, error)
+	// noBarrier: the kernel refused the snapshot barrier (see barrier).
+	noBarrier atomic.Bool
+	opts      Options
+	dial      func() (transport, error)
 
 	mu      sync.Mutex // one request at a time
 	timeout time.Duration
