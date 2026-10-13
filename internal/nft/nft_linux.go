@@ -81,6 +81,49 @@ func ListChainsContext(ctx context.Context, netns int) ([]contract.NftChain, err
 
 var errSecondSocket = errors.New("nft: refusing to open a second netlink socket for one call")
 
+// setSocketDeadline puts the deadline on a socket; tests replace it for fake
+// sockets that cannot take one.
+var setSocketDeadline = func(c *netlink.Conn, t time.Time) error { return c.SetDeadline(t) }
+
+// owned is the one netlink socket a call uses. The nftables library calls
+// option on every socket it creates, before the socket is used; the call keeps
+// the first, gives it the absolute deadline, and closes it directly. Closing
+// it directly - never through the library's CloseLasting, which waits for the
+// mutex the blocked request holds - unblocks a read in flight, and leaves the
+// library's lasting connection set so it cannot dial a transient one. A second
+// socket is refused and closed.
+type owned struct {
+	dl      time.Time
+	mu      sync.Mutex
+	sock    *netlink.Conn
+	sockets int
+}
+
+func (o *owned) option(c *netlink.Conn) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.sockets++
+	if o.sockets > 1 {
+		_ = c.Close()
+		return errSecondSocket
+	}
+	if err := setSocketDeadline(c, o.dl); err != nil {
+		_ = c.Close() // the library does not close a socket whose option failed
+		return err
+	}
+	o.sock = c
+	return nil
+}
+
+func (o *owned) close() {
+	o.mu.Lock()
+	c := o.sock
+	o.mu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
+}
+
 func listChains(ctx context.Context, netns int, open connector) ([]contract.NftChain, error) {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -91,41 +134,14 @@ func listChains(ctx context.Context, netns int, open connector) ([]contract.NftC
 		return nil, fmt.Errorf("nft: %w", boundedErr(err))
 	}
 	dl, _ := ctx.Deadline()
-	var (
-		mu      sync.Mutex
-		sock    *netlink.Conn
-		sockets int
-	)
-	closeSock := func() {
-		mu.Lock()
-		c := sock
-		mu.Unlock()
-		if c != nil {
-			_ = c.Close()
-		}
-	}
-	sockOpt := func(c *netlink.Conn) error {
-		mu.Lock()
-		defer mu.Unlock()
-		sockets++
-		if sockets > 1 {
-			_ = c.Close()
-			return errSecondSocket
-		}
-		if err := c.SetDeadline(dl); err != nil {
-			_ = c.Close() // the library does not close a socket whose option failed
-			return err
-		}
-		sock = c
-		return nil
-	}
-	conn, err := open(sockOpt, netns)
-	defer closeSock()
+	sock := &owned{dl: dl}
+	conn, err := open(sock.option, netns)
+	defer sock.close()
 	if err != nil {
 		return nil, fmt.Errorf("nft: open netlink: %w", err)
 	}
 	var chains []*nftables.Chain
-	err = rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, closeSock, func() error {
+	err = rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, sock.close, func() error {
 		var err error
 		chains, err = conn.ListChains()
 		return err

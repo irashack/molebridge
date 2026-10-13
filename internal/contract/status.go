@@ -102,13 +102,14 @@ func FamilyStatus(spec Spec, f rtnl.Family, rules []rtnl.Rule, routes []rtnl.Rou
 	routesOK, tunnelDefault := true, false
 	for _, r := range routes {
 		switch {
-		case r.Type == rtnl.RTNUnreachable && r.IsDefault() && r.Metric == FallbackMetric:
+		case isFallback(r):
 			fallback = true
 		case r.Type == rtnl.RTNUnicast && opt.ExitIfIndex != 0 && r.Oif.OK && r.Oif.V == opt.ExitIfIndex && plainDeviceRoute(r):
-			// Only the default route counts as the tunnel route; another
-			// route out of the tunnel interface is tolerated here (and
-			// removed by the repair pass).
-			if r.IsDefault() && !r.LinkDown() {
+			// Only the default route counts as the tunnel route, and only an
+			// unconditional one (see isTunnelRoute); another route out of the
+			// tunnel interface is tolerated here (and removed by the repair
+			// pass).
+			if isTunnelRoute(r, opt.ExitIfIndex) && !r.LinkDown() {
 				tunnelDefault = true
 			}
 		default:
@@ -244,7 +245,7 @@ func HostTableStatus(routes []rtnl.Route, hostIf uint32, f rtnl.Family, main []r
 func hostDestinations(routes []rtnl.Route, hostIf uint32) (map[netip.Prefix]bool, bool) {
 	found := map[netip.Prefix]bool{}
 	for _, r := range routes {
-		if r.Type != rtnl.RTNUnicast || !r.Oif.OK || hostIf == 0 || r.Oif.V != hostIf || r.MultiPath || r.Encap || r.NHID.OK {
+		if r.Type != rtnl.RTNUnicast || !r.Oif.OK || hostIf == 0 || r.Oif.V != hostIf || r.MultiPath || r.Encap || r.NHID.OK || !r.Unconditional() {
 			return nil, false
 		}
 		if r.Gateway.IsValid() && !r.IsDefault() {

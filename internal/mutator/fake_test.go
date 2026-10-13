@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/policy"
 	"github.com/irashack/molebridge/internal/rtnl"
 )
 
@@ -196,58 +197,7 @@ func (k *fakeKernel) hasLink(name string) bool {
 	return false
 }
 
-// deleteMatches: every attribute r gives is the same on x. The invert flag is
-// not compared.
-func deleteMatches(req, x rtnl.Rule) bool {
-	if req.Priority != x.Priority {
-		return false
-	}
-	if req.Action != 0 && req.Action != x.Action {
-		return false
-	}
-	if req.Table != 0 && req.Table != x.Table {
-		return false
-	}
-	if req.IifName != "" && req.IifName != x.IifName {
-		return false
-	}
-	if req.OifName != "" && req.OifName != x.OifName {
-		return false
-	}
-	if req.FwMark.OK && req.FwMark != x.FwMark {
-		return false
-	}
-	if req.FwMask.OK && req.FwMask != x.FwMask {
-		return false
-	}
-	if req.SuppressPrefixLen.OK && req.SuppressPrefixLen != x.SuppressPrefixLen {
-		return false
-	}
-	if req.IPProto.OK && req.IPProto != x.IPProto {
-		return false
-	}
-	if req.Src.IsValid() && req.Src != x.Src {
-		return false
-	}
-	if req.Dst.IsValid() && req.Dst != x.Dst {
-		return false
-	}
-	if req.Tos != 0 && req.Tos != x.Tos {
-		return false
-	}
-	for _, u := range req.Unknown {
-		found := false
-		for _, v := range x.Unknown {
-			if u.Type == v.Type && string(u.Data) == string(v.Data) {
-				found = true
-			}
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
+func deleteMatches(req, x rtnl.Rule) bool { return rtnl.DeleteMatches(req, x) }
 
 func (k *fakeKernel) DelRule(r rtnl.Rule) error {
 	k.wait()
@@ -337,6 +287,9 @@ func (k *fakeKernel) DelRoute(r rtnl.Route) error {
 		if r.Metric != 0 && r.Metric != x.Metric {
 			continue
 		}
+		if r.Tos != 0 && r.Tos != x.Tos { // a request without a TOS names any
+			continue
+		}
 		if r.Gateway.IsValid() && r.Gateway != x.Gateway {
 			continue
 		}
@@ -350,6 +303,36 @@ func (k *fakeKernel) DelRoute(r rtnl.Route) error {
 }
 
 // ---- where packets go ----
+
+// policyState is the fake kernel as the production policy model sees a
+// snapshot of it: the same code the owner asks before every deletion judges the
+// fake after every mutation.
+func (k *fakeKernel) policyState(spec contract.Spec) policy.State {
+	snap, _ := k.Take(spec.Interest())
+	k.mu.Lock()
+	k.takes--
+	k.dumps--
+	k.mu.Unlock()
+	return policy.FromSnapshot(spec, snap)
+}
+
+// escapes lists the protected classes of traffic that reach a forbidden place
+// right now: ICMP from the addresses live on the tunnel interface, not from
+// those the contract expects and the kernel does not have yet.
+func (k *fakeKernel) escapes(spec contract.Spec) []policy.Violation {
+	spec = spec.Clone()
+	spec.ReturnPath = map[rtnl.Family][]netip.Addr{}
+	k.mu.Lock()
+	unstable, fn, tf := k.unstable, k.unstableFn, k.takeFail
+	k.unstable, k.unstableFn, k.takeFail = false, nil, nil
+	k.mu.Unlock()
+	defer func() {
+		k.mu.Lock()
+		k.unstable, k.unstableFn, k.takeFail = unstable, fn, tf
+		k.mu.Unlock()
+	}()
+	return k.policyState(spec).Violations()
+}
 
 // A probe is a packet that arrived on the overlay interface. Forwarded is
 // destined for the Internet; Local for the exit's own address, which only the

@@ -69,6 +69,26 @@ func plainDeviceRoute(r rtnl.Route) bool {
 	return !r.Gateway.IsValid() && !r.Via && !r.MultiPath && !r.NHID.OK
 }
 
+// isFallback recognizes the exit table's `unreachable default metric 4096` by
+// everything that decides which packets it answers and how: the type, the
+// zero-length destination, the metric that makes it the last resort, no TOS,
+// source or input-interface selector, and (IPv4, where scope is part of a
+// route's selection) universe scope. A route that differs in any of these is a
+// different route, however alike it looks.
+func isFallback(r rtnl.Route) bool {
+	return r.Type == rtnl.RTNUnreachable && r.IsDefault() && r.Metric == FallbackMetric && r.Unconditional() &&
+		(r.Family != rtnl.V4 || r.Scope == rtnl.RTScopeUniverse)
+}
+
+// isTunnelRoute recognizes `default dev <tunnel>` in the exit table: a plain
+// unicast device route to the tunnel interface, at metric 0 (so that it wins
+// over the fallback), live, and unconditional as isFallback says.
+func isTunnelRoute(r rtnl.Route, exitIf uint32) bool {
+	return r.Type == rtnl.RTNUnicast && r.IsDefault() && exitIf != 0 && r.Oif.OK && r.Oif.V == exitIf &&
+		plainDeviceRoute(r) && r.Metric < FallbackMetric && r.Unconditional() && r.Flags&rtnl.RTNHFDead == 0 &&
+		(r.Family != rtnl.V4 || r.Scope == rtnl.RTScopeLink)
+}
+
 // ExitTableActions compares the routes of the exit table in one family with
 // the contract: `unreachable default metric 4096` always, `default dev
 // <tunnel>` as the mode says, nothing else (exit_table_actions). routes must
@@ -79,10 +99,9 @@ func ExitTableActions(routes []rtnl.Route, f rtnl.Family, table uint32, exitIf u
 	fallback, found := false, false
 	for _, r := range routes {
 		switch {
-		case r.Type == rtnl.RTNUnreachable && r.IsDefault() && r.Metric == FallbackMetric && !fallback:
+		case isFallback(r) && !fallback:
 			fallback = true
-		case r.Type == rtnl.RTNUnicast && r.IsDefault() && exitIf != 0 && r.Oif.OK && r.Oif.V == exitIf &&
-			plainDeviceRoute(r) && (mode == TunnelRequired || mode == TunnelMaybe) && !found:
+		case isTunnelRoute(r, exitIf) && (mode == TunnelRequired || mode == TunnelMaybe) && !found:
 			found = true
 		default:
 			del = append(del, RouteAction{Kind: DelRoute, Route: r})
@@ -132,7 +151,7 @@ func HostRoutes(routes []rtnl.Route, hostIf uint32, check bool) (list []HostRout
 			odd = odd || check
 			continue
 		}
-		unusual := r.Via || r.NHID.OK || r.Encap || r.MultiPath
+		unusual := r.Via || r.NHID.OK || r.Encap || r.MultiPath || !r.Unconditional()
 		if !r.Oif.OK || r.Oif.V != hostIf || hostIf == 0 || unusual || (r.Gateway.IsValid() && !r.IsDefault()) {
 			odd = odd || check
 			continue

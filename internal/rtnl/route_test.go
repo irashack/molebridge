@@ -153,3 +153,26 @@ func FuzzDecodeRoute(f *testing.F) {
 		_, _ = DecodeAddr(b)
 	})
 }
+
+// Every selector of a route survives encoding and decoding, so that a delete
+// names the route it means and a comparison can tell routes apart.
+func TestRouteSelectorsRoundTrip(t *testing.T) {
+	want := Route{Family: V6, Dst: netip.PrefixFrom(netip.IPv6Unspecified(), 0), Table: 51821, Type: RTNUnicast, Oif: Some(uint32(7)),
+		Tos: 0, Src: netip.MustParsePrefix("2001:db8:3::/64"), Iif: Some(uint32(3)), Protocol: RTProtoBoot}
+	got, err := DecodeRoute(want.Marshal())
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got.Unconditional() {
+		t.Error("a route with source and input interface selectors is unconditional")
+	}
+	plain := Route{Family: V4, Dst: netip.PrefixFrom(netip.IPv4Unspecified(), 0), Table: 5, Type: RTNUnicast}
+	if !plain.Unconditional() {
+		t.Error("a plain route is conditional")
+	}
+	plain.Tos = 16
+	back, err := DecodeRoute(plain.Marshal())
+	if err != nil || back.Tos != 16 || back.Unconditional() {
+		t.Errorf("%+v %v", back, err)
+	}
+}

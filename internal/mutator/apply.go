@@ -6,6 +6,7 @@ import (
 	"net/netip"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/policy"
 	"github.com/irashack/molebridge/internal/rtnl"
 )
 
@@ -27,6 +28,9 @@ func (tx *Tx) delRule(r rtnl.Rule) (bool, error) {
 	if err := tx.budget(); err != nil {
 		return false, err
 	}
+	if err := tx.approve(fmt.Sprintf("%s rule %d", r.Family, r.Priority), func(s policy.State) (policy.State, bool) { return s.WithoutRule(r) }); err != nil {
+		return false, err
+	}
 	err := tx.m.o.Kernel.DelRule(r)
 	if err != nil && rtnl.IsNotExist(err) {
 		return false, nil
@@ -36,6 +40,9 @@ func (tx *Tx) delRule(r rtnl.Rule) (bool, error) {
 
 func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 	if err := tx.budget(); err != nil {
+		return false, err
+	}
+	if err := tx.approve(fmt.Sprintf("a %s route in table %d", r.Family, r.Table), func(s policy.State) (policy.State, bool) { return s.WithoutRoute(r) }); err != nil {
 		return false, err
 	}
 	err := tx.m.o.Kernel.DelRoute(r)
