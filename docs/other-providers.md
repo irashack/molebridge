@@ -1,7 +1,7 @@
 # Other VPN providers
 
-Molebridge supports Mullvad and PIA natively, and NordVPN natively as an
-experiment ([providers](providers.md#how-nordvpn-differs)). The experimental
+Molebridge supports Mullvad, PIA and NordVPN natively; PIA and NordVPN are
+experimental ([providers](providers.md)). The experimental
 [gluetun backend](providers.md#the-gluetun-backend) also selects servers for
 FastestVPN, IVPN, Surfshark and Windscribe, through gluetun; those four are
 covered by automated tests and have had no live pass. This page is about

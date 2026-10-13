@@ -12,7 +12,7 @@ commands there use `"$IMAGE"` where this page shows the reference.
 
 The image's other roles are not tools: `exit` and `panel` are the two
 containers, `health` is the exit's container health check, and `status` prints the
-exit's verdict from inside it ([operations](operations.md#health)).
+exit's verdict from inside it ([other roles](#other-roles)).
 
 This page is the reference. Where the tools sit in the setup order is in
 [setup.md](setup.md).
@@ -43,13 +43,19 @@ Rules that hold for every tool:
   tool writes inside the container and the file is gone when it exits, while
   the message still names the path you gave. Check that the file appeared on
   the host.
-- Private files are mode `0600`, written to a temporary file in the same
-  directory and renamed into place, so a reader sees the old file or the new
-  one. A failure leaves no temporary file behind.
+- Private files are mode `0600`. All but the `nordvpn-key` output are written
+  to a temporary file in the same directory and renamed into place, so a reader
+  sees the old file or the new one; `nordvpn-key` instead creates its output
+  exclusively and never replaces a file. A failure leaves no temporary or
+  partial file behind.
 - No tool prints a key, token, API key or any text taken from a file it read.
   Messages are fixed text, with only the paths and setting names you supplied.
-- Exit status: `0` success, `1` a refusal, `2` a usage error. `-h` or `--help`
-  prints the tool's help and exits `0`.
+- Exit status: `0` success, `1` a refusal, `2` a usage error. For
+  `prepare-config`, `nordvpn-key`, `gluetun-auth` and `gluetun-post-rules`,
+  `-h` or `--help` prints the tool's help and exits `0`. `fix-blacklist` and
+  `check-config` take no arguments and answer any with their usage line and `2`.
+- A role name the binary doesn't know prints `molebridge: unknown role "<name>"`
+  and the list of roles, and exits `2`; so does running it with no role.
 - A tool never reads the network except `nordvpn-key`, which makes the one
   request described below.
 
@@ -139,7 +145,8 @@ Messages (standard error, exit status 1; each starts `error: `):
 | `the downloaded config is larger than 64 KiB` | input too large |
 | `the downloaded config is not valid UTF-8` | input not text |
 | `<OUTPUT> exists; keep it, or remove it deliberately to make a new key` | `--pia` with an existing file |
-| `open <path>: <reason>` | the input cannot be opened |
+| `open <path>: <reason>` | the input cannot be opened, or a file or directory for the output cannot be created (`mkdir <path>: <reason>` for the latter) |
+| `the tunnel config could not be written` | any other failure writing the output |
 
 Usage errors (`usage: molebridge prepare-config DOWNLOADED.conf OUTPUT` and
 `       molebridge prepare-config --pia OUTPUT`) exit `2`.
@@ -178,7 +185,8 @@ mode, so `chmod 600` the token file first.
 - The token is never read from a command-line argument or the environment. As a
   file it must be a regular file (not a symlink), mode `0600` or stricter; from
   standard input it is read up to 512 bytes. It is 1 to 256 printable ASCII
-  characters without a quote or backslash, with one trailing newline allowed.
+  characters other than space, quote and backslash, with one trailing newline
+  (LF or CRLF) allowed.
 - The one request: `GET https://api.nordvpn.com/v1/users/services/credentials`
   with HTTP Basic credentials `token:<token>`. No proxy from the environment is
   used, TLS 1.2 or later is required, redirects are not followed, the whole
@@ -291,7 +299,7 @@ setting is its default, as in Compose's `${NAME:-default}`:
 | `HOST_IF` | `eth0` |
 | `HOST_TABLE` | `51822` |
 | `CONTROL_MARK` | `0x1bd00` |
-| `NB_WIREGUARD_PORT` | `51820` |
+| `NB_WIREGUARD_PORT` | `51820` (1 to 65535) |
 
 Pass the same values your `.env` gives the Compose project; the tool does not
 read `.env`.
@@ -356,10 +364,13 @@ spelling `wireguard` is accepted too),
 `EXIT_IF` (default `mullvad`, `wg0` with gluetun) and `NB_STATE_DIR` (default
 `/var/lib/netbird`).
 
-It refuses without changing anything when the daemon is running, when the
-active profile is not the default, when no identity exists (it never creates
-one), when the JSON is malformed
-or ambiguous, or when it cannot preserve the file's mode, owner and group. It
+It refuses without changing anything when it can see a NetBird daemon (its
+socket answers, or a process named `netbird` runs; it can't see one in
+another container, which is why you stop the exit first), when the active
+profile is not the default, when no identity exists (it never creates one),
+when the JSON is malformed or ambiguous (a repeated key, or a field name
+outside printable ASCII), when `IFaceBlackList` isn't a list of strings, or
+when it cannot preserve the file's mode, owner and group. It
 reproduces NetBird's default filling when the list is absent, null or empty,
 keeps every operator exclusion and every other field byte for byte, and
 replaces the file atomically.
@@ -398,3 +409,15 @@ prints, for a native exit,
 `NetBird gate: configuration accepted`. A refusal is the one line the exit would print at start,
 on standard error, with exit status `1` ([troubleshooting](troubleshooting.md#startup)). A usage error
 (`usage: molebridge check-config (settings come from the environment)`) exits `2`.
+
+## Other roles
+
+These run as containers or inside the exit, not as throwaway tools. Settings
+come from the environment, and none takes arguments.
+
+| Role | What it does | Exit status |
+|---|---|---|
+| `exit` | The exit container's supervisor. It starts itself again as `--worker` and `--cleanup`; those two flags are internal, and any other argument prints `molebridge-exit: the only arguments are the internal --worker and --cleanup`. A refused setting prints one line on standard error and the exit stops before changing anything ([troubleshooting](troubleshooting.md#startup)). | `1` a refusal or an unexpected stop, `2` bad arguments; the stop statuses are in [the stop sequence](architecture.md#the-stop-sequence) |
+| `panel` | Switchyard. A refused setting prints `molebridge panel: <reason>`; a failed isolation check prints `molebridge panel: refusing to start: <reason>` ([the panel's isolation check](configuration.md#the-panels-isolation-check)). | `1` a refusal, `2` for an argument (`usage: molebridge panel (settings come from the environment)`) |
+| `health` | The container health check. Prints nothing and exits `0` while the worker's heartbeat is no more than 15 seconds old (written every 5 seconds while the operational checks pass); otherwise prints `unhealthy: <reason>`. A failed provider verification never makes it fail ([health](architecture.md#health)). | `0` healthy, `1` unhealthy, `2` for an argument (`usage: molebridge health`) |
+| `status` | Prints the exit's verdict from `state/applier/result.json` and the panel's request: `state: <state> (<label>)`, `reasons:`, `egress tier:` when there is one, `checks:`, `message:` and `configured server:` when present, then `heartbeat:` (fresh, stale or none) and `lease:`. Run it inside the exit: `docker compose exec exit molebridge status`. Nothing printed is secret. It doesn't check a sidecar's attachment or the host. | `0` when the state is `ok`, `1` otherwise or for a bad `PROVIDER` or `EXIT_KIND`, `2` for an argument (`usage: molebridge status`) |

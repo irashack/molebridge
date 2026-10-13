@@ -9,8 +9,8 @@ Compose gives the exit and the panel the registry id
 |---|---|---|---|
 | `mullvad` (default) | Tested on the hosts in [testing](testing.md) | a server | One device key and tunnel address, valid on every server |
 | `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | a region | A key registered on each server, with a different tunnel address on each |
-| `nordvpn` | Experimental: live passes on macOS with OrbStack and on rootless Podman, see [testing](testing.md#nordvpn-pass-at-036e1cc) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
-| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#gluetun-backend-pass-at-a3bb14f); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
+| `nordvpn` | Experimental: live passes on macOS with OrbStack and on rootless Podman, most recently at 0.8.0, see [testing](testing.md#080) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
+| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#080); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
 
 The `gluetun-*` ids also serve the experimental [gluetun
 sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
@@ -179,16 +179,11 @@ only the peer. The exit holds no NordVPN credential. What differs:
 | The current server is found by | the peer's key | the peer's endpoint and key |
 | Egress is confirmed by | `am.i.mullvad.net`, for each address family | `ips/insights` (`protected: true`), IPv4 |
 
-What was tested, at 0.7.0 and earlier: a live pass on macOS with OrbStack and Docker covered the
-key exchange, the server list, switches within a location and to another
-country, NordVPN's confirmation, a client's egress, and IPv6 staying blocked
-([testing](testing.md#nordvpn-pass-at-036e1cc)). On rootless Podman, a
-NordVPN exit ran with a phone on it ([v0.5.0](testing.md#nordvpn-on-rootless-podman-at-v050))
-and ran v0.6.0's repair, tunnel-loss and owner-record drills without a client
-([0086fac](testing.md#the-routing-image-on-rootless-podman-at-0086fac)), and
-at 0.7.0 a client held it through the fail-closed drills
-([d5a234a](testing.md#070-on-rootless-podman-at-d5a234a)). The insights cache retry is covered by unit
-tests only. Nothing here has run at 0.8.0.
+Tested: native NordVPN has run live on macOS with OrbStack and Docker
+([testing](testing.md#nordvpn-pass-at-036e1cc)) and on rootless Podman, most
+recently at 0.8.0, where no client device was held on it through the failure
+drills ([testing](testing.md#080)). The insights cache retry is covered by unit
+tests only.
 
 ## Port forwarding
 
@@ -245,10 +240,10 @@ v3.41.3 owns the tunnel instead of Molebridge, and brings its own provider
 support. Molebridge keeps its routing contract, its NetBird and its provider
 logic in the `exit` container, beside gluetun, and the panel;
 [architecture](architecture.md#gluetun-backend) describes how. Its live passes
-used NordVPN, on Docker and on rootless Podman, where at 0.7.0 a client held it
-through a switch and a gluetun restart; other providers are untested, and so is
-all of it at 0.8.0 ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)). The
-panel is optional: [gluetun as a NetBird exit](gluetun-netbird-exit.md).
+used NordVPN only, most recently at 0.8.0 in the overlay and sidecar forms on
+rootless Podman ([testing](testing.md#080)); the other gluetun providers have
+had no live pass. The panel is optional:
+[gluetun as a NetBird exit](gluetun-netbird-exit.md).
 
 You set gluetun's provider with `GLUETUN_PROVIDER`; `PROVIDER` doesn't
 apply. The panel can select servers for these gluetun providers:
@@ -283,10 +278,11 @@ How it differs from a native provider:
   without marking them, so for Surfshark only the ordinary and static-IP
   servers (`xx-yyy.prod.surfshark.com`, `xx-yyy-st001.prod.surfshark.com`)
   are listed.
-- gluetun's other WireGuard providers can carry traffic but the panel can't
-  select their servers: AirVPN and ProtonVPN list several servers under one
-  name, and gluetun's `custom` provider has no list. PIA stays native: its
-  port forwarding and per-server addresses don't fit this backend.
+- Other gluetun providers aren't available in 0.8.0. AirVPN and ProtonVPN list
+  several servers under one name, and gluetun's `custom` provider has no list,
+  so the panel can't select their servers; the exit refuses a `PROVIDER` that
+  isn't in its registry. PIA stays native: its port forwarding and per-server
+  addresses don't fit this backend.
 - What a DNS leak test shows depends on the provider; nothing has been
   recorded for this backend yet.
 

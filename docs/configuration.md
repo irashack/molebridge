@@ -11,17 +11,17 @@ default in the binary and appears here as an [override](#overrides).
 | `PROVIDER` | `mullvad` | `mullvad`, `pia` or `nordvpn` (experimental); see [providers](providers.md). Keep it unchanged after installation. |
 | `EXIT_IF` | `mullvad` | The tunnel interface name, and the tunnel config's file name under `tunnel/wg_confs/`. Use `pia` with PIA and `nordvpn` with NordVPN. A custom name needs an explicit output path when you run `prepare-config` ([tools](tools-reference.md#prepare-config)). |
 | `SERVER` | empty | Optional provider server hostname, or a PIA region id. When set, configuration wins; the exit ignores panel requests and Switchyard shows the exit read-only. See [a server set in configuration](#a-server-set-in-configuration). |
-| `OVERLAY_CIDR` | required | NetBird peer network range. Replies to this range return over the overlay. |
-| `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled. |
+| `OVERLAY_CIDR` | required | NetBird peer network range, an IPv4 CIDR written with its network address (`192.0.2.0/24`, not `192.0.2.5/24`), no leading zeroes, not `/0`. Replies to this range return over the overlay. |
+| `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled, also written with its network address (`/1` to `/128`). |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
-| `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). |
-| `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port. Required when forwarding is on; refused otherwise. |
+| `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). The exit also reads `1`, `true` and `yes` as on and `0`, `false` and `no` as off, in any case; any other value stops it with `PIA_PORT_FORWARD must be on or off`. |
+| `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port; it must lie inside `OVERLAY_CIDR`. Required when forwarding is on; refused otherwise. |
 | `PANEL_PORT` | `8095` | Host loopback port for the panel. Compose reads it; the panel listens on 8080 inside its container. |
 | `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Unlisted names get 421, except on `/healthz`; loopback names are accepted. Form posts require an allowed origin. |
 | `PANEL_EXITS` | empty | Several exits in one Switchyard, as `id=provider[/kind][:label]`, where `kind` is `overlay` (the default) or `sidecar`. Empty means this one exit. `compose.yaml` passes it to the bundled panel; each exit's state must then be mounted under `/state/<id>` in a `compose.override.yaml`. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `PANEL_OIDC_ISSUER`, `PANEL_OIDC_CLIENT_ID`, `PANEL_PUBLIC_URL`, `PANEL_ADMIN_GROUPS` | empty | Optional sign-in, off while the issuer is empty. See [panel sign-in](#panel-sign-in). |
-| `GATUS_URL` | empty | Gatus base URL for health pushes; empty disables them. The token goes in `secrets/applier.env`. |
+| `GATUS_URL` | empty | Gatus base URL for health pushes, starting `http://` or `https://`; empty disables them. The token (`GATUS_TOKEN`) goes in `secrets/applier.env`; with no token nothing is pushed. |
 | `TZ` | `Etc/UTC` | Container time zone. |
 
 `.env.gluetun.example` and `.env.sidecar.example` have the same shape for the
@@ -41,7 +41,7 @@ they differ the row says so.
 | Setting | Service | Default | Purpose |
 |---|---|---|---|
 | `COMPOSE_PROJECT_NAME` | Compose | `molebridge` | Deployment identity used for container names, networks and the NetBird identity volume. Keep it unchanged after installation: changing it creates a fresh identity volume and enrolls a new peer. |
-| `OVERLAY_IF` | exit | `wt0` | NetBird's interface name inside the namespace. Compose also passes it as `NB_INTERFACE_NAME`; the exit refuses to start when the two differ. Keep it unchanged after the peer enrolls: the peer's stored profile keeps the name, and the exit refuses a profile for another interface ([troubleshooting](troubleshooting.md#startup)). |
+| `OVERLAY_IF` | exit | `wt0` | NetBird's interface name inside the namespace. Compose also passes it as `NB_INTERFACE_NAME`; the exit refuses to start when the two differ. Keep it unchanged after the peer enrolls: the peer's stored profile keeps the name, and the exit refuses a profile for another interface ([troubleshooting](troubleshooting.md#startup)). Interface names here and in `EXIT_IF` and `HOST_IF` are 1 to 15 characters: letters, digits and `_`, plus `.` and `-` after the first. `OVERLAY_IF` and `EXIT_IF` must differ. |
 | `EXIT_TABLE` | exit | `51821` | Dedicated routing table (256 to 2147483647, canonical decimal). Must match the table in the tunnel config's `PostUp` and `PreDown` lines, or the exit refuses the config; see [the tunnel config](#the-tunnel-config). |
 | `PANEL_USER` | switchyard | `1000:1000` | The panel's `user:` inside its container, as `uid:gid`. On an engine that maps container uids to host uids directly, set it to your host user's `uid:gid` (`id -u` and `id -g`), the user that owns `state/`. On a rootless engine that remaps them, container root is already your host user and an unmapped uid cannot read the 0700 state tree: use `0:0` with `PANEL_ALLOW_ROOT=1`. The panel still holds no capabilities. |
 | `PANEL_ALLOW_ROOT` | switchyard | empty | Your statement that root in the panel container is deliberate (`PANEL_USER=0:0` on a rootless engine). The panel treats empty as unset and refuses to run as uid 0 unless this is exactly `1`; see [the panel's isolation check](#the-panels-isolation-check). |
@@ -57,10 +57,14 @@ they differ the row says so.
 | `ROUTING_RECONCILE_INTERVAL` | exit | `30` | Seconds between full repair passes, 2 to 60; see [repair and lease timing](#repair-and-lease-timing). |
 | `GUARD_GRACE` | exit | `30` | Seconds without an accepted lease renewal before the supervisor stops NetBird, 5 to 30; see [repair and lease timing](#repair-and-lease-timing). |
 
-`PUID`, `PGID`, `OWNER_RECORD`, `COMPOSE_FILE=compose.yaml:compose.pia.yaml`
-and `COMPOSE_FILE=compose.yaml:compose.nordvpn.yaml`, which earlier releases
-used, are gone. `PROVIDER` selects the provider now, and nothing reads the
-others. An `.env` that still sets them works, and they do nothing.
+`PUID`, `PGID` and `OWNER_RECORD`, which earlier releases used, are gone:
+Molebridge no longer reads them, and an `.env` that still sets them works.
+`COMPOSE_FILE=compose.yaml:compose.pia.yaml` and
+`COMPOSE_FILE=compose.yaml:compose.nordvpn.yaml` are different. Compose itself
+reads `COMPOSE_FILE`, those files no longer exist, and the project won't load
+while `.env` points at them. Remove the line (keep it only for a gluetun form),
+and use `PROVIDER` and `EXIT_IF` to choose the provider
+([upgrading from 0.7](operations.md#upgrading-from-07x)).
 
 ### What Compose fixes for NetBird
 
@@ -109,12 +113,32 @@ NetBird's default of `console,/var/log/netbird/client.log` unless you set it
 See [architecture](architecture.md#netbird-and-its-checks) and
 [troubleshooting](troubleshooting.md#startup).
 
+### Other settings the Compose files fix
+
+These are read by the binary, set in the Compose files, and not meant to be
+changed in `.env`:
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `TUNNEL_BACKEND` | `native` (`compose.yaml`) or `gluetun` | Who owns the tunnel. Unset means `native`; `wireguard` is read as `native`; any other value stops the exit with `TUNNEL_BACKEND must be native or gluetun`. |
+| `EXIT_KIND` | `overlay`, or `sidecar` in `compose.sidecar.yaml` | See [gluetun sidecar](#gluetun-sidecar). |
+| `STATE_DIR` | `/state` | Where the exit and the panel find `applier/` and `panel/`. The exit refuses to start unless `<STATE_DIR>/applier` is a directory it can write. |
+| `MOLEBRIDGE_KIND` | `overlay` or `sidecar`, on the `gluetun` service of the two gluetun files | Read by `routing/gluetun-preflight`, which refuses to start gluetun without a matching post-rules file (`overlay`) or with one (`sidecar`). |
+
+Three more have defaults the Compose files leave alone: `TUNNEL_CONF_DIR`
+(`/config/wg_confs`), `MOLEBRIDGE_RUN_DIR` (`/run`, where the supervisor keeps
+its heartbeat and lease files) and `PIA_SECRETS_DIR` (`/run/secrets/pia`).
+`MOLEBRIDGE_PANEL_LISTEN` replaces the panel's listen address, `0.0.0.0:8080`,
+for its tests; Compose never sets it. `MOLEBRIDGE_GENERATION`,
+`MOLEBRIDGE_RTNL_NOTIFY_LOCKED` and `MOLEBRIDGE_DRILL_CPUPROFILE` are
+internal to the supervisor and the test drills.
+
 ### Repair and lease timing
 
 | Setting | Default | Purpose |
 |---|---|---|
 | `ROUTING_RECONCILE_INTERVAL` | `30` | Seconds between full repair passes: whole seconds, 2 to 60. A change to a rule, route, link or address in the namespace starts a repair pass at once; the full pass is the fallback that backs it up, and also runs at once when the kernel reports that events were lost ([drift and repair](architecture.md#drift-and-repair)). The 0.7 default was 2 and its pass was the repair; here a shorter interval only narrows the window for a change the kernel doesn't announce. The tunnel interface is checked every 2 seconds whatever this is. |
-| `GUARD_GRACE` | `30` | The length of the lease: seconds the supervisor waits for an accepted renewal from the worker before it stops NetBird, whole seconds from 5 to 30. The worker renews every 2 seconds, so 5 is the shortest a healthy exit always meets. The same name and range as the gate's setting in 0.7, and the same idea: how long the exit tolerates its routing owner not answering ([the lease](architecture.md#the-lease)). |
+| `GUARD_GRACE` | `30` | The length of the lease: seconds the supervisor waits for an accepted renewal from the worker before it stops NetBird, whole seconds from 5 to 30. The worker renews every 2 seconds, so 5 is the shortest a healthy exit always meets. It is how long the exit tolerates its routing owner not answering ([the lease](architecture.md#the-lease)); 0.7's gate had a setting of the same name and range. |
 | `FWMARK_GRACE` | `30` | gluetun overlay exits only: seconds NetBird may go without carrying the control-plane mark before it is stopped, 5 to 30. |
 
 `compose.yaml` passes the first two from `.env` as overrides. The other
@@ -190,7 +214,7 @@ serves several exits: set them in its own environment, in an override file.
 | `PANEL_OIDC_SCOPES` | `openid profile email groups` | Scopes to request. Must include `openid`. |
 | `PANEL_OIDC_GROUPS_CLAIM` | `groups` | The claim that lists a person's groups. |
 | `PANEL_ADMIN_GROUPS` | empty | Comma-separated groups whose members see every exit. |
-| `PANEL_ACCESS` | empty | Comma-separated `group=exit` pairs. Repeat a group to grant it several exits. Every exit must be in `PANEL_EXITS`, so a single-exit panel uses `PANEL_ADMIN_GROUPS` only. Group names can't contain spaces, commas or `=`. |
+| `PANEL_ACCESS` | empty | Comma-separated `group=exit` pairs. Repeat a group to grant it several exits. Every exit must be in `PANEL_EXITS`, so a single-exit panel uses `PANEL_ADMIN_GROUPS` only. Group names are 1 to 128 characters and can't contain spaces, commas or `=`. |
 | `PANEL_SESSION_TTL` | `3600` | Seconds a sign-in lasts, from 300 to 604800. Not extended by use. |
 
 With the issuer set, at least one of `PANEL_ADMIN_GROUPS` and `PANEL_ACCESS`
@@ -222,9 +246,9 @@ records.
 
 ## gluetun backend
 
-Experimental. At 0.7.0 its live passes used NordVPN, on Docker and on rootless
-Podman ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)); nothing has run
-at 0.8.0. The design is in [architecture](architecture.md#gluetun-backend) and
+Experimental. Live passes used NordVPN only; what ran at 0.8.0 is in
+[testing](testing.md#080), earlier passes in
+[testing](testing.md#gluetun-backend-pass-at-a3bb14f). The design is in [architecture](architecture.md#gluetun-backend) and
 what differs for you in [providers](providers.md#the-gluetun-backend). Copy
 `.env.gluetun.example` to `.env`; it sets `COMPOSE_FILE=compose.gluetun.yaml`,
 and that file replaces `compose.yaml`. `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
@@ -234,12 +258,12 @@ settings above keep their meaning. `PROVIDER` and the PIA settings don't apply.
 | Setting | Default | Purpose |
 |---|---|---|
 | `GLUETUN_PROVIDER` | required | gluetun's `VPN_SERVICE_PROVIDER`. The panel can select servers for `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`, `surfshark` and `windscribe`; the exit refuses any other. `compose.gluetun.yaml` gives the exit and the panel `PROVIDER=gluetun-<this value>`. |
-| `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The routing contract and NetBird's ICE blacklist use the same value. (The binary's own default is `mullvad`, which `compose.gluetun.yaml` replaces with `wg0`.) |
+| `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The routing contract and NetBird's ICE blacklist use the same value. (The native default is `mullvad`.) |
 | `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
 | `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). When `SERVER` is set, the exit converges to it and restores it after gluetun restarts. Otherwise a selection in the panel replaces these filters while gluetun runs, and the exit restores your last verified selection after a restart. |
-| `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the exit also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. A Go duration such as `24h` or `1h30m`; anything else stops the exit at start with `invalid GLUETUN_UPDATER_PERIOD`. |
-| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. |
-| `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256 to 2147483647). Must differ from `EXIT_TABLE`; 51820 (gluetun) and 7120 (NetBird) are taken. |
+| `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the exit also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. Hours, minutes and seconds only, such as `24h`, `1h30m` or `90s`; anything else stops the exit at start with `invalid GLUETUN_UPDATER_PERIOD`. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. It can't be `lo`, `OVERLAY_IF` or `EXIT_IF`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. |
+| `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256 to 2147483647). Must differ from `EXIT_TABLE`; neither may be 51820 (gluetun) or 7120 (NetBird). |
 | `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. |
 | `NB_WIREGUARD_PORT` | `51820` | NetBird's WireGuard port, opened in gluetun's firewall. |
 | `FWMARK_GRACE` | `30` | See [repair and lease timing](#repair-and-lease-timing). |
@@ -275,8 +299,9 @@ Before the first start:
    to write `tunnel/gluetun/post-rules.txt` from these settings; add
    `--ipv4-only` if gluetun logs that it found no working ip6tables. It does
    not read `.env`: pass the settings that differ from the defaults with
-   `-e`. Run it again after changing `HOST_IF`, `EXIT_IF`, `OVERLAY_IF`,
-   `CONTROL_MARK` or `NB_WIREGUARD_PORT`, then recreate gluetun and the exit.
+   `-e`. Only `HOST_IF`, `EXIT_IF`, `OVERLAY_IF` and `NB_WIREGUARD_PORT` appear
+   in the file; run it again after changing one of them, then recreate gluetun
+   and the exit.
 
 ## gluetun sidecar
 
@@ -289,7 +314,7 @@ above. The NetBird, overlay, table and mark settings don't apply.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, for the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace) to read. Nothing in Molebridge checks it for you. `.env.sidecar.example` sets `example-app`. |
+| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, a record of your list that `docker inspect` shows. Nothing in Molebridge reads or checks it; the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace) finds dependents by network mode. `.env.sidecar.example` sets `example-app`. |
 | `GLUETUN_FIREWALL_INPUT_PORTS` | empty | gluetun's `FIREWALL_INPUT_PORTS`: ports your applications listen on, comma-separated, which you also publish on the `gluetun` service. Never 8000, the control server. |
 | `COMPOSE_PROFILES` | empty | `.env.sidecar.example` sets `example`, which runs the example application, a busybox that only sleeps; remove it once yours are listed. |
 
@@ -479,7 +504,7 @@ granted.
 | `/embed`, `/embed?exit=<id>` | Compact view for iframes |
 | `POST /select` | Refused with 403 `Exit is set in configuration; change SERVER to choose another server.` for an exit set in configuration, then with 409 `A switch is in progress; wait for it to finish.` while the exit's state is switching. Otherwise choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode. A stale or unreadable status doesn't block a switch |
 | `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
-| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. Deprecated, removed after 0.7: `view` (`state`, `label`, `tier`, `selection_mode`, `configured_server`), and in `result` for a schema-2 record `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback`, derived from the verdict and null where unknown or not applicable |
+| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. Deprecated, still sent in 0.8.0: `view` (`state`, `label`, `tier`, `selection_mode`, `configured_server`), and in `result` for a schema-2 record `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback`, derived from the verdict and null where unknown or not applicable |
 | `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>` (up to 128 servers, a fixed sample beyond that; the answer's `country` gives `probed` and `total`), or `hosts=<a,b>` (64 at most); 256 servers per request in all; `fresh=1` ignores the cache. 429 with `Retry-After` while that exit already has a request running or four are running panel-wide |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |
