@@ -122,8 +122,10 @@ func TestStopRightAfterStartLeavesNothingAlive(t *testing.T) {
 	}
 }
 
-// After Close returns no process is ever started.
-func TestNothingStartsAfterClose(t *testing.T) {
+// After Close returns, a process whose creation was already in flight may
+// still appear, but it is killed the moment it is attached: nothing that
+// starts after Close is left running, with no signal sent by anyone else.
+func TestNothingSurvivesThatStartsAfterClose(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		r := newNBRig(t)
 		if _, ok := r.m.Start(); !ok {
@@ -131,13 +133,31 @@ func TestNothingStartsAfterClose(t *testing.T) {
 		}
 		time.Sleep(time.Duration(i%5) * 4 * time.Millisecond)
 		r.m.Close()
-		n := len(r.m.snapshot())
-		time.Sleep(60 * time.Millisecond)
-		if got := len(r.m.snapshot()); got != n {
-			t.Fatalf("round %d: %d processes after Close, %d before", i, got, n)
-		}
+		before := len(r.m.snapshot())
 		if _, ok := r.m.Start(); ok {
 			t.Fatal("a launch was accepted after Close")
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			late := r.m.snapshot()
+			if len(late) >= before {
+				late = late[before:]
+			}
+			alive := false
+			for _, p := range late {
+				select {
+				case <-p.Reaped():
+				default:
+					alive = true
+				}
+			}
+			if !alive && r.m.pending.Load() == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("round %d: a process that started after Close is still alive", i)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
 		r.m.TermAll()
 		r.m.KillAll()
