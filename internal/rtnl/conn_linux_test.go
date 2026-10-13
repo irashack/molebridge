@@ -606,7 +606,7 @@ func TestASnapshotDuringWhichTheKernelChangedIsTakenAgain(t *testing.T) {
 	if err != nil || s.Unstable {
 		t.Fatalf("%+v %v", s, err)
 	}
-	if got := k.dumps(); got != 14+14 {
+	if got := k.dumps(); got != 9+9 { // a full look and a look at the rules, twice
 		t.Fatalf("%d dumps: one pair of looks discarded, one kept", got)
 	}
 }
@@ -621,7 +621,7 @@ func TestChangesElsewhereDoNotSpoilASnapshot(t *testing.T) {
 	})
 	c.churn = churn
 	s, err := c.Take(Interest{Tables: []uint32{51821}})
-	if err != nil || s.Unstable || k.dumps() != 14 {
+	if err != nil || s.Unstable || k.dumps() != 9 {
 		t.Fatalf("%+v %v (%d dumps)", s, err, k.dumps())
 	}
 	// A route in a table the snapshot reads, or a link or address change, does.
@@ -660,7 +660,7 @@ func TestLostChangeNotificationsSpoilTheSnapshotToo(t *testing.T) {
 	})
 	c.churn = churn
 	s, err := c.Take(Interest{})
-	if err != nil || s.Unstable || k.dumps() != 28 {
+	if err != nil || s.Unstable || k.dumps() != 18 {
 		t.Fatalf("%+v %v (%d dumps)", s, err, k.dumps())
 	}
 }
@@ -1125,7 +1125,7 @@ func TestALateNotificationIsSeenBecauseTheBarrierWaitsForIt(t *testing.T) {
 	if err != nil || s.Unstable {
 		t.Fatalf("%+v %v", s, err)
 	}
-	if k.barriers() != 2 || k.dumps() != 28 {
+	if k.barriers() != 2 || k.dumps() != 18 {
 		t.Errorf("%d barriers, %d dumps: the first pair of looks should have been discarded", k.barriers(), k.dumps())
 	}
 	// The barrier is the no-op RTM_NEWLINK for the loopback: no attribute, no flag.

@@ -13,6 +13,7 @@ import (
 	"github.com/irashack/molebridge/internal/contract"
 	"net/netip"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -593,4 +594,65 @@ func TestATOSQualifiedProtectionIsNotDeletedWhileTheContractCannotBeRestored(t *
 	}
 	k.fail = nil
 	repairs(t, m, k, spec)
+}
+
+// One stable snapshot per pass: the deletions of a pass are judged against the
+// model of the snapshot with the pass's own changes applied, and only a change
+// somebody else made sends the owner back to the kernel.
+func TestADeletionIsJudgedAgainstThePassesModelNotANewSnapshot(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.mu.Lock()
+	for p := uint32(20); p < 28; p++ {
+		k.rules[rtnl.V4] = append(k.rules[rtnl.V4], rtnl.Rule{Family: rtnl.V4, Priority: p, Action: rtnl.FRActUnreachable, IifName: "eth0"})
+	}
+	k.mu.Unlock()
+	sortRules(k.rules[rtnl.V4])
+	k.mu.Lock()
+	k.takes = 0
+	k.mu.Unlock()
+	repairs(t, m, k, spec)
+	k.mu.Lock()
+	takes := k.takes
+	k.mu.Unlock()
+	// The plan's look, the look that verifies, and the checks of the end.
+	if takes > 4 {
+		t.Errorf("%d snapshots for the removal of eight strays: a deletion took a snapshot of its own", takes)
+	}
+}
+
+func TestAChangeBySomebodyElseSendsTheOwnerBackToTheKernel(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.mu.Lock()
+	for p := uint32(20); p < 24; p++ {
+		k.rules[rtnl.V4] = append(k.rules[rtnl.V4], rtnl.Rule{Family: rtnl.V4, Priority: p, Action: rtnl.FRActUnreachable, IifName: "eth0"})
+	}
+	k.mu.Unlock()
+	sortRules(k.rules[rtnl.V4])
+	// Somebody else puts a rule in after the first deletion.
+	var once sync.Once
+	k.hook = func(op string) {
+		if strings.HasPrefix(op, "del 2 2") {
+			once.Do(func() {
+				k.mu.Lock()
+				k.rules[rtnl.V4] = append(k.rules[rtnl.V4], rtnl.Rule{Family: rtnl.V4, Priority: 70, Action: rtnl.FRActUnreachable, IifName: "eth0"})
+				k.mu.Unlock()
+				sortRules(k.rules[rtnl.V4])
+			})
+		}
+	}
+	k.mu.Lock()
+	k.takes = 0
+	k.mu.Unlock()
+	repairs(t, m, k, spec)
+	k.mu.Lock()
+	takes := k.takes
+	k.mu.Unlock()
+	if takes < 3 {
+		t.Errorf("%d snapshots: the foreign change did not make the owner look again", takes)
+	}
+	for _, r := range k.rules[rtnl.V4] {
+		if r.Priority == 70 {
+			t.Error("the stray somebody else added was not removed")
+		}
+	}
 }

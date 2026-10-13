@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"hash/fnv"
 	"net/netip"
 	"sort"
 
@@ -122,6 +123,42 @@ func (s State) WithoutPriority(f rtnl.Family, priority uint32) (State, bool) {
 	return s, false
 }
 
+// WithRule returns the state after the kernel adds a rule: after the rules of
+// its priority already there.
+func (s State) WithRule(r rtnl.Rule) State {
+	out := s.clone()
+	rules := out.Rules[r.Family]
+	i := len(rules)
+	for j, x := range rules {
+		if x.Priority > r.Priority {
+			i = j
+			break
+		}
+	}
+	out.Rules[r.Family] = append(rules[:i:i], append([]rtnl.Rule{r}, rules[i:]...)...)
+	return out
+}
+
+// WithRoute returns the state after the kernel creates or replaces a route
+// (NLM_F_CREATE|NLM_F_REPLACE): a route of the same destination, TOS and
+// metric in the table is replaced, otherwise the route is added. A table the
+// snapshot did not read is not tracked.
+func (s State) WithRoute(r rtnl.Route) State {
+	if _, known := s.Routes[r.Family][r.Table]; !known {
+		return s
+	}
+	out := s.clone()
+	routes := out.Routes[r.Family][r.Table]
+	for i, x := range routes {
+		if x.Dst == r.Dst && x.Tos == r.Tos && x.Metric == r.Metric && (r.Family == rtnl.V4 || x.Src == r.Src) {
+			routes[i] = r
+			return out
+		}
+	}
+	out.Routes[r.Family][r.Table] = append(routes, r)
+	return out
+}
+
 // WithoutRoute returns the state after the kernel deletes the first route of
 // the request's table that it names: fib_table_delete for IPv4 (destination,
 // TOS, type, metric, scope and protocol when the request gives them, then the
@@ -177,18 +214,19 @@ type Outcome struct {
 	Kind  outKind
 	Table uint32
 	Dev   uint32
-	// By identifies the rule whose action ended the walk (its priority and
-	// selectors), so that two paths to the same place through different rules
-	// are different outcomes when two states are compared.
-	By string
+	// By identifies the rule whose action ended the walk (a hash of its
+	// priority and selectors), so that two paths to the same place through
+	// different rules are different outcomes when two states are compared.
+	By uint64
 	// Cond records the decisions the model could not make on the way (a rule
-	// that may or may not apply, a lookup that may or may not answer): the same
-	// place reached under another assumption is another outcome.
-	Cond string
+	// that may or may not apply, a lookup that may or may not answer), as a hash
+	// of the sequence: the same place reached under another assumption is
+	// another outcome.
+	Cond uint64
 }
 
 // same ignores By and Cond: where the packet ends, not how it got there.
-func (o Outcome) same(x Outcome) bool { o.By, x.By, o.Cond, x.Cond = "", "", "", ""; return o == x }
+func (o Outcome) same(x Outcome) bool { o.By, x.By, o.Cond, x.Cond = 0, 0, 0, 0; return o == x }
 
 func (o Outcome) String() string {
 	switch o.Kind {
@@ -420,19 +458,31 @@ func (s State) lookup(r rtnl.Rule, p packet) (outs []Outcome, fall bool) {
 		suppress = int(r.SuppressPrefixLen.V)
 	}
 	ifgroup := r.SuppressIfGroup.OK
-	byBits := map[int][]rtnl.Route{}
-	var bits []int
+	// The routes that cover the destination, in the kernel's order: the longest
+	// prefix first, then (IPv4) a route with a TOS before one without, then by
+	// metric.
+	var buf [16]rtnl.Route
+	cands := buf[:0]
 	for _, rt := range s.Routes[p.f][table] {
-		if !rt.Dst.IsValid() || !rt.Dst.Contains(p.dst) {
-			continue
+		if rt.Dst.IsValid() && rt.Dst.Contains(p.dst) {
+			cands = append(cands, rt)
 		}
-		b := rt.Dst.Bits()
-		if _, ok := byBits[b]; !ok {
-			bits = append(bits, b)
-		}
-		byBits[b] = append(byBits[b], rt)
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(bits)))
+	v4 := p.f == rtnl.V4
+	less := func(a, b rtnl.Route) bool {
+		if a.Dst.Bits() != b.Dst.Bits() {
+			return a.Dst.Bits() > b.Dst.Bits()
+		}
+		if v4 && (a.Tos != 0) != (b.Tos != 0) {
+			return a.Tos != 0
+		}
+		return a.Metric < b.Metric
+	}
+	for i := 1; i < len(cands); i++ { // insertion sort: stable, and the lists are short
+		for j := i; j > 0 && less(cands[j], cands[j-1]); j-- {
+			cands[j], cands[j-1] = cands[j-1], cands[j]
+		}
+	}
 	add := func(o Outcome, f bool, b int) {
 		if f {
 			fall = true
@@ -451,26 +501,16 @@ func (s State) lookup(r rtnl.Rule, p packet) (outs []Outcome, fall bool) {
 			fall = true
 		}
 	}
-	for _, b := range bits {
-		group := byBits[b]
-		// The kernel tries a route with a TOS before one without, then by metric.
-		sort.SliceStable(group, func(a, c int) bool {
-			if v4 := p.f == rtnl.V4; v4 && (group[a].Tos != 0) != (group[c].Tos != 0) {
-				return group[a].Tos != 0
-			}
-			return group[a].Metric < group[c].Metric
-		})
-		for _, rt := range group {
-			switch s.routeApplies(rt, p) {
-			case no:
-			case maybe:
-				o, f := s.disposition(rt)
-				add(o, f, b)
-			default:
-				o, f := s.disposition(rt)
-				add(o, f, b)
-				return outs, fall
-			}
+	for _, rt := range cands {
+		switch s.routeApplies(rt, p) {
+		case no:
+		case maybe:
+			o, f := s.disposition(rt)
+			add(o, f, rt.Dst.Bits())
+		default:
+			o, f := s.disposition(rt)
+			add(o, f, rt.Dst.Bits())
+			return outs, fall
 		}
 	}
 	// No route answered: the lookup falls through.
@@ -482,12 +522,15 @@ func (s State) lookup(r rtnl.Rule, p packet) (outs []Outcome, fall bool) {
 // walk follows a packet through the rules and returns every place it can end.
 // Rules whose selectors the model cannot decide are followed both ways, a
 // goto both to its target and past it, and a lookup that can fail both ways.
-func (s State) walk(p packet) []Outcome {
+func (s State) walk(p packet) []Outcome { return s.walkWith(p, ruleHashes(s.Rules[p.f])) }
+
+// walkWith is walk with the hashes of the family's rules (ruleHashes) already made.
+func (s State) walkWith(p packet, hashes []uint64) []Outcome {
 	rules := s.Rules[p.f]
 	n := len(rules)
 	// sets[i] are the outcomes of the walk that arrives at rule i.
 	sets := make([][]Outcome, n+1)
-	sets[n] = []Outcome{{Kind: stopped, By: "end"}} // no rule answered: the lookup fails
+	sets[n] = []Outcome{{Kind: stopped, By: endHash}} // no rule answered: the lookup fails
 	union := func(a, b []Outcome) []Outcome {
 		out := append([]Outcome(nil), a...)
 		for _, o := range b {
@@ -505,10 +548,10 @@ func (s State) walk(p packet) []Outcome {
 		return out
 	}
 	// tag records a decision the model could not make on the outcomes it led to.
-	tag := func(set []Outcome, prefix string) []Outcome {
+	tag := func(set []Outcome, decision uint64) []Outcome {
 		out := make([]Outcome, len(set))
 		for k, o := range set {
-			o.Cond = prefix + o.Cond
+			o.Cond = mix(decision, o.Cond)
 			out[k] = o
 		}
 		return out
@@ -521,7 +564,7 @@ func (s State) walk(p packet) []Outcome {
 			continue
 		}
 		var taken []Outcome
-		by := ruleKey(r)
+		by := hashes[i]
 		switch r.Action {
 		case rtnl.FRActToTbl:
 			outs, fall := s.lookup(r, p)
@@ -532,7 +575,7 @@ func (s State) walk(p packet) []Outcome {
 			if fall && len(outs) > 0 {
 				// The table may answer or not: both are followed, and which
 				// one is part of the outcome.
-				taken = union(tag(outs, "+L"+by+";"), tag(sets[i+1], "-L"+by+";"))
+				taken = union(tag(outs, mix(by, 1)), tag(sets[i+1], mix(by, 2)))
 			} else if fall {
 				taken = sets[i+1]
 			}
@@ -555,7 +598,7 @@ func (s State) walk(p packet) []Outcome {
 			taken = sets[i+1]
 		}
 		if m == maybe {
-			taken = union(tag(taken, "+"+by+";"), tag(sets[i+1], "-"+by+";"))
+			taken = union(tag(taken, mix(by, 3)), tag(sets[i+1], mix(by, 4)))
 		}
 		sets[i] = taken
 	}
@@ -564,3 +607,27 @@ func (s State) walk(p packet) []Outcome {
 
 // ruleKey names a rule by its priority and selectors.
 func ruleKey(r rtnl.Rule) string { return fmt.Sprintf("%d %v", r.Priority, r.Items()) }
+
+const endHash = 0x9e3779b97f4a7c15
+
+// ruleHashes gives each rule a 64-bit name made from its priority and selectors:
+// the identity outcomes carry. Computing it takes a rule's canonical form, so it
+// is done once per state and family, not per packet.
+func ruleHashes(rules []rtnl.Rule) []uint64 {
+	out := make([]uint64, len(rules))
+	for i, r := range rules {
+		h := fnv.New64a()
+		h.Write([]byte(ruleKey(r)))
+		out[i] = h.Sum64() | 1
+	}
+	return out
+}
+
+// mix combines a decision into a sequence of decisions, order sensitive.
+func mix(decision, seq uint64) uint64 {
+	x := seq*0x9e3779b97f4a7c15 + decision + 0x7f4a7c15
+	x ^= x >> 29
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 32
+	return x
+}

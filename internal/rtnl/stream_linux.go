@@ -78,6 +78,7 @@ type netlinkTransport struct {
 	rc interface {
 		Read(func(uintptr) bool) error
 		Write(func(uintptr) bool) error
+		Control(func(uintptr)) error
 	}
 }
 
@@ -125,6 +126,20 @@ func (t *netlinkTransport) recv(buf []byte) (int, error) {
 	return n, serr
 }
 
+// portID is the socket's netlink port id, what the kernel stamps on the
+// notifications its requests cause.
+func (t *netlinkTransport) portID() uint32 {
+	var pid uint32
+	_ = t.rc.Control(func(fd uintptr) {
+		if sa, err := unix.Getsockname(int(fd)); err == nil {
+			if nl, ok := sa.(*unix.SockaddrNetlink); ok {
+				pid = nl.Pid
+			}
+		}
+	})
+	return pid
+}
+
 func (t *netlinkTransport) setDeadline(d time.Time) error { return t.c.SetDeadline(d) }
 func (t *netlinkTransport) close() error                  { return t.c.Close() }
 
@@ -132,6 +147,8 @@ func (t *netlinkTransport) close() error                  { return t.c.Close() }
 // requests are serialized. Close may be called from another goroutine to
 // unblock a request in flight.
 type Conn struct {
+	// pid is the port id of the current request socket (0 if unknown).
+	pid atomic.Uint32
 	// noBarrier: the kernel refused the snapshot barrier (see barrier).
 	noBarrier atomic.Bool
 	opts      Options
@@ -167,6 +184,7 @@ func Dial(o Options) (*Conn, error) {
 		return nil, err
 	}
 	c.t = t
+	c.pid.Store(portOf(t))
 	// Best effort: without it a snapshot is judged by two looks that agree.
 	c.reopen = func() (churnSource, error) { return Subscribe(o) }
 	if sub, err := Subscribe(o); err == nil {
@@ -256,6 +274,7 @@ func (c *Conn) socket() (transport, error) {
 		}
 		c.t = t
 		c.resets++
+		c.pid.Store(portOf(t))
 	}
 	return c.t, nil
 }
@@ -277,6 +296,7 @@ type rawMsg struct {
 	typ   uint16
 	flags uint16
 	seq   uint32
+	pid   uint32
 	data  []byte
 }
 
@@ -340,6 +360,7 @@ func splitMessages(b []byte) ([]rawMsg, error) {
 			typ:   native.Uint16(b[4:6]),
 			flags: native.Uint16(b[6:8]),
 			seq:   native.Uint32(b[8:12]),
+			pid:   native.Uint32(b[12:16]),
 			data:  cloneBytes(b[nlmsgHdrLen:n]),
 		})
 		adv := (n + 3) &^ 3
@@ -525,3 +546,15 @@ func (c *Conn) swapChurn(n churnSource) churnSource {
 	c.churn = n
 	return old
 }
+
+// portOf is a transport's port id when it has one.
+func portOf(t transport) uint32 {
+	if p, ok := t.(interface{ portID() uint32 }); ok {
+		return p.portID()
+	}
+	return 0
+}
+
+// PortID is the netlink port id of the request socket (0 if unknown): the
+// notifications of this Conn's own changes carry it as Event.Pid.
+func (c *Conn) PortID() uint32 { return c.pid.Load() }

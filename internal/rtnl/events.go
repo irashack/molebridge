@@ -38,6 +38,10 @@ type Event struct {
 	// Name is the interface name of a link event.
 	Name string
 	Err  error
+	// Pid is the port id of the socket whose request caused the notification
+	// (nlmsg_pid, which the kernel stamps from the request); 0 for a change the
+	// kernel made itself.
+	Pid uint32
 }
 
 //lint:ignore U1000 linux-only: called from events_linux.go
@@ -65,6 +69,7 @@ func decodeEvents(msgs []netlink.Message) []Event {
 		default:
 			continue
 		}
+		e.Pid = m.Header.PID
 		out = append(out, e)
 	}
 	return out

@@ -425,3 +425,104 @@ func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
 	t.Logf("%d stable snapshots (%d with a rule repeated or missing, which this kernel allows: %v), %d marked unstable, %d interrupted dumps discarded, %d stream resets",
 		taken, anomalies, relaxed, unstable, c.Interrupts(), c.Resets())
 }
+
+// The kernel stamps every notification with the port id of the socket whose
+// request caused it (nlmsg_pid): the owner tells its own changes from anyone
+// else's by it, and takes a fresh snapshot only for the latter. Verified here on
+// the kernel the drill runs on; CI runs it on the runner's older one.
+func TestNotificationsCarryThePortOfTheSocketThatCausedThem(t *testing.T) {
+	ns := nstest.New(t, "pid")
+	ns.IP("link", "add", "dum0", "type", "dummy")
+	sub, err := rtnl.Subscribe(rtnl.Options{NetNS: ns.Fd()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	c := dial(t, ns)
+	if c.PortID() == 0 {
+		t.Fatal("the request socket has no port id")
+	}
+	collect := func() []rtnl.Event {
+		var all []rtnl.Event
+		for {
+			evs, err := sub.Next(time.Now().Add(150 * time.Millisecond))
+			if err != nil {
+				return all
+			}
+			all = append(all, evs...)
+		}
+	}
+	collect()
+	// Our own changes: a rule and a route. (What the kernel does by itself in
+	// answer to a link coming up - addresses, routes, the state - carries pid 0.)
+	if err := c.AddRule(rtnl.Rule{Family: rtnl.V4, Priority: 700, Action: rtnl.FRActUnreachable, IifName: "dum0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReplaceRoute(rtnl.Route{Family: rtnl.V4, Dst: netip.MustParsePrefix("203.0.113.0/24"), Table: 51821, Type: rtnl.RTNUnreachable}); err != nil {
+		t.Fatal(err)
+	}
+	mine := collect()
+	seen := map[rtnl.EventKind]bool{}
+	for _, e := range mine {
+		seen[e.Kind] = true
+		if e.Pid != c.PortID() {
+			t.Errorf("%s event %+v: pid %d, our socket's port is %d", e.Kind, e, e.Pid, c.PortID())
+		}
+	}
+	for _, k := range []rtnl.EventKind{rtnl.EventRule, rtnl.EventRoute} {
+		if !seen[k] {
+			t.Errorf("no %s notification for our change: %+v", k, mine)
+		}
+	}
+	// Somebody else's: iproute2's socket.
+	ns.IP("rule", "add", "unreachable", "priority", "701")
+	ns.IP("route", "add", "unreachable", "198.51.100.0/24", "table", "51821")
+	theirs := collect()
+	if len(theirs) < 2 {
+		t.Fatalf("no notification for the other process's changes: %+v", theirs)
+	}
+	for _, e := range theirs {
+		if e.Pid == c.PortID() || e.Pid == 0 && e.Kind != rtnl.EventAddr && e.Kind != rtnl.EventLink {
+			t.Errorf("%s event of another process carries pid %d (ours is %d)", e.Kind, e.Pid, c.PortID())
+		}
+	}
+}
+
+func TestForeignChangeIgnoresOurOwnAndSeesOthers(t *testing.T) {
+	ns := nstest.New(t, "foreign")
+	ns.IP("link", "add", "dum0", "type", "dummy")
+	c := dial(t, ns)
+	in := rtnl.Interest{Tables: []uint32{51821}}
+	ctx := t.Context()
+	if _, err := c.TakeContext(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := c.ForeignChange(ctx, in); err != nil || f {
+		t.Fatalf("foreign=%v %v on a quiet kernel", f, err)
+	}
+	if err := c.AddRule(rtnl.Rule{Family: rtnl.V4, Priority: 700, Action: rtnl.FRActUnreachable, IifName: "dum0"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ReplaceRoute(rtnl.Route{Family: rtnl.V4, Dst: netip.MustParsePrefix("203.0.113.0/24"), Table: 51821, Type: rtnl.RTNUnreachable}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DelRule(rtnl.Rule{Family: rtnl.V4, Priority: 700, Action: rtnl.FRActUnreachable, IifName: "dum0"}); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := c.ForeignChange(ctx, in); err != nil || f {
+		t.Errorf("our own changes counted as foreign (%v %v)", f, err)
+	}
+	// A route in a table nobody reads does not count, whoever made it.
+	ns.IP("route", "add", "unreachable", "198.51.100.0/24", "table", "7120")
+	if f, err := c.ForeignChange(ctx, in); err != nil || f {
+		t.Errorf("a route in an unread table counted (%v %v)", f, err)
+	}
+	// Somebody else's change does.
+	ns.IP("rule", "add", "unreachable", "priority", "701")
+	if f, err := c.ForeignChange(ctx, in); err != nil || !f {
+		t.Errorf("another process's rule was not seen (%v %v)", f, err)
+	}
+	if f, err := c.ForeignChange(ctx, in); err != nil || f {
+		t.Errorf("the change was counted twice (%v %v)", f, err)
+	}
+}

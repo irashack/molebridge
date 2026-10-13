@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"runtime"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -83,7 +85,7 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 				// list and notifying, and the dump takes no lock), so silence
 				// proves little; a second look that agrees, and a dump that
 				// holds no rule twice, are what make the snapshot stable.
-				again, aerr := c.takeOnce(ctx, in)
+				againRules, aerr := c.takeRulesOnce(ctx)
 				if aerr != nil {
 					switch {
 					case errors.Is(aerr, errInterrupted):
@@ -96,18 +98,18 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 					lastSnap = s
 					continue
 				}
-				if !reflect.DeepEqual(s, again) {
-					lastSnap, last = again, ErrInconsistent
+				if !reflect.DeepEqual(s.Rules, againRules) {
+					lastSnap, last = s, ErrInconsistent
 					continue
 				}
-				if hasRepeats(again) {
+				if hasRepeats(s) {
 					// A rule twice is real (ip rule restore does it) or an
 					// artifact of the dump; real ones are in every look.
-					if more, merr := c.confirmRepeats(ctx, in, again); merr != nil || !more {
+					if more, merr := c.confirmRepeats(ctx, s); merr != nil || !more {
 						if merr != nil && !errors.Is(merr, errInterrupted) && !(IsStreamError(merr) && !errors.Is(merr, os.ErrDeadlineExceeded)) {
 							return nil, merr
 						}
-						lastSnap, last = again, ErrInconsistent
+						lastSnap, last = s, ErrInconsistent
 						continue
 					}
 				}
@@ -121,7 +123,7 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 					switch {
 					case IsStreamError(berr) && !errors.Is(berr, os.ErrDeadlineExceeded):
 						last = berr
-						lastSnap = again
+						lastSnap = s
 						continue
 					case berr != nil && !IsKernelRefusal(berr):
 						return nil, berr
@@ -139,7 +141,7 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 					if eerr := c.expired(ctx); eerr != nil {
 						return nil, eerr
 					}
-					return again, nil
+					return s, nil
 				case cerr != nil && !errors.Is(cerr, errObservation):
 					return nil, cerr // out of time: no snapshot is returned after the deadline
 				case cerr != nil:
@@ -148,14 +150,14 @@ func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) 
 				default:
 					last = ErrInconsistent
 				}
-				lastSnap = again
+				lastSnap = s
 				continue
 			}
 			var again *Snapshot
 			if again, err = c.takeOnce(ctx, in); err == nil {
 				if reflect.DeepEqual(s, again) {
 					if hasRepeats(again) {
-						if more, merr := c.confirmRepeats(ctx, in, again); merr != nil || !more {
+						if more, merr := c.confirmRepeats(ctx, again); merr != nil || !more {
 							if merr != nil && !errors.Is(merr, errInterrupted) && !(IsStreamError(merr) && !errors.Is(merr, os.ErrDeadlineExceeded)) {
 								return nil, merr
 							}
@@ -247,21 +249,36 @@ func ruleIdentity(r Rule) string {
 	return fmt.Sprintf("%d %v proto %d", r.Priority, items, r.Protocol.V)
 }
 
-// confirmRepeats takes more looks and says whether they all agree with the
-// snapshot. The dump of the kernels measured repeats a rule when the list
-// changes under it and nothing in the dump says so; a rule that is really
+// confirmRepeats takes more looks at the rules and says whether they all agree
+// with the snapshot. The dump of the kernels measured repeats a rule when the
+// list changes under it and nothing in the dump says so; a rule that is really
 // there twice is in every look, an artifact is not.
-func (c *Conn) confirmRepeats(ctx context.Context, in Interest, s *Snapshot) (bool, error) {
+func (c *Conn) confirmRepeats(ctx context.Context, s *Snapshot) (bool, error) {
 	for i := 0; i < repeatLooks; i++ {
-		more, err := c.takeOnce(ctx, in)
+		more, err := c.takeRulesOnce(ctx)
 		if err != nil {
 			return false, err
 		}
-		if !reflect.DeepEqual(s, more) {
+		if !reflect.DeepEqual(s.Rules, more) {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// takeRulesOnce dumps the rules of both families: the second look of a
+// snapshot. Only the rule dump needs one (the dumps of routes, addresses and
+// links are marked when they are interrupted).
+func (c *Conn) takeRulesOnce(ctx context.Context) (map[Family][]Rule, error) {
+	out := map[Family][]Rule{}
+	for _, f := range []Family{V4, V6} {
+		rules, err := c.rulesOnce(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		out[f] = rules
+	}
+	return out, nil
 }
 
 // expired reports ErrDeadline once the operation's deadline (the context's or
@@ -340,20 +357,20 @@ var errObservation = errors.New("rtnl: change notifications could not be read")
 // not silence: it returns errObservation, and a lost-events overrun counts as
 // a change.
 func (c *Conn) settleChurn(ctx context.Context, churn churnSource, in Interest, report bool) (changed bool, err error) {
+	return c.settleChurnFor(ctx, churn, report, func(e Event) bool { return relevantToSnapshot(e, in) })
+}
+
+func (c *Conn) settleChurnFor(ctx context.Context, churn churnSource, report bool, relevant func(Event) bool) (changed bool, err error) {
 	dl := c.operationDeadline(ctx)
 	for i := 0; i < 256; i++ {
 		if cerr := c.expired(ctx); cerr != nil {
 			return false, cerr
 		}
-		quiet := time.Millisecond
-		if c.noBarrier.Load() {
-			quiet = 5 * time.Millisecond // nothing orders the notifications before this read
-		}
-		until := time.Now().Add(quiet)
+		until := time.Now().Add(c.quietWindow())
 		if !dl.IsZero() && dl.Before(until) {
 			until = dl
 		}
-		events, rerr := churn.Next(until)
+		events, rerr := c.readEvents(churn, until)
 		if rerr != nil {
 			switch {
 			case errors.Is(rerr, ErrOverrun):
@@ -370,7 +387,7 @@ func (c *Conn) settleChurn(ctx context.Context, churn churnSource, in Interest, 
 			}
 		}
 		for _, e := range events {
-			if relevantToSnapshot(e, in) {
+			if relevant(e) {
 				if report {
 					return true, nil
 				}
@@ -411,4 +428,224 @@ func relevantToSnapshot(e Event, in Interest) bool {
 		}
 	}
 	return false
+}
+
+// ForeignChange drains the Conn's own change subscription and reports whether
+// it saw a change that the Conn did not make itself and that could alter what a
+// snapshot of in reads. The kernel stamps every notification with the port id
+// of the socket whose request caused it (nlmsg_pid), so the notifications of
+// this Conn's own mutations - which the owner has already applied to its model
+// of the kernel - are told from those of anyone else's. Anything that cannot
+// be told (no subscription, a read that failed, lost events, a notification
+// that does not decode) counts as foreign. The drain is preceded by the same
+// barrier as a snapshot's, so that notifications of changes under way are in
+// the queue where the kernel orders them.
+func (c *Conn) ForeignChange(ctx context.Context, in Interest) (bool, error) {
+	c.takeMu.Lock()
+	defer c.takeMu.Unlock()
+	churn := c.getChurn()
+	if churn == nil {
+		return true, nil
+	}
+	if err := c.expired(ctx); err != nil {
+		return false, err
+	}
+	if berr := c.barrier(ctx); berr != nil && !IsKernelRefusal(berr) {
+		return false, berr
+	}
+	own := c.PortID()
+	dl := c.operationDeadline(ctx)
+	changed := false
+	for i := 0; i < 256; i++ {
+		if err := c.expired(ctx); err != nil {
+			return false, err
+		}
+		until := time.Now().Add(c.quietWindow())
+		if !dl.IsZero() && dl.Before(until) {
+			until = dl
+		}
+		events, rerr := c.readEvents(churn, until)
+		if rerr != nil {
+			switch {
+			case errors.Is(rerr, ErrOverrun):
+				return true, nil
+			case Timeout(rerr):
+				if err := c.expired(ctx); err != nil {
+					return false, err
+				}
+				return changed, nil
+			default:
+				c.reopenChurn()
+				return true, nil
+			}
+		}
+		for _, e := range events {
+			if relevantToSnapshot(e, in) && (e.Err != nil || own == 0 || e.Pid != own) {
+				changed = true
+			}
+		}
+	}
+	return true, nil
+}
+
+// quietWindow is how long a drain waits for one more notification. Where the
+// kernel notifies under the rtnl lock the barrier has put every notification of
+// a change under way in the queue, so a read that finds it empty can stop at
+// once; elsewhere (from Linux 6.18, or when the barrier is refused) nothing
+// orders them and the wait is a heuristic.
+func (c *Conn) quietWindow() time.Duration {
+	switch {
+	case c.noBarrier.Load():
+		return 5 * time.Millisecond
+	case notifiesUnderLock():
+		return 200 * time.Microsecond
+	}
+	return time.Millisecond
+}
+
+var notifiesUnderLockOnce struct {
+	sync.Once
+	v bool
+}
+
+// notifiesUnderLock reports a kernel older than 6.18 (see docs/architecture.md).
+func notifiesUnderLock() bool {
+	notifiesUnderLockOnce.Do(func() {
+		// MOLEBRIDGE_RTNL_NOTIFY_LOCKED=1 or 0 overrides the version test (the
+		// drills use it to run the behaviour of an older kernel on a newer one).
+		switch os.Getenv("MOLEBRIDGE_RTNL_NOTIFY_LOCKED") {
+		case "1":
+			notifiesUnderLockOnce.v = true
+			return
+		case "0":
+			return
+		}
+		var u unix.Utsname
+		if unix.Uname(&u) != nil {
+			return
+		}
+		rel := unix.ByteSliceToString(u.Release[:])
+		var major, minor int
+		if _, err := fmt.Sscanf(rel, "%d.%d", &major, &minor); err != nil {
+			return
+		}
+		notifiesUnderLockOnce.v = major < 6 || major == 6 && minor < 18
+	})
+	return notifiesUnderLockOnce.v
+}
+
+// RulesStable reads one family's rules and says whether the read is stable, with
+// the evidence a snapshot has for the rules: two looks that agree (a repeat
+// confirmed by more), and, with a subscription, no notification of a rule change
+// behind the barrier. It is the read-back of rules the owner just installed,
+// without the dumps of everything else.
+func (c *Conn) RulesStable(ctx context.Context, f Family) (rules []Rule, stable bool, err error) {
+	c.takeMu.Lock()
+	defer c.takeMu.Unlock()
+	for attempt := 0; attempt < maxSnapshotAttempts; attempt++ {
+		if err := c.expired(ctx); err != nil {
+			return nil, false, err
+		}
+		churn := c.getChurn()
+		if churn != nil {
+			if _, err := c.settleRuleChurn(ctx, churn, false); err != nil {
+				if !errors.Is(err, errObservation) {
+					return nil, false, err
+				}
+				c.reopenChurn()
+				continue
+			}
+		}
+		first, err := c.rulesOnce(ctx, f)
+		if err != nil {
+			if errors.Is(err, errInterrupted) || IsStreamError(err) && !errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
+			}
+			return nil, false, err
+		}
+		again, err := c.rulesOnce(ctx, f)
+		if err != nil {
+			if errors.Is(err, errInterrupted) || IsStreamError(err) && !errors.Is(err, os.ErrDeadlineExceeded) {
+				continue
+			}
+			return nil, false, err
+		}
+		if !reflect.DeepEqual(first, again) {
+			rules = again
+			continue
+		}
+		if hasRepeats(&Snapshot{Rules: map[Family][]Rule{f: first}}) {
+			agreed := true
+			for i := 0; i < repeatLooks && agreed; i++ {
+				more, err := c.rulesOnce(ctx, f)
+				if err != nil {
+					return nil, false, err
+				}
+				agreed = reflect.DeepEqual(first, more)
+			}
+			if !agreed {
+				rules = first
+				continue
+			}
+		}
+		if churn != nil {
+			if berr := c.barrier(ctx); berr != nil && !IsKernelRefusal(berr) {
+				return nil, false, berr
+			}
+			changed, cerr := c.settleRuleChurn(ctx, churn, true)
+			if cerr != nil {
+				if !errors.Is(cerr, errObservation) {
+					return nil, false, cerr
+				}
+				c.reopenChurn()
+				rules = first
+				continue
+			}
+			if changed {
+				rules = first
+				continue
+			}
+		}
+		if err := c.expired(ctx); err != nil {
+			return nil, false, err
+		}
+		return first, true, nil
+	}
+	return rules, false, nil
+}
+
+// settleRuleChurn is settleChurn for a read of rules alone: only a change of
+// rules counts.
+func (c *Conn) settleRuleChurn(ctx context.Context, churn churnSource, report bool) (bool, error) {
+	return c.settleChurnFor(ctx, churn, report, func(e Event) bool { return e.Err != nil || e.Kind == EventRule })
+}
+
+// poller is implemented by change sources that can return what is waiting
+// without arming a timer (*Subscriber).
+type poller interface {
+	Poll() ([]Event, error)
+}
+
+// readEvents reads what the subscription has. Where the barrier orders the
+// notifications of every change under way before this read, what is waiting is
+// all there is and nothing needs to be waited for; elsewhere it waits until the
+// quiet window ends.
+func (c *Conn) readEvents(churn churnSource, until time.Time) ([]Event, error) {
+	p, ok := churn.(poller)
+	if !ok {
+		return churn.Next(until)
+	}
+	if !c.noBarrier.Load() && notifiesUnderLock() {
+		return p.Poll()
+	}
+	// Wait out the window by polling: a read with a deadline wakes up on the
+	// timer's granularity, which can be several milliseconds, a great deal more
+	// than the window.
+	for {
+		events, err := p.Poll()
+		if err == nil || !Timeout(err) || !time.Now().Before(until) {
+			return events, err
+		}
+		runtime.Gosched()
+	}
 }

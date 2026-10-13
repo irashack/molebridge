@@ -1,6 +1,7 @@
 package mutator
 
 import (
+	"context"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -57,6 +58,10 @@ type fakeKernel struct {
 	unstable bool
 	// mutations counts requests that change something, in order.
 	mutations int
+	// fp is the state as the owner last saw it or left it by its own requests; a
+	// different state now was changed by someone else (see ForeignChange).
+	fp string
+	// dumps counted by the owner are in dumps.
 }
 
 func newFakeKernel() *fakeKernel {
@@ -71,6 +76,35 @@ func newFakeKernel() *fakeKernel {
 	k.links = []rtnl.Link{{Index: 1, Name: "lo", Flags: rtnl.IFFUp}, {Index: 2, Name: "eth0", Flags: rtnl.IFFUp},
 		{Index: 3, Name: "wt0", Flags: rtnl.IFFUp, Kind: "wireguard"}}
 	return k
+}
+
+// fingerprintLocked is the state that matters for who changed what.
+func (k *fakeKernel) fingerprintLocked() string {
+	return fmt.Sprintf("%v|%v|%v|%v", k.rules, k.routes, k.links, k.addrs)
+}
+
+// ForeignChange says whether the state differs from what the owner saw at its
+// last snapshot and left by its own requests since: the fake's stand-in for
+// the notifications of changes somebody else made.
+func (k *fakeKernel) ForeignChange(_ context.Context, _ rtnl.Interest) (bool, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.fp != k.fingerprintLocked(), nil
+}
+
+// own brackets one of the owner's own requests: if nobody else had changed the
+// state before it, the state after it is the owner's.
+func (k *fakeKernel) own() func() {
+	k.mu.Lock()
+	clean := k.fp == k.fingerprintLocked()
+	k.mu.Unlock()
+	return func() {
+		k.mu.Lock()
+		if clean {
+			k.fp = k.fingerprintLocked()
+		}
+		k.mu.Unlock()
+	}
 }
 
 func (k *fakeKernel) SetTimeout(d time.Duration) {
@@ -133,6 +167,7 @@ func (k *fakeKernel) Take(in rtnl.Interest) (*rtnl.Snapshot, error) {
 		}
 	}
 	s.Links = append([]rtnl.Link(nil), k.links...)
+	k.fp = k.fingerprintLocked()
 	return s, nil
 }
 
@@ -148,6 +183,7 @@ func withoutInvert(r rtnl.Rule) string {
 }
 
 func (k *fakeKernel) AddRule(r rtnl.Rule) error {
+	defer k.own()()
 	k.wait()
 	k.mu.Lock()
 	op := fmt.Sprintf("add %d %d", r.Family.AF(), r.Priority)
@@ -200,6 +236,7 @@ func (k *fakeKernel) hasLink(name string) bool {
 func deleteMatches(req, x rtnl.Rule) bool { return rtnl.DeleteMatches(req, x) }
 
 func (k *fakeKernel) DelRule(r rtnl.Rule) error {
+	defer k.own()()
 	k.wait()
 	k.mu.Lock()
 	op := fmt.Sprintf("del %d %d", r.Family.AF(), r.Priority)
@@ -220,6 +257,7 @@ func (k *fakeKernel) DelRule(r rtnl.Rule) error {
 }
 
 func (k *fakeKernel) DelRulePriority(f rtnl.Family, priority uint32) error {
+	defer k.own()()
 	k.wait()
 	k.mu.Lock()
 	op := fmt.Sprintf("delprio %d %d", f.AF(), priority)
@@ -244,6 +282,7 @@ func routeKey(r rtnl.Route) string {
 }
 
 func (k *fakeKernel) ReplaceRoute(r rtnl.Route) error {
+	defer k.own()()
 	k.wait()
 	k.mu.Lock()
 	op := fmt.Sprintf("route replace %d %d", r.Family.AF(), r.Table)
@@ -267,6 +306,7 @@ func (k *fakeKernel) ReplaceRoute(r rtnl.Route) error {
 }
 
 func (k *fakeKernel) DelRoute(r rtnl.Route) error {
+	defer k.own()()
 	k.wait()
 	k.mu.Lock()
 	op := fmt.Sprintf("route del %d %d", r.Family.AF(), r.Table)

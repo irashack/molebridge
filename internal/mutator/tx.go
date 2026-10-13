@@ -26,6 +26,9 @@ type Tx struct {
 	// transaction's own steps may remove it once the address is no longer live
 	// (the deletion check still protects it while it is).
 	retiring map[netip.Addr]bool
+	// model is the policy model of the kernel for this operation: a stable
+	// snapshot with the operation's own changes applied; nil when unknown.
+	model *policy.State
 }
 
 // ErrUnsafeDeletion says the owner did not delete a rule or route because the
@@ -33,15 +36,22 @@ type Tx struct {
 // internal/policy), or because that could not be judged.
 var ErrUnsafeDeletion = errors.New("refused: the deletion could let protected traffic escape")
 
-// approve evaluates a deletion against the policy model of the current stable
-// snapshot with the rule or route taken out. It refuses a deletion that turns
-// any protected class of traffic from stopped or routed-by-the-contract into
-// an escape, and one it cannot judge: the model needs a snapshot the kernel
-// held still for. Every deletion the owner makes goes through it.
-func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool)) error {
+// approve evaluates a deletion against the policy model of the kernel with the
+// rule or route taken out. It refuses a deletion that turns any protected class
+// of traffic from stopped or routed-by-the-contract into an escape, and one it
+// cannot judge. Every deletion the owner makes goes through it.
+//
+// The model is one stable snapshot per pass, kept up to date with the pass's
+// own changes: every add and delete the owner makes is applied to it, so each
+// deletion is judged against the simulated current state. Only a change that
+// someone else made - told by the port id the kernel stamps on the
+// notification - sends the owner back to the kernel for a fresh stable snapshot
+// before the next deletion. A kernel that cannot say who made a change is
+// treated as if everything were foreign: a snapshot per deletion.
+func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool)) (after policy.State, changed bool, err error) {
 	spec := tx.m.Expected()
 	if spec.Config.IsSidecar() {
-		return nil
+		return policy.State{}, false, nil
 	}
 	if len(tx.retiring) > 0 {
 		for f, addrs := range spec.ReturnPath {
@@ -54,7 +64,7 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 			spec.ReturnPath[f] = keep
 		}
 	}
-	refuse := func(reason string, err error) error {
+	refuse := func(reason string, cause error) error {
 		msg := fmt.Sprintf("kept %s: %s", what, reason)
 		if !tx.refused[msg] {
 			if tx.refused == nil {
@@ -63,27 +73,143 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 			tx.refused[msg] = true
 			tx.Logf("molebridge: %s", msg)
 		}
-		if err != nil {
-			return fmt.Errorf("%w: %s: %w", ErrUnsafeDeletion, msg, err)
+		if cause != nil {
+			return fmt.Errorf("%w: %s: %w", ErrUnsafeDeletion, msg, cause)
 		}
 		return fmt.Errorf("%w: %s", ErrUnsafeDeletion, msg)
 	}
-	snap, err := tx.Snapshot()
+	model, err := tx.currentModel(spec)
 	if err != nil {
-		return refuse("the kernel could not be read to judge it", err)
+		return policy.State{}, false, refuse("the kernel could not be read to judge it", err)
 	}
-	if snap.Unstable {
-		return refuse("the kernel kept changing, so it could not be judged", nil)
+	if model == nil {
+		return policy.State{}, false, refuse("the kernel kept changing, so it could not be judged", nil)
 	}
-	before := policy.FromSnapshot(spec, snap)
-	after, changed := remove(before)
+	before := *model
+	before.Spec = spec
+	after, changed = remove(before)
 	if !changed {
-		return nil // nothing there to delete
+		return before, false, nil // nothing there to delete
 	}
 	if worse := policy.Worsens(before, after); len(worse) > 0 {
-		return refuse(worse[0].String()+fmt.Sprintf(" [live %v expected %v]", before.Live, spec.ReturnPath), nil)
+		return policy.State{}, false, refuse(worse[0].String(), nil)
 	}
-	return nil
+	return after, true, nil
+}
+
+// foreignDetector is implemented by kernels that can say whether anyone but the
+// caller changed what a snapshot reads since the last look (rtnl.Conn).
+type foreignDetector interface {
+	ForeignChange(ctx context.Context, in rtnl.Interest) (bool, error)
+}
+
+// currentModel returns the model of the kernel as it is now: the pass's
+// snapshot with its own changes, unless something else changed the kernel, in
+// which case a fresh stable snapshot. nil means no stable snapshot could be
+// had.
+func (tx *Tx) currentModel(spec contract.Spec) (*policy.State, error) {
+	if tx.model != nil {
+		if d, ok := tx.m.o.Kernel.(foreignDetector); ok {
+			foreign, err := d.ForeignChange(tx.ctx, spec.Interest())
+			if err != nil {
+				return nil, err
+			}
+			if !foreign {
+				return tx.model, nil
+			}
+		}
+		tx.model = nil
+	}
+	snap, err := tx.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	if snap.Unstable {
+		return nil, nil
+	}
+	return tx.model, nil // Snapshot recorded it
+}
+
+// afterDelete records a deletion in the model: the simulated state when it was
+// made, nothing known when it failed.
+func (tx *Tx) afterDelete(after policy.State, changed bool, err error) {
+	switch {
+	case tx.model == nil:
+	case err != nil:
+		tx.model = nil
+	case changed:
+		tx.model = &after
+	}
+}
+
+// afterAdd records an add: a request the kernel refused as a duplicate changed
+// nothing, any other failure leaves the state unknown.
+func (tx *Tx) afterAdd(r rtnl.Rule, err error) {
+	switch {
+	case tx.model == nil:
+	case err == nil:
+		next := tx.model.WithRule(r)
+		tx.model = &next
+	case rtnl.IsExist(err):
+	default:
+		tx.model = nil
+	}
+}
+
+func (tx *Tx) afterRoute(r rtnl.Route, err error) {
+	switch {
+	case tx.model == nil:
+	case err == nil:
+		next := tx.model.WithRoute(r)
+		tx.model = &next
+	default:
+		tx.model = nil
+	}
+}
+
+// kAddRule, kDelRule, kDelRulePriority, kReplaceRoute and kDelRoute are the
+// owner's requests to the kernel: the add and delete calls apply to the model,
+// and every delete is approved first.
+func (tx *Tx) kAddRule(r rtnl.Rule) error {
+	err := tx.m.o.Kernel.AddRule(r)
+	tx.afterAdd(r, err)
+	return err
+}
+
+func (tx *Tx) kDelRule(r rtnl.Rule) error {
+	after, changed, err := tx.approve(fmt.Sprintf("%s rule %d", r.Family, r.Priority), func(s policy.State) (policy.State, bool) { return s.WithoutRule(r) })
+	if err != nil {
+		return err
+	}
+	err = tx.m.o.Kernel.DelRule(r)
+	tx.afterDelete(after, changed, err)
+	return err
+}
+
+func (tx *Tx) kDelRulePriority(f rtnl.Family, priority uint32) error {
+	after, changed, err := tx.approve(fmt.Sprintf("the first %s rule at priority %d", f, priority), func(s policy.State) (policy.State, bool) { return s.WithoutPriority(f, priority) })
+	if err != nil {
+		return err
+	}
+	err = tx.m.o.Kernel.DelRulePriority(f, priority)
+	tx.afterDelete(after, changed, err)
+	return err
+}
+
+func (tx *Tx) kReplaceRoute(r rtnl.Route) error {
+	err := tx.m.o.Kernel.ReplaceRoute(r)
+	tx.afterRoute(r, err)
+	return err
+}
+
+func (tx *Tx) kDelRoute(r rtnl.Route) error {
+	after, changed, err := tx.approve(fmt.Sprintf("a %s route in table %d", r.Family, r.Table), func(s policy.State) (policy.State, bool) { return s.WithoutRoute(r) })
+	if err != nil {
+		return err
+	}
+	err = tx.m.o.Kernel.DelRoute(r)
+	tx.afterDelete(after, changed, err)
+	return err
 }
 
 // Context carries the operation's deadline.
@@ -132,10 +258,19 @@ func (tx *Tx) Snapshot() (*rtnl.Snapshot, error) {
 		return nil, err
 	}
 	in := tx.m.spec.Interest()
+	var snap *rtnl.Snapshot
+	var err error
 	if k, ok := tx.m.o.Kernel.(contextTaker); ok {
-		return k.TakeContext(tx.ctx, in)
+		snap, err = k.TakeContext(tx.ctx, in)
+	} else {
+		snap, err = tx.m.o.Kernel.Take(in)
 	}
-	return tx.m.o.Kernel.Take(in)
+	tx.model = nil
+	if err == nil && !snap.Unstable {
+		m := policy.FromSnapshot(tx.m.Expected(), snap)
+		tx.model = &m
+	}
+	return snap, err
 }
 
 // AddRule installs a rule; an identical rule already there is not an error.
@@ -143,7 +278,7 @@ func (tx *Tx) AddRule(r rtnl.Rule) error {
 	if err := tx.budget(); err != nil {
 		return err
 	}
-	if err := tx.m.o.Kernel.AddRule(r); err != nil && !rtnl.IsExist(err) {
+	if err := tx.kAddRule(r); err != nil && !rtnl.IsExist(err) {
 		return err
 	}
 	return nil
@@ -155,10 +290,7 @@ func (tx *Tx) DelRule(r rtnl.Rule) error {
 	if err := tx.budget(); err != nil {
 		return err
 	}
-	if err := tx.approve(fmt.Sprintf("%s rule %d", r.Family, r.Priority), func(s policy.State) (policy.State, bool) { return s.WithoutRule(r) }); err != nil {
-		return err
-	}
-	if err := tx.m.o.Kernel.DelRule(r); err != nil && !rtnl.IsNotExist(err) {
+	if err := tx.kDelRule(r); err != nil && !rtnl.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -170,10 +302,7 @@ func (tx *Tx) DelRulePriority(f rtnl.Family, priority uint32) (bool, error) {
 	if err := tx.budget(); err != nil {
 		return false, err
 	}
-	if err := tx.approve(fmt.Sprintf("the first %s rule at priority %d", f, priority), func(s policy.State) (policy.State, bool) { return s.WithoutPriority(f, priority) }); err != nil {
-		return false, err
-	}
-	if err := tx.m.o.Kernel.DelRulePriority(f, priority); err != nil {
+	if err := tx.kDelRulePriority(f, priority); err != nil {
 		if rtnl.IsNotExist(err) {
 			return false, nil
 		}
@@ -187,7 +316,7 @@ func (tx *Tx) ReplaceRoute(r rtnl.Route) error {
 	if err := tx.budget(); err != nil {
 		return err
 	}
-	return tx.m.o.Kernel.ReplaceRoute(r)
+	return tx.kReplaceRoute(r)
 }
 
 // DelRoute removes a route; one already gone is not an error.
@@ -195,10 +324,7 @@ func (tx *Tx) DelRoute(r rtnl.Route) error {
 	if err := tx.budget(); err != nil {
 		return err
 	}
-	if err := tx.approve(fmt.Sprintf("a %s route in table %d", r.Family, r.Table), func(s policy.State) (policy.State, bool) { return s.WithoutRoute(r) }); err != nil {
-		return err
-	}
-	if err := tx.m.o.Kernel.DelRoute(r); err != nil && !rtnl.IsNotExist(err) {
+	if err := tx.kDelRoute(r); err != nil && !rtnl.IsNotExist(err) {
 		return err
 	}
 	return nil

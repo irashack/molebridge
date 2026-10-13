@@ -10,8 +10,10 @@ here=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 image=molebridge-drill:local
 docker build -q -t "$image" -f "$here/internal/nstest/Dockerfile" "$here/internal/nstest" >/dev/null
 [ "$#" -gt 0 ] || set -- -count=1 ./internal/...
-exec docker run --rm --privileged \
+# DRILL_CPUS limits the container (the CI runner has 2 vCPUs).
+exec docker run --rm --privileged ${DRILL_CPUS:+--cpus="$DRILL_CPUS"} \
     -v "$here":/src -w /src \
     -v molebridge-drill-gocache:/root/.cache/go-build \
     -e GOFLAGS=-mod=vendor -e CGO_ENABLED=0 \
+    ${MOLEBRIDGE_RTNL_NOTIFY_LOCKED:+-e MOLEBRIDGE_RTNL_NOTIFY_LOCKED="$MOLEBRIDGE_RTNL_NOTIFY_LOCKED"} \
     "$image" go test -tags drill "$@"
