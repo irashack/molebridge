@@ -25,7 +25,7 @@ an earlier release are about that release.
 
 | Runtime | Status |
 |---|---|
-| Debian testing, amd64, rootless Podman 5.8 with Quadlet units | Tested at 0.8.0: upgrade from 0.7.0 of every provider and kind, and live drills from the exit's namespace ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)). This repository ships no Quadlet units. No client device was held on an exit at 0.8.0; one was at 0.7.0, on the same host and setup ([testing](testing.md#070-on-rootless-podman-at-d5a234a)) |
+| Debian testing, amd64, rootless Podman 5.8 with Quadlet units | Tested at 0.8.0: upgrade from 0.7.0 of native Mullvad, PIA and NordVPN exits and of NordVPN through gluetun (overlay exit and sidecar), and live drills from the native exits' namespaces ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)). This repository ships no Quadlet units. No client device was held on an exit at 0.8.0; one was at 0.7.0, on the same host and setup ([testing](testing.md#070-on-rootless-podman-at-d5a234a)) |
 | Debian 13, amd64, rootless Podman 5.4 with podman-compose 1.6 | Tested on 2026-09-24 at `5a6e0b5` (in v0.1.0), the only podman-compose pass: long-running, reboot, clean install, drills with a client ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)). The 0.8.0 Compose files have not run on it |
 | macOS with OrbStack, Apple silicon | Tested in earlier passes, the last on 2026-10-08, before 0.7.0 |
 | Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not tested at any version |

@@ -274,6 +274,16 @@ one ([several exits](switchyard.md#several-exits-in-one-panel)), then the exits
 in any order. Upgrading from 0.6.x or earlier directly has not been tried; go
 to 0.7.0 first, with its own documentation.
 
+**What replaces `doctor` and `recover`.** 0.7's host tools are gone:
+
+| 0.7 | 0.8.0 |
+|---|---|
+| `doctor`, saved status | `molebridge status` in the exit ([health](#health)); it reads the saved record and does not inspect the kernel |
+| `doctor`, settings and stored profile | `molebridge check-config`, and the exit's own [start checks](#what-the-exit-checks-at-start) |
+| `doctor`, routing | the exit repairs routing itself; to check it by hand, [verification](verification.md) |
+| `doctor`, shared namespace (gluetun forms) | [the attachment procedure](#checking-that-containers-share-gluetuns-namespace) |
+| `recover` | recreate the containers, in the order [recovery](#recovery) gives |
+
 Before you start, [back up](#backups). Until step 7, you can roll back by
 putting 0.7's files back and starting them: the state files stayed readable.
 
@@ -332,7 +342,8 @@ putting 0.7's files back and starting them: the state files stayed readable.
    modification time. (Use `podman` for both on rootless Podman.) Don't print the file.
 5. **Stop 0.7 and start 0.8.0.** From the 0.7 directory, `docker compose down`
    (without `-v`: the identity volume is the peer; with Quadlet, stop the
-   units). Then from the new one:
+   units). Then from the new one (in a gluetun form, first
+   `docker compose up -d gluetun`, because the exit joins its namespace):
 
    ```sh
    docker compose run --rm --no-deps exit check-config
@@ -340,8 +351,7 @@ putting 0.7's files back and starting them: the state files stayed readable.
    docker compose logs exit
    ```
 
-   In a gluetun form, start gluetun first (`docker compose up -d gluetun`):
-   the exit joins its namespace. `check-config` reports a refused setting or
+   `check-config` reports a refused setting or
    tunnel config without changing anything. A stored profile that lacks the tunnel
    interface in its ICE blacklist is refused here with the repair tool named
    ([below](#netbird-interface-blacklist)); a peer enrolled with 0.7's Compose

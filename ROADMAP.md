@@ -46,6 +46,37 @@ limit in the image, and measure how much of each exit is NetBird's share,
 which Molebridge cannot shrink. Done means NordVPN and gluetun exits under
 the target, measured the same way, with server choice and refresh unchanged.
 
+### One exit for several providers
+
+Today each exit has one provider, fixed at start by `PROVIDER`, so using
+Mullvad, PIA and NordVPN means three exits and three NetBird peers. A
+multi-provider exit would be one peer that Switchyard can move between
+providers as well as between servers. It looks feasible, because a switch
+already tears one tunnel down and brings another up under the same
+fail-closed contract, and a different provider is a bigger version of that.
+What it would take:
+
+- A target that names a provider and a server, through the same admission
+  pipeline, with each provider's own registration, key handling and egress
+  check.
+- One fixed tunnel interface name for every provider, because NetBird's
+  stored interface blacklist must keep excluding it; today the name follows
+  the provider.
+- Per-provider routing differences handled at a switch, such as PIA's
+  return-path rules and its port forwarding, which must be gone before
+  another provider's tunnel is up.
+- Every provider's credentials and tunnel configs in one container, which
+  widens what a compromised exit holds, and every provider's server catalog
+  in one process, which depends on the memory work above.
+- A panel that offers the provider as well as the server, and a status
+  record whose provider can change.
+- A live pass with switches in both directions between every pair of
+  providers, and the tunnel-loss and repair drills run on each.
+
+Everyone using that exit then shares one provider. Separate exits, one per
+provider, would stay supported for anyone who wants different devices on
+different providers at the same time.
+
 ### Automatic failover
 
 Today Molebridge never picks another server: it retries the one you chose.
