@@ -164,7 +164,7 @@ func oracleLookup(s State, r rtnl.Rule, q concrete, rng *rand.Rand, cn coins, id
 
 func has(set []Outcome, o Outcome) bool {
 	for _, x := range set {
-		if x == o {
+		if x.same(o) {
 			return true
 		}
 	}

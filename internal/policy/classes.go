@@ -344,20 +344,12 @@ func (v Violation) String() string {
 	return fmt.Sprintf("%s: a %s can reach %s", v.Class, v.Packet, v.Outcome)
 }
 
-// key identifies the packet, so that a change is judged point by point.
-func (v Violation) key() string { return v.Packet }
-
 // judge returns the violations of one state over the given points.
 func judge(s State, pts []packet) []Violation {
 	var out []Violation
-	prot := map[rtnl.Family]map[netip.Addr]bool{}
-	hosts := map[rtnl.Family][]netip.Prefix{}
-	for _, f := range families {
-		prot[f] = s.protectedAddrs(f)
-		hosts[f] = s.hostSubnets(f)
-	}
+	cls := s.classifier()
 	for _, p := range pts {
-		cl := s.classify(p, prot[p.f], hosts[p.f])
+		cl := cls(p)
 		if cl.any {
 			continue
 		}
@@ -369,6 +361,17 @@ func judge(s State, pts []packet) []Violation {
 		}
 	}
 	return out
+}
+
+// classifier returns the state's classification of a packet.
+func (s State) classifier() func(packet) class {
+	prot := map[rtnl.Family]map[netip.Addr]bool{}
+	hosts := map[rtnl.Family][]netip.Prefix{}
+	for _, f := range families {
+		prot[f] = s.protectedAddrs(f)
+		hosts[f] = s.hostSubnets(f)
+	}
+	return func(p packet) class { return s.classify(p, prot[p.f], hosts[p.f]) }
 }
 
 func allPoints(states ...State) []packet {
@@ -387,22 +390,40 @@ func (s State) Violations() []Violation {
 	return judge(s, allPoints(s))
 }
 
-// Worsens returns the violations that after has and before does not: packets a
-// change turned from safe into an escape. Both states are judged on the same
-// points; a packet that already escaped is not counted again.
+// Worsens returns what a change opens: for every point, every outcome that
+// the walk can end in after the change, was not possible before it, and the
+// class forbids. The comparison is point by point and path by path - an
+// outcome includes the rule that produced it - and never collapses a point to
+// "already escaping": a point that could escape one way before and gains
+// another is refused, because an escape that was merely possible must not hide
+// one that has become real. When the two walks differ in a way that cannot be
+// told to be safe, the answer is to refuse.
 func Worsens(before, after State) []Violation {
 	if before.Spec.Config.IsSidecar() {
 		return nil
 	}
-	pts := allPoints(before, after)
-	had := map[string]bool{}
-	for _, v := range judge(before, pts) {
-		had[v.key()] = true
-	}
+	clsAfter := after.classifier()
 	var out []Violation
-	for _, v := range judge(after, pts) {
-		if !had[v.key()] {
-			out = append(out, v)
+	for _, p := range allPoints(before, after) {
+		cl := clsAfter(p)
+		if cl.any {
+			continue
+		}
+		prior := before.walk(p)
+		for _, o := range after.walk(p) {
+			if cl.allows(o) {
+				continue
+			}
+			known := false
+			for _, x := range prior {
+				if x == o {
+					known = true
+					break
+				}
+			}
+			if !known {
+				out = append(out, Violation{Class: cl.name, Packet: p.String(), Outcome: o.String()})
+			}
 		}
 	}
 	return out

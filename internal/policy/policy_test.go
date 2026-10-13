@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"math/rand"
 	"net/netip"
 	"sort"
 	"strings"
@@ -475,4 +476,66 @@ func TestADumpedZeroMarkRuleDoesNotProtectMarkedTraffic(t *testing.T) {
 			t.Errorf("the 0xca6c packets were not among the escapes: %v", v)
 		}
 	}
+}
+
+// Round 7: a point that might escape one way must not excuse a deletion that
+// makes it escape another. An interrupted repair left the ICMP copy at
+// priority 97; the restore of 94 and 98 fails; the exit table has a route out
+// of the wrong device; and rule 96's oif keeps the unbound ICMP's outcome
+// uncertain (it escapes by the wrong route if a socket is bound to the tunnel
+// interface). Clearing priority 97 removes the copy that really stops the
+// ICMP of the sockets that are not.
+func TestAnUncertainEscapeDoesNotExcuseARealOne(t *testing.T) {
+	s := nativeState(t)
+	copy97 := rtnl.Rule{Family: rtnl.V4, Priority: 97, Action: rtnl.FRActUnreachable, IPProto: rtnl.Some(uint8(1)), Src: netip.PrefixFrom(tunnel4, 32)}
+	guard := rtnl.Rule{Family: rtnl.V4, Priority: 80, Action: rtnl.FRActUnreachable, IifName: "wt0"}
+	s = s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule {
+		r = filter(r, func(x rtnl.Rule) bool { return x.Priority != 94 && x.Priority != 98 })
+		// The copy is the first rule at 97, where a delete by priority finds it.
+		out := []rtnl.Rule{}
+		for _, x := range r {
+			if x.Priority == 97 {
+				out = append(out, copy97)
+			}
+			out = append(out, x)
+		}
+		return append(out, guard)
+	})
+	s.Routes[rtnl.V4][51821] = []rtnl.Route{contract.FallbackRoute(rtnl.V4, 51821),
+		{Family: rtnl.V4, Dst: zero(rtnl.V4), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(hostIdx)), Gateway: netip.MustParseAddr("198.51.100.2")}}
+	sortRules(&s, rtnl.V4)
+	after, ok := s.WithoutPriority(rtnl.V4, 97)
+	if !ok {
+		t.Fatal("nothing at 97")
+	}
+	// The concrete evaluator: an unbound socket's ICMP from the tunnel address.
+	q := concrete{packet: packet{f: rtnl.V4, iif: "lo", proto: 1, src: tunnel4, dst: netip.MustParseAddr("8.8.8.8")}}
+	rng := rand.New(rand.NewSource(1))
+	unbound := coins{1000 + indexOf(s.Rules[rtnl.V4], 96): false, 2000 + indexOf(s.Rules[rtnl.V4], 32766): true} // rule 96's oif does not apply
+	cl := s.classifier()(q.packet)
+	if o := oracle(s, q, rng, unbound); !cl.allows(o) {
+		t.Fatalf("the starting point already lets the unbound ICMP out: %v", o)
+	}
+	// The main table (not read by the model) answers, as it does on a host.
+	afterUnbound := coins{1000 + indexOf(after.Rules[rtnl.V4], 96): false, 2000 + indexOf(after.Rules[rtnl.V4], 32766): true}
+	if o := oracle(after, q, rng, afterUnbound); cl.allows(o) {
+		t.Fatalf("the concrete evaluator finds nothing wrong after the deletion (%v)", o)
+	}
+	// The starting point has an escape for the bound socket, which is what hid
+	// the real one.
+	if v := s.Violations(); len(v) == 0 {
+		t.Fatal("the premise: some ICMP can escape by the wrong-device route")
+	}
+	if v := Worsens(s, after); len(v) == 0 {
+		t.Error("the deletion was approved: the point's earlier, uncertain escape excused the real one")
+	}
+}
+
+func indexOf(rs []rtnl.Rule, priority uint32) int {
+	for i, r := range rs {
+		if r.Priority == priority {
+			return i
+		}
+	}
+	return -1
 }
