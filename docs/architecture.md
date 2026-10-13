@@ -560,10 +560,14 @@ sample: traffic arriving on the overlay interface in both families (whatever
 overlay prefixes are configured), ICMP the exit sends from every tunnel
 address that is live or expected, packets for the exit's own addresses
 arriving on the overlay, and, with gluetun, the exit's own control-marked,
-client-bound and unmarked traffic. A selector it cannot evaluate exactly (a
-TOS, a uid or port range, `l3mdev`, `suppress_ifgroup`, an attribute of a newer
-kernel, a conditional route) is followed both ways, a `goto` both to its target
-and past it, and a lookup that may fail falls through as well. Only a refused
+client-bound and unmarked traffic. A selector with a value the
+model can enumerate (TOS and DSCP, port and uid ranges, `l3mdev`, a route's TOS,
+source and input interface) is evaluated at every point, and the points carry a
+value on each side of every bound. A selector it cannot evaluate (an attribute
+of a newer kernel, a bound output interface, a dead route) is followed both
+ways, a `goto` both to its target and past it, and a lookup that may fail falls
+through as well; which way was taken is part of the outcome, so the same
+escape under a weaker assumption is a new one. Only a refused
 lookup, or a route out of the tunnel interface (for gluetun's classes, the
 host, overlay or tunnel device the contract names), is a safe answer: a
 default route out of `eth0` in the exit table is an escape however the table
