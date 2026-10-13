@@ -67,14 +67,17 @@ again. The refusals, by setting:
 | `invalid HOST_IF`, `HOST_IF must name the namespace's host interface, not lo, the overlay or the tunnel` | gluetun backend |
 | `CONTROL_MARK must be lowercase hexadecimal like 0x1bd00`, `... , low byte zero` | gluetun backend |
 | `ROUTING_RECONCILE_INTERVAL must be 2..60 seconds` | Whole seconds |
-| `GUARD_GRACE must be 5..30 seconds`, `FWMARK_GRACE must be 5..30 seconds` | Whole seconds, canonical decimal |
+| `GUARD_GRACE must be 5..30 seconds` | Whole seconds, canonical decimal; the lease's length |
+| `NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface <if> (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it` | A first enrollment with `NB_EXTRA_IFACE_BLACKLIST` removed or overridden to something that doesn't cover `EXIT_IF` |
+| `NB_EXTRA_IFACE_BLACKLIST is not a list NetBird can read (comma-separated, with CSV quoting); NetBird would ignore it`, `... has an empty entry, which NetBird reads as every interface` | The same setting, malformed (`WT_EXTRA_IFACE_BLACKLIST` is read too) |
 | `NB_INTERFACE_NAME (<a>) must equal OVERLAY_IF (<b>), the interface the routing contract guards` | Both are set from `OVERLAY_IF` in the Compose files |
 
 If the log ends with `molebridge-exit: the routing contract could not be
 installed; no tunnel was started`, the line before it says why: `the routing
 contract could not be installed: <family problems> (<cause>); the temporary guard
-(priority 80) stays`, where a problem is `IPv4 rules`, `IPv4 exit`, `IPv4 host`
-or the same for IPv6. No tunnel exists then, and the temporary priority-80 rules
+(priority 80) stays`, where a problem is a family and a part (`IPv4 rules`, `IPv4 exit`, with
+gluetun `IPv4 host` or `IPv4 nodefault`, and `unprotected` for a tunnel address
+without its return-path rules; the same for IPv6). No tunnel exists then, and the temporary priority-80 rules
 already added stay in place, so nothing is forwarded.
 
 **`molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not
@@ -125,10 +128,23 @@ create a missing bind directory root-owned.
 **Stopping the exit logs `molebridge-exit: cleanup incomplete: <what remains>
 still there; the routing guards stay in place` and the container exits with
 status 1.** Within the 13 seconds it allows itself, the supervisor couldn't end
-the worker or NetBird, or the cleanup child couldn't remove an interface
-(`the cleanup (exit 1)`, `the cleanup (it ran past its time)`). The rules and the
+the worker (`the worker`) or NetBird (`NetBird`), or the cleanup child couldn't
+remove an interface. `<what remains>` then also names the cleanup: `the cleanup
+(exit 1)` (its own line before it, `molebridge-exit: cleanup: <reason>`, says
+why), `the cleanup (it ran past its time)`, `the cleanup (could not start)`,
+`the cleanup (it could not be started in time)` or `the cleanup (not run while a
+process of this exit survives)`. A complete stop ends with `molebridge-exit:
+stopped (<reason>, exit <n>); the routing guards stay in place` and, after a
+failed attempt to write the status record, `molebridge-exit: the status record
+could not be written in time (is the state volume stuck?)`. The rules and the
 fallback stay in the namespace, so forwarded traffic still can't leave by another
 route. Recreate the exit ([recovery](operations.md#recovery)).
+
+**The log says `molebridge-exit: cannot write /state/applier/result.json:
+<reason>`.** The supervisor publishes the status record and couldn't write it
+(at most one line a minute). Readers then see the last record go stale after 150
+seconds. The usual cause is a `state/applier` mount that the container can't
+write; see the state directory entry above.
 
 **NetBird logs `failed to create ipv4 raw socket: operation not permitted`.**
 The exit needs `NET_RAW`. Docker grants it by default; Podman does not. The
@@ -149,17 +165,23 @@ is 1 for all of these:
   quota that throttles it for many seconds), a kernel request that did not
   finish in 10 seconds, or a hang. A refusal on the supervisor's side is
   `molebridge-exit: renewal refused: <reason>`, which a healthy exit never logs.
-  The panel and `/readyz` show the failure within the lapse time as `failed`,
-  "exit owner stopped responding".
+  If the lease had already expired when a message from the worker arrived, the
+  line `molebridge-exit: the lease expired before the worker's message was
+  processed` comes first. The supervisor writes a failure record before it
+  stops, so the panel and `/readyz` show `failed`, "exit owner stopped
+  responding", until the restarted exit publishes again.
 - **`stopping (worker exited)`**, after `molebridge-exit: the worker exited
   (status <n>)`. The worker's own last lines say why: a refusal (the settings
-  above, the control server, the API key), or a crash.
+  above, the control server, the API key), a crash, or, with gluetun, one of the
+  two monitors that end the worker when NetBird's control traffic could go out
+  unmarked (see [gluetun backend](#gluetun-backend) below).
 - **`stopping (netbird exited)`**, after `molebridge-exit: NetBird could not be
   started: <detail>` or `molebridge-exit: NetBird stopped unexpectedly: <detail>`.
   NetBird's own output, with the prefix `netbird: `, is just above. The detail is one of:
 
   ```text
   could not start `netbird service run`: <reason>
+  could not start `netbird up`: <reason>
   `netbird service run` exited with status <n> before the daemon answered
   the NetBird daemon did not become responsive within 30 seconds
   `netbird up` failed (exit <n>)
@@ -174,8 +196,9 @@ is 1 for all of these:
   <what>`. The supervisor and the worker disagree about their messages. That is a
   bug in Molebridge; report it with the line.
 
-If the exit is stopped on purpose (`docker compose stop`), the line is `stopping
-(requested)`, and the exit status is 0 when the cleanup completed.
+If the exit is stopped on purpose (`docker compose stop`), the log shows
+`molebridge-exit: received terminated` and then `stopping (requested)`, and the
+exit status is 0 when the cleanup completed.
 
 **`molebridge-exit: cannot start the worker: <reason>`, or `cannot create <path>: <reason>`.** The
 supervisor could not create its runtime directories under `/run` (the tmpfs the Compose files
@@ -281,9 +304,15 @@ requirements. The reasons:
   cannot be verified`. After `netbird up` the exit read the profile again and found
   none. NetBird failed to enroll or to write its state; see NetBird's output above
   the line. The exit admits no traffic and stops NetBird until this is resolved.
-- `GUARD_GRACE must be 5..30 seconds` and, with gluetun, `FWMARK_GRACE must be
-  5..30 seconds`, `CONTROL_MARK must be ...` and `NB_LOG_FILE must name a log
-  file; the gate reads it`.
+- With gluetun only: `<name> is set; the gluetun backend needs NetBird to mark its
+  control traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
+  `NB_DISABLE_CUSTOM_ROUTING` (remove the variable); `CONTROL_MARK must be
+  lowercase hexadecimal like 0x1bd00, low byte zero` or `CONTROL_MARK must fit in
+  32 bits`; `NB_FWMARK_BASE must equal CONTROL_MARK (<mark>)` (the Compose file sets
+  both from `CONTROL_MARK`); `NB_LOG_FILE must name a log file; the gate reads it`
+  (it needs an absolute path); and `FWMARK_GRACE must be 5..30 seconds`.
+- `NetBird gate: invalid interface name` and `the tunnel interface name is invalid
+  (EXIT_IF)`: `NB_INTERFACE_NAME` or `EXIT_IF` is not a valid interface name.
 
 **On the first start the log says `molebridge-exit: no NetBird identity found in
 the state directory or the legacy profile paths; NetBird will enroll a new
@@ -294,16 +323,18 @@ the exit will enroll a new peer and you will have to recreate its route and grou
 membership.
 
 **Everything is up, but NetBird is stopped, and the log says `not ready: the
-routing contract has not held for <n> seconds: <problems>`.** The worker could not
-restore the contract within `GUARD_GRACE` seconds, so it told the supervisor to
-stop NetBird: `molebridge-exit: the worker cannot hold the routing contract: <reason>;
+routing contract has not held for <n> seconds: <problems>`.** (After `netbird up`
+refused the stored profile, the reason reads `the NetBird profile does not exclude
+the tunnel interface; nothing is admitted`; see the blacklist entry above.) The
+worker could not restore the contract within `GUARD_GRACE` seconds, so it told the
+supervisor to stop NetBird: `molebridge-exit: the worker cannot hold the routing contract: <reason>;
 stopping NetBird`. Each problem is a family and a part: `IPv4 rules` (a rule at
 Molebridge's priorities differs), `IPv4 exit` (the exit table differs), and with
 gluetun `IPv4 host` (the host table differs) or `IPv4 nodefault` (no IPv4 default
 route through the host interface). NetBird starts again once the contract
 verifies. Look for lines in the log from the repairer, such as `molebridge-exit:
-molebridge: added IPv4 rule 97` and `molebridge-exit: molebridge: removed IPv4 rule
-50: <rule>`. Something else in the namespace is changing rules or routes faster than
+added IPv4 rule 97`, `molebridge-exit: removed IPv4 rule 50: <rule>` and
+`molebridge-exit: netlink events were lost; running a full pass`. Something else in the namespace is changing rules or routes faster than
 the exit can repair them, or the kernel refuses a change. `ip rule` and `ip route show table
 51821` in a [diagnostic shell](verification.md#inside-the-namespace) show what is
 there.
@@ -381,16 +412,19 @@ isn't running, the API key in `secrets/gluetun/api_key` doesn't match the one in
 the exit), or gluetun refused the server. The exit tries again after 1, 2, 4 and 8
 minutes, then every 15 ([retries](operations.md#retries)).
 
-**NetBird is stopped, and the log says `NetBird logged that it runs without
-advanced routing, so its control traffic would be unmarked`, or `wt0 has not carried
-the control mark 0x1bd00 for 30 seconds (last reported: <value>)`.** The exit's
-monitors stopped NetBird because its control traffic could have used the provider
-tunnel. For the first, NetBird's start-up check of socket marks and `ip rule`
-support failed: check NetBird's log just before the line and that the exit still
-has `NET_ADMIN`. For the second, `absent` means the overlay interface didn't come
-up, `off` or another mark means NetBird runs without its control mark, and
-`nothing` that it never reported one. The exit starts NetBird again once the contract
-verifies, and the monitors count from the new launch.
+**The exit stops with status 1 and restarts, and the log says `molebridge-exit:
+NetBird gate: stopping NetBird: NetBird logged that it runs without advanced routing,
+so its control traffic would be unmarked (see docs/troubleshooting.md)`, or `...
+stopping NetBird: wt0 has not carried the control mark 0x1bd00 for 30 seconds (last
+reported: <value>) (see docs/troubleshooting.md)`.** The exit's two monitors found
+that NetBird's control traffic could have used the provider tunnel. Neither is a
+retry: the worker ends, the supervisor runs the stop sequence (`stopping (worker
+exited)`) and the restart policy starts the container again. For the first, NetBird's
+start-up check of socket marks and `ip rule` support failed: check NetBird's log just
+before the line and that the exit still has `NET_ADMIN`. For the second, `absent`
+means the overlay interface didn't come up, `off` or another mark means NetBird runs
+without its control mark, and `nothing` that it never reported one. The grace is
+`FWMARK_GRACE` seconds from NetBird's launch.
 
 **The log says `not ready: ... IPv4 nodefault`, or NetBird never starts.** The
 namespace lost its host interface or its default route, usually because the engine
@@ -437,8 +471,12 @@ refused:
   ([several exits](switchyard.md#several-exits-in-one-panel)).
 - The sign-in messages in [the next section](#sign-in).
 
+`molebridge panel: cannot listen: <reason>` means the panel could not bind its port
+(8080 in its container).
+
 **`421 unknown host; publish the panel under PANEL_PUBLIC_HOSTS`.** The request's
-`Host` isn't loopback or listed in `PANEL_PUBLIC_HOSTS`. Add the public hostname. If
+`Host` isn't loopback or listed in `PANEL_PUBLIC_HOSTS`; the panel's log has
+`rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback`. Add the public hostname. If
 your proxy rewrites `Host` when it connects upstream (to `host.docker.internal:8095`,
 for example), add that name and port too.
 
@@ -448,7 +486,7 @@ reach the panel. Check that the proxy passes cookies and doesn't strip `Origin`,
 that you opened the panel by the name listed in `PANEL_PUBLIC_HOSTS`.
 
 **"No fresh trusted relay catalogue; selections are unavailable."** The panel can't
-read a catalogue less than 24 hours old. Either the exit hasn't fetched one yet (give
+read a catalog less than 24 hours old. Either the exit hasn't fetched one yet (give
 it a minute after first start), the provider's API is unreachable from the exit, or
 the panel can't read `state/applier/`. The last one usually means `PANEL_USER` is
 wrong: it must be your host user's `uid:gid` on Docker and `0:0` on rootless Podman.
@@ -510,9 +548,9 @@ inspection under way come on top. A stale status doesn't block a request.
 ## Sign-in
 
 This applies only when `PANEL_OIDC_ISSUER` is set; see
-[panel access](access.md#sign-in-with-openid-connect). Sign-in has had one live pass,
-with one provider, at 0.7.0, so most of this list comes from the code rather than from
-failures seen in use.
+[panel access](access.md#sign-in-with-openid-connect). The Go panel's sign-in has not been run against a real identity provider; the
+Python panel's was, once, with one provider ([testing](testing.md#sign-in-pass-at-62a0170)).
+Most of this list comes from the code rather than from failures seen in use.
 
 **The panel stops at start.** The last line of the container's log is
 `molebridge panel: ` and the setting it refused, with one of these messages (`<name>`
@@ -522,8 +560,8 @@ is the setting):
   `PANEL_OIDC_CLIENT_ID`, `PANEL_ACCESS`, `PANEL_ADMIN_GROUPS` or `PANEL_PUBLIC_URL`
 - `PANEL_OIDC_ISSUER must be an https URL (http only for a loopback test issuer)`
 - `PANEL_OIDC_CLIENT_ID is required with PANEL_OIDC_ISSUER`
-- `PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: <reason>` and
-  `PANEL_OIDC_CLIENT_SECRET_FILE is empty`
+- `PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: <reason>` (including `not valid
+  UTF-8`) and `PANEL_OIDC_CLIENT_SECRET_FILE is empty`
 - `PANEL_PUBLIC_URL must be the https origin people open, such as https://exit.example.net`
 - `PANEL_OIDC_SCOPES must include openid`
 - `PANEL_ADMIN_GROUPS: '<group>' is not a valid group name`
@@ -682,7 +720,7 @@ backend: the IP echo services disagreed, or answered with the host's own address
 server list doesn't name. See [egress tiers](architecture.md#egress-tiers).
 
 **"Waiting for a fresh trusted relay catalogue; request will retry automatically."** The
-selection is saved and will be applied once the exit has a current catalogue. If this
+selection is saved and will be applied once the exit has a current catalog. If this
 persists, the provider's API is unreachable from the exit.
 
 **"Routing protection is incomplete; see docs/operations.md#recovery."** A routing rule or

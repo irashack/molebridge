@@ -45,10 +45,18 @@ provider than the panel is configured for.
   state: ok (connected)
   reasons: none
   egress tier: provider
-  checks: routing=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass traffic_protection=pass app_attachment=n/a
+  checks: app_attachment=n/a routing=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass traffic_protection=pass
   heartbeat: fresh (3 s old)
   lease: held, 27 s to expiry
   ```
+
+  A failure adds a `message:` line, and an exit with `SERVER` set a
+  `configured server:` line. The `heartbeat:` line reads `fresh` up to 15
+  seconds, then `stale`, or `none (<why>)` when there is no usable file. The
+  `lease:` line reads `held, <n> s to expiry`, `lapsed`, `starting` or
+  `revoked`, or `unknown (<why>)` when the supervisor hasn't written its file
+  in the last 10 seconds. A gluetun exit has no `owner_record` check, so it
+  shows `n/a` there.
 
   `status` reads the exit's own files only. It does not prove that client
   traffic is forwarded ([verification](verification.md) does that), and it
@@ -56,23 +64,41 @@ provider than the panel is configured for.
   containers share the namespace, or that the files on the host have the
   right permissions ([host checks](#host-checks)). Its `app_attachment` stays
   `n/a` or `not-checked`.
-- The exit container's health check is operational only: the worker's
-  heartbeat is fresh (at most 15 seconds old), which the worker writes every
-  5 seconds while the tunnel interface exists, the contract holds, NetBird is
-  running and a completed check, `ok` or `failed`, is less than 150 seconds
-  old. An exit that is up but not verified, on another server than `SERVER`,
-  or without a peer stays healthy; the panel, `/readyz` and `status` report it,
-  and the exit repairs a missing peer itself. If your engine or a supervisor
-  kills unhealthy containers, killing the exit would only delay that repair.
-  A hung worker is not the health check's job: the supervisor's lease stops
-  NetBird and the container itself ([the lease](architecture.md#the-lease)).
+- The exit container's health check is `molebridge health`, which is
+  operational only: it passes while the worker's heartbeat is at most 15
+  seconds old, and otherwise prints `unhealthy: <why>` and exits 1. The worker
+  writes the heartbeat every 5 seconds while the tunnel interface exists, the
+  contract holds, NetBird is running and a completed check, `ok` or `failed`,
+  is less than 150 seconds old. An exit that is up but not verified, on
+  another server than `SERVER`, or without a peer stays healthy; the panel,
+  `/readyz` and `status` report it, and the exit repairs a missing peer
+  itself. If your engine or a supervisor kills unhealthy containers, killing
+  the exit would only delay that repair. A hung worker is not the health
+  check's job: the supervisor's lease stops NetBird and the container itself
+  ([the lease](architecture.md#the-lease)). When the worker withholds the
+  heartbeat it logs `molebridge-exit: not operational: <reason>`
+  ([troubleshooting](troubleshooting.md#startup)).
+
+The reason codes in `status` and in `/api/status` come from the
+[verdict](architecture.md#the-verdict): `no-status`, `unsupported-schema`,
+`kind-mismatch`, `provider-mismatch`, `status-stale`, `request-pending`,
+`request-not-acknowledged`, `applying`, `invalid-record`,
+`host-address-not-measurable`, `<check>-failed`, `<check>-expired`,
+`<check>-unmeasured`, `rejected`, `status-failed`, `status-unknown`, and for a
+connection on the wrong server `not-configured-server`, `not-requested-server`
+or `not-target-server`. A connected exit may carry `no-selection`: nothing has
+been selected yet. [Troubleshooting](troubleshooting.md#the-panel) explains the
+labels the panel shows for them.
 
 ### Gatus
 
 To push health to [Gatus](https://gatus.io), set `GATUS_URL` and
 `GATUS_ENDPOINT`, and put `GATUS_TOKEN=…` in `secrets/applier.env` (mode 0600).
-Use HTTPS unless the connection is local and trusted. In Gatus, treat a
-missing push as a failure: a stopped exit can't report that it's down.
+Use HTTPS unless the connection is local and trusted. With no URL or no token,
+or a URL that doesn't start with `http://` or `https://`, nothing is pushed.
+In Gatus, treat a missing push as a failure: a stopped exit can't report that
+it's down. A failed push is logged as `molebridge-exit: applier: monitoring
+push failed`.
 
 The exit pushes the [verdict](architecture.md#the-verdict) against its
 own target, so it agrees with the panel and `/readyz`; anything but `ok` is
@@ -232,17 +258,24 @@ the [backup](#backups) first in case one changes.
 ### Upgrading from 0.7.x
 
 0.8.0 keeps your state directory, the selections, PIA's registrations and the
-NetBird peer's identity, and replaces everything around them: one signed
-image instead of three local builds, two containers instead of four, no Python
-on the host. A 0.7.0 Switchyard reads a 0.8.0 exit's status, so the order is
-the same as before: **Switchyard first** if you run a separate one, then the
-exits in any order.
+NetBird peer's identity, and replaces everything around them: one signed image
+instead of locally built ones, and a native exit that is two containers
+(`exit` and `switchyard`) where 0.7 ran four (`wireguard`, `netbird`,
+`applier` and `control-panel`). In the gluetun form 0.7's `guard`, `netbird`
+and `applier` also become the one `exit`; the sidecar's `applier` does too.
+Nothing runs Python on the host any more. The 0.7 standalone gluetun form
+(no panel or server logic, any gluetun WireGuard provider) is gone: the exit
+always runs the provider logic and accepts only the registered gluetun
+providers ([providers](providers.md)).
 
-Upgrading from 0.6.x or earlier directly has not been tried; go to 0.7.0
-first, with its own documentation.
+A 0.7.0 Switchyard reads a 0.8.0 exit's status, and a 0.8 one reads both, so
+the order is the same as before: **Switchyard first** if you run a separate
+one ([several exits](switchyard.md#several-exits-in-one-panel)), then the exits
+in any order. Upgrading from 0.6.x or earlier directly has not been tried; go
+to 0.7.0 first, with its own documentation.
 
-**Before you start**, as for any upgrade: [back up](#backups), and note
-that you can roll back by putting 0.7's files back.
+Before you start, [back up](#backups). Until step 7, you can roll back by
+putting 0.7's files back and starting them: the state files stayed readable.
 
 1. **Verify the 0.8.0 download** ([setup](setup.md#1-download-and-verify)) and
    extract it somewhere new. Don't extract over the 0.7 checkout; 0.8.0 needs
@@ -256,25 +289,33 @@ that you can roll back by putting 0.7's files back.
    Keep the same `COMPOSE_PROJECT_NAME` (the default is `molebridge`): it names
    the identity volume, `<project>_netbird-data`. Your tunnel config carries over
    as it is: the exit checks the grammar 0.7's generators wrote. That check is a
-   port of 0.7's, not yet run against a 0.7-generated file on a live host, and
-   `check-config` (step 5) tells you before anything changes.
-2. **Edit `.env` against the new `.env.example`.** What changed:
+   port of 0.7's, and `check-config` (step 5) tells you before anything changes.
+   The live upgrade from 0.7.0 is in [testing](testing.md#080).
+2. **Edit `.env` against the new `.env.example`.** Settings that 0.7's example
+   listed and the new one doesn't (`PANEL_USER`, `GUARD_GRACE`, the panel's look
+   and others) are still read; [configuration](configuration.md) lists them with
+   their defaults. What changed:
    - `COMPOSE_FILE=compose.yaml:compose.pia.yaml` and `...compose.nordvpn.yaml`
      are gone, with those files. Set `PROVIDER` and `EXIT_IF` instead, and remove
-     `COMPOSE_FILE` unless you use a gluetun form.
-   - `PUID`, `PGID` and `OWNER_RECORD` are not read.
-   - `ROUTING_RECONCILE_INTERVAL` now defaults to 30, not 2: a notification
-     starts a repair at once, and the interval is the fallback.
-   - `GUARD_GRACE` is now the lease's length, with the same range, 5 to 30.
-   - `PANEL_ALLOW_ROOT=1` is needed with `PANEL_USER=0:0` on rootless Podman.
-   - A rootless engine's `PANEL_USER=0:0` is otherwise as before.
-3. **Move your overrides.** Settings you put on `wireguard`, `netbird`,
-   `applier`, `guard` or `control-panel` in a `compose.override.yaml` belong on
-   `exit` (the first four) and `switchyard` (the last) now. A Quadlet unit or a
-   Compose file of your own needs the same changes `compose.yaml` shows: one
-   `exit` unit with `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`, read-only, with
-   tmpfs on `/run` and `/var/log/netbird`, `stop_grace_period` 15 seconds, and the
-   `netbird-data` volume at `/var/lib/netbird`.
+     `COMPOSE_FILE` unless you use a gluetun form (`compose.gluetun.yaml` or
+     `compose.sidecar.yaml`).
+   - `OWNER_RECORD` is not read.
+   - `ROUTING_RECONCILE_INTERVAL` now defaults to 30, not 2, and takes any whole
+     number from 2 to 60: a kernel notification starts a repair at once, and the
+     interval is the fallback pass.
+   - `GUARD_GRACE` is now the lease's length: the seconds without an accepted
+     renewal before the supervisor stops NetBird. The range is still 5 to 30.
+   - `PANEL_USER=0:0` on a rootless engine now needs `PANEL_ALLOW_ROOT=1` beside
+     it, or the panel refuses to start.
+3. **Move your overrides.** Settings you put on `wireguard`, `netbird` or
+   `applier` (and, in the gluetun forms, `guard`) in a `compose.override.yaml`
+   belong on `exit` now, and those on `control-panel` on `switchyard`. `gluetun`
+   stays. A Quadlet unit or a Compose file of your own needs the same changes
+   `compose.yaml` shows for the exit: one unit with `NET_ADMIN`, `NET_RAW` and
+   `DAC_OVERRIDE`, read-only, with tmpfs on `/run` and `/var/log/netbird`,
+   `stop_grace_period` 15 seconds, the sysctls, the `netbird-data` volume at
+   `/var/lib/netbird` and the same environment. The exit's units in a gluetun
+   form join gluetun's network.
 4. **Check the identity volume is the one you mean.** An empty volume would
    enroll a new peer. The exit says so at start (the line is in
    [NetBird and its checks](architecture.md#netbird-and-its-checks)), but check
@@ -290,7 +331,8 @@ that you can roll back by putting 0.7's files back.
    You should see `default.json`, the peer's profile, with an owner and a recent
    modification time. (Use `podman` for both on rootless Podman.) Don't print the file.
 5. **Stop 0.7 and start 0.8.0.** From the 0.7 directory, `docker compose down`
-   (without `-v`: the identity volume is the peer), then from the new one:
+   (without `-v`: the identity volume is the peer; with Quadlet, stop the
+   units). Then from the new one:
 
    ```sh
    docker compose run --rm --no-deps exit check-config
@@ -298,11 +340,12 @@ that you can roll back by putting 0.7's files back.
    docker compose logs exit
    ```
 
-   `check-config` reports a refused setting or tunnel config without changing
-   anything. A stored profile that lacks the tunnel interface in its ICE
-   blacklist is refused here with the repair tool named
+   In a gluetun form, start gluetun first (`docker compose up -d gluetun`):
+   the exit joins its namespace. `check-config` reports a refused setting or
+   tunnel config without changing anything. A stored profile that lacks the tunnel
+   interface in its ICE blacklist is refused here with the repair tool named
    ([below](#netbird-interface-blacklist)); a peer enrolled with 0.7's Compose
-   file already has it.
+   files already has it.
 6. **Check** `docker compose exec exit molebridge status`, the panel, and the
    [host checks](#host-checks) below. Your selection is kept: with no attempt
    record the exit inspects the live server before it applies `SERVER` or a
@@ -311,25 +354,32 @@ that you can roll back by putting 0.7's files back.
    already live. PIA and NordVPN start without a peer and get the saved selection
    applied again; Mullvad starts on its config's server and is changed only when
    that isn't the selection.
-7. **Remove what 0.7 left.** The `exit-run` volume (`docker volume rm
-   molebridge_exit-run`), and the images 0.7 built locally (`docker image ls |
-   grep molebridge` lists them). Keep the `netbird-data` volume.
+7. **Remove what 0.7 left.** The volume that held the owner record
+   (`docker volume rm molebridge_exit-run` for a native exit,
+   `molebridge_guard-run` for a gluetun overlay exit), and the images 0.7 built
+   locally (`docker image ls | grep molebridge` lists them). Keep the
+   `netbird-data` volume.
 
-**What the exit checks at start.** It reports before it changes anything, with
-one line per refusal and nothing taken from a secret file: that the provider,
-backend and kind agree; that the tunnel config (native only) is a regular
-readable file, not a symlink, within 4 KiB, with no NUL or carriage return, and
-in the exact grammar the tools write, with its table the same as `EXIT_TABLE`;
-that `state/applier` exists and is writable; that `NB_INTERFACE_NAME` is
-`OVERLAY_IF`; that NetBird's environment and stored profile are the supported
-ones and the profile excludes the tunnel interface; what it found of the
-NetBird identity; for gluetun, that the control server listens on loopback only
-and the API key file is a regular file of mode 0600 or stricter; and, as a
-warning, the namespace's `icmp_errors_use_inbound_ifaddr` sysctl. It does not
-check the mode of the tunnel config or of the PIA credential files: they are
-only read, and a wrong mode is yours to check ([below](#host-checks)).
+### What the exit checks at start
 
-#### Host checks
+It reports before it changes anything, with one line per refusal and nothing
+taken from a secret file: that the provider, backend and kind agree; that the
+tunnel config (native only) is a regular readable file, not a symlink, within
+4 KiB, with no NUL or carriage return, and in the exact grammar the tools write,
+with its table the same as `EXIT_TABLE`; that `state/applier` exists and is
+writable; that `NB_INTERFACE_NAME` is `OVERLAY_IF`; that NetBird's environment
+and stored profile are the supported ones and the profile excludes the tunnel
+interface (or, with no profile yet, that `NB_EXTRA_IFACE_BLACKLIST` names it);
+what it found of the NetBird identity; for gluetun, that the control server
+listens on loopback only and the API key file is a regular file of mode 0600 or
+stricter; and, as a warning, the namespace's `icmp_errors_use_inbound_ifaddr`
+sysctl. It does not check the mode of the tunnel config or of the PIA credential
+files: they are only read, and a wrong mode is yours to check
+([below](#host-checks)). The messages are in
+[troubleshooting](troubleshooting.md#startup). `check-config` makes the checks
+that need no running exit.
+
+### Host checks
 
 The exit and the panel check what they can see from inside their own
 containers. These they can't, so they are steps you take, each with its
@@ -448,11 +498,11 @@ exit $status
 For example, `sh attach.sh molebridge-gluetun molebridge-exit my-downloader`.
 Every line must be `PASS`. A `FAIL ... is not in ...'s current namespace` means
 that member was left behind: recreate gluetun and the member together
-([recovery](#recovery)). On Docker this was run against throwaway containers,
-including an owner restarted under the same id (the case the check exists
-for), a stopped member and a missing one; see [testing](testing.md#080). On rootless Podman it
-has not been run in this form; the probe is the same one the 0.7 sidecar
-doctor used there.
+([recovery](#recovery)). The procedure was run on Docker against throwaway
+containers, including an owner restarted under the same id (the case the check
+exists for), a stopped member and a missing one; [testing](testing.md#080) does
+not record that run. On rootless Podman it has not been run in this form; the
+probe is the same one the 0.7 sidecar doctor used there.
 
 ## NetBird interface blacklist
 
@@ -494,7 +544,7 @@ your `EXIT_IF`, and `native` or `gluetun` for the backend:
 
 ```sh
 docker run --rm --user <owner uid>:<owner gid> \
-  -e PROVIDER=<provider> -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
   -v molebridge_netbird-data:/var/lib/netbird \
   "$IMAGE" fix-blacklist
 ```
@@ -503,7 +553,7 @@ docker run --rm --user <owner uid>:<owner gid> \
 
 ```sh
 podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
-  -e PROVIDER=<provider> -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
   -v molebridge_netbird-data:/var/lib/netbird \
   "$IMAGE" fix-blacklist
 ```
@@ -524,9 +574,10 @@ replaces the file atomically with the original's mode, owner and group, and prin
 changes nothing, and says why, when the daemon is visible, when the active
 profile isn't the default, when there is no identity, when the JSON is malformed or
 ambiguous, or when it cannot give the replacement the original's owner and group
-(run it as the owner then). The full messages are in [the tools
+(run it as the owner then). A refusal goes to standard error with exit status 1;
+a usage error is 2. The full messages are in [the tools
 reference](tools-reference.md#fix-blacklist) and
-[troubleshooting](troubleshooting.md#startup).
+[troubleshooting](troubleshooting.md#netbirds-settings-and-profile).
 
 Then start the exit: `docker compose up -d exit`. After `netbird up` the exit reads
 the profile again and admits traffic only if the entry is there. To see the result
@@ -733,7 +784,8 @@ docker compose exec exit netbird up \
 - The remote candidate may show as `prflx`. Rootless port forwarding rewrites
   the source address, and ICE handles that; it isn't a fault.
 
-What was tested, at 0.7.0: on Debian with passt 0.0~git20261002 and Podman 5.8.6, with
+What was tested, in October 2026 before 0.7.0 (the exit's namespace was then
+the routing container's): on Debian with passt 0.0~git20261002 and Podman 5.8.6, with
 the routing container as a Quadlet unit using the `Network=pasta:` form of
 the options above. One pasta process then owns
 the port. NetBird's outgoing STUN leaves from a socket bound to the LAN
@@ -751,9 +803,14 @@ namespace that the routing container did.
 
 ## Rootless Podman
 
-Tested at 0.7.0 on Debian 13, rootless Podman 5.4, podman-compose 1.6 on amd64;
-not retested at 0.8.0. Replace `molebridge` with your `COMPOSE_PROJECT_NAME` if
-you changed it.
+At 0.8.0 the live pass ran on Debian with rootless Podman 5.8 and Quadlet
+units, which this repository doesn't ship: give the exit and the panel the
+container definitions `compose.yaml` shows ([testing](testing.md#080)). The
+podman-compose commands below were last run in September 2026, on Debian 13
+with Podman 5.4 and podman-compose 1.6 on amd64, long before 0.7.0
+([testing](testing.md#rootless-podman-pass)); the 0.7.0 and later passes used
+Quadlet units. Replace `molebridge` with your `COMPOSE_PROJECT_NAME` if you
+changed it.
 
 Before the first start, load the kernel module and set `PANEL_USER=0:0` and
 `PANEL_ALLOW_ROOT=1` ([requirements](prerequisites.md#rootless-podman)).
@@ -830,9 +887,10 @@ systemctl --user enable --now molebridge.service
 ```
 
 Set `WorkingDirectory` to your install directory. On the tested host, a reboot
-brought the 0.7.0 exit back healthy in 76 seconds with no intervention. That's
-one reboot on one host, so check health and the namespaces after a reboot
-anyway. Podman doesn't act on failing healthchecks: a hung exit is stopped by
+brought the then four containers back healthy in 76 seconds with no
+intervention ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)).
+That's one reboot on one host, long before 0.8.0, so check health and the
+namespaces after a reboot anyway. Podman doesn't act on failing healthchecks: a hung exit is stopped by
 its own supervisor, but a dependent stranded in an old namespace stays stranded
 until you recreate it together with its owner.
 

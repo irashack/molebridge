@@ -1,7 +1,9 @@
 # Switchyard, the panel
 
-Switchyard is the web page where you pick the exit's server. Every Molebridge
-stack runs one on `127.0.0.1:8095` (`PANEL_PORT`). One Switchyard can also
+Switchyard is the web page where you pick the exit's server. It is the
+`panel` role of the Molebridge image, a Go program in a container of its own,
+and every Molebridge stack runs one on `127.0.0.1:8095` (`PANEL_PORT`; it
+listens on 8080 inside the container). One Switchyard can also
 serve several exits on the same host; see
 [several exits in one panel](#several-exits-in-one-panel).
 
@@ -27,8 +29,8 @@ its connection as unknown. A `POST /select` for that exit is refused with
 403 and "Exit is set in configuration; change SERVER to choose another
 server." `/api/status` gives the configured name as
 `verdict.configured_server`; `desired` is null. (The deprecated `view`
-object still carries `selection_mode: configuration` and `configured_server`
-in 0.7.)
+object still carries `selection_mode: configuration` and `configured_server`,
+for a 0.6 page left open in a browser.)
 
 Change or clear `SERVER` in the exit's configuration and apply it by
 [recreating the exit](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
@@ -284,10 +286,8 @@ services:
       interval: 30s
 ```
 
-The panel refuses to start unless it has no capabilities, isn't root unless
-`PANEL_ALLOW_ROOT=1` says so, and has every exit's `applier` directory mounted
-read-only ([the isolation check](configuration.md#the-panels-isolation-check)). A
-panel reads its own release's status records and the previous release's: a 0.8
+The panel refuses to start unless it passes its isolation check
+([below](#privilege-isolation)). A panel reads its own release's status records and the previous release's: a 0.8
 panel reads 0.7 and 0.8 exits, and a 0.7 panel reads 0.8 exits, because the state
 files are unchanged. A 0.6 panel misreads 0.7 and later exits
 ([upgrades](operations.md#upgrading-from-07x)).
@@ -334,3 +334,57 @@ sign-in, so a change there takes effect within `PANEL_SESSION_TTL`; see
 only controls who may use the panel. Which devices send traffic to which exit
 is still set in NetBird, and switching an exit still moves every device that
 uses it.
+
+## Privilege isolation
+
+The panel holds no capabilities, runs no subprocess and writes only the
+desired server name. At every start it checks its own isolation and, if the
+check fails, prints one line per problem to standard error and exits with
+status 1 before it listens:
+
+```text
+molebridge panel: refusing to start: <reason>
+```
+
+The checks are fixed:
+
+- **No capabilities.** Its effective capability set (`CapEff` in
+  `/proc/self/status`) must be empty, so the container needs `cap_drop: [ALL]`.
+  If it can't read the set, it refuses too.
+- **Not root.** A uid of 0 is refused unless `PANEL_ALLOW_ROOT` is exactly `1`.
+  Set `PANEL_USER` to the uid and gid that own `state/panel`. On a rootless
+  engine that remaps uids, container root is already your host user and another
+  uid can't read the state tree, so you set `PANEL_USER=0:0` and
+  `PANEL_ALLOW_ROOT=1` together. The Compose files pass `PANEL_ALLOW_ROOT`
+  through, empty unless you set it; empty counts as unset.
+- **The exit's state is read-only.** Each exit's `applier` directory
+  (`/state/applier`, or `/state/<id>/applier` with `PANEL_EXITS`) must be on a
+  read-only mount; only the `panel` directory may be writable. A directory that
+  isn't there passes, and one it can't examine is refused.
+
+The messages are in [troubleshooting](troubleshooting.md#the-panel). The panel
+can't see what else was mounted into it, so keeping tunnel configs, credentials
+and gluetun's secrets out of it is a [host check](operations.md#host-checks);
+the one credential it may hold is the sign-in client secret file.
+`MOLEBRIDGE_PANEL_ISOLATION_CHECK=off` switches the check off for tests; a start
+with it set says so on standard error, and a deployed panel should never run
+that way ([configuration](configuration.md#the-panels-isolation-check)).
+
+## Sign-in
+
+With `PANEL_OIDC_ISSUER` set, the panel signs people in with OpenID Connect
+(authorization code with PKCE) and gives each person a session of
+`PANEL_SESSION_TTL` seconds (3600 by default, 300 to 604800). Setting it also
+requires `PANEL_OIDC_CLIENT_ID`, a `PANEL_PUBLIC_URL` that is the https origin
+people open, and at least one of `PANEL_ADMIN_GROUPS` (groups that see every
+exit) and `PANEL_ACCESS` (`group=exit` pairs, see
+[per-person exits](#per-person-exits)). `PANEL_OIDC_CLIENT_SECRET_FILE`,
+`PANEL_OIDC_SCOPES` (default `openid profile email groups`) and
+`PANEL_OIDC_GROUPS_CLAIM` (default `groups`) are optional. The register-the-client
+steps are in [access](access.md#sign-in-with-openid-connect), every setting in
+[configuration](configuration.md#panel-sign-in), and the refusals and failures in
+[troubleshooting](troubleshooting.md#sign-in). The bundled Compose files pass the
+issuer, client ID, public URL, admin groups and session lifetime from `.env`;
+`PANEL_ACCESS` and the other three need an override or the environment of a
+Switchyard you run yourself. The Go panel's sign-in has not been run against a
+real identity provider ([testing](testing.md#080)).
