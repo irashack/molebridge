@@ -457,12 +457,13 @@ func (v Violation) String() string {
 func judge(s State, pts []packet) []Violation {
 	var out []Violation
 	cls := s.classifier()
+	hashes := s.hashes()
 	for _, p := range pts {
 		cl := cls(p)
 		if cl.any {
 			continue
 		}
-		for _, o := range s.walk(p) {
+		for _, o := range s.walkWith(p, hashes[p.f]) {
 			if !cl.allows(o) {
 				out = append(out, Violation{Class: cl.name, Packet: p.String(), Outcome: o.String()})
 				break
@@ -470,6 +471,11 @@ func judge(s State, pts []packet) []Violation {
 		}
 	}
 	return out
+}
+
+// hashes names the rules of both families (see ruleHashes).
+func (s State) hashes() map[rtnl.Family][]uint64 {
+	return map[rtnl.Family][]uint64{rtnl.V4: ruleHashes(s.Rules[rtnl.V4]), rtnl.V6: ruleHashes(s.Rules[rtnl.V6])}
 }
 
 // classifier returns the state's classification of a packet.
@@ -524,6 +530,7 @@ func Worsens(before, after State) []Violation {
 		return nil
 	}
 	clsAfter := after.classifier()
+	hb, ha := before.hashes(), after.hashes()
 	var out []Violation
 	pts, tooMany := allPoints(before, after)
 	if tooMany {
@@ -534,8 +541,8 @@ func Worsens(before, after State) []Violation {
 		if cl.any {
 			continue
 		}
-		prior := before.walk(p)
-		for _, o := range after.walk(p) {
+		prior := before.walkWith(p, hb[p.f])
+		for _, o := range after.walkWith(p, ha[p.f]) {
 			if cl.allows(o) {
 				continue
 			}

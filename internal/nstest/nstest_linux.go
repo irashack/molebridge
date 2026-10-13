@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/vishvananda/netns"
 )
@@ -136,18 +137,43 @@ func (n *NS) Sysctl(kv ...string) {
 // where a clash would be a bug of the test itself.
 func (n *NS) Veth(a string, other *NS, b string) {
 	n.t.Helper()
-	u := uniqueSuffix()
-	ta, tb := "va"+u, "vb"+u
-	n.IP("link", "add", ta, "type", "veth", "peer", "name", tb, "netns", other.Name)
-	for _, r := range []struct {
-		ns       *NS
-		from, to string
-	}{{n, ta, a}, {other, tb, b}} {
-		if out, err := r.ns.TryIP("link", "set", r.from, "name", r.to); err != nil {
-			all, _ := r.ns.TryIP("-d", "link")
-			n.t.Fatalf("ip -n %s link set %s name %s: %v\n%s\nthe namespace holds:\n%s", r.ns.Name, r.from, r.to, err, out, all)
+	var last string
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(50 * time.Millisecond)
 		}
+		u := uniqueSuffix()
+		ta, tb := "va"+u, "vb"+u
+		n.IP("link", "add", ta, "type", "veth", "peer", "name", tb, "netns", other.Name)
+		failed, renamed := "", false
+		for _, r := range []struct {
+			ns       *NS
+			from, to string
+		}{{n, ta, a}, {other, tb, b}} {
+			if out, err := r.ns.TryIP("link", "set", r.from, "name", r.to); err != nil {
+				all, _ := r.ns.TryIP("-d", "link")
+				failed = fmt.Sprintf("ip -n %s link set %s name %s: %v\n%s\nthe namespace holds:\n%s", r.ns.Name, r.from, r.to, err, out, all)
+				break
+			}
+			renamed = r.ns == n // the first end has its final name
+		}
+		if failed == "" {
+			return
+		}
+		// The rename of a fresh interface in a fresh namespace has failed with
+		// "File exists" on a busy machine, once in several hundred runs, with
+		// nothing of that name in the namespace. The pair is removed and made
+		// again under new names, and what was seen is kept for the report.
+		n.t.Logf("making the veth pair %s/%s failed (attempt %d), trying again:\n%s", a, b, attempt+1, failed)
+		if renamed {
+			_, _ = n.TryIP("link", "del", a)
+		} else {
+			_, _ = n.TryIP("link", "del", ta)
+		}
+		_, _ = other.TryIP("link", "del", tb)
+		last = failed
 	}
+	n.t.Fatalf("making the veth pair %s/%s failed three times; the last:\n%s", a, b, last)
 }
 
 // uniqueSuffix is 10 hex digits, random per call, short enough for an

@@ -152,6 +152,8 @@ func TestGluetunSingleFaultsAreRepairedWithin250ms(t *testing.T) {
 			g.ipx(f, "rule", "del", "iif", "lo", "to", ov, "lookup", "main", "suppress_prefixlength", "0", "priority", "91")
 		}},
 	)
+	rows := map[string]time.Duration{}
+	defer func() { logSlowest(t, rows) }()
 	for _, fault := range faults {
 		for _, family := range []string{"-4", "-6"} {
 			fault, family := fault, family
@@ -160,6 +162,7 @@ func TestGluetunSingleFaultsAreRepairedWithin250ms(t *testing.T) {
 				before := g.mut.Stats().Repairs
 				fault.apply(g, family)
 				took := g.rig.waitHealthy(2 * time.Second)
+				rows[fault.name+" "+family] = took
 				if took > repairBudget {
 					t.Errorf("repaired %v after the change, budget %v", took, repairBudget)
 				}

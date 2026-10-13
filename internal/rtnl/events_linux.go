@@ -5,6 +5,7 @@ package rtnl
 import (
 	"errors"
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 
@@ -70,6 +71,52 @@ func (s *Subscriber) Next(deadline time.Time) ([]Event, error) {
 			return nil, ErrOverrun
 		}
 		return nil, err
+	}
+	return decodeEvents(msgs), nil
+}
+
+// Poll returns the notifications that are waiting, without waiting for more: a
+// read that does not arm a timer (a read with a deadline wakes up on the timer's
+// granularity, a millisecond or more). With nothing waiting it returns an error
+// satisfying Timeout, like Next.
+func (s *Subscriber) Poll() ([]Event, error) {
+	conn, ok := s.c.(*netlink.Conn)
+	if !ok {
+		return s.Next(time.Now().Add(100 * time.Microsecond))
+	}
+	rc, err := conn.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 1<<16)
+	var n int
+	var serr error
+	if err := rc.Read(func(fd uintptr) bool {
+		n, _, serr = unix.Recvfrom(int(fd), buf, unix.MSG_DONTWAIT|unix.MSG_TRUNC)
+		return true // never wait for readiness
+	}); err != nil {
+		return nil, err
+	}
+	switch {
+	case errors.Is(serr, unix.EAGAIN):
+		return nil, os.ErrDeadlineExceeded
+	case errors.Is(serr, unix.ENOBUFS):
+		return nil, ErrOverrun
+	case serr != nil:
+		return nil, serr
+	case n > len(buf):
+		return nil, ErrOverrun // a datagram too large to read whole: treat as lost
+	}
+	raw, err := splitMessages(buf[:n])
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]netlink.Message, 0, len(raw))
+	for _, m := range raw {
+		msgs = append(msgs, netlink.Message{Header: netlink.Header{Type: netlink.HeaderType(m.typ), Flags: netlink.HeaderFlags(m.flags), Sequence: m.seq, PID: m.pid}, Data: m.data})
 	}
 	return decodeEvents(msgs), nil
 }

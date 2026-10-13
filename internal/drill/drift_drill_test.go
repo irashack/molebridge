@@ -9,6 +9,7 @@ package drill
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 )
@@ -100,8 +101,27 @@ func faults() []fault {
 	return out
 }
 
+// logSlowest reports the slowest repairs of a table of faults.
+func logSlowest(t *testing.T, rows map[string]time.Duration) {
+	t.Helper()
+	type row struct {
+		name string
+		d    time.Duration
+	}
+	var all []row
+	for n, d := range rows {
+		all = append(all, row{n, d})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].d > all[j].d })
+	for i := 0; i < len(all) && i < 5; i++ {
+		t.Logf("slow row %d: %-50s %v", i+1, all[i].name, all[i].d)
+	}
+}
+
 func TestEverySingleFaultIsRepairedWithin250ms(t *testing.T) { // the drift table, with D10's assertion
 	var worst time.Duration
+	rows := map[string]time.Duration{}
+	defer func() { logSlowest(t, rows) }()
 	for _, fl := range faults() {
 		for _, family := range []string{"-4", "-6"} {
 			fl, family := fl, family
@@ -114,6 +134,7 @@ func TestEverySingleFaultIsRepairedWithin250ms(t *testing.T) { // the drift tabl
 				before := r.mut.Stats().Repairs
 				fl.apply(r, family)
 				took := r.waitHealthy(2 * time.Second)
+				rows[fl.name+" "+family] = took
 				if took > repairBudget {
 					t.Errorf("repaired %v after the change, budget %v", took, repairBudget)
 				}

@@ -1,12 +1,12 @@
 package mutator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 
 	"github.com/irashack/molebridge/internal/contract"
-	"github.com/irashack/molebridge/internal/policy"
 	"github.com/irashack/molebridge/internal/rtnl"
 )
 
@@ -15,7 +15,7 @@ func (tx *Tx) addRule(r rtnl.Rule) (bool, error) {
 	if err := tx.budget(); err != nil {
 		return false, err
 	}
-	err := tx.m.o.Kernel.AddRule(r)
+	err := tx.kAddRule(r)
 	if err != nil && rtnl.IsExist(err) {
 		return false, nil
 	}
@@ -28,10 +28,7 @@ func (tx *Tx) delRule(r rtnl.Rule) (bool, error) {
 	if err := tx.budget(); err != nil {
 		return false, err
 	}
-	if err := tx.approve(fmt.Sprintf("%s rule %d", r.Family, r.Priority), func(s policy.State) (policy.State, bool) { return s.WithoutRule(r) }); err != nil {
-		return false, err
-	}
-	err := tx.m.o.Kernel.DelRule(r)
+	err := tx.kDelRule(r)
 	if err != nil && rtnl.IsNotExist(err) {
 		return false, nil
 	}
@@ -42,10 +39,7 @@ func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 	if err := tx.budget(); err != nil {
 		return false, err
 	}
-	if err := tx.approve(fmt.Sprintf("a %s route in table %d", r.Family, r.Table), func(s policy.State) (policy.State, bool) { return s.WithoutRoute(r) }); err != nil {
-		return false, err
-	}
-	err := tx.m.o.Kernel.DelRoute(r)
+	err := tx.kDelRoute(r)
 	if err != nil && rtnl.IsNotExist(err) {
 		return false, nil
 	}
@@ -57,19 +51,43 @@ func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 // that a protection is installed: a request the kernel acknowledged, or that
 // returned no error, is not.
 func (tx *Tx) confirmed(f rtnl.Family, rules ...rtnl.Rule) error {
-	snap, err := tx.Snapshot()
-	if err != nil {
-		return fmt.Errorf("could not read the kernel back: %w", err)
-	}
-	if snap.Unstable {
-		return errors.New("the kernel kept changing; the rules could not be confirmed")
+	var have []rtnl.Rule
+	if k, ok := tx.m.o.Kernel.(ruleReader); ok {
+		// Only the rules are in question: read them back, with the evidence a
+		// snapshot has, without the dumps of everything else.
+		if err := tx.budget(); err != nil {
+			return fmt.Errorf("could not read the kernel back: %w", err)
+		}
+		got, stable, err := k.RulesStable(tx.ctx, f)
+		if err != nil {
+			return fmt.Errorf("could not read the kernel back: %w", err)
+		}
+		if !stable {
+			return errors.New("the kernel kept changing; the rules could not be confirmed")
+		}
+		have = got
+	} else {
+		snap, err := tx.Snapshot()
+		if err != nil {
+			return fmt.Errorf("could not read the kernel back: %w", err)
+		}
+		if snap.Unstable {
+			return errors.New("the kernel kept changing; the rules could not be confirmed")
+		}
+		have = snap.Rules[f]
 	}
 	for _, r := range rules {
-		if !hasExact(snap.Rules[f], r) {
+		if !hasExact(have, r) {
 			return fmt.Errorf("rule %d is not installed: %s", r.Priority, r)
 		}
 	}
 	return nil
+}
+
+// ruleReader is implemented by kernels that can read one family's rules back
+// as stably as a snapshot reads them (rtnl.Conn).
+type ruleReader interface {
+	RulesStable(ctx context.Context, f rtnl.Family) ([]rtnl.Rule, bool, error)
 }
 
 // dependents are the expected rules that a removal makes up for: the rule one
