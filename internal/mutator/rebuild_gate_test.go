@@ -559,3 +559,38 @@ func TestAChangeMayRetireTheOldPairOnlyOnceTheAddressIsGone(t *testing.T) {
 		t.Error(h.violation)
 	}
 }
+
+// Round 8: the reviewer's TOS-16 protection at priority 50, with 94 and 98
+// missing and failing to come back. ICMP of every other TOS value already
+// escapes to main; the pass must still not delete the rule that stops TOS 16.
+func TestATOSQualifiedProtectionIsNotDeletedWhileTheContractCannotBeRestored(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	a := spec.ReturnPath[rtnl.V4][0]
+	_ = k.DelRulePriority(rtnl.V4, 94)
+	_ = k.DelRulePriority(rtnl.V4, 98)
+	protect := rtnl.Rule{Family: rtnl.V4, Priority: 50, Action: rtnl.FRActUnreachable, IPProto: rtnl.Some(uint8(1)), Src: netip.PrefixFrom(a, 32), Tos: 16}
+	if err := k.AddRule(protect); err != nil {
+		t.Fatal(err)
+	}
+	k.fail = func(op string) error {
+		if op == "add 2 94" || op == "add 2 98" {
+			return syscall.ENOMEM
+		}
+		return nil
+	}
+	res, err := m.ReconcileNow(context.Background(), "x")
+	if res.Verified || err == nil {
+		t.Errorf("verified: %+v %v", res, err)
+	}
+	found := false
+	for _, r := range k.rules[rtnl.V4] {
+		if r.Priority == 50 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the TOS-16 protection was deleted: %v", k.ruleSummary(rtnl.V4))
+	}
+	k.fail = nil
+	repairs(t, m, k, spec)
+}

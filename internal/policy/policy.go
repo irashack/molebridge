@@ -181,10 +181,14 @@ type Outcome struct {
 	// selectors), so that two paths to the same place through different rules
 	// are different outcomes when two states are compared.
 	By string
+	// Cond records the decisions the model could not make on the way (a rule
+	// that may or may not apply, a lookup that may or may not answer): the same
+	// place reached under another assumption is another outcome.
+	Cond string
 }
 
-// same ignores By: where the packet ends, not which rule sent it there.
-func (o Outcome) same(x Outcome) bool { o.By, x.By = "", ""; return o == x }
+// same ignores By and Cond: where the packet ends, not how it got there.
+func (o Outcome) same(x Outcome) bool { o.By, x.By, o.Cond, x.Cond = "", "", "", ""; return o == x }
 
 func (o Outcome) String() string {
 	switch o.Kind {
@@ -234,15 +238,22 @@ func (c class) allows(o Outcome) bool {
 
 // ---- packets ----
 
-// packet is one point of a class of traffic: the attributes rules select on
-// that the model knows. TOS, ports, uid and the like are not here: a rule that
-// selects on them may apply or not, and both are followed.
+// packet is one point of a class of traffic: every attribute a rule or a route
+// selects on that the model can evaluate. Attributes it cannot (a rule's
+// unknown attributes, the output interface of the exit's own traffic) make the
+// rule one that may or may not apply, and both are followed.
 type packet struct {
 	f        rtnl.Family
 	iif      string
 	mark     uint32
 	proto    uint8
 	src, dst netip.Addr
+	// tos is the TOS byte (DSCP and ECN); sport and dport the transport ports;
+	// uid the socket owner; l3 says the flow belongs to an l3mdev (VRF).
+	tos          uint8
+	sport, dport uint16
+	uid          uint32
+	l3           bool
 }
 
 func (p packet) String() string {
@@ -250,7 +261,20 @@ func (p packet) String() string {
 	if p.src.IsValid() && !p.src.IsUnspecified() {
 		src = p.src.String()
 	}
-	return fmt.Sprintf("%s packet in on %s mark %#x ipproto %d from %s to %s", p.f, p.iif, p.mark, p.proto, src, p.dst)
+	s := fmt.Sprintf("%s packet in on %s mark %#x ipproto %d from %s to %s", p.f, p.iif, p.mark, p.proto, src, p.dst)
+	if p.tos != 0 {
+		s += fmt.Sprintf(" tos %#x", p.tos)
+	}
+	if p.sport != 0 || p.dport != 0 {
+		s += fmt.Sprintf(" ports %d>%d", p.sport, p.dport)
+	}
+	if p.uid != 0 {
+		s += fmt.Sprintf(" uid %d", p.uid)
+	}
+	if p.l3 {
+		s += " in a VRF"
+	}
+	return s
 }
 
 type tri uint8
@@ -262,9 +286,10 @@ const (
 )
 
 // matches evaluates a rule's selectors for a packet: yes, no, or maybe when a
-// selector the model cannot evaluate exactly (TOS, uid range, ports, l3mdev,
-// suppress_ifgroup, source-address lookup, an attribute of a newer kernel)
-// decides it.
+// selector the model cannot evaluate exactly (an attribute of a newer kernel, a
+// rule that does not parse, the output interface of the exit's own traffic,
+// unknown flag bits) decides it. TOS, DSCP, uid and port ranges and l3mdev are
+// evaluated: the packet has a value of each.
 func matches(r rtnl.Rule, p packet) tri {
 	known := yes
 	if r.IifName != "" && r.IifName != p.iif {
@@ -289,13 +314,28 @@ func matches(r rtnl.Rule, p packet) tri {
 	if known != no && r.IPProto.OK && r.IPProto.V != 0 && r.IPProto.V != p.proto {
 		known = no
 	}
+	if known != no && r.Tos != 0 && r.Tos != p.tos {
+		known = no
+	}
+	if known != no && r.L3Mdev.OK && r.L3Mdev.V != 0 && !p.l3 {
+		known = no
+	}
+	ext := r.Ext()
+	if known != no && ext.UID != nil && (uint32(p.uid) < ext.UID[0] || uint32(p.uid) > ext.UID[1]) {
+		known = no
+	}
+	if known != no && ext.Sport != nil && (uint32(p.sport) < ext.Sport[0] || uint32(p.sport) > ext.Sport[1]) {
+		known = no
+	}
+	if known != no && ext.Dport != nil && (uint32(p.dport) < ext.Dport[0] || uint32(p.dport) > ext.Dport[1]) {
+		known = no
+	}
+	if known != no && ext.DSCP != nil && p.tos>>2 != *ext.DSCP {
+		known = no
+	}
 	res := known
-	if known == yes {
-		unknown := len(r.Unknown) > 0 || r.Tos != 0 || (r.L3Mdev.OK && r.L3Mdev.V != 0) || r.Bad ||
-			r.ExtraFlags() != 0 || (r.OifName != "" && p.iif == "lo")
-		if unknown {
-			res = maybe
-		}
+	if known == yes && (ext.Other || r.Bad || r.ExtraFlags() != 0 || (r.OifName != "" && p.iif == "lo")) {
+		res = maybe
 	}
 	if r.Invert() {
 		switch res {
@@ -327,10 +367,34 @@ func (s State) disposition(rt rtnl.Route) (o Outcome, fall bool) {
 	return Outcome{Kind: viaDev, Table: rt.Table, Dev: unknownDev}, false
 }
 
-// routeDefinite: a route that applies to every packet its destination covers
-// and is usable. Anything else may or may not be chosen.
-func routeDefinite(rt rtnl.Route) bool {
-	return rt.Unconditional() && rt.Flags&(rtnl.RTNHFDead|rtnl.RTNHFLinkdown|rtnl.RTNHFUnresolved) == 0
+// routeApplies says whether a route can answer the packet: its TOS, source and
+// input-interface selectors are evaluated, and a route that is dead, down or
+// unresolved may or may not be used.
+func (s State) routeApplies(rt rtnl.Route, p packet) tri {
+	if rt.Family == rtnl.V4 && rt.Tos != 0 && rt.Tos != p.tos {
+		return no
+	}
+	if rt.Src.IsValid() && rt.Src.Bits() > 0 && (!p.src.IsValid() || !rt.Src.Contains(p.src)) {
+		return no
+	}
+	if rt.Iif.OK {
+		switch {
+		case p.iif == s.Spec.Config.OverlayIf && s.OverlayIdx != 0:
+			if rt.Iif.V != s.OverlayIdx {
+				return no
+			}
+		case p.iif == "lo":
+			if rt.Iif.V != 1 {
+				return no
+			}
+		default:
+			return maybe
+		}
+	}
+	if rt.Flags&(rtnl.RTNHFDead|rtnl.RTNHFLinkdown|rtnl.RTNHFUnresolved) != 0 {
+		return maybe
+	}
+	return yes
 }
 
 // lookup follows a rule that looks a table up: the outcomes it can end the
@@ -388,24 +452,25 @@ func (s State) lookup(r rtnl.Rule, p packet) (outs []Outcome, fall bool) {
 		}
 	}
 	for _, b := range bits {
-		var best *rtnl.Route
 		group := byBits[b]
-		for i := range group {
-			rt := group[i]
-			if routeDefinite(rt) {
-				if best == nil || rt.Metric < best.Metric {
-					cp := rt
-					best = &cp
-				}
-				continue
+		// The kernel tries a route with a TOS before one without, then by metric.
+		sort.SliceStable(group, func(a, c int) bool {
+			if v4 := p.f == rtnl.V4; v4 && (group[a].Tos != 0) != (group[c].Tos != 0) {
+				return group[a].Tos != 0
 			}
-			o, f := s.disposition(rt)
-			add(o, f, b)
-		}
-		if best != nil {
-			o, f := s.disposition(*best)
-			add(o, f, b)
-			return outs, fall
+			return group[a].Metric < group[c].Metric
+		})
+		for _, rt := range group {
+			switch s.routeApplies(rt, p) {
+			case no:
+			case maybe:
+				o, f := s.disposition(rt)
+				add(o, f, b)
+			default:
+				o, f := s.disposition(rt)
+				add(o, f, b)
+				return outs, fall
+			}
 		}
 	}
 	// No route answered: the lookup falls through.
@@ -439,6 +504,15 @@ func (s State) walk(p packet) []Outcome {
 		}
 		return out
 	}
+	// tag records a decision the model could not make on the outcomes it led to.
+	tag := func(set []Outcome, prefix string) []Outcome {
+		out := make([]Outcome, len(set))
+		for k, o := range set {
+			o.Cond = prefix + o.Cond
+			out[k] = o
+		}
+		return out
+	}
 	for i := n - 1; i >= 0; i-- {
 		r := rules[i]
 		m := matches(r, p)
@@ -455,8 +529,12 @@ func (s State) walk(p packet) []Outcome {
 				outs[k].By = by
 			}
 			taken = outs
-			if fall {
-				taken = union(taken, sets[i+1])
+			if fall && len(outs) > 0 {
+				// The table may answer or not: both are followed, and which
+				// one is part of the outcome.
+				taken = union(tag(outs, "+L"+by+";"), tag(sets[i+1], "-L"+by+";"))
+			} else if fall {
+				taken = sets[i+1]
 			}
 		case rtnl.FRActUnreachable, rtnl.FRActProhibit, rtnl.FRActBlackhole:
 			taken = []Outcome{{Kind: stopped, By: by}}
@@ -477,7 +555,7 @@ func (s State) walk(p packet) []Outcome {
 			taken = sets[i+1]
 		}
 		if m == maybe {
-			taken = union(taken, sets[i+1])
+			taken = union(tag(taken, "+"+by+";"), tag(sets[i+1], "-"+by+";"))
 		}
 		sets[i] = taken
 	}

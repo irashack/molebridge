@@ -33,7 +33,6 @@ func (c coins) flip(rng *rand.Rand, key int) bool {
 
 type concrete struct {
 	packet
-	tos uint8
 }
 
 func oracle(s State, q concrete, rng *rand.Rand, cn coins) Outcome {
@@ -66,7 +65,23 @@ func oracle(s State, q concrete, rng *rand.Rand, cn coins) Outcome {
 		if m && r.Tos != 0 && r.Tos != q.tos {
 			m = false
 		}
-		if m && (len(r.Unknown) > 0 || r.L3Mdev.OK && r.L3Mdev.V != 0 || r.Bad || r.ExtraFlags() != 0) {
+		if m && r.L3Mdev.OK && r.L3Mdev.V != 0 && !q.l3 {
+			m = false
+		}
+		e := r.Ext()
+		if m && e.UID != nil && (q.uid < e.UID[0] || q.uid > e.UID[1]) {
+			m = false
+		}
+		if m && e.Sport != nil && (uint32(q.sport) < e.Sport[0] || uint32(q.sport) > e.Sport[1]) {
+			m = false
+		}
+		if m && e.Dport != nil && (uint32(q.dport) < e.Dport[0] || uint32(q.dport) > e.Dport[1]) {
+			m = false
+		}
+		if m && e.DSCP != nil && q.tos>>2 != *e.DSCP {
+			m = false
+		}
+		if m && (e.Other || r.Bad || r.ExtraFlags() != 0) {
 			m = cn.flip(rng, i)
 		}
 		if r.Invert() {
@@ -122,20 +137,26 @@ func oracleLookup(s State, r rtnl.Rule, q concrete, rng *rand.Rand, cn coins, id
 		if !rt.Dst.IsValid() || !rt.Dst.Contains(q.dst) {
 			continue
 		}
-		if rt.Tos != 0 && rt.Tos != q.tos {
+		if q.f == rtnl.V4 && rt.Tos != 0 && rt.Tos != q.tos {
 			continue
 		}
 		if rt.Src.IsValid() && rt.Src.Bits() > 0 && (!q.src.IsValid() || !rt.Src.Contains(q.src)) {
 			continue
 		}
-		if rt.Iif.OK && cn.flip(rng, 3000+i) == false {
-			continue
+		if rt.Iif.OK {
+			want := uint32(1)
+			if q.iif == s.Spec.Config.OverlayIf {
+				want = s.OverlayIdx
+			}
+			if rt.Iif.V != want {
+				continue
+			}
 		}
 		if rt.Flags&(rtnl.RTNHFDead|rtnl.RTNHFLinkdown|rtnl.RTNHFUnresolved) != 0 && cn.flip(rng, 4000+i) {
 			continue
 		}
 		better := best == nil || rt.Dst.Bits() > best.Dst.Bits() ||
-			rt.Dst.Bits() == best.Dst.Bits() && (rt.Tos != 0 && best.Tos == 0 || (rt.Tos != 0) == (best.Tos != 0) && rt.Metric < best.Metric)
+			rt.Dst.Bits() == best.Dst.Bits() && (q.f == rtnl.V4 && rt.Tos != 0 && best.Tos == 0 || (q.f != rtnl.V4 || (rt.Tos != 0) == (best.Tos != 0)) && rt.Metric < best.Metric)
 		if better {
 			cp := rt
 			best = &cp
@@ -232,10 +253,19 @@ func randomState(rng *rand.Rand, t *testing.T) State {
 				r.IPProto = rtnl.Some(uint8([]uint8{0, 1, 6, 17, 58}[rng.Intn(5)]))
 			}
 			if rng.Intn(5) == 0 {
-				r.Tos = 16
+				r.Tos = []uint8{16, 0x28}[rng.Intn(2)]
 			}
 			if rng.Intn(8) == 0 {
 				r.Unknown = []rtnl.RawAttr{{Type: 99, Data: []byte{1}}}
+			}
+			if rng.Intn(8) == 0 {
+				r.Unknown = append(r.Unknown, rtnl.PortRangeAttr(rng.Intn(2) == 0, 1000, 2000))
+			}
+			if rng.Intn(10) == 0 {
+				r.Unknown = append(r.Unknown, rtnl.UIDRangeAttr(1000, 2000))
+			}
+			if rng.Intn(10) == 0 {
+				r.Unknown = append(r.Unknown, rtnl.DSCPAttr(0x28>>2))
 			}
 			if rng.Intn(8) == 0 {
 				r.L3Mdev = rtnl.Some(uint8(1))
@@ -288,12 +318,12 @@ func TestTheModelContainsWhatTheOracleDoes(t *testing.T) {
 	checked := 0
 	for i := 0; i < 600; i++ {
 		s := randomState(rng, t)
-		pts := allPoints(s)
+		pts, _ := allPoints(s)
 		for k := 0; k < 40; k++ {
 			p := pts[rng.Intn(len(pts))]
 			set := s.walk(p)
 			for trial := 0; trial < 6; trial++ {
-				q := concrete{packet: p, tos: []uint8{0, 16}[rng.Intn(2)]}
+				q := concrete{packet: p}
 				got := oracle(s, q, rng, coins{})
 				if !has(set, got) {
 					t.Fatalf("state %d: the kernel can send %v to %v but the model says only %v (tos %d)\nrules %v\nroutes %+v", i, p, got, set, q.tos, ruleLines(s, p.f), s.Routes[p.f][51822])
@@ -344,7 +374,9 @@ func TestAnEscapeOfAnyConcretePacketIsAViolationOfSomePoint(t *testing.T) {
 			as := addrs(f)
 			q := concrete{packet: packet{f: f, iif: []string{s.Spec.Config.OverlayIf, "lo"}[rng.Intn(2)],
 				mark: []uint32{0, 7, 0x1bd00, 0x1bd21, 51820}[rng.Intn(5)], proto: []uint8{1, 6, 17, 58, 253}[rng.Intn(5)],
-				src: as[rng.Intn(len(as))], dst: as[rng.Intn(len(as))]}, tos: []uint8{0, 16}[rng.Intn(2)]}
+				src: as[rng.Intn(len(as))], dst: as[rng.Intn(len(as))],
+				tos: []uint8{0, 16, 0x28}[rng.Intn(3)], sport: []uint16{0, 1000, 2500}[rng.Intn(3)], dport: []uint16{0, 22, 443}[rng.Intn(3)],
+				uid: []uint32{0, 1000, 5000}[rng.Intn(3)], l3: rng.Intn(6) == 0}}
 			if q.dst.IsUnspecified() {
 				continue
 			}
@@ -390,7 +422,7 @@ func TestAnApprovedDeletionOpensNothingTheOracleCanFind(t *testing.T) {
 			continue
 		}
 		approved++
-		pts := allPoints(s, after)
+		pts, _ := allPoints(s, after)
 		prot := map[rtnl.Family]map[netip.Addr]bool{4: s.protectedAddrs(4), 6: s.protectedAddrs(6)}
 		hosts := map[rtnl.Family][]netip.Prefix{4: s.hostSubnets(4), 6: s.hostSubnets(6)}
 		sort.Slice(pts, func(a, b int) bool { return pts[a].String() < pts[b].String() })
@@ -400,7 +432,7 @@ func TestAnApprovedDeletionOpensNothingTheOracleCanFind(t *testing.T) {
 			if cl.any {
 				continue
 			}
-			q := concrete{packet: p, tos: []uint8{0, 16}[rng.Intn(2)]}
+			q := concrete{packet: p}
 			seed := rng.Int63()
 			before := oracle(s, q, rand.New(rand.NewSource(seed)), coins{})
 			afterO := oracle(after, q, rand.New(rand.NewSource(seed)), coins{})

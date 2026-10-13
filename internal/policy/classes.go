@@ -163,7 +163,7 @@ func (s *sig) add(v bool) {
 }
 
 // points returns the packets to judge for a family, refined over every state.
-func points(f rtnl.Family, states ...State) []packet {
+func points(f rtnl.Family, states ...State) ([]packet, bool) {
 	base := states[0]
 	c := base.Spec.Config
 	var rules []rtnl.Rule
@@ -315,19 +315,128 @@ func points(f rtnl.Family, states ...State) []packet {
 		protos = append(protos, p)
 	}
 	sort.Slice(protos, func(i, j int) bool { return protos[i] < protos[j] })
+	// The attributes rules and routes select on besides the addresses, the mark
+	// and the protocol: TOS, ports, uid and l3mdev. A value for each that the
+	// selectors can tell apart, so that those selectors are decided per point.
+	var toses []uint8
+	{
+		set := map[uint8]bool{0: true}
+		for _, r := range rules {
+			set[r.Tos] = true
+			if e := r.Ext(); e.DSCP != nil {
+				set[*e.DSCP<<2] = true
+			}
+		}
+		for _, rt := range routes {
+			if f == rtnl.V4 {
+				set[rt.Tos] = true
+			}
+		}
+		if len(set) > 1 {
+			for _, o := range []uint8{0xe0, 0xb8, 0x28, 0x04} {
+				if !set[o] {
+					set[o] = true
+					break
+				}
+			}
+		}
+		for t := range set {
+			toses = append(toses, t)
+		}
+		sort.Slice(toses, func(i, j int) bool { return toses[i] < toses[j] })
+	}
+	var sports, dports, uids []uint32
+	var l3s []bool
+	{
+		var sr, dr, ur [][2]uint32
+		l3 := false
+		for _, r := range rules {
+			e := r.Ext()
+			if e.Sport != nil {
+				sr = append(sr, *e.Sport)
+			}
+			if e.Dport != nil {
+				dr = append(dr, *e.Dport)
+			}
+			if e.UID != nil {
+				ur = append(ur, *e.UID)
+			}
+			l3 = l3 || r.L3Mdev.OK && r.L3Mdev.V != 0
+		}
+		sports, dports, uids = refineRange(sr, 65535), refineRange(dr, 65535), refineRange(ur, 0xffffffff)
+		l3s = []bool{false}
+		if l3 {
+			l3s = append(l3s, true)
+		}
+	}
+	total := 2 * len(mk) * len(protos) * len(toses) * len(sports) * len(dports) * len(uids) * len(l3s) * len(srcs) * len(dsts)
+	if total > maxPoints {
+		return nil, true
+	}
 	var out []packet
 	for _, iif := range []string{c.OverlayIf, "lo"} {
 		for _, m := range mk {
 			for _, pr := range protos {
-				for _, s := range srcs {
-					for _, d := range dsts {
-						if d.IsUnspecified() {
-							continue
+				for _, tos := range toses {
+					for _, sp := range sports {
+						for _, dp := range dports {
+							for _, uid := range uids {
+								for _, l3 := range l3s {
+									for _, s := range srcs {
+										for _, d := range dsts {
+											if d.IsUnspecified() {
+												continue
+											}
+											out = append(out, packet{f: f, iif: iif, mark: m, proto: pr, src: s, dst: d,
+												tos: tos, sport: uint16(sp), dport: uint16(dp), uid: uid, l3: l3})
+										}
+									}
+								}
+							}
 						}
-						out = append(out, packet{f: f, iif: iif, mark: m, proto: pr, src: s, dst: d})
 					}
 				}
 			}
+		}
+	}
+	return out, false
+}
+
+// maxPoints bounds the packets judged for one family; a rule set whose
+// selectors define more classes than this is refused rather than sampled.
+const maxPoints = 400000
+
+// refineRange returns one value for each set of values the ranges cannot tell
+// apart: the bounds of each range and the values just outside them, kept when
+// they differ in which ranges contain them. With no range there is one value, 0.
+func refineRange(ranges [][2]uint32, max uint32) []uint32 {
+	cand := map[uint32]bool{0: true}
+	for _, r := range ranges {
+		cand[r[0]], cand[r[1]] = true, true
+		if r[0] > 0 {
+			cand[r[0]-1] = true
+		}
+		if r[1] < max {
+			cand[r[1]+1] = true
+		}
+	}
+	vals := make([]uint32, 0, len(cand))
+	for v := range cand {
+		if v <= max {
+			vals = append(vals, v)
+		}
+	}
+	sort.Slice(vals, func(i, j int) bool { return vals[i] < vals[j] })
+	seen := map[string]bool{}
+	var out []uint32
+	for _, v := range vals {
+		var g sig
+		for _, r := range ranges {
+			g.add(v >= r[0] && v <= r[1])
+		}
+		if k := g.b.String(); !seen[k] {
+			seen[k] = true
+			out = append(out, v)
 		}
 	}
 	return out
@@ -374,20 +483,32 @@ func (s State) classifier() func(packet) class {
 	return func(p packet) class { return s.classify(p, prot[p.f], hosts[p.f]) }
 }
 
-func allPoints(states ...State) []packet {
+func allPoints(states ...State) ([]packet, bool) {
 	var pts []packet
 	for _, f := range families {
-		pts = append(pts, points(f, states...)...)
+		p, tooMany := points(f, states...)
+		if tooMany {
+			return nil, true
+		}
+		pts = append(pts, p...)
 	}
-	return pts
+	return pts, false
 }
+
+// tooManyClasses is what a rule set that defines more classes than the model
+// will judge reports: a deletion is refused rather than judged on a sample.
+var tooManyClasses = Violation{Class: "the model", Packet: "the rules", Outcome: "too many classes of traffic to judge"}
 
 // Violations lists every protected packet that can reach a forbidden place.
 func (s State) Violations() []Violation {
 	if s.Spec.Config.IsSidecar() {
 		return nil
 	}
-	return judge(s, allPoints(s))
+	pts, tooMany := allPoints(s)
+	if tooMany {
+		return []Violation{tooManyClasses}
+	}
+	return judge(s, pts)
 }
 
 // Worsens returns what a change opens: for every point, every outcome that
@@ -404,7 +525,11 @@ func Worsens(before, after State) []Violation {
 	}
 	clsAfter := after.classifier()
 	var out []Violation
-	for _, p := range allPoints(before, after) {
+	pts, tooMany := allPoints(before, after)
+	if tooMany {
+		return []Violation{tooManyClasses}
+	}
+	for _, p := range pts {
 		cl := clsAfter(p)
 		if cl.any {
 			continue
