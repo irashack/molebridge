@@ -49,9 +49,13 @@ the target, measured the same way, with server choice and refresh unchanged.
 ### One exit for several providers
 
 Today each exit has one provider, fixed at start by `PROVIDER`, so using
-Mullvad, PIA and NordVPN means three exits and three NetBird peers. A
-multi-provider exit would be one peer that Switchyard can move between
-providers as well as between servers. It looks feasible, because a switch
+Mullvad, PIA and NordVPN means three exits and three NetBird peers. Moving a
+device from one provider to another means choosing a different exit node in
+the NetBird app and then the server in Switchyard. A multi-provider exit
+would be one peer: the device stays on it, and Switchyard picks the provider
+and the server in one step. It would be an opt-in kind of exit. Single-provider
+exits stay as they are, and existing setups need no change. It looks
+feasible, because a switch
 already tears one tunnel down and brings another up under the same
 fail-closed contract, and a different provider is a bigger version of that.
 What it would take:
@@ -73,9 +77,9 @@ What it would take:
 - A live pass with switches in both directions between every pair of
   providers, and the tunnel-loss and repair drills run on each.
 
-Everyone using that exit then shares one provider. Separate exits, one per
-provider, would stay supported for anyone who wants different devices on
-different providers at the same time.
+Everyone using a multi-provider exit shares its current provider. To put
+different devices on different providers at the same time, run
+single-provider exits beside it.
 
 ### Automatic failover
 
