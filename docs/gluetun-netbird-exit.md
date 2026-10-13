@@ -22,27 +22,29 @@ isn't covered ([other providers](other-providers.md)).
 
 ## What was tested
 
-Nothing at 0.8.0 ([testing](testing.md#080)). The design was verified live at
-0.7.0, with NordVPN through gluetun v3.41.3 and a self-hosted NetBird server with
-the 0.79.0 client:
+[Testing](testing.md#080) is the record. At 0.8.0 a gluetun overlay exit with NordVPN, upgraded
+from 0.7.0 on rootless Podman with Quadlet units, came up healthy and connected. No drill was run
+on it live and no client was held on it; the gluetun rules, monitors and stop sequence are covered
+by the namespace drills in CI only. The design itself was verified live at 0.7.0, with NordVPN
+through gluetun v3.41.3 and a self-hosted NetBird server:
 
-- On 2026-10-08 on Docker (OrbStack, with a Linux 7.0 kernel VM, on macOS), in two
-  runs. With Molebridge's applier (at `a3bb14f`): forwarding with a client on a
-  direct (P2P) path; local delivery to the exit from NetBird refused; tunnel down
-  with no client traffic and none of gluetun's own flows on the host interface;
-  NetBird's control traffic on the host interface only; recreation and recovery. In
-  the form of the old standalone page (at `4933360`, with only `gluetun`, `guard`
-  and `netbird` running): the drills for a deleted exit-table route, a deleted
-  lookup rule, NetBird restarted and gluetun recreated, each with the client's probe
-  failing and nothing on the host interface's capture; local delivery refused; and a
-  server switch through gluetun's control server.
-- At 0.7.0 on rootless Podman 5.8 as Quadlet units, with a Linux client: a switch and a
-  gluetun restart ([testing](testing.md#070-on-rootless-podman-at-d5a234a)).
+- On 2026-10-08 on Docker (OrbStack, on macOS): forwarding with a client on a direct (P2P) path,
+  local delivery refused, tunnel down with nothing on the host interface, NetBird's control
+  traffic on the host interface only, recreation, and the drills for a deleted exit-table route
+  and lookup rule, NetBird restarted and gluetun recreated
+  ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)).
+- On 2026-10-11 on rootless Podman 5.8 as Quadlet units, with a Linux client held on the
+  exit: a live switch and a gluetun restart
+  ([testing](testing.md#070-on-rootless-podman-at-d5a234a)).
 
 **Not tested at any version:** any gluetun provider other than NordVPN, IPv6 through
 gluetun (NordVPN is IPv4 only), the `SERVER_CATEGORIES` override, podman-compose, and
-Docker Engine on Linux. [Testing](testing.md#gluetun-backend-pass-at-a3bb14f) holds the
-record.
+Docker Engine on Linux. **Not tested at 0.8.0:** running `compose.gluetun.yaml` at all (it
+is validated with `docker compose config` only), Docker of any kind, and NetBird Cloud.
+For FastestVPN, IVPN, Surfshark and Windscribe the egress check compares the tunnel's
+address with this host's, measured on a socket that carries NetBird's control mark;
+only unit tests cover it. Mullvad and NordVPN use their own checks.
+[Testing](testing.md#gluetun-backend-pass-at-a3bb14f) holds the older record.
 
 ## What you get, and what you don't
 
@@ -180,7 +182,7 @@ reaches gluetun's rule 101. So the exit:
    `NB_FORCE_USERSPACE_ROUTER`, `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` set to
    true; `NB_DISABLE_USERSPACE_ROUTING` not `true`; `NB_USE_LEGACY_ROUTING`,
    `NB_SKIP_SOCKET_MARK` or `NB_DISABLE_CUSTOM_ROUTING` set to true; `NB_FWMARK_BASE`
-   different from `CONTROL_MARK`; Rosenpass enabled, in the environment or in the stored
+   different from `CONTROL_MARK`; an `NB_LOG_FILE` with no absolute path; Rosenpass enabled, in the environment or in the stored
    profile; foreground mode; `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE` set; a
    stored profile that names another interface than `wt0` (or `OVERLAY_IF`) or lacks the
    tunnel interface in its ICE blacklist; and any routing setting that is invalid
@@ -201,14 +203,18 @@ reaches gluetun's rule 101. So the exit:
    rule in the table above that applies, exactly, and nothing else at priorities 0 to 97 or
    102 to 104; and the exit table's fallback with no other route in it than the tunnel default.
    It runs again on every start of the container.
-4. **Stops NetBird** (it starts again once the contract verifies), logging the reason, when:
-   - NetBird's log shows `advanced routing has been requested to be disabled` or `falling back
-     to legacy routing` in the current launch's output: `NetBird logged that it runs without
-     advanced routing, so its control traffic would be unmarked`;
-   - the overlay interface has not carried the control mark for `FWMARK_GRACE` seconds (30 by
-     default, 5 to 30), counted on the boot clock from the launch or from the last good reading:
-     `wt0 has not carried the control mark 0x1bd00 for 30 seconds (last reported: <value>)`;
-   - the contract stays broken for `GUARD_GRACE` seconds.
+4. **Stops what it cannot trust**, logging the reason:
+   - If NetBird's log shows `advanced routing has been requested to be disabled` or `falling back
+     to legacy routing` in the current launch's output, or the overlay interface has not carried the
+     control mark for `FWMARK_GRACE` seconds (30 by default, 5 to 30, counted on the boot clock from
+     the launch or from the last good reading), the exit stops itself. The worker ends, the
+     supervisor stops NetBird and removes the overlay interface, and the container exits with
+     status 1, so the restart policy starts it again. The line is `NetBird gate: stopping NetBird:
+     <reason> (see docs/troubleshooting.md)`, with the reason `NetBird logged that it runs without
+     advanced routing, so its control traffic would be unmarked` or `wt0 has not carried the control
+     mark 0x1bd00 for 30 seconds (last reported: <value>)`.
+   - If the contract stays broken for `GUARD_GRACE` seconds, the supervisor stops NetBird and
+     starts it again once the contract verifies. The container keeps running.
 5. **Stops itself** and NetBird if the worker stops answering ([the lease](architecture.md#the-lease)).
 
 NetBird can sign in to management before its overlay interface exists, so the exit cannot wait
@@ -225,8 +231,10 @@ throughout.
   always-on host. The setup asks gluetun for the kernel implementation
   (`WIREGUARD_IMPLEMENTATION=kernelspace`), which fails instead of falling back to a userspace tunnel.
   It was tried on a 7.0 kernel in OrbStack's VM on macOS and on rootless Podman, and nowhere else.
-- **Docker with Compose 2.24 or later.** Rootless Podman with podman-compose is untested for this
-  setup ([below](#rootless-podman)). Molebridge's own stack is tested as described in
+- **Docker with Compose 2.24 or later.** At 0.8.0 this Compose file has been validated with
+  `docker compose config` only; the live pass used Quadlet units, and 0.7's version ran on Docker
+  (OrbStack). Rootless Podman with podman-compose is untested for this setup
+  ([below](#rootless-podman)). Molebridge's own stack is tested as described in
   [requirements](prerequisites.md#host).
 - **A NetBird account** with admin access, either NetBird Cloud or self-hosted (only a self-hosted
   server has been tried). You need the groups, the policy, a setup key and the exit route. The steps
@@ -353,8 +361,8 @@ You can add the exit container to a gluetun you have, instead of using
   `net.ipv6.conf.all.forwarding=1`, `net.ipv4.icmp_errors_use_inbound_ifaddr=1`,
   and `net.ipv6.conf.all.disable_ipv6=0` with the same for `default`. The
   third makes the exit's ICMP errors for tunnel traffic carry the tunnel
-  address, so rule 94 returns them through the tunnel. The exit warns
-  (`net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; ...`) when it is missing.
+  address, so rule 94 returns them through the tunnel. The exit logs
+  `molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; ...` when it is missing.
 - `FIREWALL_INPUT_PORTS` set to NetBird's WireGuard port (`NB_WIREGUARD_PORT`,
   51820 by default).
 - The control server on `127.0.0.1:8000` only
@@ -447,21 +455,24 @@ what keeps traffic in the tunnel: policy routing is.
 Set `GLUETUN_SERVER_COUNTRIES` to your own country, as gluetun names it
 (`Netherlands`, `United States`), and leave the city and hostname empty.
 Gluetun's built-in server list is old (for NordVPN in v3.41.3 it dates from
-2024), and gluetun refreshes it only after one `UPDATER_PERIOD`, not at start.
+2024), and gluetun's own updater first runs one `UPDATER_PERIOD` (24 hours)
+after it starts, not at start.
 A hostname or city missing from the built-in list stops gluetun at start
 (`the hostname specified is not valid`, or the same for a city or country).
 A whole country is unlikely to be gone, and a nearby one answers best. With the
 filter empty, gluetun picks among every country's servers.
 
 On the first start gluetun may restart its VPN several times before it
-connects, because it picks servers from the old list that no longer answer.
-Gluetun refreshes the list by itself one `UPDATER_PERIOD` (24 hours) after it
-starts, or sooner if you trigger it
-([below](#choosing-and-switching-servers)).
+connects, because it picks servers from the old list that no longer answer. The
+exit does not wait for the updater. Once the tunnel has a recent handshake and
+the list is older than `GLUETUN_UPDATER_PERIOD` or 7 days, whichever is
+shorter, it asks gluetun's updater for one refresh (up to three attempts per
+start, five minutes apart; `0` turns this off). The panel shows the list's date
+and calls it stale after 30 days.
 
 ## A configured server
 
-Set `SERVER` in `.env` to one server hostname from the catalogue to pin the exit to it.
+Set `SERVER` in `.env` to one server hostname from the catalog to pin the exit to it.
 When `SERVER` is set, configuration wins: the exit ignores `desired.json` and restores
 `SERVER` after a gluetun restart, ahead of a saved panel selection. If you run Switchyard,
 it shows that exit read-only as "Set in configuration". Invalid or unknown names fail
@@ -611,8 +622,8 @@ docker exec molebridge-exit pkill -CONT -f 'exit --work[e]r'
 | Drill | Break | Expect | Restore |
 |---|---|---|---|
 | Tunnel down | In the shell, `ip link set wg0 down` | The probe fails. Nothing in the capture. | In the 0.7 test, gluetun did not bring a downed interface back by itself within several minutes, so recreate: `docker compose up -d --force-recreate gluetun exit` |
-| Exit-table route deleted | Freeze the worker, then in the shell `ip route del default dev wg0 table 51821` | The probe fails. | Let the worker continue: the exit logs `molebridge-exit: molebridge: IPv4 tunnel route through wg0 restored` |
-| Lookup rule deleted | Freeze the worker, then `ip rule del priority 95` (and `ip -6` for IPv6) | The probe fails on terminal rule 97. | Let the worker continue: `molebridge-exit: molebridge: added IPv4 rule 95` |
+| Exit-table route deleted | Freeze the worker, then in the shell `ip route del default dev wg0 table 51821` | The probe fails. | Let the worker continue: the exit logs `molebridge-exit: IPv4 tunnel route through wg0 restored` |
+| Lookup rule deleted | Freeze the worker, then `ip rule del priority 95` (and `ip -6` for IPv6) | The probe fails on terminal rule 97. | Let the worker continue: `molebridge-exit: added IPv4 rule 95` |
 | Gluetun recreated | `docker compose up -d --force-recreate gluetun exit` | The probe fails until both are back. Nothing in the capture. | The command is the restore |
 | Worker hung | `docker exec molebridge-exit pkill -STOP -f 'exit --work[e]r'` and leave it | After `GUARD_GRACE` seconds the log has `molebridge-exit: stopping (lease lapsed)`, NetBird is stopped, the overlay interface is removed (never gluetun's tunnel), and the container restarts. The probe fails. Nothing in the capture. | The restart policy |
 | NetBird killed | `docker exec molebridge-exit pkill -KILL -x netbird` | The exit stops and restarts. The probe fails while the peer is down. After it returns, `wg show wt0 fwmark` prints `0x1bd00`. | The restart policy |
@@ -645,9 +656,9 @@ overlay address gets no reply for the same reason, although the access policy al
 
 ## Rootless Podman
 
-Untested for this setup at 0.8.0; at 0.7.0 it ran on rootless Podman with Quadlet
-units. A rootless engine puts the namespace on a private
-network, so NetBird's only host candidate is an address nothing outside the
+At 0.8.0 a gluetun overlay exit with NordVPN ran on rootless Podman 5.8 as Quadlet units
+([testing](testing.md#080)), upgraded from 0.7.0; podman-compose has not been run with this form. A rootless
+engine puts the namespace on a private network, so NetBird's only host candidate is an address nothing outside the
 host can reach. Devices on your LAN still connect directly, but devices
 elsewhere fall back to a relay without any error. The method that worked for
 Molebridge's own stack is pasta's port forwarding on the container that owns

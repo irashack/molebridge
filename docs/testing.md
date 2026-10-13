@@ -17,11 +17,19 @@ tested, not instructions; the current commands are in the other pages.
 
 ## 0.8.0
 
-0.8.0 has run live on one host: a Debian host with rootless Podman and Quadlet
-units, see the table for what ran where. Docker Engine on Linux and
-NetBird Cloud were **not** tested at 0.8.0, and no client device was held on an
-exit through the fail-closed drills; the drills ran from inside the exit's own
-namespace instead. The details follow.
+0.8.0 was tested live on one host: a Debian host with rootless Podman 5.8 and
+Quadlet units. Eight exits were upgraded there from 0.7.0 (six native: one
+NordVPN, four Mullvad and one PIA; a gluetun overlay exit and a gluetun sidecar,
+both with NordVPN), and the fail-closed drills ran from inside the exits' own namespaces
+on the native Mullvad, PIA and NordVPN exits. The released image was then
+checked against the same exits ([release acceptance](#release-acceptance-at-v080)).
+
+Not tested at 0.8.0, in short: **Docker Engine on Linux and NetBird Cloud**; the
+**shipped Compose files, which were validated with `docker compose config` only
+and never run**; the drills with a client device held on an exit (they ran from
+the exit's namespace instead); and any live drill on the gluetun exits, whose
+rules only the namespace drills in CI cover. The full list is
+[at the end of this section](#not-tested-at-080).
 
 ### Run so far
 
@@ -84,8 +92,10 @@ live-acceptance attestation on that digest names the coverage below; the
 verification in [setup](setup.md#1-download-and-verify) was run against the
 published release from a clean directory on 2026-10-13 and every step passed.
 
-Every exit of the live pass above was moved to the candidate digest, pulled
-from the registry, and the drills were run on it from the exit's namespace:
+Every exit of the live pass above was moved to the candidate digest (the
+`v0.8.0-rc.2` one, which became `v0.8.0`), pulled from the registry, and these
+drills were run on it from the exit's namespace. They ran on the native exits
+only; the gluetun exits were not drilled live:
 
 - Drift on the Mullvad, PIA and NordVPN exits (IPv4 rules 97, 95 and 1, IPv6
   rule 97, a foreign rule at 96): each repaired in 8 to 13 ms.
@@ -121,16 +131,25 @@ exit container, so each figure is the whole exit.
 
 At 0.7.0 a native exit idled at about 7.9 % of one core in four containers. The
 0.8.0 target of 0.5 % or less holds for every exit measured. The 70 MB target
-holds for the Mullvad exit only: NordVPN's and gluetun's server catalogues are
-large, and the heap that parses them is not all returned. The image is 61 MB
+holds only for the first Mullvad exit (67 MB); the second Mullvad exit, PIA and the
+sidecar are at 77 to 78 MB, and the gluetun overlay exit (123 MB) and the NordVPN exit
+(189 MB) parse large server catalogs, whose heap is not all returned. The image is 61 MB
 unpacked (target 80 MB).
 
 ### Not tested at 0.8.0
 
 - Docker Engine on Linux and NetBird Cloud (dropped from 0.8.0's acceptance by the
-  maintainer). The Compose files are validated with `docker compose config` only.
+  maintainer).
+- Running any of the shipped Compose files (`compose.yaml`, `compose.gluetun.yaml`,
+  `compose.sidecar.yaml`), with Docker or podman-compose. They are validated with
+  `docker compose config` only. The live exits ran as Quadlet units.
 - A client device held on an exit through the fail-closed drills.
-- Installing from the signed bundle on a clean host.
+- Live drills on the gluetun overlay exit and the sidecar, and any gluetun provider
+  other than NordVPN. The gluetun rules, including 91 and 92 at packet level, are
+  covered only by the namespace drills in CI.
+- Installing from the release bundle on a clean host. The signature and attestation
+  verification of the published release ran from a clean directory (above), but no
+  exit was installed from the bundle.
 - The smallest capability set: `DAC_OVERRIDE` is what the Compose files grant.
 - The Go panel's sign-in against a real identity provider; `fix-blacklist` against a
   real enrolled peer; PIA port forwarding against PIA; phones during failure drills.

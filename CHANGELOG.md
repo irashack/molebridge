@@ -12,8 +12,9 @@ containers instead of four; nothing is built locally and there is no Python on
 the host. The routing contract, the status record (schema 2), the verdict, the
 admission pipeline, the state files and the panel's wording are unchanged, so
 a 0.7.0 Switchyard reads a 0.8.0 exit. Tested live on rootless Podman with
-Quadlet units only: every provider and kind upgraded from 0.7.0, drills from the
-exit's own namespace, idle CPU 0.15 to 0.5 % of one core per exit (7.9 % at
+Quadlet units only: eight exits upgraded from 0.7.0 (native Mullvad, PIA and NordVPN, and
+NordVPN through gluetun as an overlay exit and as a sidecar), drills from the native
+exits' own namespaces, idle CPU 0.15 to 0.5 % of one core per exit (7.9 % at
 0.7.0). Docker Engine on Linux, NetBird Cloud and client-held drills were not
 tested at 0.8.0 ([testing](docs/testing.md#080)). Upgrade by following
 [upgrading from 0.7.x](docs/operations.md#upgrading-from-07x): **Switchyard
@@ -94,10 +95,23 @@ over, the Compose files do not.
 still begins `NetBird gate:`. [Troubleshooting](docs/troubleshooting.md) quotes the
 current ones.
 
-**Tested.** Unit, fuzz and namespace-drill suites in CI; see
-[testing](docs/testing.md#080) for what they cover, and for the live passes that are
-still to do (Docker Engine on Linux, rootless Podman with Quadlet, NetBird Cloud, one exit
-per provider, the gluetun exit and the sidecar, and the upgrade from 0.7.0).
+**Tested.** Unit, fuzz and namespace-drill suites in CI, and a live pass on one Debian host
+with rootless Podman 5.8 and Quadlet units ([testing](docs/testing.md#080)):
+
+- Six native exits (one NordVPN, four Mullvad, one PIA), a gluetun overlay exit and a gluetun
+  sidecar, the last two with NordVPN, were upgraded from 0.7.0 and reported healthy; the
+  stored NetBird peers, selections and PIA's registration carried over.
+- The released image (`v0.8.0`, promoted from `v0.8.0-rc.2`) was run on the native Mullvad, PIA and
+  NordVPN exits through the drift, tunnel-loss and frozen-worker drills, made from the exits'
+  own namespaces. `v0.8.0-rc.1` failed the PIA tunnel-loss drill (it stayed fail-closed but did
+  not recover by itself); `v0.8.0-rc.2` fixes that.
+- The gluetun exits were not drilled live, and no client device was held on any exit.
+
+**Not tested at 0.8.0:** Docker Engine on Linux and NetBird Cloud (dropped from acceptance by the
+maintainer); running the shipped Compose files at all (they are validated with `docker compose
+config` only); gluetun with any provider other than NordVPN; installing from the release bundle on
+a clean host; PIA port forwarding against PIA; and the Go panel's sign-in against a real identity
+provider.
 
 ## 0.7.0 (2026-10-11)
 

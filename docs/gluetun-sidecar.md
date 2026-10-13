@@ -9,20 +9,12 @@ the `overlay` kind (`compose.yaml` or
 [`compose.gluetun.yaml`](gluetun-netbird-exit.md)). The sidecar is the
 `sidecar` kind, `EXIT_KIND=sidecar`.
 
-**What has been tested.** One live pass, at 0.7.0 (`d5a234a`) on rootless Podman
-5.8 with Quadlet units and gluetun with NordVPN
-([testing](testing.md#070-on-rootless-podman-at-d5a234a)): a selection
-verified by NordVPN's own check, the Compose-less doctor, the control server
-on loopback refusing requests without the key, the preflight refusing a
-malformed role file without printing the key, and the selection restored
-after gluetun restarted. That doctor and its recovery helper no longer exist;
-what replaced them is [below](#checking-that-containers-share-gluetuns-namespace).
-**Nothing has run at 0.8.0** ([testing](testing.md#080)). The attachment
-procedure has run on Docker against throwaway containers, including an owner
-restarted under the same id and a stopped member. Docker with a VPN
-provider, podman-compose, Mullvad, the four
-[tunnel-tier providers](#tunnel-tier-providers), and an application left in
-gluetun's old namespace on a live host are untested.
+**What has been tested.** At 0.8.0 a sidecar with gluetun and NordVPN, upgraded from 0.7.0
+on rootless Podman with Quadlet units, reported healthy; nothing else was run on it, and the
+attachment procedure has no 0.8.0 record. Mullvad, the four
+[tunnel-tier providers](#tunnel-tier-providers), Docker, podman-compose and an application left
+in gluetun's old namespace are untested, and `compose.sidecar.yaml` is validated with
+`docker compose config` only. The older passes are in [testing](testing.md#080).
 
 ## What is checked, and by whom
 
@@ -158,25 +150,24 @@ podman-compose (untested for this form). No Python is needed.
 
 ## Checking that containers share gluetun's namespace
 
-The exit can't see whether your applications are in gluetun's current namespace,
-and neither can any container: a restart that gives gluetun a new namespace leaves
-the others in the old one, with the same container ids. So `app_attachment` stays
-`not-checked`. The check is a procedure you run on the host, from outside every
-container, and it compares the namespace objects themselves. It is written out in
-[operations](operations.md#checking-that-containers-share-gluetuns-namespace);
-for a sidecar, name gluetun, the exit and every service in `SIDECAR_APPS`:
+The exit can't see whether your applications are in gluetun's current namespace, and
+neither can any container: a restart that gives gluetun a new namespace leaves the
+others in the old one, with the same container ids. So `app_attachment` stays
+`not-checked`. The check is a script you run on the host, from outside every container
+([operations](operations.md#checking-that-containers-share-gluetuns-namespace) has the
+script and what it compares). For a sidecar, name gluetun, the exit and every service in
+`SIDECAR_APPS`:
 
 ```sh
-sh attach.sh molebridge-sidecar-gluetun molebridge-sidecar-exit \
-  $(docker compose ps -q downloader other-app)
+sh attach.sh molebridge-sidecar-gluetun molebridge-sidecar-exit my-downloader my-other-app
 ```
 
-Every line must be `PASS`. It fails on a member that is missing or stopped, and
-it compares each member's id and start time before and after the probes, so a
-restart during the check can't pass. A failure names the member that is not in
-gluetun's current namespace; recreate it together with gluetun
-([recovery](#recovery)). Run it after every start, recreation or reboot, and
-after any gluetun update.
+Name each application's container yourself: a stopped or missing container only fails the
+check if you name it, and a list built from `docker compose ps` leaves it out.
+
+Every line must be `PASS`; a `FAIL` names the member that is not in gluetun's current
+namespace, which you recreate together with gluetun ([recovery](#recovery)). Run it after
+every start, recreation or reboot, and after any gluetun update.
 
 ## Recovery
 
@@ -217,9 +208,8 @@ restart of gluetun alone gives it a new namespace and doesn't recover the others
 `BindsTo=` systemd stops them, as the
 [0.7.0 pass](testing.md#070-on-rootless-podman-at-d5a234a) saw after a `podman restart`,
 and without it they stay in the old namespace. Either way the attachment check fails until
-all of them are restarted together. The 0.7 doctor's probe, which this procedure
-generalizes, passed on rootless Podman in that pass; the procedure itself has not been run
-there.
+all of them are restarted together. The attachment procedure has not been run on Podman
+in this form.
 
 ## Removing
 
