@@ -70,9 +70,13 @@ func glTunnelUp(r *rig, address string) {
 	_ = t
 }
 
-func newGluetunRig(t *testing.T) *glRig {
+func newGluetunRig(t *testing.T) *glRig { return newGluetunRigWith(t, nil) }
+
+// newGluetunRigWith is newGluetunRig with a decorator between the owner and
+// the kernel connection.
+func newGluetunRigWith(t *testing.T, wrap func(*rtnl.Conn) mutator.Kernel) *glRig {
 	t.Helper()
-	r := &rig{t: t, logs: &logs{}}
+	r := &rig{t: t, logs: &logs{}, wrap: wrap}
 	r.client = nstest.New(t, "gclient")
 	r.exit = nstest.New(t, "gexit")
 	r.outside = nstest.New(t, "goutside")
@@ -162,7 +166,7 @@ func startStack(t *testing.T, r *rig, _ func(contract.Spec) contract.Spec) *rig 
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.mut = mutator.New(mutator.Options{Kernel: conn, Spec: r.spec, GuardRepairs: false, Logf: r.logs.logf})
+	r.mut = mutator.New(mutator.Options{Kernel: r.kernel(conn), Spec: r.spec, GuardRepairs: false, Logf: r.logs.logf})
 	r.mut.Start()
 	if err := r.mut.Install(context.Background()); err != nil {
 		t.Fatalf("install: %v\n%s", err, r.logs.text())
