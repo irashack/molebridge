@@ -75,6 +75,33 @@ Not done: a client held on an exit through these drills, phones, a reboot of
 the host, PIA port forwarding against PIA, the Go panel's sign-in against a real
 identity provider, `fix-blacklist` against a real enrolled peer.
 
+### Release acceptance at v0.8.0
+
+The released image is the one tested: `ghcr.io/irashack/molebridge:v0.8.0`,
+index digest `sha256:aa882618115e602c554901a9b5e7d504068499da6da0ff921bf40cd39767e52a`,
+source commit `ea43d5d`, promoted from `v0.8.0-rc.2` without a rebuild. The
+live-acceptance attestation on that digest names the coverage below; the
+verification in [setup](setup.md#1-download-and-verify) was run against the
+published release from a clean directory on 2026-10-13 and every step passed.
+
+Every exit of the live pass above was moved to the candidate digest, pulled
+from the registry, and the drills were run on it from the exit's namespace:
+
+- Drift on the Mullvad, PIA and NordVPN exits (IPv4 rules 97, 95 and 1, IPv6
+  rule 97, a foreign rule at 96): each repaired in 8 to 13 ms.
+- Tunnel loss on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.2 to 1.5 s), and each exit recovered by
+  itself to a verified egress.
+- A frozen worker on the NordVPN exit: NetBird stopped 33 s later, the
+  interfaces were removed, the rules stayed, and the exit recovered.
+
+The first candidate, `v0.8.0-rc.1`, failed the PIA tunnel-loss drill: the
+recreated tunnel has no address until PIA's registration is applied again, and
+the exit kept removing and re-adding the old address's return-path rules
+instead of re-registering. It stayed fail-closed but did not recover by itself.
+`v0.8.0-rc.2` fixes it (the provider's retirement of an address it no longer
+holds is final for the routing owner) and passed the same drill.
+
 ### Resources at 0.8.0 on rootless Podman
 
 By the 0.7.0 method ([below](#resources-at-070-on-rootless-podman)): each
