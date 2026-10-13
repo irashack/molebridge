@@ -26,9 +26,9 @@ below are about earlier releases and say which.
 | Runtime | Status |
 |---|---|
 | Debian 13, rootless Podman 5.4, podman-compose 1.6, amd64 | Tested at 0.7.0: long-running, reboot and clean install |
-| Debian, rootless Podman 5.8 with Quadlet units | Tested at 0.7.0: client-held drills ([testing](testing.md#070-on-rootless-podman-at-d5a234a)). This repository ships no Quadlet units |
+| Debian, rootless Podman 5.8 with Quadlet units, amd64 | Tested at 0.8.0: upgrade from 0.7.0, every provider and kind, live drills from the exit's namespace ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)); client-held drills at 0.7.0. This repository ships no Quadlet units |
 | macOS with OrbStack, Apple silicon | Tested in earlier live passes, up to 0.7.0 |
-| Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not tested end to end at any version |
+| Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not tested end to end at any version, 0.8.0 included |
 | Docker Desktop | Untested |
 | Windows | Not supported |
 

@@ -4,15 +4,18 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased — 0.8.0
+## 0.8.0 — 2026-10-13
 
 **Experimental, and not a 1.0.** A rewrite for adoption: one signed image,
 pull and run. The Python and shell are ported to one Go binary; the exit is two
 containers instead of four; nothing is built locally and there is no Python on
 the host. The routing contract, the status record (schema 2), the verdict, the
 admission pipeline, the state files and the panel's wording are unchanged, so
-a 0.7.0 Switchyard reads a 0.8.0 exit. **Nothing in 0.8.0 has had a live pass
-yet** ([testing](docs/testing.md#080)). Upgrade by following
+a 0.7.0 Switchyard reads a 0.8.0 exit. Tested live on rootless Podman with
+Quadlet units only: every provider and kind upgraded from 0.7.0, drills from the
+exit's own namespace, idle CPU 0.15 to 0.5 % of one core per exit (7.9 % at
+0.7.0). Docker Engine on Linux, NetBird Cloud and client-held drills were not
+tested at 0.8.0 ([testing](docs/testing.md#080)). Upgrade by following
 [upgrading from 0.7.x](docs/operations.md#upgrading-from-07x): **Switchyard
 first**, then the exits; the state directory and the `netbird-data` volume carry
 over, the Compose files do not.

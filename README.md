@@ -50,8 +50,9 @@ Connections open through the exit drop when it switches.
 
 **Molebridge 0.8.0 is experimental software with one maintainer, not a 1.0.**
 It is a rewrite of 0.7: one signed image, `ghcr.io/irashack/molebridge`,
-replaces the three locally built images and the Python on the host. Nothing
-in 0.8.0 has had a live pass on a real exit yet. What 0.7.0 was tested on is
+replaces the three locally built images and the Python on the host. 0.8.0 has
+had one live pass, on rootless Podman with Quadlet units; Docker Engine and
+NetBird Cloud were not tested at 0.8.0. What 0.7.0 was tested on is
 recorded in [testing](docs/testing.md), and what 0.8.0 has and hasn't been
 tested on is in [its section there](docs/testing.md#080). Verify the
 release on your own host with the [checks](docs/verification.md) before you

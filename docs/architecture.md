@@ -13,9 +13,9 @@
 - [Panel and access](#panel-and-access)
 - [Recovery and verification](#recovery-and-verification)
 
-This page describes 0.8.0. Nothing described here has had a live pass at
-0.8.0 yet; [testing](testing.md#080) says what the CI suites cover and what is
-still to run. Where a statement comes from the 0.7.0 passes, it says so.
+This page describes 0.8.0. At 0.8.0 it has had one live pass, on rootless
+Podman with Quadlet units; [testing](testing.md#080) says what that pass and
+the CI suites cover and what was not run. Where a statement comes from the 0.7.0 passes, it says so.
 
 ## Goal and boundary
 
