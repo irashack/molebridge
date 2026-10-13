@@ -303,7 +303,8 @@ requirements. The reasons:
 - `NetBird wrote no stored profile after `netbird up`; its interface blacklist
   cannot be verified`. After `netbird up` the exit read the profile again and found
   none. NetBird failed to enroll or to write its state; see NetBird's output above
-  the line. The exit admits no traffic and stops NetBird until this is resolved.
+  the line. The exit admits no traffic and stops NetBird; the refusal holds until
+  the container restarts, so fix the cause and restart the exit.
 - With gluetun only: `<name> is set; the gluetun backend needs NetBird to mark its
   control traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
   `NB_DISABLE_CUSTOM_ROUTING` (remove the variable); `CONTROL_MARK must be
