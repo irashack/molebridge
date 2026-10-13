@@ -1,17 +1,18 @@
 <p align="center">
-  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge: your NetBird network, out through any VPN. Mullvad, PIA and NordVPN natively, six more providers through gluetun" width="1000">
+  <img src="docs/assets/molebridge-banner.svg" alt="Molebridge banner: a NetBird network leaves through a VPN provider. Mullvad, PIA and NordVPN natively, more providers through gluetun" width="1000">
 </p>
 
 <p align="center">
-  <strong>Your NetBird network, out through any VPN.</strong><br>
-  A self-hosted NetBird exit node that leaves through Mullvad, PIA or NordVPN,
-  or through gluetun for six more providers, with routing that fails
-  closed. Its panel switches servers.
+  <strong>A NetBird exit node that leaves through a commercial VPN.</strong><br>
+  Self-hosted. It uses Mullvad, PIA or NordVPN directly, or gluetun for
+  FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and Windscribe. Routing
+  fails closed, and a small web panel switches servers.
 </p>
 
 <p align="center">
   <a href="docs/setup.md"><strong>Setup</strong></a> ·
   <a href="docs/prerequisites.md">Requirements</a> ·
+  <a href="docs/testing.md">Testing</a> ·
   <a href="docs/switchyard.md">The panel</a> ·
   <a href="docs/architecture.md">Architecture</a> ·
   <a href="CHANGELOG.md">Changelog</a>
@@ -20,66 +21,119 @@
 ---
 
 Phones can usually run only one VPN at a time, so turning on Mullvad, PIA or
-NordVPN means turning off NetBird. Molebridge moves the commercial VPN tunnel onto a
-machine you keep running. That machine joins your NetBird network as an exit
-node. Your devices stay on NetBird, select the exit, and their Internet
+NordVPN means turning off NetBird. Molebridge moves the commercial VPN tunnel
+onto a machine you keep running. That machine joins your NetBird network as an
+exit node. Your devices stay on NetBird, select the exit, and their Internet
 traffic leaves through the VPN provider.
 
+By default Molebridge builds the tunnel itself (Mullvad, PIA, NordVPN).
 An experimental second backend hands the tunnel to
-[gluetun](https://github.com/qdm12/gluetun) instead. Switchyard can then
-choose servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
-Windscribe through gluetun ([the gluetun form](docs/gluetun-netbird-exit.md)).
-Only NordVPN through gluetun has had a live pass so far, and that was at
-0.7.0. Whichever path you choose, the devices using the exit are NetBird peers.
+[gluetun](https://github.com/qdm12/gluetun) instead, and Switchyard then
+chooses servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
+Windscribe through it ([the gluetun form](docs/gluetun-netbird-exit.md)).
+Either way, the devices using the exit are NetBird peers.
 
 Separately, an experimental [gluetun sidecar](docs/gluetun-sidecar.md) lets
 Switchyard choose and check the server of an ordinary gluetun container
 that your other containers share, with no NetBird involved.
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
-(PIA) in a small web panel called Switchyard. Every device using the exit follows the switch without any client
-changes. Alternatively, set [SERVER](docs/configuration.md#a-server-set-in-configuration)
-to keep the exit on a configured server; the panel then shows it read-only.
-Connections open through the exit drop when it switches.
+(PIA) in a small web panel called Switchyard. Every device using the exit
+follows the switch without any client changes. Alternatively, set
+[SERVER](docs/configuration.md#a-server-set-in-configuration) to keep the
+exit on a configured server; the panel then shows it read-only. Connections
+open through the exit drop when it switches.
 
 <p align="center">
   <img src="docs/assets/switchyard.png" alt="Switchyard with four exits as tabs: Mullvad, PIA, NordVPN, and Surfshark through gluetun; the Mullvad exit is selected" width="900">
 </p>
 
+## What 0.8.0 is
+
+0.8.0 is a rewrite of 0.7 for adoption: you pull one signed image and run it.
+
+- **One image, one binary.** `ghcr.io/irashack/molebridge` (amd64 and arm64)
+  holds one Go binary, `molebridge`, and the pinned NetBird client. The first
+  argument picks the role: `exit`, `panel`, `health`, `status`,
+  `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
+  `gluetun-post-rules` and `fix-blacklist`. GitHub Actions builds and signs
+  the image with cosign, with build provenance and SBOMs, and promotes a
+  release only after a maintainer's live-acceptance run attested that the
+  exact image passed ([verification of a release](docs/setup.md#1-download-and-verify)).
+- **NetBird runs inside the exit container.** A native exit is two containers
+  (`exit` and `switchyard`) where 0.7 had four. `molebridge exit` is
+  PID 1: a supervisor that starts a worker, which holds the routing and runs
+  the provider logic, and then the NetBird client. If the worker stops making
+  progress, the supervisor stops NetBird and the container restarts.
+- **Nothing to build, no Python on the host.** The Python applier and panel and
+  the routing shell scripts are gone. The setup tools run from the same image
+  as throwaway containers. Only `routing/gluetun-preflight` remains, a shell
+  wrapper that runs inside gluetun's container.
+- **Repair follows the kernel.** The exit repairs a changed routing rule,
+  route, link or address when the kernel reports it, and runs a full pass
+  every 30 seconds as the fallback. 0.7 compared everything every 2 seconds.
+  On the one host tested, an idle exit used 0.15 to 0.5 % of one core where
+  0.7.0 used about 7.9 %, and a deleted rule was back in 8 to 23 ms
+  ([resources and drills](docs/testing.md#080)).
+
+The routing contract, the status record, the state files and the panel's
+wording are unchanged, so a 0.7.0 panel reads a 0.8.0 exit. Removed: `doctor`
+and `recover`, `compose.pia.yaml` and `compose.nordvpn.yaml` (one
+`compose.yaml` now takes `PROVIDER`), and 0.7's standalone gluetun form. The
+state files and the NetBird identity carry over from 0.7, the Compose files
+don't: follow [the upgrade steps](docs/operations.md#upgrading-from-07x). The
+full list is in the [changelog](CHANGELOG.md#080--2026-10-13).
+
 ## Status: experimental
 
 **Molebridge 0.8.0 is experimental software with one maintainer, not a 1.0.**
-It is a rewrite of 0.7: one signed image, `ghcr.io/irashack/molebridge`,
-replaces the three locally built images and the Python on the host. 0.8.0 has
-had one live pass, on rootless Podman with Quadlet units; Docker Engine and
-NetBird Cloud were not tested at 0.8.0. What 0.7.0 was tested on is
-recorded in [testing](docs/testing.md), and what 0.8.0 has and hasn't been
-tested on is in [its section there](docs/testing.md#080). Verify the
-release on your own host with the [checks](docs/verification.md) before you
-rely on it, and keep a way into the host that doesn't depend on the exit.
+[Testing](docs/testing.md#080) is the record; in short:
+
+- **Tested live at 0.8.0:** one Debian host (amd64) running rootless Podman
+  5.8 with Quadlet units, against a self-hosted NetBird server. Native
+  Mullvad, PIA and NordVPN exits, a gluetun exit and a gluetun sidecar (both
+  with NordVPN) were upgraded from 0.7.0 and came up with their peers and
+  selections. The released image passed rule-drift and tunnel-loss drills on
+  the three native providers and a frozen-worker drill on NordVPN. The drills
+  ran from inside the exit's namespace; no client device was held on the exit.
+- **Run in CI at 0.8.0:** unit, fuzz and namespace-drill suites and the image
+  and release checks, on amd64 and arm64.
+- **Not tested at 0.8.0:** Docker Engine and NetBird Cloud; the shipped
+  Compose files on any engine (CI only validates them with
+  `docker compose config`; the live pass ran the image from Quadlet units
+  this repository doesn't ship, and podman-compose last ran in September
+  2026, at v0.1.0); installing from the signed bundle on a clean host;
+  phones; a reboot; the panel's sign-in against a real identity provider; PIA
+  port forwarding; gluetun with providers other than NordVPN.
+
+Verify the release on your own host with the [checks](docs/verification.md)
+before you rely on it, and keep a way into the host that doesn't depend on the
+exit. Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## Install
 
-You pull a signed image and run it with Compose. There is nothing to build
-and no Python on the host.
+You pull a signed image and run it with Compose; the commands are in
+[setup](docs/setup.md).
 
 1. Download `molebridge-<tag>.tar.gz` and its `.sigstore.json` from the
    [latest release](https://github.com/irashack/molebridge/releases), then
    [verify the bundle, the image and its provenance](docs/setup.md#1-download-and-verify)
    before you extract or run anything.
 2. Extract the bundle and copy `.env.example` to `.env`. Set `OVERLAY_CIDR`
-   to your NetBird range and read the other settings: the example has under
-   twenty, each commented.
-3. Create the tunnel config for your provider, add the NetBird setup key and
-   start ([setup](docs/setup.md)):
+   to your NetBird range and read the other settings: the example has
+   eighteen, each commented.
+3. Create the tunnel config for your provider with the image's tools, put the
+   NetBird setup key in `secrets/netbird.env`, then check and start:
 
    ```sh
+   docker compose run --rm --no-deps exit check-config
    docker compose up -d
    ```
 
-The bundle pins the image by tag and digest, so the image that runs is the
-one you verified. To build from source instead, see
-[CONTRIBUTING](CONTRIBUTING.md#building-the-image).
+The bundle pins the image by tag and digest (`ghcr.io/irashack/molebridge:v0.8.0@sha256:...`),
+so the image that runs is the one you verified. A release tag never moves;
+`:0.8` follows the newest 0.8 patch release. To build from source instead,
+see [CONTRIBUTING](CONTRIBUTING.md#building-the-image).
 
 ## How it works
 
@@ -122,18 +176,18 @@ A native exit is two containers from one image. The `exit` container owns the
 network namespace. Its first process is a supervisor; it starts a worker that
 checks the tunnel config, installs the routing rules before the tunnel
 exists, brings the tunnel up, runs the provider logic and keeps all of it in
-place, and the supervisor starts the pinned NetBird client once the rules hold.
-The `switchyard` container is the panel, with no capabilities and no network
-in common with the exit. With the gluetun backend, gluetun owns the namespace
+place, and the supervisor starts the pinned NetBird client once the worker
+reports ready. The `switchyard` container is the panel, with no capabilities
+and no network in common with the exit. With the gluetun backend, gluetun owns the namespace
 and the tunnel, and the `exit` container joins it and keeps the same routing
 rules in place ([architecture](docs/architecture.md#gluetun-backend)).
 
 Traffic forwarded from your devices can only go into the tunnel. If the
-tunnel or its routes disappear, that traffic is dropped; it never falls back
-to the host's own connection. The exit's own NetBird and VPN control traffic
-uses the host's normal route. If the worker stops responding, the supervisor
-stops NetBird, removes the tunnel and exits, and the engine's restart policy
-starts the container again.
+tunnel or its routes disappear, that traffic is dropped, not sent over the
+host's own connection. The exit's own NetBird and VPN control traffic uses the
+host's normal route. If the worker stops responding, the supervisor stops
+NetBird, removes the interfaces it owns, leaves the routing rules in place
+and exits, and the engine's restart policy starts the container again.
 
 The panel holds no VPN credentials, no gluetun control-server key and no
 capabilities, and runs no commands. With OpenID Connect sign-in it can hold
@@ -159,15 +213,16 @@ Details: [architecture](docs/architecture.md).
 
 - **An always-on Linux host**, amd64 or arm64, with kernel WireGuard (Linux
   5.6 or later) and Docker Engine with Compose 2.24 or later, or rootless
-  Podman with podman-compose. Windows hosts are not supported. What has been
-  tried where is in [requirements](docs/prerequisites.md#host).
-- **Resources:** 0.8.0 targets a native exit that idles at 0.5 % of one CPU
-  core or less and 70 MB of memory or less for the exit container with NetBird
-  inside it, and an image under 80 MB unpacked. These are targets; no
-  measurement has been recorded yet ([testing](docs/testing.md#080)). The
-  measured 0.7.0 figures, which were several times higher, are in
-  [requirements](docs/prerequisites.md#host). Every byte your devices send
-  crosses the host twice, so the host's upload speed caps throughput.
+  Podman. Windows hosts are not supported. Which of these ran at 0.8.0 is in
+  [requirements](docs/prerequisites.md#host); only rootless Podman with
+  Quadlet units did.
+- **Resources:** measured on that host with no client traffic, a native
+  Mullvad or PIA exit (NetBird included) idled at 0.3 to 0.5 % of one core
+  and 67 to 78 MB; a NordVPN exit used 189 MB and a gluetun exit 123 MB,
+  because they hold a large server list. The image is 61 MB unpacked
+  ([testing](docs/testing.md#resources-at-080-on-rootless-podman)). Every
+  byte your devices send crosses the host twice, so the host's upload speed
+  caps throughput.
 - **A NetBird network**, either NetBird Cloud or self-hosted, with admin
   access to create groups, a policy, a setup key and an exit-node route.
 - **A VPN account:**
@@ -194,8 +249,9 @@ Podman details, is in [requirements](docs/prerequisites.md).
   can reach it can change the exit for every device that uses it. Reach it
   through an SSH tunnel or an authenticating proxy, or turn on
   [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect). Sign-in
-  has been tried live with one provider and an admin account only, at 0.7.0;
-  see [testing](docs/testing.md#sign-in-pass-at-62a0170).
+  was tried live with one provider and an admin account only, on 0.7.0's
+  Python panel ([testing](docs/testing.md#sign-in-pass-at-62a0170)); the Go
+  panel's has not run against a real identity provider.
 - **This is not a kill switch on your devices.** The exit fails closed for
   traffic it receives. If a device deselects the exit or NetBird disconnects,
   that device uses its own connection.
@@ -226,21 +282,17 @@ Podman details, is in [requirements](docs/prerequisites.md).
   [gluetun sidecar](docs/gluetun-sidecar.md) adds Switchyard to pick and
   check its server. There, gluetun's firewall alone keeps the containers'
   traffic in the tunnel, and only Mullvad and NordVPN can be verified.
-- **Upgrading from 0.7.** The state files and the NetBird identity carry
-  over, but the Compose file does not: follow
-  [the upgrade steps](docs/operations.md#upgrading-from-07x).
 
-## Tested
+## Earlier testing
 
-Nothing in 0.8.0 has run on a real exit yet. [Testing](docs/testing.md#080) lists what
-the CI suites cover and what is still to do. At 0.7.0, whose routing and status logic
-0.8.0 ports, native Mullvad, PIA and NordVPN exits and a gluetun exit were run on rootless
-Podman with a Linux client held through rule and route deletions, tunnel loss, switches
-and a gluetun restart, and earlier passes ran on macOS with OrbStack. Not tested at any
-version: the routing on a live Docker host on Linux, Docker Desktop, NetBird Cloud, phones
-during failure drills, PIA port forwarding against PIA itself, and the gluetun backend with
-providers other than NordVPN. The dated record of each pass is in
-[testing](docs/testing.md). Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+0.8.0 ports the routing and status logic of 0.7.0, which ran on the same
+rootless Podman host with a Linux client held through rule and route
+deletions, tunnel loss, switches and a gluetun restart. Earlier releases ran
+on macOS with OrbStack and, with podman-compose, on a Debian 13 host. Not tested at any version: the routing on a live
+Docker Engine host on Linux, Docker Desktop, NetBird Cloud, phones during
+failure drills, PIA port forwarding against PIA itself, and the gluetun backend
+with providers other than NordVPN. The dated record of each pass is in
+[testing](docs/testing.md).
 
 ## Documentation
 

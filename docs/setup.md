@@ -1,16 +1,26 @@
 # Setup
 
 This takes the signed release bundle to a working exit. It assumes everything
-in [requirements](prerequisites.md) is ready. On rootless Podman, use
-`podman-compose` wherever this page says `docker compose`, and `podman run`
-where it says `docker run` (the [rootless Podman notes](prerequisites.md#rootless-podman)
-list the few differences).
+in [requirements](prerequisites.md) is ready. Plan for about half an hour,
+most of it in the NetBird dashboard.
 
-Plan for about half an hour, most of it in the NetBird dashboard.
+**What was tested.** Molebridge 0.8.0 is experimental. It has run live only on
+a Debian host with rootless Podman 5.8, started from Quadlet units written for
+that host, which this repository doesn't ship ([testing](testing.md#080)).
+The Compose commands on this page are what the bundle is for, but at 0.8.0
+they have not been run on any engine: CI only checks the Compose files with
+`docker compose config`, and podman-compose last ran in September 2026, at
+v0.1.0. Docker Engine on Linux and NetBird Cloud are untested at 0.8.0. If you
+use Quadlet, a unit needs the settings in `compose.yaml` ([the list in the
+upgrade notes](operations.md#upgrading-from-07x), step 3). Keep a way into the
+host that doesn't depend on the exit.
 
-Molebridge 0.8.0 is experimental, and nothing in it has had a live pass yet
-([testing](testing.md#080)). Keep a way into the host that doesn't depend on
-the exit.
+**Rootless Podman.** Use `podman-compose` where this page says
+`docker compose`, and `podman run` where it says `docker run`, and leave
+`--user "$(id -u):$(id -g)"` out of the `run` commands: the default mapping
+makes the container's root you ([tools reference](tools-reference.md#running-a-tool)).
+The [rootless Podman notes](prerequisites.md#rootless-podman) list the other
+differences.
 
 ## 1. Download and verify
 
@@ -27,7 +37,7 @@ commit and the image digests:
 
 ```sh
 TAG=v0.8.0            # the release tag
-RC=v0.8.0-rc.1        # the candidate tag the release notes name: the build ran under it
+RC=v0.8.0-rc.2        # the candidate tag the release notes name: the build ran under it
 COMMIT=<source commit from the release notes>
 DIGEST=sha256:<index digest from the release notes>
 REPO=irashack/molebridge
@@ -274,13 +284,14 @@ between, each line starting `netbird: `. On a first start it also says
 which is what you want here: if you expected the exit to keep an existing
 peer, stop and look at [the identity volume](operations.md#backups).
 
-`exit` becomes healthy once its first check completes, which takes about a
-minute. With Mullvad that check verifies the starting server, and the panel
-shows whether it did. With PIA, `exit` stays unhealthy until you pick a region
-in step 8, because a fresh PIA tunnel has no address yet. NordVPN's exit can be
-healthy before you pick a server; until then the panel shows "No NordVPN server
-is selected yet; choose one in the panel." If `exit` refuses to start, its log
-names the setting or config line it rejected
+`exit` becomes healthy about a minute after it starts. Healthy means the
+namespace is intact (the tunnel, the routing rules and NetBird); it does not
+mean traffic is verified, which the panel, `/readyz` and `molebridge status`
+report ([health](operations.md#health)). With Mullvad the first check
+verifies the starting server. With PIA, a fresh tunnel has no address until you pick a
+region in step 8, and with NordVPN the panel shows "No NordVPN server is
+selected yet; choose one in the panel." until you pick a server. If `exit`
+refuses to start, its log names the setting or config line it rejected
 ([troubleshooting](troubleshooting.md#startup)); if the tunnel won't come up,
 it keeps retrying and stays unhealthy.
 
@@ -344,8 +355,9 @@ test; the [verification](verification.md) drills are.
 
 ## With the gluetun backend instead
 
-**Experimental.** At 0.7.0 it had live passes with NordVPN, on Docker and on
-rootless Podman; none at 0.8.0 ([testing](testing.md#080)). gluetun owns the
+**Experimental.** At 0.8.0 a gluetun exit with NordVPN, upgraded from 0.7.0,
+ran live on rootless Podman with Quadlet units. No other provider and no
+Docker host has run it at 0.8.0 ([testing](testing.md#080)). gluetun owns the
 tunnel and brings its provider support ([providers](providers.md#the-gluetun-backend)).
 The steps above still apply, with these changes:
 
