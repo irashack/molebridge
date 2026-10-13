@@ -117,6 +117,9 @@ func sortRules(rs []rtnl.Rule) {
 
 // observe checks every live tunnel address.
 func (h *piaHarness) observe(where string) {
+	if v := h.k.escapes(h.m.Expected()); len(v) > 0 && h.violation == "" {
+		h.violation = fmt.Sprintf("the policy model sees an escape after %s: %v", where, v)
+	}
 	for _, a := range h.k.liveAddrs(rtnl.V4, "mullvad") {
 		if h.k.icmpWhere(rtnl.V4, a, 51821) == escaped && h.violation == "" {
 			h.violation = fmt.Sprintf("an ICMP error from %s reaches the host route after %s", a, where)
@@ -398,15 +401,17 @@ func TestTheNextChangeStartsFromEverythingProtected(t *testing.T) {
 				sc := piaScenario{name: "A to B fails, then A to C", old: a11, next: a12}
 				h := newPIAHarness(t, sc)
 				h.k.hook = h.observe
+				arrived := false
 				if firstUnstable {
 					// The first change's settling look is unstable: B stays expected
 					// although nothing proved it live, and the second change must
 					// still start from it.
-					h.k.unstableFn = func(n int) bool { return n >= 4 }
+					h.k.unstableFn = func(int) bool { return arrived }
 				}
 				// A -> B: B arrives, then the change fails.
 				err := h.m.ChangeReturnPath(context.Background(), rtnl.V4, a11, a12, func(tx *Tx) error {
 					h.k.setAddr(rtnl.V4, "mullvad", a12, true)
+					arrived = true
 					h.observe("B arrived")
 					return errors.New("the peer could not be set")
 				})

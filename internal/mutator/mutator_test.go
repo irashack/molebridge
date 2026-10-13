@@ -83,6 +83,12 @@ func guardLeaks(t *testing.T, k *fakeKernel, spec contract.Spec) *atomic.Bool {
 				leaking = true
 			}
 		}
+		if v := k.escapes(spec); len(v) > 0 {
+			leaking = true
+			if wasSafe.Load() {
+				t.Errorf("the policy model sees an escape after %q: %v", op, v)
+			}
+		}
 		if !leaking {
 			wasSafe.Store(true)
 		} else if wasSafe.Load() {
