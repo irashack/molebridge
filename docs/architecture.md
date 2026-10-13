@@ -571,6 +571,32 @@ is named. A deletion is simulated with the kernel's own rule and route
 matching, in which an explicit zero is a wildcard, so the rule that goes is the
 rule the kernel would remove.
 
+**What a snapshot is, and what it is not.** The FIB rule dump is not atomic and
+Linux gives no consistency signal for it: on the kernels measured, a dump taken
+while rules change repeats or skips a rule and does not set `NLM_F_DUMP_INTR`.
+The owner therefore takes two looks that must agree, multiplicity included (a
+rule that is really there twice, as `ip rule restore` leaves it, is in both
+looks twice; one that is in one look only is an artifact; a repeat is believed
+only after two more looks show it), and, when it holds a subscription to the
+kernel's rule, route, address and link notifications, drains them behind a
+barrier: a no-op `RTM_NEWLINK` for `lo`, which the kernel handles under the
+rtnl lock. On kernels that notify while holding the lock the acknowledgement of
+the barrier comes after the notifications of every change that was under way,
+so a change that overlapped the looks is seen. From Linux 6.18 `fib_newrule`
+and `fib_delrule` release the lock before they notify, and the barrier no
+longer orders those notifications. A snapshot taken while another process
+changes rules without pause can then, rarely, repeat or miss a rule without any
+signal. The consequence is bounded to that writer's own change: the
+notification of the change reaches the watcher, which asks for the next pass,
+and that pass looks again. Nothing is deleted on a miss that stands, because
+every deletion takes its own stable snapshot and is judged against it, and
+additions never depend on stability: a rule that is missing from a snapshot is
+added, and an add of a rule that is there is not an error. A snapshot that the
+looks, the barrier or the drain cannot vouch for is handed over marked
+unstable, and an unstable snapshot authorizes no deletion, no release of the
+temporary guard and no verdict. A kernel that refuses the barrier gets a longer
+drain, which is a heuristic and not an ordering.
+
 **What this does not cover.** The check, like the drift model it belongs to,
 covers rules and routes that NetBird, an operator or Molebridge's own failures
 change or remove: a crash half way through a repair, a request the kernel

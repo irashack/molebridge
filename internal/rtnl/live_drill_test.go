@@ -314,10 +314,35 @@ func TestLiveFloodReportsOverrun(t *testing.T) {
 	}
 }
 
-// Dumps taken while rules change under them: a snapshot is never a mixture.
-// 1,500 stable rules stay put while another process adds and deletes rules as
-// fast as it can; every snapshot has each stable rule exactly once, and the
-// kernel's interruption marks were seen and acted on.
+// kernelNotifiesRulesUnlocked reports a kernel from 6.18 on, where fib_newrule
+// and fib_delrule release the rtnl lock before they notify: the barrier of a
+// snapshot (a request that takes the lock) then does not order the
+// notifications of changes under way, and a writer changing rules without a
+// pause can make a snapshot repeat or miss a rule it changed concurrently
+// without any signal. FIB rule dumps are not atomic and Linux offers no
+// consistency mark for them. See docs/architecture.md, "The deletion check,
+// and what it assumes".
+func kernelNotifiesRulesUnlocked(t *testing.T) bool {
+	t.Helper()
+	b, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return true
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(string(b), "%d.%d", &major, &minor); err != nil {
+		return true
+	}
+	return major > 6 || major == 6 && minor >= 18
+}
+
+// Dumps taken while rules change under them: where the kernel notifies under
+// the rtnl lock, a snapshot is never a mixture. 1,500 stable rules stay put
+// while another process adds and deletes rules as fast as it can; every
+// snapshot has each stable rule exactly once, and the kernel's interruption
+// marks were seen and acted on. On kernels that notify after unlocking the
+// guarantee does not exist (see kernelNotifiesRulesUnlocked): the anomalies are
+// counted and reported, and what must hold is that a snapshot taken once the
+// writer has stopped is exact.
 func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
 	ns := nstest.New(t, "concurrent")
 	var stable strings.Builder
@@ -339,7 +364,8 @@ func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
 	c := dial(t, ns)
 	done := make(chan struct{})
 	go func() { defer close(done); _, _ = ns.TryIP("-batch", dir+"/churn") }()
-	var taken, unstable int
+	relaxed := kernelNotifiesRulesUnlocked(t)
+	var taken, unstable, anomalies int
 	for running := true; running; {
 		select {
 		case <-done:
@@ -366,8 +392,28 @@ func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
 		}
 		for p := uint32(1001); p <= 2500; p++ {
 			if seen[p] != 1 {
+				if relaxed {
+					anomalies++
+					break
+				}
 				t.Fatalf("a snapshot has rule %d %d times", p, seen[p])
 			}
+		}
+	}
+	// The writer is done: a snapshot now is exact.
+	s, err := c.Take(rtnl.Interest{Tables: []uint32{254}})
+	if err != nil || s.Unstable {
+		t.Fatalf("after the writer stopped: %+v %v", s.Unstable, err)
+	}
+	seen := map[uint32]int{}
+	for _, r := range s.Rules[rtnl.V4] {
+		if r.Priority > 1000 && r.Priority <= 2500 {
+			seen[r.Priority]++
+		}
+	}
+	for p := uint32(1001); p <= 2500; p++ {
+		if seen[p] != 1 {
+			t.Fatalf("a quiet snapshot has rule %d %d times", p, seen[p])
 		}
 	}
 	if taken == 0 {
@@ -376,5 +422,6 @@ func TestLiveSnapshotsSurviveConcurrentChanges(t *testing.T) {
 	if c.Interrupts() == 0 {
 		t.Log("the kernel never marked a dump interrupted in this run; the scripted tests cover the retry")
 	}
-	t.Logf("%d stable snapshots, %d marked unstable, %d interrupted dumps discarded, %d stream resets", taken, unstable, c.Interrupts(), c.Resets())
+	t.Logf("%d stable snapshots (%d with a rule repeated or missing, which this kernel allows: %v), %d marked unstable, %d interrupted dumps discarded, %d stream resets",
+		taken, anomalies, relaxed, unstable, c.Interrupts(), c.Resets())
 }
