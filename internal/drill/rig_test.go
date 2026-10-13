@@ -48,6 +48,8 @@ type rig struct {
 	logs                       *logs
 	cancel                     context.CancelFunc
 	wg                         sync.WaitGroup
+	// wrap: see rigOptions.
+	wrap func(*rtnl.Conn) mutator.Kernel
 }
 
 type logs struct {
@@ -165,6 +167,9 @@ type rigOptions struct {
 	// pair until a transaction registers it, which is exactly the state in
 	// which Verified must not be true.
 	pia bool
+	// wrap puts a decorator between the owner and the kernel connection (to
+	// refuse some mutations); nil leaves the connection as it is.
+	wrap func(*rtnl.Conn) mutator.Kernel
 }
 
 func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
@@ -173,7 +178,7 @@ func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
 	for _, m := range mod {
 		m(&o)
 	}
-	r := &rig{t: t, logs: &logs{}}
+	r := &rig{t: t, logs: &logs{}, wrap: o.wrap}
 	r.client, r.exit, r.outside, r.tun = topology(t)
 	cfg, err := contract.ConfigFromEnv(func(k string) string {
 		return map[string]string{"OVERLAY_CIDR": "192.0.2.0/24", "OVERLAY6_CIDR": "2001:db8:1::/64", "OVERLAY_IF": overlayIf,
@@ -207,7 +212,7 @@ func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
 	if o.guard != nil {
 		guard = *o.guard
 	}
-	r.mut = mutator.New(mutator.Options{Kernel: conn, Spec: r.spec, GuardRepairs: guard, Logf: r.logs.logf})
+	r.mut = mutator.New(mutator.Options{Kernel: r.kernel(conn), Spec: r.spec, GuardRepairs: guard, Logf: r.logs.logf})
 	r.mut.Start()
 	if err := r.mut.Install(context.Background()); err != nil {
 		t.Fatalf("install: %v\n%s", err, r.logs.text())
@@ -246,6 +251,14 @@ func newRig(t *testing.T, mod ...func(*rigOptions)) *rig {
 		r.waitHealthy(2 * time.Second)
 	}
 	return r
+}
+
+// kernel is what the owner mutates through.
+func (r *rig) kernel(conn *rtnl.Conn) mutator.Kernel {
+	if r.wrap != nil {
+		return r.wrap(conn)
+	}
+	return conn
 }
 
 // healthy: both families hold the whole contract and no guard is left, judged
