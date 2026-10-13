@@ -1,17 +1,21 @@
 # Working on Molebridge
 
-Read `README.md` and `docs/architecture.md` first. Molebridge is MIT-licensed;
-the bundled font keeps its own license. Create releases or tags
-only when the owner asks. Handle suspected vulnerabilities through the private
-route in `SECURITY.md`, never in a public issue or commit message.
+Read `README.md`, `docs/architecture.md` and the layout in `CONTRIBUTING.md`
+first. Molebridge is MIT-licensed; the bundled font keeps its own license.
+Create releases or tags only when the owner asks: a `v*-rc.N` tag builds,
+signs and publishes a candidate image, and a `vX.Y.Z` tag promotes the
+candidate that live acceptance attested (`.github/workflows/release.yml`).
+Handle suspected vulnerabilities through the private route in `SECURITY.md`,
+never in a public issue or commit message.
 
 ## Write for someone else's machine
 
-- Design for a person installing on an ordinary supported host: Docker with
-  Compose or rootless Podman with podman-compose, a NetBird account, and a
-  Mullvad, PIA or NordVPN account or a provider gluetun supports. Never require the author's
-  infrastructure, hostnames, directory layout, identity provider, secret store,
-  monitoring or deployment tooling.
+- Design for a person installing on an ordinary supported host: Docker Engine
+  with Compose, or rootless Podman (podman-compose, or Quadlet units you
+  write), a NetBird account, and a Mullvad, PIA or NordVPN account or a
+  provider gluetun supports. Never require the author's infrastructure,
+  hostnames, directory layout, identity provider, secret store, monitoring or
+  deployment tooling.
 - Site-specific deployment records and policies belong with that deployment,
   not here. A deployment's conventions are not product requirements.
 - Keep credentials, real hostnames, IP addresses, account numbers, peer names and
@@ -29,9 +33,10 @@ route in `SECURITY.md`, never in a public issue or commit message.
 - **Privilege split:** the panel is its own container, holds no capabilities,
   never runs `wg`, `ip` or subprocesses, and only writes the desired server
   name; it checks its own isolation at start and refuses to run otherwise.
-  The exit container is the only one with `NET_ADMIN`, the tunnel key and the
-  provider credentials. Its binary starts no shell: the only programs it
-  runs are the pinned NetBird client and its own worker and cleanup roles.
+  The exit container holds `NET_ADMIN`, the tunnel key and the provider
+  credentials (with the gluetun backend gluetun also holds `NET_ADMIN` and its
+  key). The exit's binary starts no shell: the only programs it runs are the
+  pinned NetBird client and its own worker and cleanup roles.
 - **Untrusted input:** Mullvad's relay list, PIA's region list and API
   responses, NordVPN's server list, gluetun's `servers.json` and control
   server answers, the tunnel config, the stored NetBird profile,
@@ -52,12 +57,13 @@ route in `SECURITY.md`, never in a public issue or commit message.
   (netlink, WireGuard control, nftables), and a new one needs a reason in
   the commit message. Front-end code (`panel/static/`) stays dependency-free.
 - Validate in proportion to impact: `gofmt -l`, `go vet ./...` and
-  `go test ./...`; the namespace drills (`internal/nstest/drill.sh`, which
-  needs Docker and runs privileged in a throwaway container) for anything
-  that touches routing, the tunnel or the mutation owner;
-  `MOLEBRIDGE_PANEL=go node --test panel/js-tests/*.test.js` for the panel
-  script; `sh -n` and `shellcheck` on the shell scripts, `routing/gluetun-preflight`
-  among them; and `docker compose config` against `.env.example` (with
+  `go test ./...` (CI also runs staticcheck and govulncheck); the namespace
+  drills (`sh internal/nstest/drill.sh`, which needs Docker and runs
+  privileged in a throwaway container) for anything that touches routing, the
+  tunnel or the mutation owner; `node --test panel/js-tests/*.test.js` for the
+  panel script, which asks the Go toolchain for the panel's answers; `sh -n`
+  and `shellcheck` on the shell scripts (`routing/gluetun-preflight` and
+  `tools/*.sh`); and `docker compose config` against `.env.example` (with
   `PROVIDER` set to each of `mullvad`, `pia` and `nordvpn`),
   `compose.gluetun.yaml` against `.env.gluetun.example` and
   `compose.sidecar.yaml` against `.env.sidecar.example` (`tools/check-compose.sh`

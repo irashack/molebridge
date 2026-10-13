@@ -11,17 +11,21 @@ says what it would take as far as we know today.
   on a backoff ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
 - **A sidecar mode** (0.7.0, experimental): Switchyard for an ordinary
   gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
-  had one live pass, NordVPN on rootless Podman; [testing](docs/testing.md)
-  records the gaps that keep it experimental.
+  had live passes with NordVPN on rootless Podman only, the latest an upgrade
+  to 0.8.0; [testing](docs/testing.md) records the gaps that keep it
+  experimental.
 - **One signed image, pull and run** (0.8.0, experimental, live-tested on
-  rootless Podman only):
-  the Python and shell were ported to one Go binary, published as a signed
-  multi-architecture image with a signed Compose bundle, so there is nothing to
-  build and no Python on the host ([setup](docs/setup.md),
+  rootless Podman only): the Python and the routing shell were ported to one
+  Go binary (`routing/gluetun-preflight`, which runs inside gluetun, is the
+  one script left), published as a signed multi-architecture image with a
+  signed Compose bundle, so there is nothing to build and no Python on the
+  host. NetBird runs inside the exit container, which makes a native exit two
+  containers instead of four ([setup](docs/setup.md),
   [architecture](docs/architecture.md)).
-- **Repair driven by the kernel's notifications** (0.8.0): a changed rule or
-  route starts a repair at once, and the 30-second pass is the fallback
-  ([drift and repair](docs/architecture.md#drift-and-repair)).
+- **Repair driven by the kernel's notifications** (0.8.0): a changed rule,
+  route, link or address starts a repair at once, and the 30-second pass is
+  the fallback ([drift and repair](docs/architecture.md#drift-and-repair)).
+  Live, a deleted rule was back in 8 to 23 ms ([testing](docs/testing.md#080)).
 - **Running without Switchyard** (0.8.0, partly): the panel is its own
   container, so `docker compose up -d exit` starts an exit alone, and
   `molebridge status` reads the verdict from inside it

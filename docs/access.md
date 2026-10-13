@@ -107,7 +107,9 @@ described above will do; it doesn't need to authenticate.
    - Type: public, using the authorization code flow with PKCE. The panel
      then holds no secret. If your provider only offers confidential clients,
      see `PANEL_OIDC_CLIENT_SECRET_FILE` in
-     [configuration](configuration.md#panel-sign-in).
+     [configuration](configuration.md#panel-sign-in). If the provider's
+     discovery document lists `code_challenge_methods_supported`, `S256` must
+     be among them.
    - Redirect (callback) URL: `PANEL_PUBLIC_URL` plus `/auth/callback`, for
      example `https://exit.example.net/auth/callback`.
    - Scopes: `openid profile email groups`, so the provider includes the

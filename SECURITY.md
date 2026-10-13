@@ -29,8 +29,8 @@ Anything that breaks the properties in [the architecture](docs/architecture.md):
   tunnel-config, NetBird-profile or form input;
 - a published image or release bundle that does not match the signatures,
   provenance and SBOMs described in [setup](docs/setup.md#1-download-and-verify);
-- disclosure of the WireGuard key, the NetBird identity, the PIA login or
-  other secrets;
+- disclosure of the WireGuard key, the NetBird identity, the PIA login, the
+  gluetun API key, a NordVPN token or other secrets;
 - with PIA port forwarding on, forwarded inbound connections reaching
   anything other than the configured overlay target.
 

@@ -16,14 +16,14 @@ affects in the same pull request.
 ## Where things are
 
 Molebridge is one Go module, `github.com/irashack/molebridge`, Go 1.27 (the
-Dockerfile builds with `golang:1.27.1-alpine`). It uses the standard library
+Dockerfile and CI build with Go 1.27.2). It uses the standard library
 wherever it reaches, plus the short list in `vendor/modules.txt` (netlink,
 WireGuard control, nftables), which is vendored and committed. A new module needs
 a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 
 - `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
   `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
-  `gluetun-auth`, `gluetun-post-rules`, `fix-blacklist`); each role is one file.
+  `gluetun-auth`, `gluetun-post-rules`, `fix-blacklist`); each has a `role_*.go` file.
 - `internal/exit/`: the exit container's process: the supervisor, the worker, the
   lease, the NetBird child, status publication and the stop sequence.
 - `internal/contract/`: the routing contract: expected rules and routes, the diff and
@@ -31,13 +31,15 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   rtnetlink (a lossless rule decoder and the multicast groups), `internal/mutator/` is
   the single owner of every kernel change, `internal/watch/` the event loop,
   `internal/tunnel/` the native WireGuard bring-up and the cleanup, `internal/nft/`
-  reads NetBird's nftables objects.
+  reads NetBird's nftables objects, and `internal/policy/` is the model of what the
+  kernel's policy routing does with protected traffic, which the mutation owner asks
+  before every deletion. `internal/proc/` starts and reaps child processes for PID 1.
 - `internal/applier/`: the provider pipeline: the admission pipeline, the egress
   checks, the status record, and one provider per family (Mullvad, PIA, NordVPN,
   gluetun). `internal/attempt/` is the persisted attempt
   (`state/applier/attempt.json`), `internal/verdict/` judges a status record for every
-  reader, `internal/providers/` is the provider registry and the catalogue parsers,
-  `internal/egress/` the tunnel-tier checks.
+  reader, `internal/providers/` is the provider registry and the catalog parsers,
+  `internal/egress/` the tunnel-tier checks, `internal/countries/` country names to codes.
 - `internal/nbprofile/` checks NetBird's settings and stored profile and holds the
   `fix-blacklist` repair; `internal/tunnelconf/` validates the tunnel config;
   `internal/gluetunauth/` is gluetun's role file and API key.
@@ -56,9 +58,10 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `compose.yaml`, `compose.gluetun.yaml` and `compose.sidecar.yaml`: the supported
   Compose forms, with `.env.example`, `.env.gluetun.example` and `.env.sidecar.example`.
 
-Every test file ported from the 0.7 Python suite names its Python file in its header
-comment, and its test names stay recognizably close to the Python ones, so the two can be
-compared. Tests reuse `tools/fixtures/` and `panel/fixtures/` by relative path.
+Test files ported from the 0.7 Python suite usually name their Python file in a header
+comment, and their test names stay close to the Python ones, so the two can be compared.
+The supervisor, the lease, the mutation owner and the drills are new in Go and have no
+Python counterpart. Tests reuse `tools/fixtures/` and `panel/fixtures/` by relative path.
 
 ## Checks
 
@@ -68,7 +71,7 @@ go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go test -count=1 ./...
-MOLEBRIDGE_PANEL=go node --test panel/js-tests/*.test.js
+node --test panel/js-tests/*.test.js
 
 sh -n routing/gluetun-preflight && shellcheck -x -S warning routing/gluetun-preflight
 sh tools/test-gluetun-preflight.sh
@@ -82,9 +85,9 @@ sh tools/check-compose.sh
 sh tools/check-doc-links.sh
 ```
 
-The panel script tests need Node 18 or later and nothing from npm; with
-`MOLEBRIDGE_PANEL=go` they ask the Go toolchain (run from anywhere inside the checkout) for
-the panel's own answers.
+The panel script tests need Node 18 or later and nothing from npm. They run
+`go test -run TestWritePayloads ./internal/panel` for the panel's own answers, so they need
+the Go toolchain too.
 
 The release tooling has its own scripts and tests, which CI runs: `tools/test-make-bundle.sh`,
 `tools/test-check-bundle.sh`, `tools/test-gen-third-party.sh`, `tools/test-release-notes.sh`,
