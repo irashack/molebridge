@@ -9,24 +9,12 @@ the `overlay` kind (`compose.yaml` or
 [`compose.gluetun.yaml`](gluetun-netbird-exit.md)). The sidecar is the
 `sidecar` kind, `EXIT_KIND=sidecar`.
 
-**What has been tested.** [Testing](testing.md#080) is the record.
-
-- At 0.8.0, on rootless Podman 5.8 with Quadlet units: a sidecar with gluetun and
-  NordVPN, upgraded from 0.7.0, reported healthy and its idle CPU and memory were
-  measured. Nothing more was run on it: no drill and no switch is recorded.
-- At 0.7.0 (`d5a234a`), on the same platform
-  ([testing](testing.md#070-on-rootless-podman-at-d5a234a)): a selection verified by
-  NordVPN's own check, the control server on loopback refusing requests without the key,
-  the preflight refusing a malformed role file without printing the key, and the
-  selection restored after gluetun restarted.
-- The attachment procedure ([below](#checking-that-containers-share-gluetuns-namespace))
-  has run on Docker against throwaway containers, including an owner restarted under the
-  same id and a stopped member.
-
-Untested: `compose.sidecar.yaml` itself (validated with `docker compose config` only),
-Docker with a VPN provider, podman-compose, Mullvad, the four
-[tunnel-tier providers](#tunnel-tier-providers), and an application left in gluetun's old
-namespace on a live host.
+**What has been tested.** At 0.8.0 a sidecar with gluetun and NordVPN, upgraded from 0.7.0
+on rootless Podman with Quadlet units, reported healthy; nothing else was run on it, and the
+attachment procedure has no 0.8.0 record. Mullvad, the four
+[tunnel-tier providers](#tunnel-tier-providers), Docker, podman-compose and an application left
+in gluetun's old namespace are untested, and `compose.sidecar.yaml` is validated with
+`docker compose config` only. The older passes are in [testing](testing.md#080).
 
 ## What is checked, and by whom
 
@@ -171,9 +159,11 @@ script and what it compares). For a sidecar, name gluetun, the exit and every se
 `SIDECAR_APPS`:
 
 ```sh
-sh attach.sh molebridge-sidecar-gluetun molebridge-sidecar-exit \
-  $(docker compose ps -q downloader other-app)
+sh attach.sh molebridge-sidecar-gluetun molebridge-sidecar-exit my-downloader my-other-app
 ```
+
+Name each application's container yourself: a stopped or missing container only fails the
+check if you name it, and a list built from `docker compose ps` leaves it out.
 
 Every line must be `PASS`; a `FAIL` names the member that is not in gluetun's current
 namespace, which you recreate together with gluetun ([recovery](#recovery)). Run it after

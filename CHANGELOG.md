@@ -12,8 +12,8 @@ containers instead of four; nothing is built locally and there is no Python on
 the host. The routing contract, the status record (schema 2), the verdict, the
 admission pipeline, the state files and the panel's wording are unchanged, so
 a 0.7.0 Switchyard reads a 0.8.0 exit. Tested live on rootless Podman with
-Quadlet units only: eight exits upgraded from 0.7.0 (six native, one gluetun overlay
-exit and one gluetun sidecar, the two gluetun ones with NordVPN), drills from the native
+Quadlet units only: eight exits upgraded from 0.7.0 (native Mullvad, PIA and NordVPN, and
+NordVPN through gluetun as an overlay exit and as a sidecar), drills from the native
 exits' own namespaces, idle CPU 0.15 to 0.5 % of one core per exit (7.9 % at
 0.7.0). Docker Engine on Linux, NetBird Cloud and client-held drills were not
 tested at 0.8.0 ([testing](docs/testing.md#080)). Upgrade by following

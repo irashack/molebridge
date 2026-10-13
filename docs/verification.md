@@ -128,8 +128,10 @@ come from the config, as with Mullvad; IPv6 stays blocked as on PIA.
    shows `table ip netbird` or a `table ip filter` whose chains include `NETBIRD-`
    ones (`nft list chains`). The exit's `netbird` check requires both.
 8. `docker compose exec exit molebridge status` should print `state: ok (connected)`.
-   It checks routing, NetBird's mode, status freshness and, last, the verdict on the
-   exit's record. Its `lease:` line should say `held`, and `heartbeat:` `fresh`.
+   It assesses the exit's saved record (`state/applier/result.json`) and the saved
+   request, and reads the heartbeat and lease files; it does not inspect the kernel, and
+   its exit status follows that verdict alone. Checks 1 to 7 are what look at the
+   namespace. Its `lease:` line should say `held`, and `heartbeat:` `fresh`.
 
 Run these egress probes in the shell:
 
@@ -161,8 +163,10 @@ Also record any client fallback to its own connection: server routing cannot
 enforce a device-wide kill switch after NetBird disconnects or deselects the exit.
 
 **The repair is fast, so hold it off to see the containment.** The exit repairs a
-deleted rule or route as soon as the kernel announces the change, normally within
-a few milliseconds and by design within 250 ms. A client probe will usually not
+deleted rule or route as soon as the kernel announces the change. The live repairs
+in [testing](testing.md#release-acceptance-at-v080) took 8 to 13 ms. The 250 ms bound
+is what the isolated namespace drills assert for a single fault in a quiet
+namespace; a mutation operation may take up to 10 seconds. A client probe will usually not
 notice a deletion at all. That is the repair working, and what you check in that
 case is the log line and the absence of any host-interface traffic (the
 [capture](#a-capture-on-the-host-interface) below). To watch a path fail, freeze
@@ -246,8 +250,10 @@ overlay forwarding has stopped once the cleanup has run. What they cover and don
 A blocked client path must not appear healthy. The exit checks about once a minute, so a
 short break can fall between two checks, and a repair can land inside the window; the
 hung-worker drill lasts as long as you leave the worker frozen. During it, confirm the
-status record reports `failed` with "exit owner stopped responding", `/readyz` returns 503,
-and any monitoring push reports failure. During a
+status record reports `failed` with "exit owner stopped responding" and `/readyz` returns
+503. The supervisor's failure record is written but not pushed (Gatus pushes come from the
+worker), so a push monitor sees only missing pushes; it must treat those as failure
+([operations](operations.md#gatus)). During a
 route deletion on a dual-stack Mullvad tunnel, the other family should still work. On PIA,
 deleting the IPv4 default must leave both families blocked.
 

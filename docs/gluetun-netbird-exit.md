@@ -22,29 +22,20 @@ isn't covered ([other providers](other-providers.md)).
 
 ## What was tested
 
-[Testing](testing.md#080) is the record. At 0.8.0, on rootless Podman 5.8 with Quadlet
-units (not the Compose file), a gluetun overlay exit with NordVPN, upgraded from 0.7.0
-against a self-hosted NetBird server, came up healthy and connected, and its idle CPU
-and memory were measured. No drill was run on it live, and no client was held on it. The
-gluetun rules, including 91 and 92 at packet level, the gluetun log and mark monitors and
-the stop sequence, are covered by the namespace drills in CI.
+[Testing](testing.md#080) is the record. At 0.8.0 a gluetun overlay exit with NordVPN, upgraded
+from 0.7.0 on rootless Podman with Quadlet units, came up healthy and connected. No drill was run
+on it live and no client was held on it; the gluetun rules, monitors and stop sequence are covered
+by the namespace drills in CI only. The design itself was verified live at 0.7.0, with NordVPN
+through gluetun v3.41.3 and a self-hosted NetBird server:
 
-The design itself was verified live at 0.7.0, with NordVPN through gluetun v3.41.3 and a
-self-hosted NetBird server with the 0.79.0 client:
-
-- On 2026-10-08 on Docker (OrbStack, with a Linux 7.0 kernel VM, on macOS), in two
-  runs. With Molebridge's applier (at `a3bb14f`): forwarding with a client on a
-  direct (P2P) path; local delivery to the exit from NetBird refused; tunnel down
-  with no client traffic and none of gluetun's own flows on the host interface;
-  NetBird's control traffic on the host interface only; recreation and recovery. In
-  the form of the old standalone page (at `4933360`, with only `gluetun`, `guard`
-  and `netbird` running): the drills for a deleted exit-table route, a deleted
-  lookup rule, NetBird restarted and gluetun recreated, each with the client's probe
-  failing and nothing on the host interface's capture; local delivery refused; and a
-  server switch through gluetun's control server.
-- On 2026-10-11 at 0.7.0 on rootless Podman 5.8 as Quadlet units, with a Linux client
-  held on the gluetun exit: a live switch, a gluetun restart, and the drills of that
-  pass ([testing](testing.md#070-on-rootless-podman-at-d5a234a)).
+- On 2026-10-08 on Docker (OrbStack, on macOS): forwarding with a client on a direct (P2P) path,
+  local delivery refused, tunnel down with nothing on the host interface, NetBird's control
+  traffic on the host interface only, recreation, and the drills for a deleted exit-table route
+  and lookup rule, NetBird restarted and gluetun recreated
+  ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)).
+- On 2026-10-11 on rootless Podman 5.8 as Quadlet units, with a Linux client held on the
+  exit: a live switch and a gluetun restart
+  ([testing](testing.md#070-on-rootless-podman-at-d5a234a)).
 
 **Not tested at any version:** any gluetun provider other than NordVPN, IPv6 through
 gluetun (NordVPN is IPv4 only), the `SERVER_CATEGORIES` override, podman-compose, and
