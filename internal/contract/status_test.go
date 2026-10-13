@@ -354,7 +354,7 @@ func glSpec() Spec { return Spec{Config: gluetunConfig()} }
 
 func glStatus(rules []rtnl.Rule, f rtnl.Family, spec Spec) (bool, bool) {
 	routes := []rtnl.Route{
-		{Family: f, Dst: zero(f), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))},
+		tunnelRoute(f),
 		fallbackRoute(f),
 	}
 	return FamilyStatus(spec, f, rules, routes, StatusOptions{TunnelAddress: netip.MustParseAddr(addrOf(f)), ExitIfIndex: exitIfIndex})
@@ -423,7 +423,7 @@ func TestWireguardBackendKeepsRejectingMarkRules(t *testing.T) { // test_wiregua
 	cfg.ExitIf = "wg0"
 	spec := Spec{Config: cfg}
 	routes := []rtnl.Route{
-		{Family: rtnl.V4, Dst: zero(rtnl.V4), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))},
+		tunnelRoute(rtnl.V4),
 		fallbackRoute(rtnl.V4),
 	}
 	opt := StatusOptions{TunnelAddress: netip.MustParseAddr(tunnel4), ExitIfIndex: exitIfIndex}
@@ -547,7 +547,7 @@ func trSnapshot(returnPaths []string, detached bool) []rtnl.Rule {
 
 var (
 	trFallback = fallbackRoute(rtnl.V4)
-	trTunnel   = rtnl.Route{Family: 4, Dst: zero(4), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))}
+	trTunnel   = rtnl.Route{Family: 4, Dst: zero(4), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex)), Scope: rtnl.RTScopeLink}
 )
 
 func trStatus(rules []rtnl.Rule, routes []rtnl.Route, address string, present, up bool) (bool, bool) {

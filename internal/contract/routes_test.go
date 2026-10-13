@@ -151,3 +151,68 @@ func TestHostRoutes(t *testing.T) {
 		t.Error("an absent host interface must match nothing")
 	}
 }
+
+// A route is the contract's route only if every selector matches: a TOS, a
+// source selector or an input interface narrows it to other traffic, and a
+// scope or metric that differs changes whether and when it is chosen. The
+// reviewer's case: with both IPv4 routes at TOS 16 the pass verified with no
+// mutation.
+func TestRoutesThatOnlyLookLikeTheContractsAreNotTheContractsRoutes(t *testing.T) {
+	with := func(r rtnl.Route, edit func(*rtnl.Route)) rtnl.Route { edit(&r); return r }
+	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
+		fb, tun := fallbackRoute(f), tunnelRoute(f)
+		src := netip.PrefixFrom(netip.MustParseAddr(map[rtnl.Family]string{rtnl.V4: "203.0.113.5", rtnl.V6: "2001:db8:3::5"}[f]), map[rtnl.Family]int{rtnl.V4: 32, rtnl.V6: 128}[f])
+		cases := []struct {
+			name   string
+			routes []rtnl.Route
+			want   []RouteActionKind
+		}{
+			{"both with a TOS", []rtnl.Route{with(fb, func(r *rtnl.Route) { r.Tos = 16 }), with(tun, func(r *rtnl.Route) { r.Tos = 16 })}, []RouteActionKind{AddFallback, AddTunnel, DelRoute, DelRoute}},
+			{"the fallback with a TOS", []rtnl.Route{with(fb, func(r *rtnl.Route) { r.Tos = 16 }), tun}, []RouteActionKind{AddFallback, DelRoute}},
+			{"the tunnel route with a TOS", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Tos = 16 })}, []RouteActionKind{AddTunnel, DelRoute}},
+			{"the tunnel route from a source", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Src = src })}, []RouteActionKind{AddTunnel, DelRoute}},
+			{"the fallback from a source", []rtnl.Route{with(fb, func(r *rtnl.Route) { r.Src = src }), tun}, []RouteActionKind{AddFallback, DelRoute}},
+			{"the tunnel route for an input interface", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Iif = rtnl.Some(uint32(2)) })}, []RouteActionKind{AddTunnel, DelRoute}},
+			{"the tunnel route with a metric above the fallback's", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Metric = 5000 })}, []RouteActionKind{AddTunnel, DelRoute}},
+			{"a dead tunnel route", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Flags = rtnl.RTNHFDead })}, []RouteActionKind{AddTunnel, DelRoute}},
+		}
+		if f == rtnl.V4 {
+			cases = append(cases,
+				struct {
+					name   string
+					routes []rtnl.Route
+					want   []RouteActionKind
+				}{"the tunnel route with universe scope", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Scope = rtnl.RTScopeUniverse })}, []RouteActionKind{AddTunnel, DelRoute}},
+				struct {
+					name   string
+					routes []rtnl.Route
+					want   []RouteActionKind
+				}{"the fallback with link scope", []rtnl.Route{with(fb, func(r *rtnl.Route) { r.Scope = rtnl.RTScopeLink }), tun}, []RouteActionKind{AddFallback, DelRoute}})
+		}
+		for _, tc := range cases {
+			got := routeKinds(ExitTableActions(tc.routes, f, 51821, exitIfIndex, TunnelRequired))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("%s %s: %v, want %v", f, tc.name, got, tc.want)
+			}
+			// The readiness judgment agrees: not ready, whatever the rules say.
+			if ready, _ := nativeStatus(nativeRules(f), tc.routes, f, true); ready {
+				t.Errorf("%s %s: ready", f, tc.name)
+			}
+		}
+	}
+}
+
+func TestAHostRouteWithATOSIsNotAHostRoute(t *testing.T) {
+	r := rtnl.Route{Family: rtnl.V4, Dst: netip.PrefixFrom(netip.IPv4Unspecified(), 0), Table: 254, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(2)),
+		Gateway: netip.MustParseAddr("198.51.100.2")}
+	if list, odd := HostRoutes([]rtnl.Route{r}, 2, true); len(list) != 1 || odd {
+		t.Fatalf("%v %v", list, odd)
+	}
+	r.Tos = 16
+	if list, odd := HostRoutes([]rtnl.Route{r}, 2, true); len(list) != 0 || !odd {
+		t.Errorf("a TOS route was taken for a host route: %v %v", list, odd)
+	}
+	if _, ok := hostDestinations([]rtnl.Route{r}, 2); ok {
+		t.Error("the status judgment accepted a TOS route in the host table")
+	}
+}

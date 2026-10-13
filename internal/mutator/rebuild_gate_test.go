@@ -494,3 +494,25 @@ func TestAForeignRuleThatIsTheOnlyProtectionIsNotDeleted(t *testing.T) {
 		}
 	}
 }
+
+// Routes that carry a TOS are not the contract's: the reviewer found both IPv4
+// routes of the exit table re-marked TOS 16 and the pass verified with no
+// mutation. They are replaced, and nothing leaks while they are.
+func TestTOSRoutesAreReplacedNotAccepted(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.mu.Lock()
+	for i := range k.routes[rtnl.V4] {
+		k.routes[rtnl.V4][i].Tos = 16
+	}
+	k.mu.Unlock()
+	guardLeaks(t, k, spec)
+	res := repairs(t, m, k, spec)
+	if !res.Repaired {
+		t.Error("nothing was repaired")
+	}
+	for _, r := range k.routes[rtnl.V4] {
+		if r.Tos != 0 {
+			t.Errorf("a TOS route is still there: %+v", r)
+		}
+	}
+}

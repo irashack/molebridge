@@ -109,7 +109,7 @@ func (s State) WithoutRoute(r rtnl.Route) (State, bool) {
 		return s, false
 	}
 	for i, x := range routes {
-		if x.Dst == r.Dst && (r.Type == 0 || x.Type == r.Type) && (r.Metric == 0 || x.Metric == r.Metric) &&
+		if x.Dst == r.Dst && (r.Type == 0 || x.Type == r.Type) && (r.Metric == 0 || x.Metric == r.Metric) && (r.Tos == 0 || x.Tos == r.Tos) &&
 			(!r.Oif.OK || x.Oif == r.Oif) && (!r.Gateway.IsValid() || x.Gateway == r.Gateway) {
 			out.Routes[r.Family][r.Table] = append(routes[:i:i], routes[i+1:]...)
 			return out, true

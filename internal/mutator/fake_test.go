@@ -287,6 +287,9 @@ func (k *fakeKernel) DelRoute(r rtnl.Route) error {
 		if r.Metric != 0 && r.Metric != x.Metric {
 			continue
 		}
+		if r.Tos != 0 && r.Tos != x.Tos { // a request without a TOS names any
+			continue
+		}
 		if r.Gateway.IsValid() && r.Gateway != x.Gateway {
 			continue
 		}

@@ -145,8 +145,14 @@ func fallbackRoute(f rtnl.Family) rtnl.Route {
 	return rtnl.Route{Family: f, Dst: zero(f), Table: 51821, Type: rtnl.RTNUnreachable, Metric: 4096}
 }
 
+// tunnelRoute is `default dev mullvad` as the kernel reports it: IPv4 device
+// routes have link scope, IPv6 routes always report universe scope.
 func tunnelRoute(f rtnl.Family) rtnl.Route {
-	return rtnl.Route{Family: f, Dst: zero(f), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))}
+	r := rtnl.Route{Family: f, Dst: zero(f), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))}
+	if f == rtnl.V4 {
+		r.Scope = rtnl.RTScopeLink
+	}
+	return r
 }
 
 // nativeRoutes is test_runtime.routes().
