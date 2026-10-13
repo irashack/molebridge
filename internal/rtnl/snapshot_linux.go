@@ -39,6 +39,27 @@ func (c *Conn) Take(in Interest) (*Snapshot, error) { return c.TakeContext(conte
 // read so far is discarded and the whole snapshot is taken again on the
 // (possibly fresh) socket. A timeout is not retried; the operation is out of
 // time.
+// TakeReadOnly is one look at the namespace for judgments that change
+// nothing, such as the status record's checks: no settling of the
+// subscription, no second look, no barrier. Rule dumps are not atomic (see
+// TakeContext), so the snapshot is always marked Unstable: the mutation owner
+// never bases a deletion, a guard release or a verdict on one. A status check
+// that reads one during a concurrent change may be wrong for that tick and is
+// read again on the next.
+func (c *Conn) TakeReadOnly(ctx context.Context, in Interest) (*Snapshot, error) {
+	c.takeMu.Lock()
+	defer c.takeMu.Unlock()
+	if err := c.expired(ctx); err != nil {
+		return nil, err
+	}
+	s, err := c.takeOnce(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	s.Unstable = true
+	return s, nil
+}
+
 func (c *Conn) TakeContext(ctx context.Context, in Interest) (*Snapshot, error) {
 	c.takeMu.Lock()
 	defer c.takeMu.Unlock()

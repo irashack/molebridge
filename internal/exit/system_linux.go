@@ -656,7 +656,10 @@ func (k *KernelSystem) readSnapshot() (*rtnl.Snapshot, error) {
 	if k.snap != nil && time.Since(k.snapAt) < snapshotAge {
 		return k.snap, nil
 	}
-	snap, err := k.Obs.Take(k.Spec.Interest())
+	// The reads behind the status record change nothing, so one look will do:
+	// the full stable snapshot (two looks behind a barrier) is for the
+	// mutation owner's decisions.
+	snap, err := k.Obs.TakeReadOnly(context.Background(), k.Spec.Interest())
 	if err != nil {
 		return nil, err
 	}
