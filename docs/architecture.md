@@ -403,7 +403,8 @@ question, not the health check's ([the verdict](#the-verdict)).
 The worker writes a heartbeat (a line with the boot id and the boot-clock time)
 on the tmpfs every 5 seconds, but only while all of these hold:
 
-- the NetBird profile check hasn't refused, and NetBird has been started;
+- the NetBird profile check hasn't refused, and, except for a sidecar (which
+  has no NetBird), NetBird has been started;
 - for the overlay kind, the routing contract is verified (natively, with the
   tunnel interface up) and NetBird is running;
 - the provider logic's own health holds: the last record is less than 150
@@ -603,11 +604,10 @@ is logged, for example `molebridge-exit: added IPv4 rule 97`,
 `molebridge-exit: IPv4 unreachable fallback in table 51821 restored`.
 
 With PIA's addressless config, the repairer leaves priorities 94 and 98 alone
-entirely: it adds and removes nothing there, and neither its verification nor
-NetBird's start compares them. The PIA transaction keeps exactly one pair
-there, for the current address, through the mutation owner, and the same
-single-fault promise holds with the pipeline's pass in place of the
-repairer's ([providers](providers.md#how-pia-differs)).
+until PIA's registration gives the tunnel an address: until then it adds and
+removes nothing there. The registration installs the pair for the new address
+through the mutation owner, and from then on the repairer repairs that pair
+like the other rules; a later registration retires the old address's pair ([providers](providers.md#how-pia-differs)).
 
 The namespace drills in `internal/drill` exercise these cases against a real
 kernel, in disposable namespaces inside a privileged container, in CI and with

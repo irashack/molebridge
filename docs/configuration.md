@@ -314,7 +314,7 @@ above. The NetBird, overlay, table and mark settings don't apply.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, a record of your list that `docker inspect` shows. Nothing in Molebridge reads or checks it; the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace) finds dependents by network mode. `.env.sidecar.example` sets `example-app`. |
+| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, a record of your list that `docker inspect` shows. Nothing in Molebridge reads or checks it, and neither does the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace): you name every container to check, and one you leave out is not checked. `.env.sidecar.example` sets `example-app`. |
 | `GLUETUN_FIREWALL_INPUT_PORTS` | empty | gluetun's `FIREWALL_INPUT_PORTS`: ports your applications listen on, comma-separated, which you also publish on the `gluetun` service. Never 8000, the control server. |
 | `COMPOSE_PROFILES` | empty | `.env.sidecar.example` sets `example`, which runs the example application, a busybox that only sleeps; remove it once yours are listed. |
 

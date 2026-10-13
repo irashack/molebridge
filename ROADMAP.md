@@ -38,12 +38,17 @@ says what it would take as far as we know today.
 
 A Mullvad or PIA exit idles at 67–78 MB, but a NordVPN exit uses about
 190 MB and a gluetun exit about 120 MB ([resources](docs/testing.md#resources-at-080-on-rootless-podman)),
-against a target of 70 MB. The difference is the server catalog: the whole
-provider file is parsed into memory, and Go keeps much of that heap after
-parsing. What it would take: decode the file as a stream, keep only the
-fields that picking and showing a server need, possibly set a soft memory
-limit in the image, and measure how much of each exit is NetBird's share,
-which Molebridge cannot shrink. Done means NordVPN and gluetun exits under
+against a target of 70 MB. The likely cause, not yet profiled, is the
+server catalog: the whole provider file is decoded into memory before it is
+filtered, and Go keeps much of that heap afterwards. What it would take:
+profile first, idle and during a refresh; then decode the file as a stream
+and keep only the fields that picking and showing a server need. NordVPN's
+list joins servers to separate tables of groups, services, locations and
+technologies, so streaming can't assume the order of the document. The
+strict checks must stay: bounded size, strict UTF-8, duplicate keys refused,
+and the last good catalog kept when a refresh fails. Possibly also set a soft
+memory limit in the image, and measure how much of each exit is NetBird's
+share, which Molebridge cannot shrink. Done means NordVPN and gluetun exits under
 the target, measured the same way, with server choice and refresh unchanged.
 
 ### One exit for several providers
@@ -53,33 +58,39 @@ Mullvad, PIA and NordVPN means three exits and three NetBird peers. Moving a
 device from one provider to another means choosing a different exit node in
 the NetBird app and then the server in Switchyard. A multi-provider exit
 would be one peer: the device stays on it, and Switchyard picks the provider
-and the server in one step. It would be an opt-in kind of exit. Single-provider
-exits stay as they are, and existing setups need no change. It looks
-feasible, because a switch
-already tears one tunnel down and brings another up under the same
-fail-closed contract, and a different provider is a bigger version of that.
-What it would take:
+and the server in one step. It would be an opt-in kind of exit for the native
+providers. Single-provider exits stay as they are, and existing setups need
+no change.
 
+It looks feasible, but a provider change is more than today's server switch,
+which keeps the tunnel and changes its peer (and, for PIA, its address). What
+it would take:
+
+- Replacing the tunnel's whole configuration (key, addresses, MTU, routes)
+  through the mutation owner, and making the tunnel-recovery loop rebuild the
+  current provider's tunnel. Today recovery recreates the tunnel from the
+  configuration the exit started with.
 - A target that names a provider and a server, through the same admission
   pipeline, with each provider's own registration, key handling and egress
-  check.
-- One fixed tunnel interface name for every provider, because NetBird's
-  stored interface blacklist must keep excluding it; today the name follows
-  the provider.
+  check. Attempt records and the status record would need a provider field,
+  and their readers would have to accept a provider that changes; today a
+  reader rejects a record whose provider differs from its own setting.
 - Per-provider routing differences handled at a switch, such as PIA's
   return-path rules and its port forwarding, which must be gone before
   another provider's tunnel is up.
+- One tunnel interface name for every provider, the simplest way to keep
+  NetBird's interface exclusion and the routing contract stable (the
+  exclusion list could also name several).
 - Every provider's credentials and tunnel configs in one container, which
   widens what a compromised exit holds, and every provider's server catalog
   in one process, which depends on the memory work above.
-- A panel that offers the provider as well as the server, and a status
-  record whose provider can change.
+- A panel that offers the provider as well as the server.
 - A live pass with switches in both directions between every pair of
   providers, and the tunnel-loss and repair drills run on each.
 
-Everyone using a multi-provider exit shares its current provider. To put
-different devices on different providers at the same time, run
-single-provider exits beside it.
+gluetun exits are out of scope: gluetun owns their tunnel. Everyone using a
+multi-provider exit shares its current provider. To put different devices on
+different providers at the same time, run single-provider exits beside it.
 
 ### Automatic failover
 

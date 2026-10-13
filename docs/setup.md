@@ -284,7 +284,9 @@ between, each line starting `netbird: `. On a first start it also says
 which is what you want here: if you expected the exit to keep an existing
 peer, stop and look at [the identity volume](operations.md#backups).
 
-`exit` becomes healthy about a minute after it starts. Healthy means the
+`exit` becomes healthy about a minute after it starts; a new PIA exit stays
+unhealthy until you pick a region in step 8, because its tunnel has no
+address before PIA registers it. Healthy means the
 namespace is intact (the tunnel, the routing rules and NetBird); it does not
 mean traffic is verified, which the panel, `/readyz` and `molebridge status`
 report ([health](operations.md#health)). With Mullvad the first check

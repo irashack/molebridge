@@ -6,9 +6,10 @@ changing routing, the tunnel config, Compose networking or the image.
 0.8.0, and only on rootless Podman with Quadlet:
 
 - **Ran live**, from inside the exit's namespace with no client device: the
-  repair drills (rules 1, 95 and 97 in IPv4, rule 97 in IPv6, the exit table's
-  tunnel route, and a foreign rule at priority 96), tunnel loss, and a frozen
-  worker, on native Mullvad, PIA and NordVPN exits. The gluetun exits were
+  repair drills (rules 1, 95 and 97 in IPv4, rule 97 in IPv6, and a foreign
+  rule at priority 96) and tunnel loss on native Mullvad, PIA and NordVPN
+  exits; the exit table's tunnel route deleted, and a frozen worker, on the
+  NordVPN exit only. The gluetun exits were
   upgraded from 0.7.0 and reported healthy, but were not drilled.
 - **Not run at 0.8.0**: the drills with a client holding the exit (last run at
   0.7.0), the other rows of the drill tables below, the status drills, the

@@ -209,7 +209,7 @@ reaches gluetun's rule 101. So the exit:
      control mark for `FWMARK_GRACE` seconds (30 by default, 5 to 30, counted on the boot clock from
      the launch or from the last good reading), the exit stops itself. The worker ends, the
      supervisor stops NetBird and removes the overlay interface, and the container exits with
-     status 1, so the restart policy starts it again. The line is `NetBird gate: stopping NetBird:
+     status 1, so the restart policy starts it again. The line is `molebridge-exit: NetBird gate: stopping NetBird:
      <reason> (see docs/troubleshooting.md)`, with the reason `NetBird logged that it runs without
      advanced routing, so its control traffic would be unmarked` or `wt0 has not carried the control
      mark 0x1bd00 for 30 seconds (last reported: <value>)`.

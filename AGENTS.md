@@ -5,6 +5,9 @@ first. Molebridge is MIT-licensed; the bundled font keeps its own license.
 Create releases or tags only when the owner asks: a `v*-rc.N` tag builds,
 signs and publishes a candidate image, and a `vX.Y.Z` tag promotes the
 candidate that live acceptance attested (`.github/workflows/release.yml`).
+The Compose files in the source pin the latest release by tag and digest,
+so a checkout runs a published image; after a release, update them to it
+(the release bundle rewrites them to its own image either way).
 Handle suspected vulnerabilities through the private route in `SECURITY.md`,
 never in a public issue or commit message.
 

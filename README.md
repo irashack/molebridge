@@ -96,8 +96,9 @@ full list is in the [changelog](CHANGELOG.md#080--2026-10-13).
   selections. The released image passed rule-drift and tunnel-loss drills on
   the three native providers and a frozen-worker drill on NordVPN. The drills
   ran from inside the exit's namespace; no client device was held on the exit.
-- **Run in CI at 0.8.0:** unit, fuzz and namespace-drill suites and the image
-  and release checks, on amd64 and arm64.
+- **Run in CI at 0.8.0:** unit, fuzz and namespace-drill suites and the
+  release checks on amd64; the image checks on amd64 and arm64. The namespace
+  drills also passed once on an arm64 Linux VM.
 - **Not tested at 0.8.0:** Docker Engine and NetBird Cloud; the shipped
   Compose files on any engine (CI only validates them with
   `docker compose config`; the live pass ran the image from Quadlet units

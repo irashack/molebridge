@@ -35,7 +35,7 @@ name: molebridge
 
 services:
   exit:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge:v0.8.0@sha256:aa882618115e602c554901a9b5e7d504068499da6da0ff921bf40cd39767e52a
     # Only for people who build from a checkout (`docker compose build`);
     # the release bundle has no Dockerfile and pulls the image instead.
     build:
@@ -173,7 +173,7 @@ services:
           memory: 512m
 
   switchyard:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge:v0.8.0@sha256:aa882618115e602c554901a9b5e7d504068499da6da0ff921bf40cd39767e52a
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
     restart: unless-stopped

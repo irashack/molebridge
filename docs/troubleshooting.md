@@ -425,7 +425,8 @@ start-up check of socket marks and `ip rule` support failed: check NetBird's log
 before the line and that the exit still has `NET_ADMIN`. For the second, `absent`
 means the overlay interface didn't come up, `off` or another mark means NetBird runs
 without its control mark, and `nothing` that it never reported one. The grace is
-`FWMARK_GRACE` seconds from NetBird's launch.
+`FWMARK_GRACE` seconds, counted from NetBird's launch or from the last good
+reading.
 
 **The log says `not ready: ... IPv4 nodefault`, or NetBird never starts.** The
 namespace lost its host interface or its default route, usually because the engine

@@ -390,8 +390,10 @@ refusal there logs `applier: invalid configuration or unavailable state` and
 the reason, and the exit stops with nothing admitted. It does not check the mode of the tunnel config or of the PIA credential
 files: they are only read, and a wrong mode is yours to check
 ([below](#host-checks)). The messages are in
-[troubleshooting](troubleshooting.md#startup). `check-config` makes the first set of checks only; it does not
-read the provider's settings.
+[troubleshooting](troubleshooting.md#startup). `check-config` reads the settings, the tunnel config
+and the NetBird profile only: it does not check gluetun's control server or
+the ICMP sysctl, which need the running exit's namespace, or the provider's
+settings.
 
 ### Host checks
 

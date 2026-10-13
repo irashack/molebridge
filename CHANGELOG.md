@@ -102,8 +102,8 @@ with rootless Podman 5.8 and Quadlet units ([testing](docs/testing.md#080)):
   sidecar, the last two with NordVPN, were upgraded from 0.7.0 and reported healthy; the
   stored NetBird peers, selections and PIA's registration carried over.
 - The released image (`v0.8.0`, promoted from `v0.8.0-rc.2`) was run on the native Mullvad, PIA and
-  NordVPN exits through the drift, tunnel-loss and frozen-worker drills, made from the exits'
-  own namespaces. `v0.8.0-rc.1` failed the PIA tunnel-loss drill (it stayed fail-closed but did
+  NordVPN exits through the drift and tunnel-loss drills, and the NordVPN exit through the
+  frozen-worker drill, made from the exits' own namespaces. `v0.8.0-rc.1` failed the PIA tunnel-loss drill (it stayed fail-closed but did
   not recover by itself); `v0.8.0-rc.2` fixes that.
 - The gluetun exits were not drilled live, and no client device was held on any exit.
 
