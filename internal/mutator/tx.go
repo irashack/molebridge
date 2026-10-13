@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
@@ -20,6 +21,11 @@ type Tx struct {
 	name string
 	// refused remembers the deletions already refused, so each is logged once.
 	refused map[string]bool
+	// retiring are return-path addresses a transaction is moving away from: the
+	// expected state keeps their pair until the transaction settles, but the
+	// transaction's own steps may remove it once the address is no longer live
+	// (the deletion check still protects it while it is).
+	retiring map[netip.Addr]bool
 }
 
 // ErrUnsafeDeletion says the owner did not delete a rule or route because the
@@ -36,6 +42,17 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 	spec := tx.m.Expected()
 	if spec.Config.IsSidecar() {
 		return nil
+	}
+	if len(tx.retiring) > 0 {
+		for f, addrs := range spec.ReturnPath {
+			var keep []netip.Addr
+			for _, a := range addrs {
+				if !tx.retiring[a] {
+					keep = append(keep, a)
+				}
+			}
+			spec.ReturnPath[f] = keep
+		}
 	}
 	refuse := func(reason string, err error) error {
 		msg := fmt.Sprintf("kept %s: %s", what, reason)
@@ -64,7 +81,7 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 		return nil // nothing there to delete
 	}
 	if worse := policy.Worsened(before.Violations(), after.Violations()); len(worse) > 0 {
-		return refuse(worse[0].String(), nil)
+		return refuse(worse[0].String()+fmt.Sprintf(" [live %v expected %v]", before.Live, spec.ReturnPath), nil)
 	}
 	return nil
 }

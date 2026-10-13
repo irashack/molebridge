@@ -516,3 +516,46 @@ func TestTOSRoutesAreReplacedNotAccepted(t *testing.T) {
 		}
 	}
 }
+
+// A change moves away from the old address, and its own steps may remove the old
+// pair once the address is gone; while the address is live the pair is still
+// protected, and the deletion is refused.
+func TestAChangeMayRetireTheOldPairOnlyOnceTheAddressIsGone(t *testing.T) {
+	a11, a12 := netip.MustParseAddr("203.0.113.11"), netip.MustParseAddr("203.0.113.12")
+	pairRule := func(spec contract.Spec, prio uint32, a netip.Addr) rtnl.Rule {
+		s := spec.Clone()
+		s.ReturnPath = map[rtnl.Family][]netip.Addr{rtnl.V4: {a}}
+		for _, r := range s.Rules(rtnl.V4) {
+			if r.Priority == prio {
+				return r
+			}
+		}
+		t.Fatal("no rule")
+		return rtnl.Rule{}
+	}
+	h := newPIAHarness(t, piaScenario{name: "x", old: a11, next: a12})
+	h.k.hook = h.observe
+	var whileLive, afterGone error
+	err := h.m.ChangeReturnPath(context.Background(), rtnl.V4, a11, a12, func(tx *Tx) error {
+		h.k.setAddr(rtnl.V4, "mullvad", a12, true)
+		if err := tx.DelRule(pairRule(h.spec, 94, a11)); err != nil { // the backstop still stops it
+			return err
+		}
+		whileLive = tx.DelRule(pairRule(h.spec, 98, a11)) // a11 is still on the interface: its last protection
+		h.k.setAddr(rtnl.V4, "mullvad", a11, false)
+		afterGone = tx.DelRule(pairRule(h.spec, 98, a11))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(whileLive, ErrUnsafeDeletion) {
+		t.Errorf("the pair of a live address was deleted: %v", whileLive)
+	}
+	if afterGone != nil {
+		t.Errorf("the pair of an address that left was refused: %v", afterGone)
+	}
+	if h.violation != "" {
+		t.Error(h.violation)
+	}
+}

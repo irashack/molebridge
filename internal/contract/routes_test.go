@@ -174,6 +174,7 @@ func TestRoutesThatOnlyLookLikeTheContractsAreNotTheContractsRoutes(t *testing.T
 			{"the fallback from a source", []rtnl.Route{with(fb, func(r *rtnl.Route) { r.Src = src }), tun}, []RouteActionKind{AddFallback, DelRoute}},
 			{"the tunnel route for an input interface", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Iif = rtnl.Some(uint32(2)) })}, []RouteActionKind{AddTunnel, DelRoute}},
 			{"the tunnel route with a metric above the fallback's", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Metric = 5000 })}, []RouteActionKind{AddTunnel, DelRoute}},
+			{"the tunnel route at the metric IPv6 gives a route without one is the tunnel route", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Metric = 1024 })}, nil},
 			{"a dead tunnel route", []rtnl.Route{fb, with(tun, func(r *rtnl.Route) { r.Flags = rtnl.RTNHFDead })}, []RouteActionKind{AddTunnel, DelRoute}},
 		}
 		if f == rtnl.V4 {
@@ -195,8 +196,8 @@ func TestRoutesThatOnlyLookLikeTheContractsAreNotTheContractsRoutes(t *testing.T
 				t.Errorf("%s %s: %v, want %v", f, tc.name, got, tc.want)
 			}
 			// The readiness judgment agrees: not ready, whatever the rules say.
-			if ready, _ := nativeStatus(nativeRules(f), tc.routes, f, true); ready {
-				t.Errorf("%s %s: ready", f, tc.name)
+			if ready, _ := nativeStatus(nativeRules(f), tc.routes, f, true); ready != (tc.want == nil) {
+				t.Errorf("%s %s: ready = %v", f, tc.name, ready)
 			}
 		}
 	}

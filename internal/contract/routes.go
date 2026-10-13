@@ -85,7 +85,7 @@ func isFallback(r rtnl.Route) bool {
 // over the fallback), live, and unconditional as isFallback says.
 func isTunnelRoute(r rtnl.Route, exitIf uint32) bool {
 	return r.Type == rtnl.RTNUnicast && r.IsDefault() && exitIf != 0 && r.Oif.OK && r.Oif.V == exitIf &&
-		plainDeviceRoute(r) && r.Metric == 0 && r.Unconditional() && r.Flags&rtnl.RTNHFDead == 0 &&
+		plainDeviceRoute(r) && r.Metric < FallbackMetric && r.Unconditional() && r.Flags&rtnl.RTNHFDead == 0 &&
 		(r.Family != rtnl.V4 || r.Scope == rtnl.RTScopeLink)
 }
 
