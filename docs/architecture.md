@@ -1626,11 +1626,11 @@ In order:
 11. `status: ok` with every required check passed: `ok`, "connected", if the
     target agrees; otherwise `failed`, "verification failed".
 
-**Target agreement.** The panel's target is the configured lock from the
-record, or else its own acknowledged request. The exit's and
-`molebridge status`'s is the exit's own resolution: its local `SERVER`, then the
-panel's accepted request, read again at that moment, then the restore
-target.
+**Target agreement.** The panel and `molebridge status` judge against the
+same target: the configured lock from the record, or else the panel's
+request in `desired.json`. The exit's applier judges against its own
+resolution: its local `SERVER`, then the panel's accepted request, read again
+at that moment, then the restore target.
 
 - With `SERVER`: the record's `server` is that server.
 - For a panel request: `server` and `requested_server` are both the
