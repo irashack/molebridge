@@ -13,7 +13,8 @@ says what it would take as far as we know today.
   gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
   had one live pass, NordVPN on rootless Podman; [testing](docs/testing.md)
   records the gaps that keep it experimental.
-- **One signed image, pull and run** (0.8.0, experimental, not yet live-tested):
+- **One signed image, pull and run** (0.8.0, experimental, live-tested on
+  rootless Podman only):
   the Python and shell were ported to one Go binary, published as a signed
   multi-architecture image with a signed Compose bundle, so there is nothing to
   build and no Python on the host ([setup](docs/setup.md),
@@ -28,6 +29,18 @@ says what it would take as far as we know today.
   panel, and an exit with `SERVER` set has not been run this way on a live host.
 
 ## Backlog
+
+### Smaller memory with large server catalogs
+
+A Mullvad or PIA exit idles at 67–78 MB, but a NordVPN exit uses about
+190 MB and a gluetun exit about 120 MB ([resources](docs/testing.md#resources-at-080-on-rootless-podman)),
+against a target of 70 MB. The difference is the server catalog: the whole
+provider file is parsed into memory, and Go keeps much of that heap after
+parsing. What it would take: decode the file as a stream, keep only the
+fields that picking and showing a server need, possibly set a soft memory
+limit in the image, and measure how much of each exit is NetBird's share,
+which Molebridge cannot shrink. Done means NordVPN and gluetun exits under
+the target, measured the same way, with server choice and refresh unchanged.
 
 ### Automatic failover
 
