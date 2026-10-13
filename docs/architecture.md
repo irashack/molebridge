@@ -1,13 +1,14 @@
 # Architecture
 
 - [Goal and boundary](#goal-and-boundary)
+- [What changed from 0.7](#what-changed-from-07)
 - [Components and trust](#components-and-trust)
 - [The exit container](#the-exit-container)
 - [Routing contract](#routing-contract)
 - [NetBird and its checks](#netbird-and-its-checks)
 - [gluetun backend](#gluetun-backend)
 - [The sidecar kind](#the-sidecar-kind)
-- [Relay catalogue](#relay-catalogue)
+- [Relay catalog](#relay-catalog)
 - [Requests and switching](#requests-and-switching)
 - [Status reporting](#status-reporting)
 - [Panel and access](#panel-and-access)
@@ -51,6 +52,37 @@ does with DNS, IPv6 and its own local routes, needs checking separately
 The sections below describe Mullvad. [Providers](providers.md#how-pia-differs)
 lists what differs for PIA and NordVPN. Everything provider-specific is one
 entry in the provider registry, `internal/providers`.
+
+## What changed from 0.7
+
+0.8.0 is a rewrite for adoption, not a change of design: the routing
+contract, the status record, the verdict, the admission pipeline, the state
+files and the panel's wording are the ones 0.7.0 had, so a 0.7.0 Switchyard
+reads a 0.8.0 exit ([changelog](../CHANGELOG.md)). What moved:
+
+- **One binary, one signed image.** The Python applier and panel and the
+  routing shell scripts are Go in `cmd/molebridge`, selected by role. The
+  native stack is two containers (`exit` and `switchyard`) where 0.7 had
+  four, and nothing is built on your host. The only shell script that still
+  runs in a container is `routing/gluetun-preflight`, gluetun's entrypoint
+  wrapper.
+- **A supervisor and a worker instead of a gate.** In 0.7 the tunnel key and
+  the provider logic were in different containers, with a gate and an
+  owner-record file between the routing owner and NetBird. Now one process
+  tree holds them, and a [progress lease](#the-lease) replaces the gate: if
+  the routing owner stops making progress, the supervisor stops NetBird.
+- **Repair on notification.** The routing owner repairs on the kernel's
+  rule, route, link and address notifications. The periodic full pass
+  (`ROUTING_RECONCILE_INTERVAL`, 30 seconds by default) is the fallback; at
+  0.7 the 2-second pass was the repair ([drift and repair](#drift-and-repair)).
+- **No shell and no `wg-quick`.** Rules, routes, the tunnel link and
+  nftables are changed through netlink from the binary, which starts no
+  shell.
+- **NetBird runs under the binary.** Its settings, stored profile and ICE
+  blacklist are checked before the daemon starts ([NetBird and its
+  checks](#netbird-and-its-checks)).
+- **gluetun** keeps its shape, but the 0.7 standalone form without the
+  provider logic is gone ([gluetun backend](#gluetun-backend)).
 
 ## Components and trust
 
@@ -98,7 +130,7 @@ flowchart TB
     desired -- "read on the next pass" --> worker
     server -. "wins over desired.json" .-> worker
     sup -- "publishes" --> result
-    worker -- "catalogue" --> result
+    worker -- "catalog" --> result
     provider -- "downloaded, validated" --> worker
 
     classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
@@ -114,15 +146,13 @@ flowchart TB
     linkStyle default stroke:#8087a2,stroke-width:2px
 ```
 
-The panel holds nothing that can change routing: it writes one file, and the
-exit decides whether that file names a server it will use.
-
-**What the panel can and can't do.** The panel can write only its request
-directory. It reads `state/applier/` through a read-only mount and checks at
-start that it holds no capabilities, that it isn't root unless you said so,
-and that the exit's state is mounted read-only
-([the isolation check](configuration.md#the-panels-isolation-check)). It
-cannot change the relay catalogue or the result. An old
+**What the panel can and can't do.** The panel holds nothing that can change
+routing: it writes one file, and the exit decides whether that file names a
+server it will use. It can write only its request directory. It reads
+`state/applier/` through a read-only mount and checks at start that it holds no
+capabilities, that it isn't root unless you said so, and that the exit's state
+is mounted read-only ([the isolation check](configuration.md#the-panels-isolation-check)).
+It cannot change the relay catalog or the result. An old
 `state/panel/relays.json` has no authority and is ignored. Its own outbound
 connections are the TCP latency probes to relays and, only when
 [sign-in](#sign-in) is configured, HTTPS requests to the identity provider.
@@ -135,14 +165,13 @@ private key), and with PIA the PIA login. It holds `NET_ADMIN` in the tunnel
 namespace, so a compromised exit could read the live key and change routing.
 It is part of the trusted base, along with the container engine, the host and
 NetBird. In 0.7 the tunnel key and the provider logic were in different
-containers; in 0.8.0 they are in one process tree, which is what lets the
-exit own the whole fail-closed property, but it means that split is gone.
-What remains is exit versus panel. The exit's root filesystem is read-only;
-it writes its state directory, the `netbird-data` volume and two tmpfs mounts:
-`/run`, which holds its runtime files and scratch space, and `/var/log/netbird`.
-It validates everything it reads: server lists, API
-answers, the tunnel config, the stored NetBird profile, desired-state files,
-and the panel's requests.
+containers; in 0.8.0 they share one process tree, which lets the exit own the
+whole fail-closed property but removes that split. What remains is exit versus
+panel. The exit's root filesystem is read-only; it writes its state directory,
+the `netbird-data` volume and two tmpfs mounts: `/run`, which holds its runtime
+files and scratch space, and `/var/log/netbird`. It validates everything it
+reads: server lists, API answers, the tunnel config, the stored NetBird
+profile, desired-state files and the panel's requests.
 
 ## The exit container
 
@@ -166,16 +195,18 @@ the boot clock, and checks the lease deadline on its own timer.
    too ([troubleshooting](troubleshooting.md#startup)).
 2. With gluetun, wait up to 30 seconds for gluetun's control server to listen
    on loopback, and refuse if it listens on anything else.
-3. Subscribe to the kernel's rule, route, link and address notifications
-   before the first look at the kernel, so no change between the look and the
-   watch is missed.
+3. For an overlay exit, subscribe to the kernel's rule, route, link and address
+   notifications before the first look at the kernel, so no change between the
+   look and the watch is missed. A sidecar has no contract and no watcher.
 4. [Install the routing contract](#routing-contract). Nothing forwarded can
    leave before the tunnel exists.
 5. Natively, [bring the tunnel up](#the-tunnel); keep it up.
 6. Tell the supervisor the contract holds (and, natively, that the tunnel is
-   up), so it starts NetBird.
+   up), so it starts NetBird. The worker's first lease renewal goes out before
+   steps 4 and 5, because the supervisor gives a new worker only 30 seconds
+   for it.
 7. Run the provider logic, once NetBird is up and its stored profile has been
-   checked again: the relay catalogue, the admission pipeline, the egress
+   checked again: the relay catalog, the admission pipeline, the egress
    checks, the status record ([requests and switching](#requests-and-switching)).
    With a sidecar there is no NetBird, and this starts at once.
 8. Watch and repair ([drift and repair](#drift-and-repair)), renew the lease,
@@ -194,17 +225,40 @@ meanwhile.
 
 ### The tunnel
 
-A native exit creates the tunnel itself. It creates a link of kind `wireguard`
-through rtnetlink, sets the private key, and for Mullvad the peer, through
-WireGuard's generic netlink, sets the MTU and addresses from the tunnel
-config, brings the link up and puts the default route into the exit table.
-`PostUp` and `PreDown` are read as the route operations they stand for and are
-never executed. If bring-up fails, or the interface is later missing or down,
-the worker retries after 2 seconds, then 4, doubling up to 60, and checks the
-interface every 2 seconds. Meanwhile the exit isn't ready, the namespace NetBird
-shares isn't replaced, and forwarded traffic hits the exit table's fallback.
-The log says `molebridge-exit: tunnel bring-up failed (<reason>); retrying in <n> s`,
-with the failing step and the kernel's error as the reason.
+A native exit creates the tunnel itself (`internal/tunnel`, run as an operation
+of the mutation owner). It removes a leftover link of the same name, creates a
+link of kind `wireguard` through rtnetlink, sets the private key through
+WireGuard's generic netlink (and the peer, for a config that carries one: a
+Mullvad config does, PIA's and NordVPN's don't), assigns the addresses, sets the
+MTU from the tunnel config, brings the link up and puts the default route into
+the exit table. `PostUp` and `PreDown` are read as the route operations they
+stand for and are never executed. A failed attempt removes the half-built link.
+If bring-up fails, or the interface is later missing or down, the worker retries
+after 2 seconds, then 4, doubling up to 60, and checks the interface every 2
+seconds. Meanwhile the exit isn't ready, the namespace NetBird shares isn't
+replaced, and forwarded traffic hits the exit table's fallback. The log says
+`molebridge-exit: tunnel bring-up failed (<reason>); retrying in <n> s`, with
+the failing step and the kernel's error as the reason.
+
+### nftables
+
+The exit uses nftables in three small ways (`internal/nft`), all through
+netlink, never `nft`. None of them is what keeps forwarded traffic in the
+tunnel; that is the [routing contract](#routing-contract).
+
+- **Looking.** The `netbird` check lists the namespace's chains to see
+  NetBird's kernel firewall ([NetBird and its checks](#netbird-and-its-checks)).
+  This is a read.
+- **PIA's ingress guard.** With PIA the exit installs table
+  `inet molebridge_guard`, a forward hook that drops anything arriving from the
+  tunnel interface and not leaving over the overlay. An earlier table of that
+  name is replaced; nothing removes it.
+- **PIA's port forwarding.** While forwarding is on, table
+  `ip molebridge_forward` holds the DNAT and masquerade rules for the forwarded
+  port ([providers](providers.md#port-forwarding)).
+
+Each change is one batch on a socket with a deadline of its own (10 seconds
+when the caller gives none).
 
 ### NetBird as a child
 
@@ -300,11 +354,11 @@ stop looking good:
   `traffic_protection` and keeps `owner_record` `n/a`; a sidecar marks its
   required checks (`peer`, `handshake`, `egress`) `unknown`, because the
   worker that measured them is gone and nothing is invented.
-  A 0.7.0 reader then shows the failure within the lapse time rather than
-  after its 150-second window. One exception is today's behavior too: a newer,
-  unacknowledged panel request still shows as `applying`.
+  A reader then shows the failure within the lapse time rather than after its
+  150-second window, except that a newer, unacknowledged panel request still
+  shows as `applying`.
 - A requested stop publishes nothing more: the last record goes stale after
-  150 seconds, as it did in 0.7.
+  150 seconds.
 
 ### The stop sequence
 
@@ -318,7 +372,7 @@ files give the container:
 | T+0 | The lease is revoked. Publication ends (a failure record, unless the stop was requested). The worker is told to stop: it refuses new mutations and cancels provider work. Every NetBird process group gets `TERM` |
 | T+6 | `KILL` to the worker's group and to any NetBird process still alive |
 | T+7 | Everything is reaped, or the step that is still alive is named |
-| T+7 to T+12 | The independent cleanup, `molebridge exit --cleanup`, a bounded child of the same binary. It does not run while the worker is still alive |
+| T+7 to T+12 | The independent cleanup, `molebridge exit --cleanup`, a bounded child of the same binary. It does not run while the worker or a NetBird process is still alive; the stop is then reported as incomplete |
 | T+13 | The supervisor exits |
 
 The cleanup deletes the interfaces the exit owns: natively Molebridge's tunnel
@@ -339,19 +393,34 @@ non-zero status. The log lines are `molebridge-exit: stopping (requested)` (or
 
 ### Health
 
-`molebridge health` is the container's health check. The worker writes a
-heartbeat (a line with the boot id and the boot-clock time) on the tmpfs every
-5 seconds, but only when the operational checks pass: the tunnel interface
-exists, the contract holds, NetBird is running and the provider logic's own
-health holds (a fresh completed check and an intact namespace). `health`
-passes while the heartbeat is no more than 15 seconds old on the boot clock.
-A failed provider verification never fails it: that is the verdict's question
-([readiness, monitoring and the health check](#readiness-monitoring-and-the-health-check)).
-When the heartbeat can't be written, the worker says why, at most once a minute
-for each reason: `molebridge-exit: not operational: <reason>`, where the reason is
-`the NetBird profile check refused`, `NetBird has not been started yet`,
-`the routing contract is not verified`, `NetBird is not running` or `the pipeline
-reports the namespace is not intact (<what>)`.
+`molebridge health` is the container's health check. It is operational only:
+whether the exit is verified, including on its `SERVER`, is the verdict's
+question, not the health check's ([the verdict](#the-verdict)).
+
+The worker writes a heartbeat (a line with the boot id and the boot-clock time)
+on the tmpfs every 5 seconds, but only while all of these hold:
+
+- the NetBird profile check hasn't refused, and NetBird has been started;
+- for the overlay kind, the routing contract is verified (natively, with the
+  tunnel interface up) and NetBird is running;
+- the provider logic's own health holds: the last record is less than 150
+  seconds old and from a completed check (`ok` or `failed`; startup and a
+  switch in progress don't count), and the namespace is intact for the kind.
+  For an overlay exit that is the tunnel interface present, routing
+  protection (natively, including a live lease) and NetBird on kernel
+  WireGuard with its kernel firewall. A missing peer doesn't count, because
+  the pipeline puts it back and an engine that killed unhealthy containers
+  would only delay that. For a sidecar it is gluetun's control server
+  answering and exactly one peer.
+
+`health` passes while the heartbeat is no more than 15 seconds old on the boot
+clock, so two missed beats still pass and three don't. When the heartbeat
+can't be written, the worker says why, at most once a minute for each reason:
+`molebridge-exit: not operational: <reason>`, where the reason is `the NetBird
+profile check refused`, `NetBird has not been started yet`, `the routing
+contract is not verified`, `NetBird is not running` or `the pipeline reports the
+namespace is not intact (<what>)`. Docker and Podman don't restart unhealthy
+containers by themselves; the supervisor's lease is what stops a hung worker.
 
 ### Capabilities, and why
 
@@ -454,17 +523,15 @@ The overlay link is narrower than the tunnel (NetBird 1280 bytes, Mullvad
 1420), so replies larger than the overlay MTU need an ICMP error back to their
 origin. NetBird clamps TCP; UDP, including QUIC, depends on that error. The
 error is generated by the exit itself, so no `iif`/`oif` rule matches it; only
-its source address does. The protocol qualifier holds the rule to that one
-purpose: an unqualified rule would force every protocol sourced from the
-tunnel address into the tunnel, including traffic from anything else sharing
-the namespace. `compose.yaml` sets
-`net.ipv4.icmp_errors_use_inbound_ifaddr=1` so IPv4 errors carry the tunnel
-address; the kernel already selects the inbound interface's address for IPv6.
-The worker warns (`net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`)
+its source address does. The protocol qualifier holds rule 94 to that one
+purpose: an unqualified rule would force everything sourced from the tunnel
+address into the tunnel, including traffic from anything else sharing the
+namespace. `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr=1` so
+IPv4 errors carry the tunnel address; the kernel already selects the inbound
+interface's address for IPv6. The worker warns (`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`)
 when it isn't set. Without rule 94 the errors would leave over the host's
-route with an unroutable source, and large UDP flows through the exit would
-silently stall. Rule 98 keeps that from happening when rule 94 or the exit
-table's routes are gone: the errors are dropped instead.
+route with an unroutable source, and large UDP flows would silently stall; rule
+98 drops them instead when rule 94 or the exit table's routes are gone.
 
 ### Drift and repair
 
@@ -475,27 +542,30 @@ is up, its default route in each family the tunnel carries, nothing else. What
 it promises holds for one fault at a time.
 
 **It is driven by events.** The worker joins the kernel's rule, route, link and
-address notifications before it first looks at the kernel. A notification that
-could change the contract's standing (any rule change, a route change in a
-table of interest, a change to the tunnel, the overlay or the host interface,
-any address change, or one it can't decode) asks the mutation owner for a
-repair pass. The pass takes its own fresh look at the kernel and compares it
-with the expected state at that moment, so a stale notification only ever
-results in a look at the present state, and requests made while a pass is
-pending are one request. A full pass also runs every
-`ROUTING_RECONCILE_INTERVAL` seconds (30 by default), and at once when the
-kernel reports that notifications were lost (`ENOBUFS`), which logs
-`molebridge-exit: molebridge: netlink events were lost; running a full pass`.
+address notifications before it first looks at the kernel (`internal/watch`).
+A notification that could change the contract's standing (any rule change, a
+route change in a table of interest, a change to the tunnel, the overlay or the
+host interface, any address change, or one it can't decode) asks the mutation
+owner for a repair pass. The watcher decides nothing and changes nothing. The
+pass takes its own fresh look at the kernel and compares it with the expected
+state at that moment, so a stale notification only ever results in a look at
+the present state, and requests made while a pass is pending are one request.
+A full pass also runs every `ROUTING_RECONCILE_INTERVAL` seconds (30 by
+default, 2 to 60), and at once when the kernel reports that notifications were
+lost (`ENOBUFS`), which logs
+`molebridge-exit: netlink events were lost; running a full pass`.
 The full pass is the fallback for a change the kernel doesn't announce, not
 the repair itself. Reading the kernel uses a decoder of the exit's own for
-rules, because the common library's rule listing drops the action and
-attributes it doesn't know, and a rule that is wrong in one of those would
-look right.
+rules (`internal/rtnl`), because the common library's rule listing drops the
+action and attributes it doesn't know, and a rule that is wrong in one of
+those would look right. A decoded rule keeps every attribute it arrived with,
+so a rule with a selector the exit doesn't understand never equals one it
+expects, and can still be deleted by sending the same attributes back.
 
 A **deleted protection** is contained by the ones that remain, and put back by
 the pass that its notification starts. The CI drill asserts that a single
 deletion or insertion is repaired within 250 ms of the event, on a quiet
-namespace; [testing](testing.md#080) records what has run.
+namespace ([testing](testing.md#080) records what has run).
 
 | Deleted | Contained by |
 |---|---|
@@ -518,15 +588,16 @@ repair pass its notification starts. Nothing is promised about traffic between
 the insertion and its removal: only root in the namespace can insert one, and
 root there can defeat any guard. Two faults at once are outside the guarantee.
 
-A pass that has to change rules 90–97 first adds the temporary priority-80
-rule, which blocks forwarding, and removes it in the same pass once the
-result verifies; if it doesn't verify, rule 80 stays until a pass does. A
-wrong rule whose selectors are a subset of the right one's is rebuilt behind
+On the native backend, a pass that has to change rules 90–97 first adds the
+temporary priority-80 rule, which blocks forwarding, and removes it in the same
+pass once the result verifies; if it doesn't verify, rule 80 stays until a pass
+does. With gluetun only the first installation uses rule 80; a repair there
+doesn't add it. A wrong rule whose selectors are a subset of the right one's is rebuilt behind
 a copy one priority earlier, so a repair never leaves rules 94 and 98 both
 missing. A pass that finds everything in place changes nothing. Each change
-is logged, for example `molebridge-exit: molebridge: added IPv4 rule 97`,
-`molebridge-exit: molebridge: removed IPv4 rule 50: <the rule>` or
-`molebridge-exit: molebridge: IPv4 unreachable fallback in table 51821 restored`.
+is logged, for example `molebridge-exit: added IPv4 rule 97`,
+`molebridge-exit: removed IPv4 rule 50: <the rule>` or
+`molebridge-exit: IPv4 unreachable fallback in table 51821 restored`.
 
 With PIA's addressless config, the repairer leaves priorities 94 and 98 alone
 entirely: it adds and removes nothing there, and neither its verification nor
@@ -537,10 +608,9 @@ repairer's ([providers](providers.md#how-pia-differs)).
 
 The namespace drills in `internal/drill` exercise these cases against a real
 kernel, in disposable namespaces inside a privileged container, in CI and with
-`internal/nstest/drill.sh` ([CONTRIBUTING](../CONTRIBUTING.md#checks)); they port
-the rows of 0.7's `tools/check-routing.sh` and add a 250 ms repair assertion,
-rules with the wrong action or an extra selector, event loss by flood, and
-packet-level checks that nothing leaves while a repair runs.
+`internal/nstest/drill.sh` ([CONTRIBUTING](../CONTRIBUTING.md#checks)). They
+cover each row above, rules with the wrong action or an extra selector, event
+loss by flood, and packet-level checks that nothing leaves while a repair runs.
 [Testing](testing.md#080) records what has run on a live exit.
 
 ### The deletion check, and what it assumes
@@ -548,11 +618,21 @@ packet-level checks that nothing leaves while a repair runs.
 The mutation owner never deletes a rule or a route on its own say. Before every
 deletion (an exact delete, a delete by priority, the clearing in a rebuild, a
 stray copy, a route out of a table, the release of the temporary guard) it
-takes a snapshot the kernel held still for, applies the deletion to it as the
-kernel would, and asks `internal/policy` whether any protected class of traffic
-has gone from safe to escaping. If one has, or the kernel kept changing so it
-cannot tell, the rule stays, the pass is unverified, and the refusal is logged
-once (`kept IPv4 rule 98: ...`).
+judges the deletion against a model of the kernel that the kernel held still
+for, applies the deletion to the model as the kernel would, and asks
+`internal/policy` whether any protected class of traffic has gone from safe to
+escaping. If one has, or the kernel kept changing so it cannot tell, the rule
+stays, the pass is unverified, and the refusal is logged once
+(`molebridge-exit: kept IPv4 rule 98: ...`). A sidecar has no contract, so
+nothing is checked there.
+
+The model is one stable snapshot per operation, kept up to date with the
+operation's own adds and deletes. The owner goes back to the kernel for a fresh
+stable snapshot only when someone else changed it: the kernel stamps each
+notification with the port id of the socket whose request caused it, which
+tells the owner's changes from anyone else's. A change it can't attribute (no
+subscription, lost events, a notification it can't decode) counts as someone
+else's.
 
 The model follows a packet through the rules the way the kernel does and
 errs on the side of refusing. It judges every packet a class defines, not a
@@ -578,7 +658,7 @@ rule the kernel would remove.
 **What a snapshot is, and what it is not.** The FIB rule dump is not atomic and
 Linux gives no consistency signal for it: on the kernels measured, a dump taken
 while rules change repeats or skips a rule and does not set `NLM_F_DUMP_INTR`.
-The owner therefore takes two looks that must agree, multiplicity included (a
+A snapshot is therefore two looks that must agree, multiplicity included (a
 rule that is really there twice, as `ip rule restore` leaves it, is in both
 looks twice; one that is in one look only is an artifact; a repeat is believed
 only after two more looks show it), and, when it holds a subscription to the
@@ -593,13 +673,16 @@ changes rules without pause can then, rarely, repeat or miss a rule without any
 signal. The consequence is bounded to that writer's own change: the
 notification of the change reaches the watcher, which asks for the next pass,
 and that pass looks again. Nothing is deleted on a miss that stands, because
-every deletion takes its own stable snapshot and is judged against it, and
+every deletion is judged against a model built from a stable snapshot, and
 additions never depend on stability: a rule that is missing from a snapshot is
 added, and an add of a rule that is there is not an error. A snapshot that the
 looks, the barrier or the drain cannot vouch for is handed over marked
 unstable, and an unstable snapshot authorizes no deletion, no release of the
 temporary guard and no verdict. A kernel that refuses the barrier gets a longer
-drain, which is a heuristic and not an ordering.
+drain, which is a heuristic and not an ordering. The reads behind the status
+record's checks change nothing, so they take a single look instead, always
+marked unstable and shared for 100 milliseconds; a check that reads during a
+concurrent change can be wrong for one tick and is read again on the next.
 
 **What this does not cover.** The check, like the drift model it belongs to,
 covers rules and routes that NetBird, an operator or Molebridge's own failures
@@ -710,7 +793,7 @@ inspection:
   return-path rule (94) for exactly that address and its ICMP protocol, and
   its backstop (98) for the same packets;
 - the ICMP source sysctl is set;
-- the supervisor holds a live lease (`owner_record`).
+- natively, the supervisor holds a live lease (`owner_record`).
 
 An IPv4-only tunnel still needs the IPv6 fail-closed guards, and must have no
 IPv6 return-path rule or backstop. An unknown rule ahead of the guard, an extra
@@ -724,13 +807,16 @@ them is an instantaneous defense against a compromised host.
 
 **Experimental.** At 0.7.0 it had live passes with NordVPN on Docker and on
 rootless Podman; see [testing](testing.md#gluetun-backend-pass-at-a3bb14f)
-for what they covered and what they didn't. Nothing has run at 0.8.0. The
-gluetun behaviors below were read in the source of the pinned releases
-(gluetun v3.41.3, NetBird 0.80.0) and exercised in isolated namespaces by the
-drills in `internal/drill`. The 0.7 form without the provider logic and the
-panel, three containers with only a routing guard, no longer exists: the exit
-container always runs the provider logic, and so only the six providers in the
-registry are accepted ([gluetun as a NetBird exit](gluetun-netbird-exit.md)).
+for what they covered and what they didn't. At 0.8.0 a gluetun exit with
+NordVPN was upgraded from 0.7.0 on rootless Podman and reported healthy and
+connected; the live drills ran on the native exits, not on this backend
+([testing](testing.md#080)). The gluetun behaviors below were read in the
+source of the pinned releases (gluetun v3.41.3, NetBird 0.80.0) and exercised
+in isolated namespaces by the drills in `internal/drill`. The 0.7 form without
+the provider logic and the panel, three containers with only a routing guard,
+no longer exists: the exit container always runs the provider logic, and so
+only the six providers in the registry are accepted
+([gluetun as a NetBird exit](gluetun-netbird-exit.md)).
 
 With this backend [gluetun](https://github.com/qdm12/gluetun) owns the
 provider tunnel instead of Molebridge, which brings its provider list. Only
@@ -931,9 +1017,13 @@ exit also:
     message like `wt0 has not carried the control mark 0x1bd00 for 30 seconds (last reported: absent)`,
     where the last reported value is `absent`, `off`, `nothing` or the mark seen.
     This is independent of the 30 seconds the contract may be incomplete.
-  Either stop takes NetBird down, not the exit: the supervisor starts it
-  again once the contract verifies, and the monitors start counting from the
-  new launch.
+  Either stop is fatal to the worker, as the 0.7 gate's was: NetBird can't be
+  trusted to mark its control traffic, so the worker logs `molebridge-exit:
+  NetBird gate: stopping NetBird: <reason> (see docs/troubleshooting.md)` and
+  exits, the supervisor runs the [stop sequence](#the-stop-sequence) and
+  publishes the failure record, and the exit stops with status 1. The
+  restart policy starts it again; the monitors count from the new launch.
+  NetBird is never relaunched silently by the worker that rejected it.
 
 **The accepted residual.** The settings above are checked before launch, so
 only a failed capability check inside NetBird can leave its control traffic
@@ -1020,13 +1110,13 @@ never matches `iif lo`.
 The provider logic works as it does with the native backend ([requests and
 switching](#requests-and-switching)); these parts differ.
 
-**Catalogue.** gluetun's own server list, not a download: gluetun keeps it
+**Catalog.** gluetun's own server list, not a download: gluetun keeps it
 in `servers.json` (`STORAGE_FILEPATH`), which `compose.gluetun.yaml` puts in
 a volume of its own so the exit can mount only that directory,
 read-only. The file is untrusted. The exit reads it with the same limits
 as a download (32 MiB, no symlinks, duplicate keys refused), keeps only
 the configured provider's WireGuard servers with a valid key, hostname and
-IPv4 endpoint, and keeps the last good catalogue when the file fails to
+IPv4 endpoint, and keeps the last good catalog when the file fails to
 parse, as it does while gluetun rewrites it in place. It checks the file
 every minute and reads it again when it changed, or at least every six
 hours. gluetun dates each provider's data when it last changed; the panel
@@ -1053,7 +1143,7 @@ and comes back, and the exit puts the exit route back within a couple of
 seconds. It reports that as switching, not as a failure, for up to
 90 seconds ([gluetun's reconnection](#gluetuns-reconnection-during-a-switch)).
 Success needs, as with the native backend: exactly one peer
-whose endpoint and key identify the selected server in the catalogue (`wg
+whose endpoint and key identify the selected server in the catalog (`wg
 show wg0 endpoints`, IPv4 or IPv6, matched against every address the
 server lists, since gluetun connects to any of them at random; an address
 listed for several servers stays unidentified), a fresh handshake, the whole contract in both families
@@ -1142,7 +1232,8 @@ engines haven't been checked.
 
 ## The sidecar kind
 
-Experimental, with one live pass at 0.7.0, NordVPN on rootless Podman
+Experimental, with one live pass at 0.7.0, NordVPN on rootless Podman, and an
+upgrade of that sidecar to 0.8.0 that reported healthy
 ([gluetun sidecar](gluetun-sidecar.md) says what has been tested). With `EXIT_KIND=sidecar` and
 `compose.sidecar.yaml`, the exit and the panel select and check servers
 for an ordinary gluetun whose namespace other containers share
@@ -1169,7 +1260,7 @@ when it stops:
   its own. You check that every application in `SIDECAR_APPS` is in
   gluetun's current namespace with the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace).
 - **Gates.** A switch needs no routing or NetBird gate, only a usable
-  catalogue, a listed target and readable peers.
+  catalog, a listed target and readable peers.
 - **Egress.** Mullvad's and NordVPN's own checks work as on the gluetun
   backend. The tunnel tier can't: in plain gluetun's namespace nothing
   leaves off the tunnel, so the host's own address can't be measured. With
@@ -1188,9 +1279,9 @@ The panel needs the kind too: `EXIT_KIND` for a single-exit panel, or
 is never connected ("kind mismatch"). A sidecar's page says "tunnel" where an
 overlay exit's says "exit".
 
-## Relay catalogue
+## Relay catalog
 
-With the native backend, the exit downloads the catalogue; with gluetun
+With the native backend, the exit downloads the catalog; with gluetun
 it reads gluetun's file instead ([the exit with
 gluetun](#the-exit-with-gluetun)). The exit fetches the fixed HTTPS
 Mullvad relay API at startup and every six hours. Redirects and proxy environment overrides are refused. Input is size
@@ -1200,14 +1291,14 @@ and bounded location strings. The optional display attributes (Mullvad-owned,
 RAM-only, hosting provider) are kept only when they are strict booleans or
 bounded text; they never affect whether a relay may be selected.
 
-The PIA catalogue is PIA's region list, and the NordVPN catalogue NordVPN's
+The PIA catalog is PIA's region list, and the NordVPN catalog NordVPN's
 server list, each parsed and validated the same way by its own module; see
 [providers](providers.md). Each provider's download limits are in its registry
 entry: 10 MiB and 20 seconds, except NordVPN's 32 MiB and 60 seconds.
 
 It atomically writes `state/applier/relays.json`. Failed or empty refreshes
-keep the last good catalogue and publish a sanitized error in
-`relay-error.json`; retries happen every minute. A catalogue older than 24
+keep the last good catalog and publish a sanitized error in
+`relay-error.json`; retries happen every minute. A catalog older than 24
 hours cannot authorize a new switch or a healthy result. It does not remove a
 working tunnel merely because the API is unavailable.
 
@@ -1231,7 +1322,7 @@ source is recorded in `result.json`'s `selection`
 server by itself.
 
 When `SERVER` is set, the exit ignores `desired.json`. It validates the
-name and fresh-catalogue membership through the same gates.
+name and fresh-catalog membership through the same gates.
 `result.json` carries `configured_server` (null when unset); the panel
 uses it to omit switching controls, refuse selection posts and ignore old
 panel requests when interpreting status. Connection freshness is checked
@@ -1248,10 +1339,10 @@ sequenceDiagram
     participant A as Exit
     participant T as Tunnel
     participant E as Provider's check
-    P->>P: server is in the catalogue
+    P->>P: server is in the catalog
     P->>D: server, requested_at, request_id
     A->>D: read on its next pass, validate
-    A->>A: gates: catalogue, routing protection, NetBird
+    A->>A: gates: catalog, routing protection, NetBird
     A->>A: attempt.json: attempting
     A->>T: remove old peer, set new key and endpoint
     T-->>A: fresh handshake
@@ -1261,24 +1352,24 @@ sequenceDiagram
     P->>P: reads result.json, shows connected
 ```
 
-1. The panel checks membership in the read-only catalogue and atomically writes
+1. The panel checks membership in the read-only catalog and atomically writes
    `desired.json` with `server`, `requested_at` and a random `request_id`. It
    refuses a new request with 409 while the exit is switching
    ([panel and access](#panel-and-access)).
 2. On each pass the exit reads a bounded, regular, non-symlink file. It
-   waits five seconds between passes; catalogue refreshes, checks and
+   waits five seconds between passes; catalog refreshes, checks and
    switches can delay the next read.
    It validates the entire schema and resolves the name only through its own
-   fresh catalogue. The old two-field request schema remains readable.
+   fresh catalog. The old two-field request schema remains readable.
 3. **Gates.** Before any change: a valid configuration and request, the
-   target listed in a fresh catalogue, for the overlay kind intact routing
+   target listed in a fresh catalog, for the overlay kind intact routing
    protection and NetBird in kernel mode, and readable WireGuard peers. A
    missing prerequisite leaves the request **pending**, without changing
    peers, with a message saying it will retry automatically; it is tried
    again on every pass until the prerequisites recover. A malformed request,
-   or a server not in the catalogue, is **rejected**: acknowledged as failed
+   or a server not in the catalog, is **rejected**: acknowledged as failed
    and not tried again until a new request arrives or, for an unlisted
-   server, the catalogue's server names change. A refused panel request is never the target, so with
+   server, the catalog's server names change. A refused panel request is never the target, so with
    gluetun the restore target still applies meanwhile.
 4. **Record, then change.** The exit writes `attempting` to
    `state/applier/attempt.json` before any I/O, because a lost response can
@@ -1301,7 +1392,7 @@ sequenceDiagram
 
 ### The admission pipeline
 
-The attempt's state, in `state/applier/attempt.json` (`applier/attempt.py`):
+The attempt's state, in `state/applier/attempt.json` (`internal/attempt`):
 
 | State | Meaning |
 |---|---|
@@ -1322,7 +1413,7 @@ What happens next, in precedence order on each pass:
    again); an older one, as after a restart or an upgrade, and every other
    source inspect first.
 2. **Pending** goes through the gates again on every pass. **Rejected** is
-   tried again when what refused it changes: the catalogue's server names,
+   tried again when what refused it changes: the catalog's server names,
    or with PIA the credential files.
 3. **No live peer.** With the native backend the tunnel comes back from
    its config without the selected peer (the worker brings a
@@ -1331,7 +1422,7 @@ What happens next, in precedence order on each pass:
    per new worker generation (the worker started
    again) whatever the state, even while a failure backs off; never within
    90 seconds of the last change. With gluetun, no peer is treated like a
-   peer the catalogue can't name (7): gluetun's interface has no peer for a
+   peer the catalog can't name (7): gluetun's interface has no peer for a
    moment while it reconnects by itself.
 4. **A due re-apply.** A failed change is applied again on a backoff of 1,
    2, 4 and 8 minutes, then every 15.
@@ -1346,9 +1437,9 @@ What happens next, in precedence order on each pass:
 6. **Drift**: the live server is identifiable and isn't the target. It is
    put back only from `idle` or `unverified`, never while a failed attempt
    waits on its backoff, and never within 90 seconds of the last change.
-7. **A peer the catalogue can't name** counts as drift after 90 seconds; the
+7. **A peer the catalog can't name** counts as drift after 90 seconds; the
    wait restarts when it becomes identifiable or the target changes. With
-   no fresh catalogue nothing counts as drift.
+   no fresh catalog nothing counts as drift.
 
 Every automatic re-apply first inspects: if the target is live and passes
 every check, the attempt is `idle` and nothing changes; if it is live but a
@@ -1459,7 +1550,7 @@ Which checks must pass depends on the kind and backend:
 | `traffic_protection` | required, from `routing` | required, from `routing` | `not-checked` (gluetun's firewall) |
 | `netbird`: kernel WireGuard and NetBird's kernel firewall | required | required | `n/a` |
 | `owner_record` | required | `n/a` | `n/a` |
-| `peer`: exactly one peer, the selected server in a fresh catalogue | required | required | required |
+| `peer`: exactly one peer, the selected server in a fresh catalog | required | required | required |
 | `handshake`: fresher than 180 seconds (`age_s`) | required | required | required |
 | `egress`: every expected address family, at a tier valid for the provider | required | required | required, never the tunnel tier |
 | `app_attachment` | `n/a` | `n/a` | `not-checked` (the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace)) |
@@ -1561,7 +1652,7 @@ Egress is confirmed at one of two tiers, recorded as `checks.egress.tier`:
   tunnel carries needs a fresh handshake; two independent IP echo services,
   asked through the tunnel interface, answering with the same address; that
   address differing from the host's own public address, measured off the
-  tunnel; and, where the catalogue
+  tunnel; and, where the catalog
   lists exit addresses for the selected server, the address being one of
   them. A measurement that fails, after the one retry described below,
   fails the tier.
@@ -1587,28 +1678,32 @@ unconfirmed.
 Each egress request goes through the tunnel with a 10-second limit. When a
 periodic check's egress check gets no usable answer (a timeout, a refused or
 reset connection, an HTTP error, a malformed reply or, at the `tunnel` tier,
-a failed measurement of the host's own address), the exit waits 10
-seconds and asks once more before it reports a failure. An answer that does
-not confirm the egress (`mullvad_exit_ip: false` for any family, PIA's
-`connected: false`, NordVPN's `protected: false` beyond its cache retry, or
-echo answers that fail the `tunnel` checks) counts at once and ends the
-check before any further request, so a later timeout can't turn it into a
-retry: asking again would only delay reporting traffic that may be leaving
-the wrong way. There is no second attempt while a switch is verified, because
-the switch keeps asking until its own timeout; when the check fails whatever
-the answer (no fresh handshake, a pending or rejected selection, a peer not
-in a fresh catalogue); or when the first attempt took longer than 15
-seconds. The second attempt starts no request more than 30 seconds after it
-began, and NordVPN's cache retry stops waiting then too, so a check that
-retries ends within about 70 seconds. Routing protection, NetBird's mode
-and the peer count are checked before any egress request and fail at once;
-a missing or stale handshake fails the check after the first attempt,
-without a second. Until the check finishes, the previous record stays in
-`result.json`, and readers still treat one older than 150 seconds as
-unknown. It logs `molebridge-exit: applier: egress check got no answer; asking once
-more`, and `molebridge-exit: applier: egress check got no answer twice` when the second
-attempt fails too. A failed egress check on the live target leaves the
-attempt `unverified`: re-checked, not switched again.
+a failed measurement of the host's own address), the exit waits 10 seconds and
+asks once more before it reports a failure. It does not ask again when:
+
+- the answer doesn't confirm the egress (`mullvad_exit_ip: false` for any
+  family, PIA's `connected: false`, NordVPN's `protected: false` beyond its
+  cache retry, or echo answers that fail the `tunnel` checks). That counts at
+  once and ends the check before any further request, so a later timeout can't
+  turn it into a retry: asking again would only delay reporting traffic that
+  may be leaving the wrong way;
+- a switch is being verified, because the switch keeps asking until its own
+  timeout;
+- the check fails whatever the answer (no fresh handshake, a pending or
+  rejected selection, a peer not in a fresh catalog);
+- the first attempt took longer than 15 seconds.
+
+The second attempt starts no request more than 30 seconds after it began, and
+NordVPN's cache retry stops waiting then too, so a check that retries ends
+within about 70 seconds. Routing protection, NetBird's mode and the peer count
+are checked before any egress request and fail at once; a missing or stale
+handshake fails the check after the first attempt. Until the check finishes,
+the previous record stays in `result.json`, and readers still treat one older
+than 150 seconds as unknown. The exit logs `molebridge-exit: applier: egress
+check got no answer; asking once more`, and `molebridge-exit: applier: egress
+check got no answer twice` when the second attempt fails too. A failed egress
+check on the live target leaves the attempt `unverified`: re-checked, not
+switched again.
 
 ### Readiness, monitoring and the health check
 
@@ -1621,20 +1716,8 @@ attempt `unverified`: re-checked, not switched again.
   with its reason codes, the egress tier, each check's state, the heartbeat's
   age and the lease state. It exits 0 only when the verdict is `ok`.
 - The exit container's health check (`molebridge health`, Compose's
-  `healthcheck`) is operational only: the worker's heartbeat is no more than
-  15 seconds old. The worker writes it every 5 seconds, and only while the
-  tunnel interface exists, the contract holds, NetBird is running and the
-  provider logic's own health holds: a record less than 150 seconds old from a
-  completed check, `ok` or `failed` (startup and a switch in progress don't
-  count), and an intact namespace for the kind. For the overlay kind that is the
-  tunnel interface present, routing protection (natively, including a live
-  lease) and NetBird on kernel WireGuard with its kernel firewall; a missing
-  peer doesn't count, because the pipeline puts it back, and an engine or
-  supervisor that kills unhealthy containers would only delay that. For a
-  sidecar it is gluetun's control server answering and exactly one peer.
-  Whether the exit is verified, including on its `SERVER`, is the verdict's
-  question, not the health check's. Docker and Podman don't restart unhealthy
-  containers by themselves; the supervisor's lease is what stops a hung worker.
+  `healthcheck`) is operational only and doesn't use the verdict; see
+  [health](#health).
 
 ## Panel and access
 
@@ -1657,7 +1740,7 @@ strings, bodies and unknown paths.
 One panel can serve several exits on the same host (`PANEL_EXITS`; see
 [Switchyard](switchyard.md)). Each exit is a pair of state directories under
 `$STATE_DIR/<id>`. Every request names its exit, and a selection is checked
-against that exit's own catalogue and written only to that exit's
+against that exit's own catalog and written only to that exit's
 `desired.json`. The privilege split is unchanged: each exit alone applies
 what its own request file asks.
 
@@ -1808,12 +1891,12 @@ and then checking the attachment ([operations](operations.md#recovery)). A
 native exit has one container that owns its namespace, so recreating it is
 enough, and NetBird's identity stays in the `netbird-data` volume.
 
-Operational recovery and verified egress are two different things. A recreated
-exit is operational when its health check passes; whether it carries traffic to
-the provider is `molebridge status`, which reads the exit's own record.
-Nothing in `molebridge` deletes a volume or enrolls a new peer on its own: a
-missing identity is reported at start, in a line, and the exit then enrolls a
-new peer with the setup key ([NetBird and its checks](#netbird-and-its-checks)).
+A recreated exit is operational when its health check passes; whether it
+carries traffic to the provider is `molebridge status`, which reads the exit's
+own record. Nothing in `molebridge` deletes a volume or enrolls a new peer on
+its own: a missing identity is reported at start, in a line, and the exit then
+enrolls a new peer with the setup key ([NetBird and its
+checks](#netbird-and-its-checks)).
 
 [Verification](verification.md) covers the live deployment; the namespace
 drills in `internal/drill` cover the routing contract against a real kernel in
