@@ -518,7 +518,8 @@ tunnel config has an address: they are installed from the config's `Address`
 line, so they exist before the interface does, and they stay through tunnel
 downtime. Exactly one IPv4 address and at most one IPv6 address are supported.
 A PIA config has no address: the exit adds rules 94 and 98 with the address it
-registers, and the repairer leaves both priorities alone
+registers; until then the repairer leaves both priorities alone, and after
+registration it repairs that pair like the other rules
 ([providers](providers.md#how-pia-differs)). Table numbers 0–255 are reserved
 and refused. Interface names, overlay ranges and the tunnel config are
 validated.

@@ -24,8 +24,8 @@
 # back. No volume carries an owner record any more: the supervisor's lease
 # inside the container does what the owner-record volume of 0.7 did.
 #
-# The image is pinned to an exact release; the release bundle pins it by tag
-# and digest. `docker compose build` builds the same image from a checkout.
+# The image is pinned to an exact release by tag and digest. To build it
+# from a checkout instead, see CONTRIBUTING.md#building-the-image.
 # Secrets live in the mode-0600 files under ./tunnel and ./secrets, and the
 # NetBird identity in the netbird-data volume; never print them or paste
 # `docker compose config` output anywhere.
@@ -36,8 +36,9 @@ name: molebridge
 services:
   exit:
     image: ghcr.io/irashack/molebridge:v0.8.0@sha256:aa882618115e602c554901a9b5e7d504068499da6da0ff921bf40cd39767e52a
-    # Only for people who build from a checkout (`docker compose build`);
-    # the release bundle has no Dockerfile and pulls the image instead.
+    # Only for people who build from a checkout, with a local image name in
+    # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
+    # bundle has no Dockerfile and pulls the image instead.
     build:
       context: .
       dockerfile: Dockerfile

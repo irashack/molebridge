@@ -135,8 +135,9 @@ services:
     # tunnel. NET_ADMIN as with the native exit; the API key is full gluetun
     # administration, part of the same trusted base.
     image: ghcr.io/irashack/molebridge:v0.8.0@sha256:aa882618115e602c554901a9b5e7d504068499da6da0ff921bf40cd39767e52a
-    # Only for people who build from a checkout (`docker compose build`);
-    # the release bundle has no Dockerfile and pulls the image instead.
+    # Only for people who build from a checkout, with a local image name in
+    # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
+    # bundle has no Dockerfile and pulls the image instead.
     build:
       context: .
       dockerfile: Dockerfile

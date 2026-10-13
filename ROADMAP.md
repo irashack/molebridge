@@ -72,9 +72,10 @@ it would take:
   configuration the exit started with.
 - A target that names a provider and a server, through the same admission
   pipeline, with each provider's own registration, key handling and egress
-  check. Attempt records and the status record would need a provider field,
-  and their readers would have to accept a provider that changes; today a
-  reader rejects a record whose provider differs from its own setting.
+  check. Attempt records would need the provider as well as the server, and
+  readers of the status record, which already names its provider, would have
+  to accept one that changes; today a reader rejects a record whose provider
+  differs from its own setting.
 - Per-provider routing differences handled at a switch, such as PIA's
   return-path rules and its port forwarding, which must be gone before
   another provider's tunnel is up.

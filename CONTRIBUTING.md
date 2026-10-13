@@ -146,9 +146,21 @@ sh tools/check-image.sh molebridge:dev linux/amd64    # what the image contains
 
 It cross-compiles the binary with `CGO_ENABLED=0 GOFLAGS=-mod=vendor` (so the `vendor/` directory is
 the dependency list) and adds the NetBird client from the release archive pinned in the `Dockerfile`,
-checked against the SHA-256 committed there. `docker compose build exit` builds the same image under the
-name the Compose file uses (`ghcr.io/irashack/molebridge:<tag>`), so `docker compose up -d` then runs your
-build instead of pulling. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
+checked against the SHA-256 committed there. To run your build through Compose, give it a local name in
+a `compose.override.yaml` beside the Compose file, because the Compose files pin the release by digest
+and an image can't be built under a digest:
+
+```yaml
+services:
+  exit: {image: molebridge:dev}
+  switchyard: {image: molebridge:dev}
+```
+
+List only services your Compose file has: `compose.gluetun.yaml` has no
+`switchyard`, so leave that line out there, or Compose adds a stray service.
+Then `docker compose build exit` and `docker compose up -d` run your build. Compose reads
+`compose.override.yaml` by itself only when `COMPOSE_FILE` is unset; with a gluetun form, add it, as in
+`COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
 `netbird_<version>_checksums.txt`, and reading the checks in `internal/nbprofile` against the new release's
 source. The base images are pinned by tag and index digest; update them deliberately and run the
 [verification](docs/verification.md) afterward.
