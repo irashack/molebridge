@@ -7,11 +7,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/netip"
-	"sync"
+	"time"
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
-	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/irashack/molebridge/internal/rtnl"
@@ -23,57 +22,45 @@ const (
 	GuardTable   = "molebridge_guard"
 )
 
+// MutationBudget bounds a change whose context has no deadline.
+const MutationBudget = 10 * time.Second
+
+// extraConnOptions, when set, adds connection options to every mutation (tests
+// replace the netlink dial through it).
+var extraConnOptions func() []nftables.ConnOption
+
 // withConn opens a lasting nftables connection for one change and runs fn on
-// it. Every socket the connection opens carries the context's absolute
-// deadline from the start (WithSockOptions), the whole change also runs under
-// rtnl.RunBounded, which closes the connection at the deadline (a kernel that
-// never answers cannot hold the caller), and the connection is never reused:
-// it is closed when fn returns, and one delivered after the caller gave up on
-// it is closed by the goroutine that opened it. netns is a file descriptor of
-// a network namespace, 0 for the caller's.
+// it. The connection owns exactly one netlink socket, which carries the
+// context's absolute deadline from the moment it is created (see owned) and
+// is closed directly when the context ends: Flush holds the library's mutex
+// for the whole acknowledgement read, so CloseLasting cannot be the way to
+// cancel it. The change runs under rtnl.RunBounded, which reports a call that
+// outlasts even the closed socket. The connection is never reused. netns is a
+// file descriptor of a network namespace, 0 for the caller's.
 func withConn(ctx context.Context, netns int, fn func(*nftables.Conn) error) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, MutationBudget)
+		defer cancel()
+	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("nft: %w", rtnl.ErrDeadline)
+		return fmt.Errorf("nft: %w", boundedErr(err))
 	}
-	opts := []nftables.ConnOption{nftables.AsLasting()}
-	if dl, ok := ctx.Deadline(); ok {
-		opts = append(opts, nftables.WithSockOptions(func(c *netlink.Conn) error { return c.SetDeadline(dl) }))
-	}
+	dl, _ := ctx.Deadline()
+	sock := &owned{dl: dl}
+	opts := []nftables.ConnOption{nftables.AsLasting(), nftables.WithSockOptions(sock.option)}
 	if netns != 0 {
 		opts = append(opts, nftables.WithNetNSFd(netns))
 	}
-	var (
-		mu        sync.Mutex
-		c         *nftables.Conn
-		abandoned bool
-	)
-	err := rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() {
-		mu.Lock()
-		abandoned = true
-		cc := c
-		mu.Unlock()
-		if cc != nil {
-			_ = cc.CloseLasting()
-		}
-	}, func() error {
-		opened, err := nftables.New(opts...)
-		if err != nil {
-			return err
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if abandoned {
-			_ = opened.CloseLasting()
-			return rtnl.ErrDeadline
-		}
-		c = opened
-		return nil
-	})
+	if extraConnOptions != nil {
+		opts = append(opts, extraConnOptions()...)
+	}
+	c, err := nftables.New(opts...)
+	defer sock.close()
 	if err != nil {
 		return fmt.Errorf("nft: open netlink: %w", err)
 	}
-	defer c.CloseLasting()
-	return rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, func() { _ = c.CloseLasting() }, func() error { return fn(c) })
+	return rtnl.RunBounded(ctx, rtnl.DefaultAbortGrace, sock.close, func() error { return fn(c) })
 }
 
 // ifname is an interface name as nft compares it: NUL-padded to IFNAMSIZ.

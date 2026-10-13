@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/policy"
 	"github.com/irashack/molebridge/internal/rtnl"
 )
 
@@ -17,6 +19,71 @@ type Tx struct {
 	m    *Mutator
 	ctx  context.Context
 	name string
+	// refused remembers the deletions already refused, so each is logged once.
+	refused map[string]bool
+	// retiring are return-path addresses a transaction is moving away from: the
+	// expected state keeps their pair until the transaction settles, but the
+	// transaction's own steps may remove it once the address is no longer live
+	// (the deletion check still protects it while it is).
+	retiring map[netip.Addr]bool
+}
+
+// ErrUnsafeDeletion says the owner did not delete a rule or route because the
+// kernel's policy without it would let a class of protected traffic escape (see
+// internal/policy), or because that could not be judged.
+var ErrUnsafeDeletion = errors.New("refused: the deletion could let protected traffic escape")
+
+// approve evaluates a deletion against the policy model of the current stable
+// snapshot with the rule or route taken out. It refuses a deletion that turns
+// any protected class of traffic from stopped or routed-by-the-contract into
+// an escape, and one it cannot judge: the model needs a snapshot the kernel
+// held still for. Every deletion the owner makes goes through it.
+func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool)) error {
+	spec := tx.m.Expected()
+	if spec.Config.IsSidecar() {
+		return nil
+	}
+	if len(tx.retiring) > 0 {
+		for f, addrs := range spec.ReturnPath {
+			var keep []netip.Addr
+			for _, a := range addrs {
+				if !tx.retiring[a] {
+					keep = append(keep, a)
+				}
+			}
+			spec.ReturnPath[f] = keep
+		}
+	}
+	refuse := func(reason string, err error) error {
+		msg := fmt.Sprintf("kept %s: %s", what, reason)
+		if !tx.refused[msg] {
+			if tx.refused == nil {
+				tx.refused = map[string]bool{}
+			}
+			tx.refused[msg] = true
+			tx.Logf("molebridge: %s", msg)
+		}
+		if err != nil {
+			return fmt.Errorf("%w: %s: %w", ErrUnsafeDeletion, msg, err)
+		}
+		return fmt.Errorf("%w: %s", ErrUnsafeDeletion, msg)
+	}
+	snap, err := tx.Snapshot()
+	if err != nil {
+		return refuse("the kernel could not be read to judge it", err)
+	}
+	if snap.Unstable {
+		return refuse("the kernel kept changing, so it could not be judged", nil)
+	}
+	before := policy.FromSnapshot(spec, snap)
+	after, changed := remove(before)
+	if !changed {
+		return nil // nothing there to delete
+	}
+	if worse := policy.Worsened(before.Violations(), after.Violations()); len(worse) > 0 {
+		return refuse(worse[0].String()+fmt.Sprintf(" [live %v expected %v]", before.Live, spec.ReturnPath), nil)
+	}
+	return nil
 }
 
 // Context carries the operation's deadline.
@@ -88,6 +155,9 @@ func (tx *Tx) DelRule(r rtnl.Rule) error {
 	if err := tx.budget(); err != nil {
 		return err
 	}
+	if err := tx.approve(fmt.Sprintf("%s rule %d", r.Family, r.Priority), func(s policy.State) (policy.State, bool) { return s.WithoutRule(r) }); err != nil {
+		return err
+	}
 	if err := tx.m.o.Kernel.DelRule(r); err != nil && !rtnl.IsNotExist(err) {
 		return err
 	}
@@ -98,6 +168,9 @@ func (tx *Tx) DelRule(r rtnl.Rule) error {
 // error but is reported by the bool.
 func (tx *Tx) DelRulePriority(f rtnl.Family, priority uint32) (bool, error) {
 	if err := tx.budget(); err != nil {
+		return false, err
+	}
+	if err := tx.approve(fmt.Sprintf("the first %s rule at priority %d", f, priority), func(s policy.State) (policy.State, bool) { return s.WithoutPriority(f, priority) }); err != nil {
 		return false, err
 	}
 	if err := tx.m.o.Kernel.DelRulePriority(f, priority); err != nil {
@@ -120,6 +193,9 @@ func (tx *Tx) ReplaceRoute(r rtnl.Route) error {
 // DelRoute removes a route; one already gone is not an error.
 func (tx *Tx) DelRoute(r rtnl.Route) error {
 	if err := tx.budget(); err != nil {
+		return err
+	}
+	if err := tx.approve(fmt.Sprintf("a %s route in table %d", r.Family, r.Table), func(s policy.State) (policy.State, bool) { return s.WithoutRoute(r) }); err != nil {
 		return err
 	}
 	if err := tx.m.o.Kernel.DelRoute(r); err != nil && !rtnl.IsNotExist(err) {

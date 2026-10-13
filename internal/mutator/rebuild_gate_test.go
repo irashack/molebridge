@@ -9,6 +9,8 @@ package mutator
 
 import (
 	"context"
+	"errors"
+	"github.com/irashack/molebridge/internal/contract"
 	"net/netip"
 	"strings"
 	"syscall"
@@ -318,4 +320,242 @@ func TestRulesBetweenNinetyAndNinetySevenAreLeftAloneWhenTheGuardIsNotInPlace(t 
 	}
 	k.fail = nil
 	repairs(t, m, k, spec)
+}
+
+// The reviewer's scenario of round 5. An earlier failed refill left the
+// protective copies at 93 and 97 in place of the originals at 94 and 98, and
+// additions at 94 and 98 keep failing. An exact delete of the copy at 93 fails
+// too, and the fallback deletes by priority; then the rebuild of 97 (its rule
+// is repeated) would clear the remaining copy of the ICMP backstop. No single
+// step is wrong on its own: what is wrong is that the exit's ICMP errors from
+// the tunnel address would reach the host route. The owner asks the policy
+// model before every deletion, and refuses the one that opens that.
+func TestNoDeletionTakesTheLastProtectionOfATrafficClass(t *testing.T) {
+	for _, guard := range []bool{false, true} {
+		t.Run(fmtName(guard, "reviewer scenario"), func(t *testing.T) {
+			m, k, spec := healthyNamespace(t, func(o *Options) { o.GuardRepairs = guard })
+			a := spec.ReturnPath[rtnl.V4][0]
+			var orig94, orig98 rtnl.Rule
+			for _, r := range spec.Rules(rtnl.V4) {
+				switch {
+				case r.Priority == 94 && r.Src.Addr() == a:
+					orig94 = r
+				case r.Priority == 98 && r.Src.Addr() == a:
+					orig98 = r
+				}
+			}
+			_ = k.DelRulePriority(rtnl.V4, 94)
+			_ = k.DelRulePriority(rtnl.V4, 98)
+			copy93, copy97 := orig94, orig98
+			copy93.Priority, copy97.Priority = 93, 97
+			dup97 := rtnl.Rule{Family: rtnl.V4, Priority: 97, Action: rtnl.FRActUnreachable, IifName: spec.Config.OverlayIf}
+			for _, r := range []rtnl.Rule{copy93, copy97} {
+				if err := k.AddRule(r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The kernel refuses an exact repeat; one that arrived some other
+			// way is put in directly.
+			k.mu.Lock()
+			k.rules[rtnl.V4] = append(k.rules[rtnl.V4], dup97)
+			k.mu.Unlock()
+			sortRules(k.rules[rtnl.V4])
+			k.log = nil
+			guardLeaks(t, k, spec)
+			if v := k.escapes(spec); len(v) != 0 {
+				t.Fatalf("the starting point is not protected: %v", v)
+			}
+			k.fail = func(op string) error {
+				switch op {
+				case "add 2 94", "add 2 98":
+					return syscall.ENOMEM
+				case "del 2 93":
+					return syscall.EIO
+				}
+				return nil
+			}
+			res, err := m.ReconcileNow(context.Background(), "x")
+			if res.Verified || err == nil {
+				t.Errorf("verified: %+v %v", res, err)
+			}
+			if v := k.escapes(spec); len(v) != 0 {
+				t.Errorf("the policy model sees an escape at the end: %v", v)
+			}
+			// The ICMP protection is still there, in one form or the other.
+			kept := false
+			for _, r := range k.rules[rtnl.V4] {
+				if r.Src.IsValid() && r.Src.Addr() == a {
+					kept = true
+				}
+			}
+			if !kept {
+				t.Errorf("every rule for %s went: %v", a, k.ruleSummary(rtnl.V4))
+			}
+			k.fail = nil
+			repairs(t, m, k, spec)
+		})
+	}
+}
+
+// A deletion the owner cannot judge is not made: a snapshot that never holds
+// still gives no evidence, and nothing is removed on it.
+func TestADeletionIsNotMadeOnEvidenceThatIsNotStable(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.mu.Lock()
+	k.rules[rtnl.V4] = append(k.rules[rtnl.V4], rtnl.Rule{Family: rtnl.V4, Priority: 93, Action: rtnl.FRActUnreachable, IifName: "eth0"})
+	k.mu.Unlock()
+	sortRules(k.rules[rtnl.V4])
+	err := m.Do(context.Background(), "delete", func(tx *Tx) error {
+		k.unstable = true
+		defer func() { k.unstable = false }()
+		return tx.DelRule(rtnl.Rule{Family: rtnl.V4, Priority: 93, Action: rtnl.FRActUnreachable, IifName: "eth0"})
+	})
+	if !errors.Is(err, ErrUnsafeDeletion) {
+		t.Fatalf("%v", err)
+	}
+	if index(k.log, "del 2 93") >= 0 {
+		t.Error("the rule was deleted on an unstable look")
+	}
+	repairs(t, m, k, spec)
+}
+
+// What the case-by-case gates cannot know: a rule of no priority the contract
+// expects can be the only thing between a class of traffic and the host's
+// route, because the rules that should be there cannot be added. It is not
+// deleted, whatever the plan calls it.
+func TestAForeignRuleThatIsTheOnlyProtectionIsNotDeleted(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(spec contract.Spec, k *fakeKernel) (stray rtnl.Rule)
+		fail  func(op string) error
+	}{
+		{"ICMP from the tunnel address", func(spec contract.Spec, k *fakeKernel) rtnl.Rule {
+			a := spec.ReturnPath[rtnl.V4][0]
+			_ = k.DelRulePriority(rtnl.V4, 94)
+			_ = k.DelRulePriority(rtnl.V4, 98)
+			r := rtnl.Rule{Family: rtnl.V4, Priority: 50, Action: rtnl.FRActUnreachable, Src: netip.PrefixFrom(a, 32), IPProto: rtnl.Some(uint8(1))}
+			if err := k.AddRule(r); err != nil {
+				panic(err)
+			}
+			return r
+		}, func(op string) error {
+			if op == "add 2 94" || op == "add 2 98" {
+				return syscall.ENOMEM
+			}
+			return nil
+		}},
+		{"forwarded traffic from the overlay", func(spec contract.Spec, k *fakeKernel) rtnl.Rule {
+			_ = k.DelRulePriority(rtnl.V4, 95)
+			_ = k.DelRulePriority(rtnl.V4, 97)
+			r := rtnl.Rule{Family: rtnl.V4, Priority: 60, Action: rtnl.FRActUnreachable, IifName: spec.Config.OverlayIf}
+			if err := k.AddRule(r); err != nil {
+				panic(err)
+			}
+			return r
+		}, func(op string) error {
+			if op == "add 2 95" || op == "add 2 97" || op == "add 2 80" { // the temporary guard is another protection
+				return syscall.ENOMEM
+			}
+			return nil
+		}},
+	}
+	for _, guard := range []bool{false, true} {
+		for _, tc := range cases {
+			t.Run(fmtName(guard, tc.name), func(t *testing.T) {
+				m, k, spec := healthyNamespace(t, func(o *Options) { o.GuardRepairs = guard })
+				stray := tc.setup(spec, k)
+				k.log = nil
+				guardLeaks(t, k, spec)
+				if v := k.escapes(spec); len(v) != 0 {
+					t.Fatalf("the starting point is not protected: %v", v)
+				}
+				k.fail = tc.fail
+				res, err := m.ReconcileNow(context.Background(), "x")
+				if res.Verified || err == nil {
+					t.Errorf("verified: %+v %v", res, err)
+				}
+				if v := k.escapes(spec); len(v) != 0 {
+					t.Errorf("the policy model sees an escape: %v", v)
+				}
+				still := false
+				for _, r := range k.rules[rtnl.V4] {
+					if r.Priority == stray.Priority {
+						still = true
+					}
+				}
+				if !still {
+					t.Errorf("the only protection, rule %d, was deleted: %v", stray.Priority, k.ruleSummary(rtnl.V4))
+				}
+				// Once the kernel cooperates the contract is restored and the
+				// foreign rule goes.
+				k.fail = nil
+				repairs(t, m, k, spec)
+			})
+		}
+	}
+}
+
+// Routes that carry a TOS are not the contract's: the reviewer found both IPv4
+// routes of the exit table re-marked TOS 16 and the pass verified with no
+// mutation. They are replaced, and nothing leaks while they are.
+func TestTOSRoutesAreReplacedNotAccepted(t *testing.T) {
+	m, k, spec := healthyNamespace(t)
+	k.mu.Lock()
+	for i := range k.routes[rtnl.V4] {
+		k.routes[rtnl.V4][i].Tos = 16
+	}
+	k.mu.Unlock()
+	guardLeaks(t, k, spec)
+	res := repairs(t, m, k, spec)
+	if !res.Repaired {
+		t.Error("nothing was repaired")
+	}
+	for _, r := range k.routes[rtnl.V4] {
+		if r.Tos != 0 {
+			t.Errorf("a TOS route is still there: %+v", r)
+		}
+	}
+}
+
+// A change moves away from the old address, and its own steps may remove the old
+// pair once the address is gone; while the address is live the pair is still
+// protected, and the deletion is refused.
+func TestAChangeMayRetireTheOldPairOnlyOnceTheAddressIsGone(t *testing.T) {
+	a11, a12 := netip.MustParseAddr("203.0.113.11"), netip.MustParseAddr("203.0.113.12")
+	pairRule := func(spec contract.Spec, prio uint32, a netip.Addr) rtnl.Rule {
+		s := spec.Clone()
+		s.ReturnPath = map[rtnl.Family][]netip.Addr{rtnl.V4: {a}}
+		for _, r := range s.Rules(rtnl.V4) {
+			if r.Priority == prio {
+				return r
+			}
+		}
+		t.Fatal("no rule")
+		return rtnl.Rule{}
+	}
+	h := newPIAHarness(t, piaScenario{name: "x", old: a11, next: a12})
+	h.k.hook = h.observe
+	var whileLive, afterGone error
+	err := h.m.ChangeReturnPath(context.Background(), rtnl.V4, a11, a12, func(tx *Tx) error {
+		h.k.setAddr(rtnl.V4, "mullvad", a12, true)
+		if err := tx.DelRule(pairRule(h.spec, 94, a11)); err != nil { // the backstop still stops it
+			return err
+		}
+		whileLive = tx.DelRule(pairRule(h.spec, 98, a11)) // a11 is still on the interface: its last protection
+		h.k.setAddr(rtnl.V4, "mullvad", a11, false)
+		afterGone = tx.DelRule(pairRule(h.spec, 98, a11))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(whileLive, ErrUnsafeDeletion) {
+		t.Errorf("the pair of a live address was deleted: %v", whileLive)
+	}
+	if afterGone != nil {
+		t.Errorf("the pair of an address that left was refused: %v", afterGone)
+	}
+	if h.violation != "" {
+		t.Error(h.violation)
+	}
 }

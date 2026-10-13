@@ -23,6 +23,12 @@ type Route struct {
 	// Metric is RTA_PRIORITY, 0 when absent.
 	Metric uint32
 	Tos    uint8
+	// Src is the route's source selector (RTA_SRC with the header's source
+	// prefix length: an IPv6 source-specific route), invalid when absent.
+	Src netip.Prefix
+	// Iif is an input-interface selector (RTA_IIF), set only on routes that
+	// match forwarded traffic arriving on that interface.
+	Iif Opt[uint32]
 	// Via, MultiPath, NHID and Encap record attributes that make a route
 	// something other than a plain device or gateway route.
 	Via       bool
@@ -33,6 +39,12 @@ type Route struct {
 	// info, router preference).
 	Other int
 }
+
+// Unconditional reports a route that applies to every packet its destination
+// covers: no TOS, source or input-interface selector narrows it. A route with
+// one is a different route, whatever else it shares with the one the contract
+// installs.
+func (r Route) Unconditional() bool { return r.Tos == 0 && !r.Src.IsValid() && !r.Iif.OK }
 
 // IsDefault reports a zero-length destination.
 func (r Route) IsDefault() bool { return r.Dst.IsValid() && r.Dst.Bits() == 0 }
@@ -65,6 +77,10 @@ func DecodeRoute(data []byte) (Route, error) {
 	if dstLen > family.Bits() {
 		return Route{}, fmt.Errorf("%w: route prefix length %d", ErrMalformed, dstLen)
 	}
+	srcLen := int(data[2])
+	if srcLen > family.Bits() {
+		return Route{}, fmt.Errorf("%w: route source prefix length %d", ErrMalformed, srcLen)
+	}
 	zero := netip.IPv4Unspecified()
 	if family == V6 {
 		zero = netip.IPv6Unspecified()
@@ -84,6 +100,18 @@ func DecodeRoute(data []byte) (Route, error) {
 			}
 			r.Dst = netip.PrefixFrom(addr, dstLen)
 			haveDst = true
+		case rtaSrc:
+			addr, ok := attrAddr(family, a.data)
+			if !ok {
+				return Route{}, fmt.Errorf("%w: route source selector", ErrMalformed)
+			}
+			r.Src = netip.PrefixFrom(addr, srcLen)
+		case rtaIif:
+			if v, ok := attrU32(a.data); ok {
+				r.Iif = Some(v)
+			} else {
+				return Route{}, fmt.Errorf("%w: route iif", ErrMalformed)
+			}
 		case rtaOif:
 			if v, ok := attrU32(a.data); ok {
 				r.Oif = Some(v)
@@ -144,6 +172,9 @@ func (r Route) Marshal() []byte {
 	if r.Dst.IsValid() {
 		hdr[1] = uint8(r.Dst.Bits())
 	}
+	if r.Src.IsValid() {
+		hdr[2] = uint8(r.Src.Bits())
+	}
 	hdr[3] = r.Tos
 	if r.Table < 256 {
 		hdr[4] = uint8(r.Table)
@@ -157,6 +188,12 @@ func (r Route) Marshal() []byte {
 	b := hdr
 	if r.Dst.IsValid() && r.Dst.Bits() > 0 {
 		b = appendAttr(b, rtaDst, addrBytes(r.Dst.Addr()))
+	}
+	if r.Src.IsValid() && r.Src.Bits() > 0 {
+		b = appendAttr(b, rtaSrc, addrBytes(r.Src.Addr()))
+	}
+	if r.Iif.OK {
+		b = appendAttrU32(b, rtaIif, r.Iif.V)
 	}
 	if r.Oif.OK {
 		b = appendAttrU32(b, rtaOif, r.Oif.V)

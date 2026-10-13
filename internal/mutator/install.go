@@ -157,6 +157,9 @@ func (m *Mutator) ChangeReturnPath(ctx context.Context, f rtnl.Family, old, next
 				fmt.Errorf("the new %s return-path rules could not be confirmed: %w", f, orUnverified(res.Err)),
 				tx.settle(before, both, f, old, next, true))
 		}
+		if old.IsValid() && old != next {
+			tx.retiring = map[netip.Addr]bool{old: true}
+		}
 		// The callback is about to change what the last verdict was about. From
 		// here until a stable pass verifies the result there is no verdict.
 		tx.unverified("a return-path change is in progress")

@@ -106,7 +106,7 @@ func glSnapshot() *rtnl.Snapshot {
 			}
 		}
 		s.Routes[f] = []rtnl.Route{
-			{Family: f, Dst: zero(f), Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIfIndex))},
+			tunnelRoute(f),
 			fallbackRoute(f),
 		}
 	}
