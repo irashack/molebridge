@@ -156,7 +156,7 @@ only the peer. The exit holds no NordVPN credential. What differs:
   seconds, and needs more memory to parse it: the Compose files give the exit
   container 512 MiB, which is sized for it. The validated `relays.json` it keeps
   is much smaller, about 1.5 MB for some 5,300 servers, and may grow to
-  16 MiB; a refresh that would exceed that keeps the last good catalogue. Only online standard servers with the
+  16 MiB; a refresh that would exceed that keeps the last good catalog. Only online standard servers with the
   VPN service, a WireGuard key and one location are listed; dedicated-IP,
   Double VPN, Onion over VPN and obfuscated servers are left out. Servers in
   NordVPN's virtual locations are labeled "virtual".
@@ -320,7 +320,7 @@ provider needs:
   `checks.egress` in the status record; prefer it whenever the provider has such an
   endpoint. `tunnel` means it has none: the default hook then runs the shared tunnel
   checks instead (two IP echo services through the tunnel that agree, an address
-  different from the host's own, a match against any exit addresses the catalogue
+  different from the host's own, a match against any exit addresses the catalog
   lists, and a fresh handshake), and the panel shows a connected exit with a "tunnel
   checks only" label. [Architecture](architecture.md#egress-tiers) describes both;
 - a generator for its tunnel config in `internal/tools`, and its case in the config

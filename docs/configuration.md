@@ -149,7 +149,7 @@ bound on a monitor's step, and the 15-second stop budget
 
 ### A server set in configuration
 
-Set `SERVER` in `.env` to a name from your provider's relay catalogue: a
+Set `SERVER` in `.env` to a name from your provider's relay catalog: a
 server hostname for native Mullvad, native NordVPN and the gluetun backend,
 or a region id for PIA. Use the exact name, without spaces, a port, a URL or
 a comma-separated list. Leave it empty to keep the existing panel behavior.
@@ -163,8 +163,8 @@ with the configured name and no switching controls.
 
 The exit treats `SERVER` as untrusted input. It uses the same name
 validation as a desired-state request and requires membership in a fresh
-trusted catalogue for the configured provider. PIA's port-forwarding filter
-still applies. If no fresh catalogue is available, the request waits and
+trusted catalog for the configured provider. PIA's port-forwarding filter
+still applies. If no fresh catalog is available, the request waits and
 retries when one becomes available. An invalid or unknown name reports a
 failed status with the name quoted, for example:
 
@@ -192,7 +192,7 @@ the panel cannot know the setting; the exit still ignores its requests.
 
 With gluetun, `GLUETUN_SERVER_*` filters still control gluetun's first
 connection, before the exit runs. `SERVER` takes over once the exit has a
-fresh catalogue and can apply it.
+fresh catalog and can apply it.
 
 ### Panel sign-in
 
@@ -476,15 +476,15 @@ same reason, and the exit warns when it is not `1`. See
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 exit snapshots are mode 0644 so the non-root panel can read them; requests
-are mode 0600. The panel cannot write the applier directory. Catalogue refresh
-is every six hours (one-minute retry on failure), maximum catalogue age is 24
+are mode 0600. The panel cannot write the applier directory. Catalog refresh
+is every six hours (one-minute retry on failure), maximum catalog age is 24
 hours, and maximum status age is 150 seconds. A server list download may take
 20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. With the
 gluetun backend nothing is downloaded: the exit reads gluetun's server
 file, up to 32 MiB, every minute when it changed and at least every six
 hours. The validated `relays.json` may be 10 MiB, NordVPN's and gluetun's
 16 MiB; the exit refuses to write a larger one and keeps the last good
-catalogue, reporting it in `relay-error.json` like any failed refresh, and
+catalog, reporting it in `relay-error.json` like any failed refresh, and
 neither the exit nor the panel reads a larger one. These are fixed safety
 defaults, set per provider in `internal/providers`.
 

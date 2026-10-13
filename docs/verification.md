@@ -104,7 +104,7 @@ come from the config, as with Mullvad; IPv6 stays blocked as on PIA.
 5. Check the trust boundary. The panel can read `state/applier/relays.json` but
    cannot write the applier mount (`docker exec molebridge-switchyard touch
    /state/applier/x` must fail with a read-only filesystem). The old panel-owned
-   catalogue is ignored. A malformed desired file and a valid request for an
+   catalog is ignored. A malformed desired file and a valid request for an
    unlisted name must report failure without changing the peer. A valid request has
    `server`, `requested_at` (current UTC `YYYY-MM-DDTHH:MM:SSZ`) and an optional
    32-character lowercase hexadecimal `request_id`. Use a fictitious unlisted name
@@ -325,7 +325,7 @@ identity. With the gluetun forms, recreate gluetun alone outside Compose and con
 [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace) fails for the exit, then
 recover. Repeat with a non-default `OVERLAY_IF` and confirm NetBird creates that interface.
 
-Start with a saved desired selection, an expired catalogue and an unavailable relay API. Confirm no peer change
+Start with a saved desired selection, an expired catalog and an unavailable relay API. Confirm no peer change
 occurs and the result says the request will retry. Restore the API and confirm the same request is applied
 automatically. An unlisted request is not retried until the server list's names change or you select again, and a
 malformed one until you select again; a failed peer update is retried on its backoff.
