@@ -15,4 +15,5 @@ exec docker run --rm --privileged ${DRILL_CPUS:+--cpus="$DRILL_CPUS"} \
     -v "$here":/src -w /src \
     -v molebridge-drill-gocache:/root/.cache/go-build \
     -e GOFLAGS=-mod=vendor -e CGO_ENABLED=0 \
+    ${MOLEBRIDGE_RTNL_NOTIFY_LOCKED:+-e MOLEBRIDGE_RTNL_NOTIFY_LOCKED="$MOLEBRIDGE_RTNL_NOTIFY_LOCKED"} \
     "$image" go test -tags drill "$@"
