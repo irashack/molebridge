@@ -10,18 +10,25 @@ import (
 )
 
 // State is what the model judges: the contract, the rules of both families, the
-// routes of the tables the snapshot read, and the addresses live on the tunnel
-// interface.
+// routes of the tables the snapshot read, the interfaces and the addresses.
 type State struct {
 	Spec  contract.Spec
 	Rules map[rtnl.Family][]rtnl.Rule
 	// Routes by family and table; only tables in Known are present. A table
-	// that is not known is assumed to answer every lookup (the worst case).
+	// that is not known may or may not answer a lookup, and through any device.
 	Routes map[rtnl.Family]map[uint32][]rtnl.Route
 	Known  map[uint32]bool
 	// Live are the global addresses on the tunnel interface, per family.
 	Live map[rtnl.Family][]netip.Addr
+	// Locals are every address of the namespace (the local table answers for
+	// them), per family.
+	Locals map[rtnl.Family][]netip.Addr
+	// ExitIdx, HostIdx and OverlayIdx are the interface indexes of the
+	// contract's interfaces, 0 for one that does not exist.
+	ExitIdx, HostIdx, OverlayIdx uint32
 }
+
+var families = []rtnl.Family{rtnl.V4, rtnl.V6}
 
 // FromSnapshot builds the state from a snapshot taken for spec.Interest().
 func FromSnapshot(spec contract.Spec, snap *rtnl.Snapshot) State {
@@ -31,27 +38,42 @@ func FromSnapshot(spec contract.Spec, snap *rtnl.Snapshot) State {
 		Routes: map[rtnl.Family]map[uint32][]rtnl.Route{},
 		Known:  map[uint32]bool{},
 		Live:   map[rtnl.Family][]netip.Addr{},
+		Locals: map[rtnl.Family][]netip.Addr{},
 	}
+	c := spec.Config
 	for _, t := range spec.Interest().Tables {
 		s.Known[t] = true
 	}
-	link, haveLink := snap.Link(spec.Config.ExitIf)
-	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
-		s.Rules[f] = append([]rtnl.Rule(nil), snap.Rules[f]...)
-		sort.SliceStable(s.Rules[f], func(i, j int) bool { return s.Rules[f][i].Priority < s.Rules[f][j].Priority })
+	link, haveLink := snap.Link(c.ExitIf)
+	if haveLink {
+		s.ExitIdx = link.Index
+	}
+	if l, ok := snap.Link(c.HostIf); ok && c.HostIf != "" {
+		s.HostIdx = l.Index
+	}
+	if l, ok := snap.Link(c.OverlayIf); ok {
+		s.OverlayIdx = l.Index
+	}
+	for _, f := range families {
+		s.Rules[f] = sortedRules(snap.Rules[f])
 		s.Routes[f] = map[uint32][]rtnl.Route{}
 		for t := range s.Known {
 			s.Routes[f][t] = snap.RoutesInTable(f, t)
 		}
-		if haveLink {
-			for _, a := range snap.Addrs[f] {
-				if a.Index == link.Index && a.Global() {
-					s.Live[f] = append(s.Live[f], a.Local.Addr())
-				}
+		for _, a := range snap.Addrs[f] {
+			s.Locals[f] = append(s.Locals[f], a.Local.Addr())
+			if haveLink && a.Index == link.Index && a.Global() {
+				s.Live[f] = append(s.Live[f], a.Local.Addr())
 			}
 		}
 	}
 	return s
+}
+
+func sortedRules(in []rtnl.Rule) []rtnl.Rule {
+	out := append([]rtnl.Rule(nil), in...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Priority < out[j].Priority })
+	return out
 }
 
 // clone copies the parts a deletion edits.
@@ -72,7 +94,8 @@ func (s State) clone() State {
 }
 
 // WithoutRule returns the state after the kernel deletes the first rule (in
-// priority order) that has every attribute of req, and whether there was one.
+// priority order) that the request names, as rtnl.DeleteMatches defines it,
+// and whether there was one.
 func (s State) WithoutRule(req rtnl.Rule) (State, bool) {
 	out := s.clone()
 	rules := out.Rules[req.Family]
@@ -99,9 +122,11 @@ func (s State) WithoutPriority(f rtnl.Family, priority uint32) (State, bool) {
 	return s, false
 }
 
-// WithoutRoute returns the state after the kernel deletes the route r names:
-// the first route of its table with the same destination, type, interface,
-// gateway and, when it gives one, metric.
+// WithoutRoute returns the state after the kernel deletes the first route of
+// the request's table that it names: fib_table_delete for IPv4 (destination,
+// TOS, type, metric, scope and protocol when the request gives them, then the
+// nexthop's device and gateway) and ip6_route_del for IPv6 (destination,
+// source, metric, then device and gateway).
 func (s State) WithoutRoute(r rtnl.Route) (State, bool) {
 	out := s.clone()
 	routes, known := out.Routes[r.Family][r.Table]
@@ -109,196 +134,116 @@ func (s State) WithoutRoute(r rtnl.Route) (State, bool) {
 		return s, false
 	}
 	for i, x := range routes {
-		if x.Dst == r.Dst && (r.Type == 0 || x.Type == r.Type) && (r.Metric == 0 || x.Metric == r.Metric) && (r.Tos == 0 || x.Tos == r.Tos) &&
-			(!r.Oif.OK || x.Oif == r.Oif) && (!r.Gateway.IsValid() || x.Gateway == r.Gateway) {
-			out.Routes[r.Family][r.Table] = append(routes[:i:i], routes[i+1:]...)
-			return out, true
+		if x.Dst != r.Dst || (r.Metric != 0 && x.Metric != r.Metric) {
+			continue
 		}
+		if r.Oif.OK && x.Oif != r.Oif || r.Gateway.IsValid() && x.Gateway != r.Gateway {
+			continue
+		}
+		if r.Family == rtnl.V4 {
+			if r.Tos != 0 && x.Tos != r.Tos || r.Type != 0 && x.Type != r.Type || x.Scope != r.Scope || r.Protocol != 0 && x.Protocol != r.Protocol {
+				continue
+			}
+		} else if r.Src.IsValid() && r.Src.Bits() > 0 && x.Src != r.Src {
+			continue
+		}
+		out.Routes[r.Family][r.Table] = append(routes[:i:i], routes[i+1:]...)
+		return out, true
 	}
 	return s, false
 }
 
-// Outcome is where a lookup ends.
+// ---- outcomes ----
+
+type outKind uint8
+
+const (
+	// stopped: the lookup is refused (an unreachable, blackhole or prohibit
+	// rule or route, or no rule answered).
+	stopped outKind = iota + 1
+	// local: the local table answered.
+	local
+	// viaDev: a route in a table the snapshot read answered, out of a device.
+	viaDev
+	// viaTable: a table the snapshot did not read may have answered, out of
+	// any device.
+	viaTable
+)
+
+const unknownDev = ^uint32(0)
+
+// Outcome is where a lookup can end: the selected route's disposition.
 type Outcome struct {
-	// Unreachable: the lookup is refused (an unreachable, blackhole or
-	// prohibit rule or route, or no rule answered).
-	Unreachable bool
-	// Table is the table whose route answered.
+	Kind  outKind
 	Table uint32
+	Dev   uint32
 }
 
 func (o Outcome) String() string {
-	if o.Unreachable {
+	switch o.Kind {
+	case stopped:
 		return "stopped"
-	}
-	switch o.Table {
-	case rtnl.TableMain:
-		return "the main table"
-	case rtnl.TableLocal:
+	case local:
 		return "local delivery"
+	case viaTable:
+		return fmt.Sprintf("table %d (not read)", o.Table)
 	}
-	return fmt.Sprintf("table %d", o.Table)
+	if o.Dev == unknownDev {
+		return fmt.Sprintf("a route of table %d out of an unknown device", o.Table)
+	}
+	return fmt.Sprintf("a route of table %d out of interface %d", o.Table, o.Dev)
 }
 
-// Probe is one class of protected traffic.
-type Probe struct {
-	Name   string
-	Family rtnl.Family
-	// Iif is the input interface: the overlay for traffic arriving there, "lo"
-	// for what the exit sends itself.
-	Iif      string
-	Mark     uint32
-	Src, Dst netip.Addr
-	Proto    uint8
-	// DstLocal says Dst is an address of the exit (the local table answers).
-	DstLocal bool
-	// Allowed are the tables a lookup for the probe may end in; being stopped
-	// is always allowed.
-	Allowed []uint32
+// class says which outcomes are safe for a packet.
+type class struct {
+	name string
+	// any: nothing is asked of this packet.
+	any bool
+	// devs are the devices a route may send it out of; tables the tables not
+	// read that may answer it. Being stopped is always safe.
+	devs, tables []uint32
 }
 
-func (p Probe) allows(o Outcome) bool {
-	if o.Unreachable {
+func (c class) allows(o Outcome) bool {
+	if c.any || o.Kind == stopped {
 		return true
 	}
-	for _, t := range p.Allowed {
-		if t == o.Table {
-			return true
+	switch o.Kind {
+	case viaDev:
+		for _, d := range c.devs {
+			if d == o.Dev && d != 0 && d != unknownDev {
+				return true
+			}
+		}
+	case viaTable:
+		for _, t := range c.tables {
+			if t == o.Table {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-// Violation is a probe that can reach a forbidden place.
-type Violation struct {
-	Probe   string
-	Outcome string
+// ---- packets ----
+
+// packet is one point of a class of traffic: the attributes rules select on
+// that the model knows. TOS, ports, uid and the like are not here: a rule that
+// selects on them may apply or not, and both are followed.
+type packet struct {
+	f        rtnl.Family
+	iif      string
+	mark     uint32
+	proto    uint8
+	src, dst netip.Addr
 }
 
-func (v Violation) String() string { return fmt.Sprintf("%s reaches %s", v.Probe, v.Outcome) }
-
-var (
-	outside4 = netip.MustParseAddr("8.8.8.8")
-	outside6 = netip.MustParseAddr("2001:4860:4860::8888")
-)
-
-func outside(f rtnl.Family) netip.Addr {
-	if f == rtnl.V6 {
-		return outside6
+func (p packet) String() string {
+	src := "unbound"
+	if p.src.IsValid() && !p.src.IsUnspecified() {
+		src = p.src.String()
 	}
-	return outside4
-}
-
-func icmp(f rtnl.Family) uint8 {
-	if f == rtnl.V6 {
-		return 58
-	}
-	return 1
-}
-
-// clientAddr is an address inside the overlay, not the exit's own.
-func clientAddr(p netip.Prefix) netip.Addr {
-	a := p.Masked().Addr().Next()
-	if p.Bits() >= p.Addr().BitLen()-1 {
-		return p.Addr()
-	}
-	return a.Next()
-}
-
-// exitAddr is the exit's own address in the overlay.
-func exitAddr(p netip.Prefix) netip.Addr {
-	if p.Bits() >= p.Addr().BitLen()-1 {
-		return p.Addr()
-	}
-	return p.Masked().Addr().Next()
-}
-
-// Probes lists the classes of protected traffic for the state.
-func (s State) Probes() []Probe {
-	c := s.Spec.Config
-	if c.IsSidecar() {
-		return nil
-	}
-	var out []Probe
-	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
-		overlay := c.OverlayFor(f)
-		var live []netip.Addr
-		live = append(live, s.Live[f]...)
-		live = append(live, s.Spec.ReturnPath[f]...)
-		live = dedupe(live)
-		marks := []uint32{0}
-		if c.IsGluetun() {
-			marks = []uint32{0, c.ControlMark, c.ControlMark | 0x21, contract.GluetunMark}
-		}
-		if overlay.IsValid() {
-			client := clientAddr(overlay)
-			for _, m := range marks {
-				out = append(out, Probe{Name: fmt.Sprintf("%s traffic forwarded from %s (mark %#x)", f, c.OverlayIf, m), Family: f,
-					Iif: c.OverlayIf, Mark: m, Src: client, Dst: outside(f), Proto: 6, Allowed: []uint32{c.Table}})
-			}
-			out = append(out, Probe{Name: fmt.Sprintf("%s traffic from %s to the exit's own address", f, c.OverlayIf), Family: f,
-				Iif: c.OverlayIf, Src: client, Dst: exitAddr(overlay), Proto: 6, DstLocal: true, Allowed: []uint32{c.Table}})
-			if c.IsGluetun() {
-				out = append(out, Probe{Name: fmt.Sprintf("%s traffic the exit sends to a client of %s", f, c.OverlayIf), Family: f,
-					Iif: "lo", Src: netip.Addr{}, Dst: client, Proto: 1, Allowed: []uint32{rtnl.TableMain}})
-			}
-		}
-		for _, a := range live {
-			out = append(out, Probe{Name: fmt.Sprintf("%s ICMP the exit sends from tunnel address %s", f, a), Family: f,
-				Iif: "lo", Src: a, Dst: outside(f), Proto: icmp(f), Allowed: []uint32{c.Table}})
-		}
-		if c.IsGluetun() {
-			out = append(out,
-				Probe{Name: fmt.Sprintf("%s traffic the exit sends unmarked", f), Family: f,
-					Iif: "lo", Dst: outside(f), Proto: 17, Allowed: []uint32{contract.GluetunMark}},
-				Probe{Name: fmt.Sprintf("%s control-marked traffic the exit sends (%#x)", f, c.ControlMark), Family: f,
-					Iif: "lo", Mark: c.ControlMark, Dst: outside(f), Proto: 17, Allowed: []uint32{c.HostTable}})
-		}
-	}
-	return out
-}
-
-func dedupe(addrs []netip.Addr) []netip.Addr {
-	seen := map[netip.Addr]bool{}
-	var out []netip.Addr
-	for _, a := range addrs {
-		if a.IsValid() && !seen[a] {
-			seen[a] = true
-			out = append(out, a)
-		}
-	}
-	return out
-}
-
-// Violations lists every class that can reach a place the contract forbids.
-func (s State) Violations() []Violation {
-	var out []Violation
-	for _, p := range s.Probes() {
-		for _, o := range s.outcomes(p) {
-			if !p.allows(o) {
-				out = append(out, Violation{Probe: p.Name, Outcome: o.String()})
-				break
-			}
-		}
-	}
-	return out
-}
-
-// Worsened returns the violations of after that are not in before: classes a
-// change turned from safe into an escape. A class that already escaped is not
-// counted again.
-func Worsened(before, after []Violation) []Violation {
-	had := map[string]bool{}
-	for _, v := range before {
-		had[v.Probe] = true
-	}
-	var out []Violation
-	for _, v := range after {
-		if !had[v.Probe] {
-			out = append(out, v)
-		}
-	}
-	return out
+	return fmt.Sprintf("%s packet in on %s mark %#x ipproto %d from %s to %s", p.f, p.iif, p.mark, p.proto, src, p.dst)
 }
 
 type tri uint8
@@ -309,38 +254,43 @@ const (
 	maybe
 )
 
-// matches evaluates a rule's selectors for a probe.
-func matches(r rtnl.Rule, p Probe, overlay netip.Prefix) tri {
-	res := yes
-	if r.IifName != "" && r.IifName != p.Iif {
-		res = no
+// matches evaluates a rule's selectors for a packet: yes, no, or maybe when a
+// selector the model cannot evaluate exactly (TOS, uid range, ports, l3mdev,
+// suppress_ifgroup, source-address lookup, an attribute of a newer kernel)
+// decides it.
+func matches(r rtnl.Rule, p packet) tri {
+	known := yes
+	if r.IifName != "" && r.IifName != p.iif {
+		known = no
 	}
-	if r.OifName != "" {
-		res = no // no output interface is known at the lookups modeled
+	if known != no && r.OifName != "" && p.iif != "lo" {
+		known = no // a forwarded packet has no output interface at the lookup
 	}
-	if res != no && r.Src.IsValid() && r.Src.Bits() > 0 {
-		if !p.Src.IsValid() || !r.Src.Contains(p.Src) {
-			res = no
-		}
+	if known != no && r.Src.IsValid() && r.Src.Bits() > 0 && (!p.src.IsValid() || !r.Src.Contains(p.src)) {
+		known = no
 	}
-	if res != no && r.Dst.IsValid() && r.Dst.Bits() > 0 && !r.Dst.Contains(p.Dst) {
-		res = no
+	if known != no && r.Dst.IsValid() && r.Dst.Bits() > 0 && !r.Dst.Contains(p.dst) {
+		known = no
 	}
-	if res != no && r.FwMark.OK {
+	if known != no && r.FwMark.OK {
 		mask := uint32(0xffffffff)
 		if r.FwMask.OK {
 			mask = r.FwMask.V
 		}
-		if (r.FwMark.V^p.Mark)&mask != 0 {
-			res = no
+		if (r.FwMark.V^p.mark)&mask != 0 {
+			known = no
 		}
 	}
-	if res != no && r.IPProto.OK && r.IPProto.V != p.Proto {
-		res = no
+	if known != no && r.IPProto.OK && r.IPProto.V != 0 && r.IPProto.V != p.proto {
+		known = no
 	}
-	if res == yes && (len(r.Unknown) > 0 || r.Tos != 0 || r.L3Mdev.OK || r.Bad || r.SuppressIfGroup.OK) {
-		// Selectors the model does not follow: they may exclude the packet.
-		res = maybe
+	res := known
+	if known == yes {
+		unknown := len(r.Unknown) > 0 || r.Tos != 0 || (r.L3Mdev.OK && r.L3Mdev.V != 0) || r.Bad ||
+			r.ExtraFlags() != 0 || (r.OifName != "" && p.iif == "lo")
+		if unknown {
+			res = maybe
+		}
 	}
 	if r.Invert() {
 		switch res {
@@ -353,111 +303,174 @@ func matches(r rtnl.Rule, p Probe, overlay netip.Prefix) tri {
 	return res
 }
 
-// lookup follows a rule that looks a table up: it ends the search with an
-// outcome, or falls through to the next rule.
-func (s State) lookup(r rtnl.Rule, p Probe, overlay netip.Prefix) (Outcome, bool) {
-	table := r.Table
-	if table == rtnl.TableLocal {
-		if p.DstLocal {
-			return Outcome{Table: table}, true
+// ---- lookups ----
+
+// disposition is what one route does with a packet.
+func (s State) disposition(rt rtnl.Route) (o Outcome, fall bool) {
+	switch rt.Type {
+	case rtnl.RTNUnreachable, rtnl.RTNBlackhole, rtnl.RTNProhibit:
+		return Outcome{Kind: stopped}, false
+	case rtnl.RTNThrow:
+		return Outcome{}, true
+	case rtnl.RTNUnicast:
+		if rt.Oif.OK && !rt.MultiPath && !rt.NHID.OK && !rt.Via && !rt.Encap {
+			return Outcome{Kind: viaDev, Table: rt.Table, Dev: rt.Oif.V}, false
 		}
-		return Outcome{}, false
 	}
-	suppress := -1
-	if r.SuppressPrefixLen.OK && r.SuppressPrefixLen.V != 0xffffffff {
-		suppress = int(r.SuppressPrefixLen.V)
-	}
-	if s.Known[table] {
-		var best *rtnl.Route
-		for i := range s.Routes[p.Family][table] {
-			rt := &s.Routes[p.Family][table][i]
-			if !rt.Dst.IsValid() || !rt.Dst.Contains(p.Dst) {
-				continue
-			}
-			if best == nil || rt.Dst.Bits() > best.Dst.Bits() || rt.Dst.Bits() == best.Dst.Bits() && rt.Metric < best.Metric {
-				best = rt
-			}
-		}
-		if best == nil {
-			return Outcome{}, false
-		}
-		switch best.Type {
-		case rtnl.RTNUnreachable, rtnl.RTNBlackhole, rtnl.RTNProhibit:
-			return Outcome{Unreachable: true}, true
-		case rtnl.RTNThrow:
-			return Outcome{}, false
-		}
-		if suppress >= 0 && best.Dst.Bits() <= suppress {
-			return Outcome{}, false
-		}
-		return Outcome{Table: table}, true
-	}
-	// A table the snapshot did not read answers with a default route, and the
-	// main table also with the overlay's connected route.
-	bits := 0
-	if table == rtnl.TableMain && overlay.IsValid() && overlay.Contains(p.Dst) {
-		bits = overlay.Bits()
-	}
-	if suppress >= 0 && bits <= suppress {
-		return Outcome{}, false
-	}
-	return Outcome{Table: table}, true
+	// Multipath, nexthop objects, encapsulation, local and broadcast routes,
+	// a gateway with no device: the device is not known.
+	return Outcome{Kind: viaDev, Table: rt.Table, Dev: unknownDev}, false
 }
 
-// outcomes follows the probe through the rules and returns every place it can
-// end (more than one only through rules with selectors the model cannot
-// decide).
-func (s State) outcomes(p Probe) []Outcome {
-	rules := s.Rules[p.Family]
-	overlay := s.Spec.Config.OverlayFor(p.Family)
-	var out []Outcome
-	add := func(o Outcome) {
-		for _, x := range out {
-			if x == o {
-				return
+// routeDefinite: a route that applies to every packet its destination covers
+// and is usable. Anything else may or may not be chosen.
+func routeDefinite(rt rtnl.Route) bool {
+	return rt.Unconditional() && rt.Flags&(rtnl.RTNHFDead|rtnl.RTNHFLinkdown|rtnl.RTNHFUnresolved) == 0
+}
+
+// lookup follows a rule that looks a table up: the outcomes it can end the
+// search in, and whether the search can fall through to the next rule.
+func (s State) lookup(r rtnl.Rule, p packet) (outs []Outcome, fall bool) {
+	table := r.Table
+	if table == rtnl.TableLocal {
+		for _, a := range s.Locals[p.f] {
+			if a == p.dst {
+				return []Outcome{{Kind: local, Table: table}}, false
 			}
 		}
-		out = append(out, o)
+		if p.dst.IsLoopback() {
+			return []Outcome{{Kind: local, Table: table}}, false
+		}
+		return nil, true
 	}
-	for i := 0; i < len(rules); i++ {
-		r := rules[i]
-		m := matches(r, p, overlay)
-		if m == no {
+	if !s.Known[table] {
+		return []Outcome{{Kind: viaTable, Table: table}}, true
+	}
+	suppress := -1
+	if r.SuppressPrefixLen.OK {
+		suppress = int(r.SuppressPrefixLen.V)
+	}
+	ifgroup := r.SuppressIfGroup.OK
+	byBits := map[int][]rtnl.Route{}
+	var bits []int
+	for _, rt := range s.Routes[p.f][table] {
+		if !rt.Dst.IsValid() || !rt.Dst.Contains(p.dst) {
 			continue
 		}
-		var o Outcome
-		stop := false
-		jump := -1
+		b := rt.Dst.Bits()
+		if _, ok := byBits[b]; !ok {
+			bits = append(bits, b)
+		}
+		byBits[b] = append(byBits[b], rt)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(bits)))
+	add := func(o Outcome, f bool, b int) {
+		if f {
+			fall = true
+			return
+		}
+		if o.Kind == stopped { // an error, not a result: nothing suppresses it
+			outs = append(outs, o)
+			return
+		}
+		if suppress >= 0 && b <= suppress {
+			fall = true // the result is thrown away; the next rule is tried
+			return
+		}
+		outs = append(outs, o)
+		if ifgroup {
+			fall = true
+		}
+	}
+	for _, b := range bits {
+		var best *rtnl.Route
+		group := byBits[b]
+		for i := range group {
+			rt := group[i]
+			if routeDefinite(rt) {
+				if best == nil || rt.Metric < best.Metric {
+					cp := rt
+					best = &cp
+				}
+				continue
+			}
+			o, f := s.disposition(rt)
+			add(o, f, b)
+		}
+		if best != nil {
+			o, f := s.disposition(*best)
+			add(o, f, b)
+			return outs, fall
+		}
+	}
+	// No route answered: the lookup falls through.
+	return outs, true
+}
+
+// ---- the rule walk ----
+
+// walk follows a packet through the rules and returns every place it can end.
+// Rules whose selectors the model cannot decide are followed both ways, a
+// goto both to its target and past it, and a lookup that can fail both ways.
+func (s State) walk(p packet) []Outcome {
+	rules := s.Rules[p.f]
+	n := len(rules)
+	// sets[i] are the outcomes of the walk that arrives at rule i.
+	sets := make([][]Outcome, n+1)
+	sets[n] = []Outcome{{Kind: stopped}} // no rule answered: the lookup fails
+	union := func(a, b []Outcome) []Outcome {
+		out := append([]Outcome(nil), a...)
+		for _, o := range b {
+			dup := false
+			for _, x := range out {
+				if x == o {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				out = append(out, o)
+			}
+		}
+		return out
+	}
+	for i := n - 1; i >= 0; i-- {
+		r := rules[i]
+		m := matches(r, p)
+		if m == no {
+			sets[i] = sets[i+1]
+			continue
+		}
+		var taken []Outcome
 		switch r.Action {
 		case rtnl.FRActToTbl:
-			o, stop = s.lookup(r, p, overlay)
+			outs, fall := s.lookup(r, p)
+			taken = outs
+			if fall {
+				taken = union(taken, sets[i+1])
+			}
 		case rtnl.FRActUnreachable, rtnl.FRActProhibit, rtnl.FRActBlackhole:
-			o, stop = Outcome{Unreachable: true}, true
+			taken = []Outcome{{Kind: stopped}}
 		case rtnl.FRActGoto:
-			if r.Goto.OK && r.Flags&rtnl.FIBRuleUnresolved == 0 {
-				for j := i + 1; j < len(rules); j++ {
-					if rules[j].Priority >= r.Goto.V {
-						jump = j
+			taken = sets[i+1] // an unresolved goto falls through
+			if r.Goto.OK {
+				// The kernel resolves the target to the first rule after this
+				// one with exactly that priority; with none (it was deleted)
+				// the goto does nothing.
+				for j := i + 1; j < n; j++ {
+					if rules[j].Priority == r.Goto.V {
+						taken = sets[j]
 						break
 					}
 				}
 			}
+		default:
+			taken = sets[i+1]
 		}
 		if m == maybe {
-			if stop {
-				add(o)
-			}
-			continue
+			taken = union(taken, sets[i+1])
 		}
-		if stop {
-			add(o)
-			return out
-		}
-		if jump >= 0 {
-			i = jump - 1
-		}
+		sets[i] = taken
 	}
-	// No rule answered: the lookup fails.
-	add(Outcome{Unreachable: true})
-	return out
+	return sets[0]
 }

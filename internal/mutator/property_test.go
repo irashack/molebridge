@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/netip"
 	"syscall"
 	"testing"
 
@@ -40,6 +41,58 @@ func (s kernelState) restore(k *fakeKernel) {
 	}
 }
 
+// extraFault adds what the round-6 review found the model must handle: routes
+// out of the wrong device, TOS routes, gotos, explicit zero marks and rules
+// with selectors that cannot be followed.
+func extraFault(rng *rand.Rand, k *fakeKernel, spec contract.Spec) string {
+	f := families[rng.Intn(2)]
+	owned := []uint32{1, 90, 94, 95, 96, 97, 98}
+	p := owned[rng.Intn(len(owned))]
+	switch rng.Intn(6) {
+	case 0: // a default route out of the host interface in the exit table
+		k.routes[f] = append(k.routes[f], rtnl.Route{Family: f, Dst: netip.PrefixFrom(map[rtnl.Family]netip.Addr{4: netip.IPv4Unspecified(), 6: netip.IPv6Unspecified()}[f], 0),
+			Table: 51821, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(2)), Metric: uint32([]int{0, 100, 5000}[rng.Intn(3)])})
+		return fmt.Sprintf("host default in the exit table %s", f)
+	case 1: // the fallback with a TOS
+		for _, r := range k.routes[f] {
+			if r.Type == rtnl.RTNUnreachable {
+				r.Tos = 16
+				k.routes[f] = append(k.routes[f], r)
+				return fmt.Sprintf("TOS fallback %s", f)
+			}
+		}
+	case 2: // a goto
+		prio := uint32(rng.Intn(99))
+		_ = k.AddRule(rtnl.Rule{Family: f, Priority: prio, Action: rtnl.FRActGoto, Goto: rtnl.Some(prio + 1 + uint32(rng.Intn(60)))})
+		return fmt.Sprintf("goto at %d", prio)
+	case 3: // an explicit zero mark on a copy
+		for _, r := range k.rules[f] {
+			if r.Priority == p {
+				r.FwMark, r.FwMask = rtnl.Some(uint32(0)), rtnl.Some(uint32(0xffffffff))
+				k.rules[f] = append(k.rules[f], r)
+				return fmt.Sprintf("zero-mark copy %s %d", f, p)
+			}
+		}
+	case 4: // a TOS copy of a protective rule
+		for _, r := range k.rules[f] {
+			if r.Priority == p {
+				r.Tos = 16
+				k.rules[f] = append(k.rules[f], r)
+				return fmt.Sprintf("TOS copy %s %d", f, p)
+			}
+		}
+	case 5: // a rule with a selector nothing can follow
+		for _, r := range k.rules[f] {
+			if r.Priority == p {
+				r.Unknown = []rtnl.RawAttr{{Type: 99, Data: []byte{1}}}
+				k.rules[f] = append(k.rules[f], r)
+				return fmt.Sprintf("unknown-selector copy %s %d", f, p)
+			}
+		}
+	}
+	return "nothing"
+}
+
 func TestNoFailureSequenceEverOpensAProtectedClass(t *testing.T) {
 	for _, guard := range []bool{true, false} {
 		t.Run(fmt.Sprintf("guard=%v", guard), func(t *testing.T) { failureSequences(t, guard) })
@@ -61,7 +114,12 @@ func failureSequences(t *testing.T, guard bool) {
 		var faults []string
 		for n := 1 + rng.Intn(4); n > 0; n-- {
 			before := saveState(k)
-			f := randomFault(rng, k, spec)
+			var f string
+			if rng.Intn(3) == 0 {
+				f = extraFault(rng, k, spec)
+			} else {
+				f = randomFault(rng, k, spec)
+			}
 			for _, fam := range families {
 				sortRules(k.rules[fam]) // the kernel keeps rules in priority order
 			}
