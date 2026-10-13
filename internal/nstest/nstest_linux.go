@@ -3,6 +3,8 @@
 package nstest
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -27,7 +29,9 @@ type NS struct {
 // It skips the test when the environment cannot create namespaces.
 func New(t *testing.T, label string) *NS {
 	t.Helper()
-	name := fmt.Sprintf("mb%d-%d-%s", os.Getpid(), counter.Add(1), label)
+	// Unique across processes even if a pid is reused while a leaked namespace
+	// of an earlier test binary still has the name.
+	name := fmt.Sprintf("mb%d-%d-%s-%s", os.Getpid(), counter.Add(1), label, uniqueSuffix()[:4])
 	h, err := netns.NewNamed(name)
 	if err != nil {
 		t.Skipf("cannot create a network namespace (run the drills in a privileged container): %v", err)
@@ -125,7 +129,33 @@ func (n *NS) Sysctl(kv ...string) {
 }
 
 // Veth creates a veth pair, one end in n named a, the other in other named b.
+//
+// The pair is created under names no other test can use (the packages' drills
+// run in parallel in one container, and interface names are the one thing
+// they could contend for), and each end is renamed inside its own namespace,
+// where a clash would be a bug of the test itself.
 func (n *NS) Veth(a string, other *NS, b string) {
 	n.t.Helper()
-	n.IP("link", "add", a, "type", "veth", "peer", "name", b, "netns", other.Name)
+	u := uniqueSuffix()
+	ta, tb := "va"+u, "vb"+u
+	n.IP("link", "add", ta, "type", "veth", "peer", "name", tb, "netns", other.Name)
+	for _, r := range []struct {
+		ns       *NS
+		from, to string
+	}{{n, ta, a}, {other, tb, b}} {
+		if out, err := r.ns.TryIP("link", "set", r.from, "name", r.to); err != nil {
+			all, _ := r.ns.TryIP("-d", "link")
+			n.t.Fatalf("ip -n %s link set %s name %s: %v\n%s\nthe namespace holds:\n%s", r.ns.Name, r.from, r.to, err, out, all)
+		}
+	}
+}
+
+// uniqueSuffix is 10 hex digits, random per call, short enough for an
+// interface name (IFNAMSIZ is 16 with the terminator).
+func uniqueSuffix() string {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%010x", counter.Add(1)+int64(os.Getpid())<<20)
+	}
+	return hex.EncodeToString(b[:])
 }

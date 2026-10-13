@@ -43,7 +43,7 @@ type glRig struct {
 
 func glTunnelUp(r *rig, address string) {
 	t := r.t
-	r.exit.IP("link", "add", glExitIf, "type", "veth", "peer", "name", "tunnel0", "netns", r.tun.Name)
+	r.exit.Veth(glExitIf, r.tun, "tunnel0")
 	r.tun.IP("link", "set", "tunnel0", "address", "02:00:00:00:13:02")
 	r.exit.IP("addr", "add", address+"/28", "dev", glExitIf)
 	r.exit.IP("-6", "addr", "add", "2001:db8:3::1/64", "dev", glExitIf, "nodad")
