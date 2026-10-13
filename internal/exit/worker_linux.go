@@ -117,12 +117,18 @@ func RunWorker(environ []string, stderr io.Writer) int {
 		return 1
 	}
 	w := &worker{s: s, gen: gen, clock: bootclock.System(), out: stderr, warned: map[string]time.Time{},
-		netbirdCh: make(chan Msg, 8)}
+		netbirdCh: make(chan Msg, 64)}
 	w.send = &workerSender{w: os.NewFile(3, "to-supervisor"), gen: gen}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	defer w.cancel()
 	go w.readSupervisor(os.NewFile(4, "from-supervisor"))
 	return w.run()
+}
+
+// libLogf is the log sink of the routing libraries, whose lines already begin
+// "molebridge: ": one prefix per line, the program's.
+func (w *worker) libLogf(format string, a ...any) {
+	w.logf(strings.TrimPrefix(format, "molebridge: "), a...)
 }
 
 // fatal ends the worker with a failure: the line is printed, the worker stops
@@ -334,14 +340,14 @@ func (w *worker) run() int {
 		kernel = conn
 	}
 	w.mut = mutator.New(mutator.Options{Kernel: kernel, Spec: spec, Clock: w.clock, GuardRepairs: s.Native(),
-		Logf: func(format string, a ...any) { w.logf(format, a...) }})
+		Logf: w.libLogf})
 	w.mut.Start()
 
 	w.loops = map[string]loopSource{LoopMutator: {w.mut.Progress, MutatorBound}}
 	if s.Overlay() {
 		wt := watch.New(watch.Config{Source: sub, Mutator: w.mut, Interval: s.Interval, Clock: w.clock,
 			Tables: spec.Interest().Tables, Links: []string{s.Routing.ExitIf, s.Routing.OverlayIf, s.Routing.HostIf},
-			Logf: func(format string, a ...any) { w.logf(format, a...) }})
+			Logf: w.libLogf})
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
 		go func() {
 			if err := wt.Run(w.ctx); err != nil {
@@ -547,20 +553,27 @@ func (w *worker) recheckNetBird() error {
 	return err
 }
 
-// netbirdLoop handles the supervisor's reports about NetBird.
+// netbirdLoop handles the supervisor's reports about NetBird. Every report
+// names its launch, and a report of a launch older than the current one is
+// ignored before it touches any state.
 func (w *worker) netbirdLoop() {
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
 		case m := <-w.netbirdCh:
-			switch m.State {
-			case NBLaunching:
-				// The launch begins: the gluetun monitors count from here.
-				w.launch.Store(int64(m.Launch))
-				if w.monitors != nil {
-					w.monitors.newLaunch(m.Launch, m.LogOffset, time.Duration(m.AtBootNs))
+			if m.State == NBLaunching {
+				if int64(m.Launch) < w.launch.Load() {
+					continue
 				}
+				w.launch.Store(int64(m.Launch))
+			} else if int64(m.Launch) != w.launch.Load() {
+				continue
+			}
+			if w.monitors != nil {
+				w.monitors.event(m)
+			}
+			switch m.State {
 			case NBStarted:
 				// `netbird up` in daemon mode can return before any
 				// configuration change applies: read the profile again and
@@ -576,9 +589,6 @@ func (w *worker) netbirdLoop() {
 				w.pipeOn.Store(true)
 			case NBStopped, NBFailed:
 				w.nbRunning.Store(false)
-				if w.monitors != nil {
-					w.monitors.endLaunch()
-				}
 			}
 		}
 	}
