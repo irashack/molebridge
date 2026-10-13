@@ -1,6 +1,7 @@
 package mutator
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 
@@ -44,6 +45,49 @@ func (tx *Tx) delRoute(r rtnl.Route) (bool, error) {
 	return err == nil, err
 }
 
+// confirmed reads the kernel back and reports an error unless every rule is
+// there exactly, on a snapshot the kernel held still for. It is the proof
+// that a protection is installed: a request the kernel acknowledged, or that
+// returned no error, is not.
+func (tx *Tx) confirmed(f rtnl.Family, rules ...rtnl.Rule) error {
+	snap, err := tx.Snapshot()
+	if err != nil {
+		return fmt.Errorf("could not read the kernel back: %w", err)
+	}
+	if snap.Unstable {
+		return errors.New("the kernel kept changing; the rules could not be confirmed")
+	}
+	for _, r := range rules {
+		if !hasExact(snap.Rules[f], r) {
+			return fmt.Errorf("rule %d is not installed: %s", r.Priority, r)
+		}
+	}
+	return nil
+}
+
+// dependents are the expected rules that a removal makes up for: the rule one
+// priority later with the same selectors (a protective copy stands in for
+// it), and, for the kernel's priority-0 local-delivery rule, the guard at
+// priority 1 that replaces it.
+func dependents(spec contract.Spec, f rtnl.Family, a contract.Action) []rtnl.Rule {
+	if a.Priority == 0 {
+		return spec.RulesAt(f, contract.PrioLocalGuard)
+	}
+	var out []rtnl.Rule
+	items := a.Rule.Items()
+	for _, e := range spec.RulesAt(f, a.Priority+1) {
+		if equalStrings(e.Items(), items) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// inGuardRange: rules 90-97, which a native repair changes behind the guard.
+func inGuardRange(priority uint32) bool {
+	return priority >= contract.PrioFromTunnel && priority <= contract.PrioIngressReject
+}
+
 // apply carries out one family's plan in order: the host table, the rules
 // (missing ones first, terminal rules first, then the removals), the exit
 // table. It never stops at a failure; every failure is returned and the pass's
@@ -85,10 +129,28 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 		}
 	}
 	rebuilt := map[uint32]bool{}
-	// Adds that failed. A rule one priority earlier with the same selectors
-	// is the copy that protects while the expected rule is missing (see
-	// rebuild); it is not removed as a stray until the expected rule is back.
-	failedAdd := map[string]bool{}
+	// Every removal that makes up for an addition of this plan waits for the
+	// addition to be read back (see dependents): an Add whose request failed,
+	// or that the kernel does not show, never costs the rule it was replacing.
+	added := map[string]bool{}
+	for _, a := range p.Rules {
+		if a.Kind == contract.Add {
+			added[copyKey(a.Priority, a.Rule)] = true
+		}
+	}
+	// A native repair of rules 90-97 is done behind the temporary guard, and
+	// only once the guard is read back in the kernel.
+	guardRead := false
+	behindGuard := func(priority uint32) error {
+		if !spec.TempGuard[f] || !inGuardRange(priority) || guardRead {
+			return nil
+		}
+		if err := tx.confirmed(f, guardRule(spec, f)); err != nil {
+			return fmt.Errorf("the temporary guard is not in place: %w", err)
+		}
+		guardRead = true
+		return nil
+	}
 	for _, a := range p.Rules {
 		if !removals && a.Kind != contract.Add {
 			continue
@@ -96,9 +158,6 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 		switch a.Kind {
 		case contract.Add:
 			ch, err := tx.addRule(a.Rule)
-			if err != nil {
-				failedAdd[copyKey(a.Priority, a.Rule)] = true
-			}
 			note(ch, err, fmt.Sprintf("could not restore %s rule %d", f, a.Priority))
 			if ch {
 				tx.Logf("molebridge: added %s rule %d", f, a.Priority)
@@ -108,6 +167,10 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 				continue
 			}
 			rebuilt[a.Priority] = true
+			if err := behindGuard(a.Priority); err != nil {
+				errs = append(errs, opErr(fmt.Sprintf("left %s rule %d as it is", f, a.Priority), err))
+				continue
+			}
 			n, err := tx.rebuild(spec, f, a.Priority)
 			mutations += n
 			if err != nil {
@@ -116,9 +179,22 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 				tx.Logf("molebridge: rebuilt %s rule %d", f, a.Priority)
 			}
 		case contract.Del:
-			if failedAdd[copyKey(a.Priority+1, a.Rule)] {
-				tx.Logf("molebridge: keeping %s rule %d: it protects while rule %d cannot be restored", f, a.Priority, a.Priority+1)
+			if err := behindGuard(a.Priority); err != nil {
+				errs = append(errs, opErr(fmt.Sprintf("kept %s rule %d", f, a.Priority), err))
 				continue
+			}
+			if deps := dependents(spec, f, a); len(deps) > 0 {
+				addedNow := false
+				for _, d := range deps {
+					addedNow = addedNow || added[copyKey(d.Priority, d)]
+				}
+				if addedNow {
+					if err := tx.confirmed(f, deps...); err != nil {
+						tx.Logf("molebridge: keeping %s rule %d: it protects until what replaces it is read back", f, a.Priority)
+						errs = append(errs, opErr(fmt.Sprintf("kept %s rule %d, which protects until what replaces it is installed", f, a.Priority), err))
+						continue
+					}
+				}
 			}
 			ch, err := tx.delRule(a.Rule)
 			if err != nil && len(spec.RulesAt(f, a.Priority)) == 0 {
@@ -135,10 +211,12 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 			}
 		}
 	}
+	routeAddFailed := false
 	for _, ra := range p.Routes {
 		switch ra.Kind {
 		case contract.AddFallback:
 			if err := tx.ReplaceRoute(ra.Route); err != nil {
+				routeAddFailed = true
 				note(false, err, fmt.Sprintf("restore the %s unreachable fallback in table %d", f, c.Table))
 			} else {
 				mutations++
@@ -146,6 +224,7 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 			}
 		case contract.AddTunnel:
 			if err := tx.ReplaceRoute(ra.Route); err != nil {
+				routeAddFailed = true
 				note(false, err, fmt.Sprintf("restore the %s tunnel route through %s", f, c.ExitIf))
 			} else {
 				mutations++
@@ -153,6 +232,12 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 			}
 		case contract.DelRoute:
 			if !removals {
+				continue
+			}
+			if routeAddFailed {
+				// A route that could not be restored may be what this one is
+				// being replaced by.
+				errs = append(errs, fmt.Errorf("kept a %s route in table %d: a route this pass adds could not be installed", f, c.Table))
 				continue
 			}
 			ch, err := tx.delRoute(clearSource(ra.Route))
@@ -173,25 +258,37 @@ func clearSource(r rtnl.Route) rtnl.Route {
 // gap: a copy of each goes in one priority earlier, the priority is cleared and
 // refilled, then the copies go. Each copy's selectors or action differ from
 // the expected rule at that earlier priority, so removing it cannot take that
-// one. The copies come out only if this call put them in.
+// one.
+//
+// Nothing is deleted at the priority unless every copy is in the kernel: a
+// copy whose request failed, for whatever reason and however often, ends the
+// rebuild there with the rules found left as they are, and the pass reports
+// the failure. The copies are read back on a stable snapshot before the
+// priority is cleared, and the refilled rules before the copies go. The
+// copies come out only if this call put them in, and stay while anything is
+// unconfirmed.
 func (tx *Tx) rebuild(spec contract.Spec, f rtnl.Family, priority uint32) (mutations int, err error) {
 	want := spec.RulesAt(f, priority)
 	if len(want) == 0 {
 		return 0, fmt.Errorf("rebuild %s rule %d: nothing is expected there", f, priority)
 	}
 	previous := priority - 1
-	var copies []rtnl.Rule
+	var copies, installed []rtnl.Rule
 	for _, w := range want {
 		cp := w
 		cp.Priority = previous
 		ch, aerr := tx.addRule(cp)
-		if aerr != nil && !tx.stillAlive() {
-			return mutations, aerr
+		if aerr != nil {
+			return mutations, opErr(fmt.Sprintf("could not install the protective copy of %s rule %d; the rules there are left as they are", f, priority), aerr)
 		}
+		copies = append(copies, cp)
 		if ch {
 			mutations++
-			copies = append(copies, cp)
+			installed = append(installed, cp)
 		}
+	}
+	if cerr := tx.confirmed(f, copies...); cerr != nil {
+		return mutations, opErr(fmt.Sprintf("the protective copies of %s rule %d are not confirmed; the rules there are left as they are", f, priority), cerr)
 	}
 	for i := 0; i < 32; i++ {
 		gone, derr := tx.DelRulePriority(f, priority)
@@ -214,10 +311,15 @@ func (tx *Tx) rebuild(spec contract.Spec, f rtnl.Family, priority uint32) (mutat
 		}
 	}
 	// The copies protect until the expected rules are confirmed back: if any
-	// re-add failed they stay, and the next pass adds the missing rule before
-	// it removes the copy as the stray it then is.
+	// re-add failed, or cannot be read back, they stay, and the next pass adds
+	// the missing rule before it removes the copy as the stray it then is.
 	if firstErr == nil {
-		for _, cp := range copies {
+		if cerr := tx.confirmed(f, want...); cerr != nil {
+			firstErr = opErr(fmt.Sprintf("%s rule %d is not confirmed after the rebuild; its protective copy stays", f, priority), cerr)
+		}
+	}
+	if firstErr == nil {
+		for _, cp := range installed {
 			ch, _ := tx.delRule(cp)
 			if ch {
 				mutations++
@@ -226,8 +328,6 @@ func (tx *Tx) rebuild(spec contract.Spec, f rtnl.Family, priority uint32) (mutat
 	}
 	return mutations, firstErr
 }
-
-func (tx *Tx) stillAlive() bool { return tx.ctx.Err() == nil }
 
 // copyKey identifies a rule's selectors and action at a priority.
 func copyKey(priority uint32, r rtnl.Rule) string {
