@@ -11,3 +11,8 @@ import "golang.org/x/sys/unix"
 func BecomeSubreaper() error {
 	return unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
 }
+
+// StopBeingSubreaper undoes BecomeSubreaper (tests that borrow the role).
+func StopBeingSubreaper() error {
+	return unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0)
+}

@@ -238,3 +238,88 @@ func TestExtraFilesArriveAtDescriptor3(t *testing.T) {
 		t.Fatalf("got %q", buf[:n])
 	}
 }
+
+// A fork that stalls blocks nothing but its caller: other children still start,
+// and their statuses are still collected and routed.
+func TestAStalledForkBlocksNothingElse(t *testing.T) {
+	stall, entered := make(chan struct{}), make(chan struct{})
+	testReaper.mu.Lock()
+	real := testReaper.fork
+	var once sync.Once
+	testReaper.fork = func(argv0 string, argv []string, attr *syscall.ProcAttr) (int, error) {
+		stalled := false
+		once.Do(func() { stalled = true })
+		if stalled {
+			close(entered)
+			<-stall
+		}
+		return real(argv0, argv, attr)
+	}
+	testReaper.mu.Unlock()
+	t.Cleanup(func() {
+		testReaper.mu.Lock()
+		testReaper.fork = real
+		testReaper.mu.Unlock()
+	})
+	started := make(chan *Process, 1)
+	go func() {
+		p, err := testReaper.Start(sh("exit 5"))
+		if err != nil {
+			t.Error(err)
+		}
+		started <- p
+	}()
+	<-entered
+	// With that fork stalled, others start, exit and are reaped.
+	for i := 0; i < 5; i++ {
+		p, err := testReaper.Start(sh(fmt.Sprintf("exit %d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ws, ok := p.Wait(5 * time.Second)
+		if !ok || ExitCode(ws) != i {
+			t.Fatalf("child %d: %v %v", i, ws, ok)
+		}
+	}
+	done := make(chan struct{})
+	go func() { testReaper.Orphans(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("the reaper's lock is held across a stalled fork")
+	}
+	close(stall)
+	p := <-started
+	if ws, ok := p.Wait(5 * time.Second); !ok || ExitCode(ws) != 5 {
+		t.Fatalf("the stalled child: %v %v", ws, ok)
+	}
+}
+
+// A child that exits and is collected before its fork call returns is still
+// routed to its owner.
+func TestAChildCollectedBeforeTheForkReturns(t *testing.T) {
+	proceed := make(chan struct{})
+	testReaper.mu.Lock()
+	real := testReaper.fork
+	testReaper.fork = func(argv0 string, argv []string, attr *syscall.ProcAttr) (int, error) {
+		pid, err := real(argv0, argv, attr)
+		// Hold the return until the child has exited and been reaped.
+		time.Sleep(300 * time.Millisecond)
+		close(proceed)
+		return pid, err
+	}
+	testReaper.mu.Unlock()
+	defer func() {
+		testReaper.mu.Lock()
+		testReaper.fork = real
+		testReaper.mu.Unlock()
+	}()
+	p, err := testReaper.Start(sh("exit 9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-proceed
+	if ws, ok := p.Wait(5 * time.Second); !ok || ExitCode(ws) != 9 {
+		t.Fatalf("%v %v", ws, ok)
+	}
+}

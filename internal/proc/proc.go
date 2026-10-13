@@ -13,10 +13,12 @@
 // A process using this package must not also wait for children another way
 // (exec.Cmd.Wait, os.Process.Wait) while a Reaper is running.
 //
-// The registration race (a child that exits before its pid is recorded) cannot
-// happen: Start holds the reaper's lock across the fork and the registration,
-// and the reaper holds it while it collects and routes statuses, so a status
-// is routed only after its pid is registered.
+// The registration race (a child that exits before its pid is recorded) is
+// closed without holding any lock across the fork, so a fork that stalls
+// blocks nothing but its caller: Start counts the fork in flight, and while one
+// is in flight the reaper keeps the status of a pid it does not know instead of
+// discarding it; Start, when the fork returns, registers the pid and picks up
+// a status kept for it. The reaper's lock is held only for non-blocking calls.
 package proc
 
 import (
@@ -35,6 +37,14 @@ type Reaper struct {
 	mu      sync.Mutex
 	procs   map[int]*Process
 	orphans int
+	// forking counts Starts between the start of the fork and the registration
+	// of its pid. While it is above zero a status for an unknown pid is kept in
+	// early rather than counted as an orphan's: it may be the child of a fork
+	// that has not returned yet.
+	forking int
+	early   map[int]syscall.WaitStatus
+	// fork is syscall.ForkExec (tests replace it).
+	fork    func(argv0 string, argv []string, attr *syscall.ProcAttr) (int, error)
 	sig     chan os.Signal
 	stop    chan struct{}
 	stopped chan struct{}
@@ -55,6 +65,8 @@ func NewReaper() (*Reaper, error) {
 	}
 	r := &Reaper{
 		procs:   map[int]*Process{},
+		early:   map[int]syscall.WaitStatus{},
+		fork:    syscall.ForkExec,
 		sig:     make(chan os.Signal, 1),
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
@@ -123,6 +135,10 @@ func (r *Reaper) collect() {
 		}
 		p := r.procs[pid]
 		if p == nil {
+			if r.forking > 0 && len(r.early) < 1024 {
+				r.early[pid] = ws
+				continue
+			}
 			r.orphans++
 			continue
 		}
@@ -184,20 +200,41 @@ func (r *Reaper) Start(s Spec) (*Process, error) {
 	}
 	attr := &syscall.ProcAttr{Dir: s.Dir, Env: s.Env, Files: files, Sys: &syscall.SysProcAttr{Setpgid: true}}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	pid, err := syscall.ForkExec(s.Path, s.Args, attr)
+	r.forking++
+	fork := r.fork
+	r.mu.Unlock()
+	pid, err := fork(s.Path, s.Args, attr)
 	// The descriptors must stay open (and unfinalized) until the fork is done.
 	runtime.KeepAlive(s.Stdin)
 	runtime.KeepAlive(s.Stdout)
 	runtime.KeepAlive(s.Stderr)
 	runtime.KeepAlive(s.ExtraFiles)
 	runtime.KeepAlive(null)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.forking--
 	if err != nil {
+		r.settleEarlyLocked()
 		return nil, fmt.Errorf("proc: start %s: %w", s.Path, err)
 	}
 	p := &Process{Pid: pid, done: make(chan struct{})}
-	r.procs[pid] = p
+	if ws, ok := r.early[pid]; ok {
+		delete(r.early, pid)
+		p.finish(ws)
+	} else {
+		r.procs[pid] = p
+	}
+	r.settleEarlyLocked()
 	return p, nil
+}
+
+// settleEarlyLocked forgets the statuses kept for forks once none is in flight:
+// they were the orphans' after all.
+func (r *Reaper) settleEarlyLocked() {
+	if r.forking == 0 && len(r.early) > 0 {
+		r.orphans += len(r.early)
+		r.early = map[int]syscall.WaitStatus{}
+	}
 }
 
 // Reaped is closed when the leader's exit status has been collected.
