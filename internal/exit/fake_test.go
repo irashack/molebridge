@@ -18,8 +18,6 @@ import (
 // The test binary doubles as the fake worker and the fake cleanup child:
 // `exit.test fake-worker <mode>` and `exit.test fake-cleanup <mode>`.
 
-var testReaper *proc.Reaper
-
 func TestMain(m *testing.M) {
 	if len(os.Args) >= 3 {
 		switch os.Args[1] {
@@ -31,17 +29,40 @@ func TestMain(m *testing.M) {
 			os.Exit(0)
 		}
 	}
+	os.Exit(m.Run())
+}
+
+// reaperFor lends a test the process's reaper (and the sub-reaper role) for
+// its own duration. The test binary has none otherwise: a reaper collects
+// every child with wait4(-1), and the helpers the drills run (exec.Command:
+// ip, nft, ping) wait for their own pid and would lose the race to it.
+func reaperFor(t *testing.T) *proc.Reaper {
+	t.Helper()
+	reapersMu.Lock()
+	defer reapersMu.Unlock()
+	if r, ok := reapers[t]; ok {
+		return r
+	}
 	_ = proc.BecomeSubreaper()
 	r, err := proc.NewReaper()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		t.Fatal(err)
 	}
-	testReaper = r
-	code := m.Run()
-	r.Close()
-	os.Exit(code)
+	reapers[t] = r
+	t.Cleanup(func() {
+		r.Close()
+		_ = proc.StopBeingSubreaper()
+		reapersMu.Lock()
+		delete(reapers, t)
+		reapersMu.Unlock()
+	})
+	return r
 }
+
+var (
+	reapersMu sync.Mutex
+	reapers   = map[*testing.T]*proc.Reaper{}
+)
 
 func trace(format string, a ...any) {
 	path := os.Getenv("MB_TRACE_FILE")

@@ -51,6 +51,8 @@ type Config struct {
 	Write func(path string, v any) error
 	// Bounds replaces the loops and bounds the lease supervises (tests).
 	Bounds map[string]time.Duration
+	// nbHook is the NetBird manager's test hook.
+	nbHook func(stage string)
 }
 
 type event interface{}
@@ -195,7 +197,7 @@ func (s *Supervisor) run() int {
 		s.nb = &nbManager{reaper: s.reap, bin: s.c.NetBirdBin, clock: s.c.Clock,
 			env: ChildEnvNetBird(s.s.Env, tmp, false), envUp: ChildEnvNetBird(s.s.Env, tmp, true),
 			logPath: watchLogPath(s.s.Env), out: s.stderr, timing: s.c.Timing,
-			emit: func(e nbEvent) { s.push(evNB{e}) }}
+			hook: s.c.nbHook, emit: func(e nbEvent) { s.push(evNB{e}) }}
 	}
 	s.pub.Full(StartingRecord(s.s, s.c.Wall()))
 	if err := s.startWorker(); err != nil {
@@ -436,13 +438,17 @@ func (s *Supervisor) maybeStartNetBird() {
 }
 
 func (s *Supervisor) handleNB(e nbEvent) (string, string) {
-	if e.kind != nbStopped && e.launch != s.nb.currentLaunch() {
-		return "", "" // an event of a launch that has been stopped
+	// An event of an older launch is dropped, a stopped event included: the
+	// manager marks a launch inactive before its event reaches this loop, so a
+	// newer launch may already be running, and telling the worker the older
+	// one stopped would end the newer one's accounting.
+	if e.launch != s.nb.currentLaunch() {
+		return "", ""
 	}
 	switch e.kind {
 	case nbStarted:
 		s.logf("NetBird is up (launch %d)", e.launch)
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStarted, LogOffset: e.offset, AtBootNs: int64(s.c.Clock())})
+		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStarted, LogOffset: e.offset, AtBootNs: int64(e.at)})
 	case nbFailed:
 		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBFailed})
 		return ReasonNetBird, "NetBird could not be started: " + e.detail

@@ -31,7 +31,7 @@ func newNBRig(t *testing.T) *nbRig {
 	env := []string{"PATH=" + bin + ":/usr/bin:/bin", "NB_TRACE_FILE=" + r.trace, "TMPDIR=" + dir}
 	tm := DefaultTiming()
 	tm.NBLive, tm.NBPoll, tm.NBProbe, tm.NBUp, tm.NBTerm = 5*time.Second, 20*time.Millisecond, 2*time.Second, 5*time.Second, time.Second
-	r.m = &nbManager{reaper: testReaper, bin: "netbird", env: env, envUp: env, clock: func() time.Duration { return time.Second },
+	r.m = &nbManager{reaper: reaperFor(t), bin: "netbird", env: env, envUp: env, clock: func() time.Duration { return time.Second },
 		out: io.Discard, timing: tm, emit: func(e nbEvent) { r.events <- e }}
 	t.Cleanup(func() {
 		r.m.Close()
@@ -162,4 +162,60 @@ func TestEachCommandGetsItsOwnEnvironment(t *testing.T) {
 	}
 	r.m.Stop()
 	r.next(nbStopped)
+}
+
+// A process creation that stalls holds no lock the deadline path takes: Active,
+// Close, TermAll and Alive answer at once, the running daemon gets TERM, and
+// when the creation finally returns the late child is killed, not adopted.
+func TestAStalledCreationHoldsNoLock(t *testing.T) {
+	r := newNBRig(t)
+	stall, entered := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	r.m.hook = func(stage string) {
+		if stage == "spawn status --check live" {
+			once.Do(func() { close(entered) })
+			<-stall
+		}
+	}
+	if _, ok := r.m.Start(); !ok {
+		t.Fatal("start")
+	}
+	<-entered
+	answered := make(chan bool, 1)
+	go func() {
+		active := r.m.Active()
+		r.m.Close()
+		r.m.TermAll()
+		answered <- active && r.m.Alive() // the creation in flight counts as alive
+	}()
+	select {
+	case ok := <-answered:
+		if !ok {
+			t.Error("a creation in flight must count as alive")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Active, Close or TermAll waited on the stalled creation")
+	}
+	// The daemon, started before the stall, was told to end.
+	procs := r.m.snapshot()
+	if len(procs) == 0 {
+		t.Fatal("the daemon was not started before the stall")
+	}
+	select {
+	case <-procs[0].Reaped():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the daemon got no TERM")
+	}
+	close(stall)
+	deadline := time.Now().Add(5 * time.Second)
+	for r.m.Alive() {
+		if time.Now().After(deadline) {
+			t.Fatal("the late child outlived the cancelled launch")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Whatever the late child managed to write, it did not go on to `up`.
+	if strings.Contains(r.traceText(), "netbird up ") {
+		t.Fatalf("the cancelled launch went on:\n%s", r.traceText())
+	}
 }
