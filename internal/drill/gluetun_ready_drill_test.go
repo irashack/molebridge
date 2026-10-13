@@ -32,9 +32,8 @@ func TestGluetunContractNotIntactIsNotReady(t *testing.T) {
 	}
 
 	type brk struct {
-		name    string
-		do      func()
-		restore func() // only what the owner is not expected to repair
+		name string
+		do   func()
 	}
 	var breaks []brk
 	for _, p := range []string{"88", "89", "90", "94", "95", "96"} {
