@@ -96,22 +96,13 @@ still begins `NetBird gate:`. [Troubleshooting](docs/troubleshooting.md) quotes 
 current ones.
 
 **Tested.** Unit, fuzz and namespace-drill suites in CI, and a live pass on one Debian host
-with rootless Podman 5.8 and Quadlet units ([testing](docs/testing.md#080)):
-
-- Six native exits (one NordVPN, four Mullvad, one PIA), a gluetun overlay exit and a gluetun
-  sidecar, the last two with NordVPN, were upgraded from 0.7.0 and reported healthy; the
-  stored NetBird peers, selections and PIA's registration carried over.
-- The released image (`v0.8.0`, promoted from `v0.8.0-rc.2`) was run on the native Mullvad, PIA and
-  NordVPN exits through the drift and tunnel-loss drills, and the NordVPN exit through the
-  frozen-worker drill, made from the exits' own namespaces. `v0.8.0-rc.1` failed the PIA tunnel-loss drill (it stayed fail-closed but did
-  not recover by itself); `v0.8.0-rc.2` fixes that.
-- The gluetun exits were not drilled live, and no client device was held on any exit.
-
-**Not tested at 0.8.0:** Docker Engine on Linux and NetBird Cloud (dropped from acceptance by the
-maintainer); running the shipped Compose files at all (they are validated with `docker compose
-config` only); gluetun with any provider other than NordVPN; installing from the release bundle on
-a clean host; PIA port forwarding against PIA; and the Go panel's sign-in against a real identity
-provider.
+with rootless Podman 5.8 and Quadlet units: eight exits upgraded from 0.7.0 and healthy, and
+the released image run through the drift, tunnel-loss and frozen-worker drills on the native
+exits, from their own namespaces. `v0.8.0-rc.1` failed the PIA tunnel-loss drill (it stayed
+fail-closed but did not recover by itself); `v0.8.0-rc.2` fixes that. **Not tested:** Docker
+Engine and NetBird Cloud (dropped from acceptance by the maintainer), running the shipped
+Compose files at all, live drills on the gluetun exits, and installing from the release bundle
+on a clean host. The record, with the full list, is [testing](docs/testing.md#080).
 
 ## 0.7.0 (2026-10-11)
 

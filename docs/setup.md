@@ -6,14 +6,12 @@ most of it in the NetBird dashboard.
 
 **What was tested.** Molebridge 0.8.0 is experimental. It has run live only on
 a Debian host with rootless Podman 5.8, started from Quadlet units written for
-that host, which this repository doesn't ship ([testing](testing.md#080)).
-The Compose commands on this page are what the bundle is for, but at 0.8.0
-they have not been run on any engine: CI only checks the Compose files with
-`docker compose config`, and podman-compose last ran in September 2026, at
-v0.1.0. Docker Engine on Linux and NetBird Cloud are untested at 0.8.0. If you
-use Quadlet, a unit needs the settings in `compose.yaml` ([the list in the
-upgrade notes](operations.md#upgrading-from-07x), step 3). Keep a way into the
-host that doesn't depend on the exit.
+that host, which this repository doesn't ship. The Compose commands on this
+page are what the bundle is for, but at 0.8.0 they have not been run on any
+engine; Docker Engine on Linux and NetBird Cloud are untested too
+([testing](testing.md#080)). If you use Quadlet, a unit needs the settings in
+`compose.yaml` ([the list in the upgrade notes](operations.md#upgrading-from-07x),
+step 3). Keep a way into the host that doesn't depend on the exit.
 
 **Rootless Podman.** Use `podman-compose` where this page says
 `docker compose`, and `podman run` where it says `docker run`, and leave
@@ -290,10 +288,8 @@ address before PIA registers it. Healthy means the
 namespace is intact (the tunnel, the routing rules and NetBird); it does not
 mean traffic is verified, which the panel, `/readyz` and `molebridge status`
 report ([health](operations.md#health)). With Mullvad the first check
-verifies the starting server. With PIA, a fresh tunnel has no address until you pick a
-region in step 8, and with NordVPN the panel shows "No NordVPN server is
-selected yet; choose one in the panel." until you pick a server. If `exit`
-refuses to start, its log names the setting or config line it rejected
+verifies the starting server; PIA and NordVPN need you to choose one first
+(step 8). If `exit` refuses to start, its log names the setting or config line it rejected
 ([troubleshooting](troubleshooting.md#startup)); if the tunnel won't come up,
 it keeps retrying and stays unhealthy.
 
@@ -361,58 +357,23 @@ test; the [verification](verification.md) drills are.
 ran live on rootless Podman with Quadlet units. No other provider and no
 Docker host has run it at 0.8.0 ([testing](testing.md#080)). gluetun owns the
 tunnel and brings its provider support ([providers](providers.md#the-gluetun-backend)).
-The steps above still apply, with these changes:
 
-1. Use `.env.gluetun.example` as your `.env` instead of `.env.example`. It sets
-   `COMPOSE_FILE=compose.gluetun.yaml`, which replaces `compose.yaml`.
-   Set `GLUETUN_PROVIDER` (one of `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`,
-   `surfshark`, `windscribe`), `EXIT_IF` (`wg0`), `GLUETUN_WIREGUARD_ADDRESSES`
-   if your provider assigned your key an address, `OVERLAY_CIDR`, and `HOST_IF`
-   on rootless Podman. For the first start, set `GLUETUN_SERVER_COUNTRIES` to
-   your own country, as gluetun names it (`Netherlands`, `United States`), and
-   leave the city and hostname empty. gluetun only knows its built-in server
-   list then, which can be years old: it refuses to start when a hostname or
-   city isn't in it, and picks among that list's servers, some of which may be
-   gone. A whole country is unlikely to be gone, and nearby servers answer
-   best. Left empty, gluetun picks from every country. The settings are in
-   [configuration](configuration.md#gluetun-backend). `PROVIDER` doesn't apply.
-2. Instead of a tunnel config, put the provider's WireGuard private key in a
-   file, and write gluetun's role file, the exit's copy of the API key and
-   gluetun's firewall post-rules:
+[gluetun as a NetBird exit](gluetun-netbird-exit.md#set-up) is the
+installation procedure for this form, and replaces steps 2 to 5 here. Step 1
+(download and verify), the NetBird setup in step 9 and the checks work the same
+way, with these differences:
 
-   ```sh
-   mkdir -p secrets/gluetun tunnel/gluetun state/panel state/applier
-   chmod 700 secrets/gluetun
-   (umask 077 && ${EDITOR:-vi} secrets/gluetun/wireguard_private_key)
-   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/secrets/gluetun:/out" "$IMAGE" gluetun-auth /out
-   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/tunnel/gluetun:/out" \
-     -e OVERLAY_CIDR=<your NetBird range> "$IMAGE" gluetun-post-rules /out
-   ```
-
-   The key file holds one line, the private key. Add `--ipv4-only` to the
-   `gluetun-post-rules` command if gluetun later logs that it found no working
-   ip6tables. Pass the same `HOST_IF`, `EXIT_IF` and other routing settings you
-   put in `.env` with `-e` if they aren't the defaults: the tool doesn't read
-   `.env` ([tools reference](tools-reference.md#gluetun-post-rules)).
-3. The NetBird setup key is the same (step 4).
-4. `docker compose run --rm --no-deps exit check-config` needs gluetun's
-   namespace, so start gluetun first with `docker compose up -d gluetun`.
-   Then `docker compose up -d`. Read `docker compose logs exit`: before it
-   starts NetBird it waits for gluetun's control server to listen on
-   loopback and installs the routing rules.
-5. Use `wg0` (your `EXIT_IF`) wherever the later steps and
-   [verification](verification.md) name the tunnel interface. The gluetun form
-   has its own checks: [gluetun as a NetBird exit](gluetun-netbird-exit.md#verification).
-6. The panel shows the provider's name "via gluetun", and the date of
-   gluetun's server data in Diagnostics. On a first start that data is
-   gluetun's built-in list; once gluetun's tunnel carries traffic (a fresh
-   handshake), the exit asks gluetun to refresh it, Diagnostics says `updating
-   server list`, and a minute or two after it finishes the panel lists the
-   current servers. Choose a server after that. gluetun starts on any server
-   (or the one from `GLUETUN_SERVER_*`); picking one in the panel takes over.
-7. Create the route and try a device the same way. For providers other than
-   Mullvad and NordVPN, the panel shows a connected exit as "tunnel checks
-   only": there is no provider check.
+- Your `.env` comes from `.env.gluetun.example`, which sets
+  `COMPOSE_FILE=compose.gluetun.yaml`; `PROVIDER` doesn't apply
+  ([configuration](configuration.md#gluetun-backend)).
+- There is no tunnel config. You put the provider's WireGuard private key in a
+  file, and the image's `gluetun-auth` and `gluetun-post-rules` tools write
+  gluetun's role file and firewall post-rules.
+- Start gluetun first (`docker compose up -d gluetun`), because `check-config`
+  needs its namespace; then `docker compose up -d`.
+- The tunnel interface is `wg0` (your `EXIT_IF`) wherever this page and
+  [verification](verification.md) name it. The gluetun form has its own checks:
+  [verification in the gluetun guide](gluetun-netbird-exit.md#verification).
 
 For the gluetun sidecar, which has no NetBird, see [the sidecar](gluetun-sidecar.md).
 

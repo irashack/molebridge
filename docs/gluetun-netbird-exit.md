@@ -26,25 +26,14 @@ isn't covered ([other providers](other-providers.md)).
 from 0.7.0 on rootless Podman with Quadlet units, came up healthy and connected. No drill was run
 on it live and no client was held on it; the gluetun rules, monitors and stop sequence are covered
 by the namespace drills in CI only. The design itself was verified live at 0.7.0, with NordVPN
-through gluetun v3.41.3 and a self-hosted NetBird server:
+through gluetun v3.41.3, on Docker
+([2026-10-08](testing.md#gluetun-backend-pass-at-a3bb14f)) and on rootless Podman with a Linux
+client held on the exit ([2026-10-11](testing.md#070-on-rootless-podman-at-d5a234a)).
 
-- On 2026-10-08 on Docker (OrbStack, on macOS): forwarding with a client on a direct (P2P) path,
-  local delivery refused, tunnel down with nothing on the host interface, NetBird's control
-  traffic on the host interface only, recreation, and the drills for a deleted exit-table route
-  and lookup rule, NetBird restarted and gluetun recreated
-  ([testing](testing.md#gluetun-backend-pass-at-a3bb14f)).
-- On 2026-10-11 on rootless Podman 5.8 as Quadlet units, with a Linux client held on the
-  exit: a live switch and a gluetun restart
-  ([testing](testing.md#070-on-rootless-podman-at-d5a234a)).
-
-**Not tested at any version:** any gluetun provider other than NordVPN, IPv6 through
-gluetun (NordVPN is IPv4 only), the `SERVER_CATEGORIES` override, podman-compose, and
-Docker Engine on Linux. **Not tested at 0.8.0:** running `compose.gluetun.yaml` at all (it
-is validated with `docker compose config` only), Docker of any kind, and NetBird Cloud.
-For FastestVPN, IVPN, Surfshark and Windscribe the egress check compares the tunnel's
-address with this host's, measured on a socket that carries NetBird's control mark;
-only unit tests cover it. Mullvad and NordVPN use their own checks.
-[Testing](testing.md#gluetun-backend-pass-at-a3bb14f) holds the older record.
+**Not tested at any version:** any gluetun provider other than NordVPN, IPv6 through gluetun,
+the `SERVER_CATEGORIES` override, podman-compose, and Docker Engine on Linux. **Not tested at
+0.8.0:** running `compose.gluetun.yaml` at all, and NetBird Cloud
+([the list](testing.md#not-tested-at-080)).
 
 ## What you get, and what you don't
 
@@ -121,73 +110,40 @@ Three containers, with the first two sharing one network namespace owned by `glu
 Gluetun deletes and recreates its tunnel interface on every reconnect, and the kernel drops
 the routes through it. The exit therefore keeps watching: it repairs on the kernel's
 notifications, and runs a full pass every `ROUTING_RECONCILE_INTERVAL` seconds (30 by
-default) as the fallback. It puts back the exit table's tunnel route, refreshes the host
-table, and adds, repairs or removes rules until the set is exactly the expected one.
-[Architecture](architecture.md#keeping-the-contract-in-place) describes the loop.
+default) as the fallback. [Architecture](architecture.md#gluetun-backend) is the canonical
+description of how the backend works: the containers, the rules and tables, the repair loop,
+the monitors and the switch. This page keeps what you set, what you will see and what to do.
 
 ### The rules
 
-The exit owns priorities 0 to 97 and 102 to 104 in this namespace, in both
-IPv4 and IPv6, and removes anything else at those priorities. Gluetun's rules
-98 to 101 and NetBird's 105 and 110 are left alone. Do not add your own rules
-at the contract's priorities. In the table, `<tunnel>` is gluetun's tunnel
-interface (`EXIT_IF`), `<overlay>` is your NetBird peer range
-(`OVERLAY_CIDR`, and `OVERLAY6_CIDR` for IPv6), `<exit table>` is table 51821
-(`EXIT_TABLE`) and `<host table>` is table 51822 (`HOST_TABLE`).
-
-| Priority | Rule | Reason |
-|---|---|---|
-| 1 | `not iif wt0 lookup local` | Local-delivery guard. It replaces the kernel's priority-0 `lookup local`. A packet arriving on `wt0` never consults the local table, so overlay traffic is never delivered to a process on the exit. Loopback and every other interface keep local delivery. |
-| 80 | `iif wt0 unreachable` | Temporary. Blocks forwarding while the exit installs the other rules, then is removed. |
-| 88 | `iif lo fwmark 0x1bd00/0xffffffff lookup <host table>` | NetBird's control traffic. The exact mark and `iif lo` mean a forwarded packet that carries one of NetBird's other marks never matches. |
-| 89 | `iif lo fwmark 0x1bd00/0xffffffff unreachable` | Terminal for control traffic. If the host table has no route, the connection fails instead of falling to gluetun's rule 101 and the tunnel. |
-| 90 | `iif <tunnel> to <overlay> lookup main` | Replies from the tunnel go back to the overlay. Client-originated traffic cannot use it. |
-| 91 | `iif lo to <overlay> lookup main suppress_prefixlength 0` | What the exit itself sends to the overlay, above all the ICMP errors it returns to clients, uses NetBird's overlay route in the main table and never main's default route. |
-| 92 | `iif lo to <overlay> unreachable` | With no overlay route (NetBird down), that traffic fails here instead of reaching rule 101 and the tunnel. |
-| 94 | `from <tunnel address> ipproto icmp lookup <exit table>` | ICMP errors the exit generates for tunnel traffic return through the tunnel. IPv6 uses `ipproto ipv6-icmp`. It exists for a family in which the tunnel interface has an address. |
-| 95 | `iif wt0 lookup <exit table>` | Forwarded traffic uses the exit table. |
-| 96 | `oif <tunnel> lookup <exit table>` | Probes bound to the tunnel interface use the same table. |
-| 97 | `iif wt0 unreachable` | Terminal guard if rule 95 or every exit-table route disappears. |
-| 102 | `iif lo fwmark 0xca6c lookup main` | Gluetun's own WireGuard socket carries mark 51820 (`0xca6c`), which rule 101 skips. It reaches the provider's server by the main table. |
-| 103 | `iif lo lookup <host table> suppress_prefixlength 0` | The host interface's own subnets (the host table's on-link routes, never its default). Gluetun needs them at start: it adds `default via <gateway> dev eth0 table 200` before its own rule 98 exists, and without rule 103 the kernel refused that route as "network is unreachable" and gluetun stopped. |
-| 104 | `iif lo unreachable` | The exit's own kill switch. Anything the exit itself sends that rule 101 did not take into the tunnel fails here, instead of using the host's default route while gluetun reconnects. The exit adds it only after rule 103 and the host table are in place. |
-
-Rules 90 to 92 exist for a family that has an overlay range. The mark `0x1bd00`
-is `CONTROL_MARK`; gluetun's mark 51820 is fixed in gluetun v3.41.3.
-
-| Table | Contents | Reason |
-|---|---|---|
-| Host table (51822) | Copies of the main table's default and on-link routes through the host interface (`HOST_IF`, `eth0` on Docker), and nothing else. Never a route through the tunnel. IPv4 needs a default among them. | Gives rules 88 and 103 a route that does not depend on the main table being complete. |
-| Exit table (51821) | `unreachable default metric 4096`, always, plus `default dev <tunnel>` while the tunnel interface is up with an address in that family. Nothing else. | Without the tunnel route, forwarded traffic hits the unreachable route. It does not reach the host's default route. |
-
-The exit table is not gluetun's table 51820. An empty 51820 would let packets
-fall through to later rules instead of the fallback.
-
-[Architecture](architecture.md#gluetun-backend) explains each rule in more
-detail. The expected set is defined once, in `internal/contract`, and the exit's
-repairer, its verification and its start decision all use that definition. Typing
-the rules by hand is not a substitute: the tunnel route has to come back every
-time gluetun recreates its interface, and that is the exit's loop.
+The exit owns priorities 0 to 97 and 102 to 104 in this namespace, in both IPv4 and IPv6, and
+removes anything else at those priorities. Gluetun's rules 98 to 101 and NetBird's 105 and 110
+are left alone. Do not add your own rules at the contract's priorities. Two tables go with
+them: the exit table (51821, `EXIT_TABLE`), which always holds an `unreachable default metric
+4096` fallback and holds `default dev <tunnel>` only while the tunnel interface is up, and the
+host table (51822, `HOST_TABLE`), copies of the host interface's default and on-link routes and
+never a route through the tunnel. Table 51820 is gluetun's own, not the exit table.
+[Architecture](architecture.md#why-the-routing-contract-is-policy-routing) lists every rule and
+why it exists; [Before any drill](#before-any-drill) shows what `ip rule show` should print.
+Typing the rules by hand is not a substitute: the tunnel route has to come back every time
+gluetun recreates its interface, and that is the exit's loop.
 
 ### The checks in the exit
 
-In 0.7 a script in front of NetBird (the gate) did these. In 0.8.0 the exit does
-them itself, because it starts NetBird. Rules 88 and 89 only see packets that carry
-NetBird's mark. If NetBird runs without it, its control traffic is unmarked and
-reaches gluetun's rule 101. So the exit:
+In 0.7 a script in front of NetBird (the gate) did these. In 0.8.0 the exit does them itself,
+because it starts NetBird. They matter because rules 88 and 89 only see packets that carry
+NetBird's mark: if NetBird runs without it, its control traffic is unmarked and reaches
+gluetun's rule 101. The mechanism is in
+[architecture](architecture.md#netbirds-control-mark-and-the-monitors). The exit:
 
 1. **Refuses NetBird settings that cannot work here**, with one line and exit status 1:
    `NetBird gate: refusing to start NetBird: <reason> (see docs/troubleshooting.md)`
-   (the line keeps the name "gate"). The reasons are: `NB_FORCE_USERSPACE_FIREWALL`,
-   `NB_FORCE_USERSPACE_ROUTER`, `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` set to
-   true; `NB_DISABLE_USERSPACE_ROUTING` not `true`; `NB_USE_LEGACY_ROUTING`,
-   `NB_SKIP_SOCKET_MARK` or `NB_DISABLE_CUSTOM_ROUTING` set to true; `NB_FWMARK_BASE`
-   different from `CONTROL_MARK`; an `NB_LOG_FILE` with no absolute path; Rosenpass enabled, in the environment or in the stored
-   profile; foreground mode; `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE` set; a
-   stored profile that names another interface than `wt0` (or `OVERLAY_IF`) or lacks the
-   tunnel interface in its ICE blacklist; and any routing setting that is invalid
-   (`OVERLAY_CIDR`, `EXIT_IF`, the tables, `CONTROL_MARK`, `FWMARK_GRACE`). Check without
-   starting NetBird:
+   (the line keeps the name "gate"). The reasons are the ones in
+   [configuration](configuration.md#what-compose-fixes-for-netbird), and for this backend also
+   `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or `NB_DISABLE_CUSTOM_ROUTING` set to true,
+   `NB_FWMARK_BASE` different from `CONTROL_MARK`, an `NB_LOG_FILE` with no absolute path, and
+   any invalid routing setting (`OVERLAY_CIDR`, `EXIT_IF`, the tables, `CONTROL_MARK`,
+   `FWMARK_GRACE`). Check without starting NetBird:
 
    ```sh
    docker compose run --rm --no-deps exit check-config
@@ -199,31 +155,26 @@ reaches gluetun's rule 101. So the exit:
 2. **Checks gluetun's control server** before it installs anything: it waits up to 30
    seconds for it to listen on loopback, and refuses if the same port has a listener on
    another address.
-3. **Starts NetBird only when the whole contract holds**, in both families. "Whole" means every
-   rule in the table above that applies, exactly, and nothing else at priorities 0 to 97 or
-   102 to 104; and the exit table's fallback with no other route in it than the tunnel default.
-   It runs again on every start of the container.
+3. **Starts NetBird only when the whole contract holds**, in both families, on every start of
+   the container. An extra rule at the exit's priorities keeps NetBird from starting.
 4. **Stops what it cannot trust**, logging the reason:
    - If NetBird's log shows `advanced routing has been requested to be disabled` or `falling back
-     to legacy routing` in the current launch's output, or the overlay interface has not carried the
-     control mark for `FWMARK_GRACE` seconds (30 by default, 5 to 30, counted on the boot clock from
-     the launch or from the last good reading), the exit stops itself. The worker ends, the
-     supervisor stops NetBird and removes the overlay interface, and the container exits with
-     status 1, so the restart policy starts it again. The line is `molebridge-exit: NetBird gate: stopping NetBird:
-     <reason> (see docs/troubleshooting.md)`, with the reason `NetBird logged that it runs without
-     advanced routing, so its control traffic would be unmarked` or `wt0 has not carried the control
-     mark 0x1bd00 for 30 seconds (last reported: <value>)`.
+     to legacy routing`, or the overlay interface has not carried the control mark for
+     `FWMARK_GRACE` seconds (30 by default, 5 to 30), the exit stops NetBird and itself with
+     status 1, so the restart policy starts it again. The line is `molebridge-exit: NetBird gate:
+     stopping NetBird: <reason> (see docs/troubleshooting.md)`, with the reason `NetBird logged
+     that it runs without advanced routing, so its control traffic would be unmarked` or `wt0 has
+     not carried the control mark 0x1bd00 for 30 seconds (last reported: <value>)`.
    - If the contract stays broken for `GUARD_GRACE` seconds, the supervisor stops NetBird and
      starts it again once the contract verifies. The container keeps running.
 5. **Stops itself** and NetBird if the worker stops answering ([the lease](architecture.md#the-lease)).
 
-NetBird can sign in to management before its overlay interface exists, so the exit cannot wait
-for the fwmark before launching. If NetBird's own start-up capability check fails, its TLS and
-relay connections go through the provider tunnel until the log monitor sees the line or the missing
-fwmark: up to `FWMARK_GRACE` seconds, plus the two-second samples, plus up to 6 seconds for NetBird to
-exit once the exit decides to stop it. That is a metadata and availability cost for NetBird's control
-traffic. It does not let your devices' traffic out: rules 1, 95 and 97 hold forwarded traffic
-throughout.
+One gap remains. NetBird can sign in to management before its overlay interface exists, so the
+exit cannot wait for the fwmark before launching. If NetBird's own start-up capability check
+fails, its TLS and relay connections go through the provider tunnel until the monitors stop it:
+up to `FWMARK_GRACE` seconds, plus sampling and up to 6 seconds for NetBird to exit. That is a
+metadata and availability cost for NetBird's control traffic. It does not let your devices'
+traffic out: rules 1, 95 and 97 hold forwarded traffic throughout.
 
 ## Requirements
 
@@ -250,9 +201,9 @@ No Python is needed on the host: the tools run from the image.
 
 ## Set up
 
-These steps use the bundle's `compose.gluetun.yaml` and `.env.gluetun.example`. The
-[setup page](setup.md#with-the-gluetun-backend-instead) has the same steps in the order of a first
-install; this is the checklist with the reasons.
+This is the one installation procedure for the gluetun form, with the reasons. It uses the
+bundle's `compose.gluetun.yaml` and `.env.gluetun.example`. The [setup page](setup.md) covers the
+native exit and says where this form differs.
 
 1. **Verify and extract the bundle** ([setup](setup.md#1-download-and-verify)), then:
 
@@ -469,6 +420,13 @@ the list is older than `GLUETUN_UPDATER_PERIOD` or 7 days, whichever is
 shorter, it asks gluetun's updater for one refresh (up to three attempts per
 start, five minutes apart; `0` turns this off). The panel shows the list's date
 and calls it stale after 30 days.
+
+In the panel, the provider's name appears with "via gluetun". While the refresh runs,
+Diagnostics says `updating server list`, and a minute or two after it finishes the panel lists
+the current servers; choose a server after that. gluetun starts on any server (or the one from
+`GLUETUN_SERVER_*`), and picking one in the panel takes over. For providers other than Mullvad
+and NordVPN the panel shows a connected exit as "tunnel checks only", because there is no
+provider check.
 
 ## A configured server
 

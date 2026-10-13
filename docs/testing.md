@@ -147,6 +147,12 @@ unpacked (target 80 MB).
 - Live drills on the gluetun overlay exit and the sidecar, and any gluetun provider
   other than NordVPN. The gluetun rules, including 91 and 92 at packet level, are
   covered only by the namespace drills in CI.
+- The gluetun backend at any version: IPv6 (NordVPN is IPv4 only), the `SERVER_CATEGORIES`
+  override, podman-compose, and Docker Engine on Linux. For FastestVPN,
+  IVPN, Surfshark and Windscribe the gluetun egress check (the tunnel's address against
+  this host's, on a socket that carries NetBird's control mark) has unit tests only.
+- podman-compose last ran in September 2026, at v0.1.0 (the
+  [rootless Podman pass](#rootless-podman-pass)).
 - Installing from the release bundle on a clean host. The signature and attestation
   verification of the published release ran from a clean directory (above), but no
   exit was installed from the bundle.

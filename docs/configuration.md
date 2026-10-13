@@ -223,19 +223,32 @@ must name a group.
 ### The panel's isolation check
 
 Switchyard is the one component that must hold nothing: no capabilities, no
-way to write what the exit publishes. At start it checks that about itself and
-refuses to run when any of these is false:
+way to write what the exit publishes. It runs no subprocess and writes only the
+desired server name. At every start it checks its own isolation and, when any
+of these is false, prints one line per problem to standard error and exits with
+status 1 before it listens:
 
-- its effective capability set is empty (`CapEff` in `/proc/self/status` is
-  zero), as `cap_drop: [ALL]` makes it;
-- it is not uid 0, unless `PANEL_ALLOW_ROOT` is exactly `1`;
-- every exit's `applier` state directory is mounted read-only. Only the
-  `panel/` directory, where requests are written, may be writable.
+- **No capabilities.** Its effective capability set (`CapEff` in
+  `/proc/self/status`) is empty, as `cap_drop: [ALL]` makes it. If it can't
+  read the set, it refuses too.
+- **Not root.** It is not uid 0, unless `PANEL_ALLOW_ROOT` is exactly `1`
+  (empty counts as unset; the Compose files pass it through empty). Set
+  `PANEL_USER` to the uid and gid that own `state/panel`. On a rootless engine
+  that remaps uids, container root is already your host user and another uid
+  can't read the state tree, so you set `PANEL_USER=0:0` and
+  `PANEL_ALLOW_ROOT=1` together.
+- **The exit's state is read-only.** Every exit's `applier` state directory
+  (`/state/applier`, or `/state/<id>/applier` with `PANEL_EXITS`) is on a
+  read-only mount. Only the `panel/` directory, where requests are written, may
+  be writable. A directory that isn't there passes; one it can't examine is
+  refused.
 
 Each refusal is one fixed line starting `molebridge panel: refusing to start:`
 ([troubleshooting](troubleshooting.md#the-panel)). The check cannot see what
-else was mounted into the panel container, so keeping credentials out of it
-is a host check ([operations](operations.md#host-checks)).
+else was mounted into the panel container, so keeping tunnel configs,
+credentials and gluetun's secrets out of it is a host check
+([operations](operations.md#host-checks)); the one credential the panel may
+hold is the sign-in client secret file.
 
 `MOLEBRIDGE_PANEL_ISOLATION_CHECK=off` turns the check off. It exists for the
 panel's script tests and for running the panel by hand outside a container;

@@ -338,37 +338,14 @@ uses it.
 ## Privilege isolation
 
 The panel holds no capabilities, runs no subprocess and writes only the
-desired server name. At every start it checks its own isolation and, if the
-check fails, prints one line per problem to standard error and exits with
-status 1 before it listens:
-
-```text
-molebridge panel: refusing to start: <reason>
-```
-
-The checks are fixed:
-
-- **No capabilities.** Its effective capability set (`CapEff` in
-  `/proc/self/status`) must be empty, so the container needs `cap_drop: [ALL]`.
-  If it can't read the set, it refuses too.
-- **Not root.** A uid of 0 is refused unless `PANEL_ALLOW_ROOT` is exactly `1`.
-  Set `PANEL_USER` to the uid and gid that own `state/panel`. On a rootless
-  engine that remaps uids, container root is already your host user and another
-  uid can't read the state tree, so you set `PANEL_USER=0:0` and
-  `PANEL_ALLOW_ROOT=1` together. The Compose files pass `PANEL_ALLOW_ROOT`
-  through, empty unless you set it; empty counts as unset.
-- **The exit's state is read-only.** Each exit's `applier` directory
-  (`/state/applier`, or `/state/<id>/applier` with `PANEL_EXITS`) must be on a
-  read-only mount; only the `panel` directory may be writable. A directory that
-  isn't there passes, and one it can't examine is refused.
-
-The messages are in [troubleshooting](troubleshooting.md#the-panel). The panel
-can't see what else was mounted into it, so keeping tunnel configs, credentials
-and gluetun's secrets out of it is a [host check](operations.md#host-checks);
-the one credential it may hold is the sign-in client secret file.
-`MOLEBRIDGE_PANEL_ISOLATION_CHECK=off` switches the check off for tests; a start
-with it set says so on standard error, and a deployed panel should never run
-that way ([configuration](configuration.md#the-panels-isolation-check)).
+desired server name. At every start it checks its own isolation (no
+capabilities, not uid 0 unless `PANEL_ALLOW_ROOT=1`, each exit's `applier`
+state directory read-only) and refuses to run, with status 1 and one line per
+problem, if any check fails. The checks, the rootless Podman settings
+(`PANEL_USER=0:0` with `PANEL_ALLOW_ROOT=1`) and the test-only switch that
+turns the check off are in
+[configuration](configuration.md#the-panels-isolation-check); the messages are
+in [troubleshooting](troubleshooting.md#the-panel).
 
 ## Sign-in
 

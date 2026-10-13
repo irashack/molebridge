@@ -61,10 +61,8 @@ open through the exit drop when it switches.
   release only after a maintainer's live-acceptance run attested that the
   exact image passed ([verification of a release](docs/setup.md#1-download-and-verify)).
 - **NetBird runs inside the exit container.** A native exit is two containers
-  (`exit` and `switchyard`) where 0.7 had four. `molebridge exit` is
-  PID 1: a supervisor that starts a worker, which holds the routing and runs
-  the provider logic, and then the NetBird client. If the worker stops making
-  progress, the supervisor stops NetBird and the container restarts.
+  (`exit` and `switchyard`) where 0.7 had four. `molebridge exit` is PID 1 and
+  supervises the worker and NetBird ([how it works](#how-it-works)).
 - **Nothing to build, no Python on the host.** The Python applier and panel and
   the routing shell scripts are gone. The setup tools run from the same image
   as throwaway containers. Only `routing/gluetun-preflight` remains, a shell
@@ -87,25 +85,26 @@ full list is in the [changelog](CHANGELOG.md#080--2026-10-13).
 ## Status: experimental
 
 **Molebridge 0.8.0 is experimental software with one maintainer, not a 1.0.**
-[Testing](docs/testing.md#080) is the record; in short:
+[Testing](docs/testing.md#080) is the record, and the only place the results
+are written out in full; in short:
 
 - **Tested live at 0.8.0:** one Debian host (amd64) running rootless Podman
   5.8 with Quadlet units, against a self-hosted NetBird server. Native
   Mullvad, PIA and NordVPN exits, a gluetun exit and a gluetun sidecar (both
   with NordVPN) were upgraded from 0.7.0 and came up with their peers and
   selections. The released image passed rule-drift and tunnel-loss drills on
-  the three native providers and a frozen-worker drill on NordVPN. The drills
-  ran from inside the exit's namespace; no client device was held on the exit.
-- **Run in CI at 0.8.0:** unit, fuzz and namespace-drill suites and the
-  release checks on amd64; the image checks on amd64 and arm64. The namespace
-  drills also passed once on an arm64 Linux VM.
-- **Not tested at 0.8.0:** Docker Engine and NetBird Cloud; the shipped
-  Compose files on any engine (CI only validates them with
-  `docker compose config`; the live pass ran the image from Quadlet units
-  this repository doesn't ship, and podman-compose last ran in September
-  2026, at v0.1.0); installing from the signed bundle on a clean host;
+  the native exits, run from inside the exit's namespace with no client device
+  held on it.
+- **Run in CI:** unit, fuzz and namespace-drill suites and the release checks
+  on amd64; the image checks on amd64 and arm64. The namespace drills also
+  passed once on an arm64 Linux VM.
+- **Not tested at 0.8.0:** Docker Engine and NetBird Cloud; running the
+  shipped Compose files on any engine (CI only validates them with
+  `docker compose config`; the live exits ran from Quadlet units this
+  repository doesn't ship); installing from the signed bundle on a clean host;
   phones; a reboot; the panel's sign-in against a real identity provider; PIA
-  port forwarding; gluetun with providers other than NordVPN.
+  port forwarding; gluetun with providers other than NordVPN. The full list is
+  [in testing](docs/testing.md#not-tested-at-080).
 
 Verify the release on your own host with the [checks](docs/verification.md)
 before you rely on it, and keep a way into the host that doesn't depend on the
@@ -260,11 +259,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
   Mullvad, plain DNS that passes through the exit ends up at the Mullvad
   server, so a DNS leak test shows Mullvad; this is observed, not documented
   by Mullvad. PIA and NordVPN are untested. See [DNS](docs/operations.md#dns).
-- **Mullvad, PIA and NordVPN natively, plus the gluetun backend.** NordVPN
-  is experimental. The gluetun backend selects servers for FastestVPN, IVPN,
-  Mullvad, NordVPN, Surfshark and Windscribe through gluetun, and only those:
-  the exit refuses any other provider. [Other providers](docs/other-providers.md)
-  says which could be added, and what that support would realistically look like.
+- **Six gluetun providers and three native ones, no others.** NordVPN is
+  experimental. The gluetun backend accepts only the providers named above; the
+  exit refuses any other. [Other providers](docs/other-providers.md) says which
+  could be added, and what that support would realistically look like.
 - **One provider per exit.** To offer more than one, run one exit per
   provider on the same host and serve them from one
   [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
@@ -289,11 +287,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
 0.8.0 ports the routing and status logic of 0.7.0, which ran on the same
 rootless Podman host with a Linux client held through rule and route
 deletions, tunnel loss, switches and a gluetun restart. Earlier releases ran
-on macOS with OrbStack and, with podman-compose, on a Debian 13 host. Not tested at any version: the routing on a live
-Docker Engine host on Linux, Docker Desktop, NetBird Cloud, phones during
-failure drills, PIA port forwarding against PIA itself, and the gluetun backend
-with providers other than NordVPN. The dated record of each pass is in
-[testing](docs/testing.md).
+on macOS with OrbStack and, with podman-compose, on a Debian 13 host.
+[Testing](docs/testing.md) has the dated record of each pass and what has
+never been tested at any version (Docker Desktop, phones during failure
+drills, PIA port forwarding against PIA itself, among others).
 
 ## Documentation
 
