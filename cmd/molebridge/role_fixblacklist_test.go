@@ -65,7 +65,7 @@ func TestFixBlacklistRole(t *testing.T) {
 	if code, _, errOut = run([]string{"extra"}, env); code != 2 || !strings.HasPrefix(errOut, "usage: molebridge fix-blacklist") {
 		t.Fatalf("usage: %d %q", code, errOut)
 	}
-	if code, _, errOut = run(nil, map[string]string{"TUNNEL_BACKEND": "other"}); code != 1 || !strings.Contains(errOut, "TUNNEL_BACKEND must be wireguard or gluetun") {
+	if code, _, errOut = run(nil, map[string]string{"TUNNEL_BACKEND": "other"}); code != 1 || !strings.Contains(errOut, "TUNNEL_BACKEND must be native or gluetun") {
 		t.Fatalf("backend: %d %q", code, errOut)
 	}
 	if code, _, errOut = run(nil, map[string]string{"NB_STATE_DIR": t.TempDir()}); code != 1 || !strings.Contains(errOut, "no NetBird identity found") {

@@ -1,9 +1,9 @@
 package panel
 
 // The Node tests (panel/js-tests) check the browser script against what the
-// real server serves for every case in the consumer matrix. They used to
-// run panel/fixtures/payloads.py; with MOLEBRIDGE_PANEL=go, server.js runs
-// this test instead, which writes the same document:
+// real server serves for every case in the consumer matrix. server.js runs
+// this test, which writes the document they read (it replaced
+// panel/fixtures/payloads.py of 0.7.0):
 //
 //	PANEL_PAYLOADS_OUT=/tmp/payloads.json go test ./internal/panel -run TestWritePayloads
 

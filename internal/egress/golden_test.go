@@ -8,9 +8,10 @@ import (
 	"github.com/irashack/molebridge/internal/validate"
 )
 
-// TestMatchesPython compares ParseEcho and the route classification with the
-// Python functions on generated inputs (testdata/golden.json: blanks of every
-// kind around IPv4 and IPv6 forms, and route destinations). They agree on all of
+// TestMatchesPython compares ParseEcho and the route classification with what
+// 0.7.0's Python functions returned on generated inputs (testdata/golden.json:
+// blanks of every kind around IPv4 and IPv6 forms, and route destinations). The
+// golden was generated at commit d553f25 and is now fixed. They agree on all of
 // them; the two places Go is stricter than some Python versions (a scoped IPv6
 // address, an IPv4-mapped loopback) are not among them.
 func TestMatchesPython(t *testing.T) {

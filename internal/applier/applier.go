@@ -1285,7 +1285,7 @@ func (a *Applier) gate(ctx context.Context, target *Selection) *gateResult {
 	if a.kind() == "overlay" {
 		if protected, _ := a.routingStatus(ctx, a.spec.AddressBeforeSwitch); !protected {
 			return &gateResult{"pending", "Waiting for tunnel and overlay routing; request will retry automatically. " +
-				"Run recovery if this persists.", ""}
+				"If this persists, recreate the exit (docs/operations.md#recovery).", ""}
 		}
 		if !a.netbirdNative(ctx) {
 			return &gateResult{"pending", "Waiting for NetBird to run kernel WireGuard with its kernel firewall; " +

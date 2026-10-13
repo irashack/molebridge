@@ -55,7 +55,7 @@ var SwitchTimeoutSec = float64(state.SwitchTimeouts["native"])
 const (
 	NetbirdModeFailed = "NetBird is not running kernel WireGuard with its kernel firewall on the overlay " +
 		"interface; see the troubleshooting guide."
-	RoutingFailed  = "Routing protection is incomplete; run the recovery helper."
+	RoutingFailed  = "Routing protection is incomplete; see docs/operations.md#recovery."
 	InvalidDesired = "Invalid desired-state file; no change applied."
 	Unlisted       = "Requested server is not in a fresh trusted relay catalogue; no change applied."
 	// EgressFailedMessage is what an inspection says when a call failed.

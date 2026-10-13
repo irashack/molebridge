@@ -393,7 +393,7 @@ docker compose run --rm --no-deps exit check-config
 (For the gluetun forms, start gluetun first: the exit joins its namespace.) On success it
 prints, for a native exit,
 `molebridge-exit: configuration accepted (/config/wg_confs/<EXIT_IF>.conf: an IPv4 address and an IPv6 address)`
-(or `an IPv4 address`, or `no address (the applier sets it)` for PIA), and for the other kinds
+(or `an IPv4 address`, or `no address (the exit sets it)` for PIA), and for the other kinds
 `molebridge-exit: configuration accepted`; then, for an overlay exit,
 `NetBird gate: configuration accepted`. A refusal is the one line the exit would print at start,
 on standard error, with exit status `1` ([troubleshooting](troubleshooting.md#startup)). A usage error

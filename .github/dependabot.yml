@@ -19,16 +19,3 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build(go)"
-  # The older routing and applier images, until their Dockerfiles go.
-  - package-ecosystem: docker
-    directory: /routing
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: "build(routing)"
-  - package-ecosystem: docker
-    directory: /applier
-    schedule:
-      interval: weekly
-    commit-message:
-      prefix: "build(applier)"

@@ -25,8 +25,10 @@ jobs:
       - name: Whitespace
         run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
       - name: Shell scripts
+        # routing/gluetun-preflight is the one shell program that ships; the
+        # rest are the repository's own check and release scripts.
         run: |
-          scripts="routing/molebridge-exit routing/10-exit-routing routing/wait-for-guards routing/contract-rules routing/gluetun-preflight applier/apply.sh tools/check-routing.sh tools/check-exit-image.sh tools/check-compose.sh tools/test-gluetun-preflight.sh"
+          scripts="routing/gluetun-preflight $(ls tools/*.sh)"
           for script in $scripts; do sh -n "$script"; done
           # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
@@ -51,45 +53,6 @@ jobs:
           docker run --rm -v "$PWD:/repo:ro" -w /repo \
             docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e \
             sh tools/test-gluetun-preflight.sh
-      - name: Python tests
-        run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --quiet pytest==9.1.1 PyYAML==6.0.3
-          .venv/bin/python -m pytest -q panel tools
-      - name: Panel script tests
-        # Node's own test runner, no dependencies: the runner image's Node.
-        # The tests read the real panel's answers through Python.
-        run: |
-          node --version
-          PYTHON=.venv/bin/python node --test panel/js-tests/describe.test.js panel/js-tests/cached-0.6.test.js
-      - name: Sidecar doctor and recovery against Docker
-        # The doctor's namespace identity probe and recover, with a pinned
-        # busybox owning the namespace in gluetun's place: attachment, a
-        # same-ID owner restart that leaves members behind, and recovery.
-        run: python3 tools/check-sidecar-doctor.py
-      - name: Build the privileged applier
-        run: docker build --tag molebridge-applier:ci --file applier/Dockerfile .
-      - name: Check runtime tools in the applier image
-        run: docker run --rm --network none --entrypoint sh molebridge-applier:ci -c 'python --version && wg --version && ip -Version && curl --version && nft --version && test -s /app/applier/pia-ca.rsa.4096.crt'
-      - name: Build the routing image
-        run: |
-          docker build --tag molebridge-wireguard:ci --file routing/Dockerfile .
-          # The guard and the exit run as root with every capability dropped
-          # but NET_ADMIN (and DAC_READ_SEARCH): they must read the shared
-          # rules without DAC override.
-          docker run --rm --network none --cap-drop ALL --cap-add NET_ADMIN --entrypoint sh molebridge-wireguard:ci -c 'test -r /usr/local/lib/molebridge/contract-rules && . /usr/local/lib/molebridge/contract-rules'
-      - name: Routing image life cycle
-        # The image as compose.yaml runs it, with a throwaway config and a
-        # documentation-range peer: start, repair, tunnel loss, a failing or
-        # hanging bring-up, every stop, the guard mode.
-        run: sh tools/check-exit-image.sh molebridge-wireguard:ci
-      - name: Linux namespace routing drills
-        run: |
-          # nft runs the PIA port-forwarding and ingress-guard drill; busybox,
-          # mawk and gawk run the NetBird gate's JSON reader under each awk.
-          sudo apt-get install -y --no-install-recommends nftables busybox mawk gawk >/dev/null
-          # busybox sh: the shell the routing image and NetBird's image use.
-          sudo env ROUTING_SH="busybox sh" sh tools/check-routing.sh
 
   go:
     name: Go
@@ -117,11 +80,21 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+        # With and without the drill tag: the namespace drills are Go too.
+        run: |
+          go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+          go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 -tags drill ./...
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Unit tests
         run: go test -count=1 ./...
+      - name: Panel script tests
+        # Node's own test runner, no dependencies: the runner image's Node. The
+        # tests read the real panel's answers: server.js runs the Go panel's
+        # TestWritePayloads (internal/panel/payloads_test.go).
+        run: |
+          node --version
+          node --test panel/js-tests/*.test.js
       - name: Namespace drills
         # The runner is a VM: root network namespaces are disposable here.
         # Only packages with `drill`-tagged tests build anything extra.
@@ -190,6 +163,12 @@ jobs:
         run: sh tools/check-image.sh molebridge:ci-amd64 linux/amd64
       - name: Check the arm64 image
         run: sh tools/check-image.sh molebridge:ci-arm64 linux/arm64
+      - name: Exit life cycle (amd64)
+        # The image's exit role in a namespace a busybox container keeps
+        # alive: every refusal with its exact message, the start order,
+        # health, a stop inside its budget with the rules left in place.
+        # Needs kernel WireGuard, which the runner has. Not run under QEMU.
+        run: sh tools/check-exit-image.sh molebridge:ci-amd64
 
   release-tooling:
     name: Release tooling

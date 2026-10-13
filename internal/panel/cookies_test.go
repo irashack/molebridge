@@ -2,8 +2,8 @@ package panel
 
 // Ported from panel/test_oidc.py (StrictCookieTests) and checked against
 // Python's http.cookies: testdata/cookies.json holds what get_cookie and
-// get_cookie_strict returned for each header when it was generated with
-// Python 3.14 (python3 over the same functions as panel/app.py).
+// get_cookie_strict returned for each header; it was generated from 0.7.0's
+// Python implementation (Python 3.14) at commit d553f25 and is now fixed.
 
 import (
 	"encoding/json"

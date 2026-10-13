@@ -1,7 +1,7 @@
 package panel
 
 // Status records and requests for the panel's tests, with fictitious values
-// only: panel/fixtures/records.py in Go. schema 2 as the appliers publish it,
+// only: the records of 0.7.0's panel/fixtures/records.py. schema 2 as the appliers publish it,
 // and the 0.6 shape the panel still reads.
 
 import (

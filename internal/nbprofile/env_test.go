@@ -110,8 +110,8 @@ func TestGateRefusalMessagesAreVerbatim(t *testing.T) {
 		{"bad interface name", baseEnv(map[string]string{"NB_INTERFACE_NAME": "-x"}), "", "NetBird gate: invalid interface name"},
 		{"long interface name", baseEnv(map[string]string{"NB_INTERFACE_NAME": "abcdefghijklmnop"}), "", "NetBird gate: invalid interface name"},
 		{"dotted interface name", baseEnv(map[string]string{"NB_INTERFACE_NAME": "a b"}), "", "NetBird gate: invalid interface name"},
-		{"backend", baseEnv(nil), "other", "NetBird gate: TUNNEL_BACKEND must be wireguard or gluetun"},
-		{"backend from env", baseEnv(map[string]string{"TUNNEL_BACKEND": "other"}), "", "NetBird gate: TUNNEL_BACKEND must be wireguard or gluetun"},
+		{"backend", baseEnv(nil), "other", "NetBird gate: TUNNEL_BACKEND must be native or gluetun"},
+		{"backend from env", baseEnv(map[string]string{"TUNNEL_BACKEND": "other"}), "", "NetBird gate: TUNNEL_BACKEND must be native or gluetun"},
 		{"legacy routing", gluetunEnv(map[string]string{"NB_USE_LEGACY_ROUTING": "true"}), "", frame + "NB_USE_LEGACY_ROUTING is set; the gluetun backend needs NetBird to mark its control traffic" + tail},
 		{"socket mark", gluetunEnv(map[string]string{"NB_SKIP_SOCKET_MARK": "1"}), "", frame + "NB_SKIP_SOCKET_MARK is set; the gluetun backend needs NetBird to mark its control traffic" + tail},
 		{"custom routing", gluetunEnv(map[string]string{"NB_DISABLE_CUSTOM_ROUTING": "TRUE"}), "", frame + "NB_DISABLE_CUSTOM_ROUTING is set; the gluetun backend needs NetBird to mark its control traffic" + tail},
@@ -246,7 +246,7 @@ func TestTunnelFromEnv(t *testing.T) {
 		{map[string]string{"TUNNEL_BACKEND": "native", "EXIT_IF": "pia", "PROVIDER": "pia"}, BackendWireGuard, "pia", DefaultStateDir, ""},
 		{map[string]string{"TUNNEL_BACKEND": "gluetun"}, BackendGluetun, "wg0", DefaultStateDir, ""},
 		{map[string]string{"TUNNEL_BACKEND": "gluetun", "EXIT_IF": "tun9", "NB_STATE_DIR": "/s"}, BackendGluetun, "tun9", "/s", ""},
-		{map[string]string{"TUNNEL_BACKEND": "x"}, "", "", "", "TUNNEL_BACKEND must be wireguard or gluetun"},
+		{map[string]string{"TUNNEL_BACKEND": "x"}, "", "", "", "TUNNEL_BACKEND must be native or gluetun"},
 		{map[string]string{"EXIT_IF": `a"b`}, "", "", "", "the tunnel interface name is invalid"},
 	} {
 		backend, tunnel, state, err := TunnelFromEnv(c.env)

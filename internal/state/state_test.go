@@ -1,5 +1,6 @@
-// Tests for molebridge/state.py. The golden files were made by running the
-// Python functions on the same inputs. Ported: test_request_names_are_provider_
+// Tests for molebridge/state.py. The golden files were generated from
+// 0.7.0's Python implementation at commit d553f25 (run on the same inputs) and are
+// now fixed. Ported: test_request_names_are_provider_
 // specific (tools/test_pia.py), the egress_tier checks of tools/test_egress.py
 // (test_tunnel_tier_counts_only_for_a_provider_without_its_own_check and
 // test_provider_tier_keeps_meaning_provider_confirmed; their status_view

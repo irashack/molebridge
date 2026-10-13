@@ -110,7 +110,7 @@ func checkCommon(e envView, backend string) (Settings, error) {
 	case BackendGluetun:
 		s.Backend = BackendGluetun
 	default:
-		return s, refuseBare("NetBird gate: TUNNEL_BACKEND must be wireguard or gluetun")
+		return s, refuseBare("NetBird gate: TUNNEL_BACKEND must be native or gluetun")
 	}
 	s.StateDir = e.def("NB_STATE_DIR", DefaultStateDir)
 	s.TunnelIF = e.def("EXIT_IF", map[string]string{BackendWireGuard: "mullvad", BackendGluetun: "wg0"}[s.Backend])
@@ -326,7 +326,7 @@ func TunnelFromEnv(env map[string]string) (backend, tunnelIF, stateDir string, e
 	case BackendGluetun:
 		backend = BackendGluetun
 	default:
-		return "", "", "", refuseBare("NetBird gate: TUNNEL_BACKEND must be wireguard or gluetun")
+		return "", "", "", refuseBare("NetBird gate: TUNNEL_BACKEND must be native or gluetun")
 	}
 	def := "mullvad"
 	if backend == BackendGluetun {
