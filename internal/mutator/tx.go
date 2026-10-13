@@ -80,7 +80,7 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 	if !changed {
 		return nil // nothing there to delete
 	}
-	if worse := policy.Worsened(before.Violations(), after.Violations()); len(worse) > 0 {
+	if worse := policy.Worsens(before, after); len(worse) > 0 {
 		return refuse(worse[0].String()+fmt.Sprintf(" [live %v expected %v]", before.Live, spec.ReturnPath), nil)
 	}
 	return nil
