@@ -543,6 +543,44 @@ rules with the wrong action or an extra selector, event loss by flood, and
 packet-level checks that nothing leaves while a repair runs.
 [Testing](testing.md#080) records what has run on a live exit.
 
+### The deletion check, and what it assumes
+
+The mutation owner never deletes a rule or a route on its own say. Before every
+deletion (an exact delete, a delete by priority, the clearing in a rebuild, a
+stray copy, a route out of a table, the release of the temporary guard) it
+takes a snapshot the kernel held still for, applies the deletion to it as the
+kernel would, and asks `internal/policy` whether any protected class of traffic
+has gone from safe to escaping. If one has, or the kernel kept changing so it
+cannot tell, the rule stays, the pass is unverified, and the refusal is logged
+once (`kept IPv4 rule 98: ...`).
+
+The model follows a packet through the rules the way the kernel does and
+errs on the side of refusing. It judges every packet a class defines, not a
+sample: traffic arriving on the overlay interface in both families (whatever
+overlay prefixes are configured), ICMP the exit sends from every tunnel
+address that is live or expected, packets for the exit's own addresses
+arriving on the overlay, and, with gluetun, the exit's own control-marked,
+client-bound and unmarked traffic. A selector it cannot evaluate exactly (a
+TOS, a uid or port range, `l3mdev`, `suppress_ifgroup`, an attribute of a newer
+kernel, a conditional route) is followed both ways, a `goto` both to its target
+and past it, and a lookup that may fail falls through as well. Only a refused
+lookup, or a route out of the tunnel interface (for gluetun's classes, the
+host, overlay or tunnel device the contract names), is a safe answer: a
+default route out of `eth0` in the exit table is an escape however the table
+is named. A deletion is simulated with the kernel's own rule and route
+matching, in which an explicit zero is a wildcard, so the rule that goes is the
+rule the kernel would remove.
+
+**What this does not cover.** The check, like the drift model it belongs to,
+covers rules and routes that NetBird, an operator or Molebridge's own failures
+change or remove: a crash half way through a repair, a request the kernel
+refuses, a snapshot that is unstable or unreadable, an address that comes and
+goes. A process with `NET_ADMIN` in the exit's namespace that sets out to craft
+rules that defeat the check is outside it, as it is outside every guard here:
+it can already route traffic anywhere, and root in the namespace can defeat any
+rule it is shown. The model is a safety net for mistakes and races, not a
+sandbox.
+
 ## NetBird and its checks
 
 Rule 1 means overlay traffic is never delivered to the exit itself. A packet
