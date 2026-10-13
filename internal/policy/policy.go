@@ -144,12 +144,11 @@ func (s State) WithRule(r rtnl.Rule) State {
 // metric in the table is replaced, otherwise the route is added. A table the
 // snapshot did not read is not tracked.
 func (s State) WithRoute(r rtnl.Route) State {
-	routes, known := s.Routes[r.Family][r.Table]
-	if !known {
+	if _, known := s.Routes[r.Family][r.Table]; !known {
 		return s
 	}
 	out := s.clone()
-	routes = out.Routes[r.Family][r.Table]
+	routes := out.Routes[r.Family][r.Table]
 	for i, x := range routes {
 		if x.Dst == r.Dst && x.Tos == r.Tos && x.Metric == r.Metric && (r.Family == rtnl.V4 || x.Src == r.Src) {
 			routes[i] = r
