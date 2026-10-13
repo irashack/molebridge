@@ -418,7 +418,7 @@ connects, because it picks servers from the old list that no longer answer. The
 exit does not wait for the updater. Once the tunnel has a recent handshake and
 the list is older than `GLUETUN_UPDATER_PERIOD` or 7 days, whichever is
 shorter, it asks gluetun's updater for one refresh (up to three attempts per
-start, five minutes apart; `0` turns this off). The panel shows the list's date
+start, each given 15 minutes, with 5 minutes between a failure and the next; `0` turns this off). The panel shows the list's date
 and calls it stale after 30 days.
 
 In the panel, the provider's name appears with "via gluetun". While the refresh runs,
