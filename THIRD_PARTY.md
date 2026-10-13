@@ -109,10 +109,10 @@ module's license text is reproduced as vendored.
 | `github.com/mdlayher/socket` | v0.5.1 | LICENSE.md |
 | `github.com/vishvananda/netlink` | v1.3.1 | LICENSE |
 | `github.com/vishvananda/netns` | v0.0.5 | LICENSE |
-| `golang.org/x/crypto` | v0.31.0 | LICENSE, PATENTS |
-| `golang.org/x/net` | v0.33.0 | LICENSE, PATENTS |
+| `golang.org/x/crypto` | v0.57.0 | LICENSE, PATENTS |
+| `golang.org/x/net` | v0.60.0 | LICENSE, PATENTS |
 | `golang.org/x/sync` | v0.10.0 | LICENSE, PATENTS |
-| `golang.org/x/sys` | v0.28.0 | LICENSE, PATENTS |
+| `golang.org/x/sys` | v0.48.0 | LICENSE, PATENTS |
 | `golang.zx2c4.com/wireguard` | v0.0.0-20231211153847-12269c276173 | LICENSE |
 | `golang.zx2c4.com/wireguard/wgctrl` | v0.0.0-20241231184526-a9ab2273dd10 | LICENSE.md |
 
@@ -819,7 +819,7 @@ Packages: github.com/vishvananda/netns
    limitations under the License.
 ~~~~
 
-### golang.org/x/crypto v0.31.0
+### golang.org/x/crypto v0.57.0
 
 Packages: golang.org/x/crypto/curve25519
 
@@ -882,7 +882,7 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 ~~~~
 
-### golang.org/x/net v0.33.0
+### golang.org/x/net v0.60.0
 
 Packages: golang.org/x/net/bpf
 
@@ -1008,7 +1008,7 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 ~~~~
 
-### golang.org/x/sys v0.28.0
+### golang.org/x/sys v0.48.0
 
 Packages: golang.org/x/sys/unix, golang.org/x/sys/windows
 
