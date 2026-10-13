@@ -272,12 +272,10 @@ func matches(r rtnl.Rule, p packet) tri {
 	if known != no && r.Dst.IsValid() && r.Dst.Bits() > 0 && !r.Dst.Contains(p.dst) {
 		known = no
 	}
-	if known != no && r.FwMark.OK {
-		mask := uint32(0xffffffff)
-		if r.FwMask.OK {
-			mask = r.FwMask.V
-		}
-		if (r.FwMark.V^p.mark)&mask != 0 {
+	if known != no {
+		// As fib_rule_match: (packet mark ^ rule mark) & mask; a dumped rule
+		// can carry the mask alone (see EffectiveMark).
+		if mark, mask := r.EffectiveMark(); (mark^p.mark)&mask != 0 {
 			known = no
 		}
 	}

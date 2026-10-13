@@ -436,3 +436,43 @@ func BenchmarkWorsensGluetun(b *testing.B) {
 		Worsens(s, after)
 	}
 }
+
+// Round 7: a rule the kernel dumps as "fwmark 0/0xffffffff" carries a mask and
+// no mark. It selects only unmarked packets. The reviewer's case: with it as
+// rule 95 and 95/97 gone, the rule before it is the protection of every other mark,
+// and deleting that rule lets forwarded traffic marked 0xca6c reach main/eth0.
+func TestADumpedZeroMarkRuleDoesNotProtectMarkedTraffic(t *testing.T) {
+	for name, build := range map[string]func(t *testing.T) State{"native": nativeState, "gluetun": gluetunState} {
+		s := build(t)
+		zeroMark, err := rtnl.DecodeRule(rtnl.Rule{Family: rtnl.V4, Priority: 95, Action: rtnl.FRActToTbl, Table: 51821, IifName: "wt0",
+			FwMask: rtnl.Some(uint32(0xffffffff))}.Marshal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		everything := rtnl.Rule{Family: rtnl.V4, Priority: 93, Action: rtnl.FRActToTbl, Table: 51821, IifName: "wt0"}
+		s = s.set(rtnl.V4, func(r []rtnl.Rule) []rtnl.Rule {
+			r = filter(r, func(x rtnl.Rule) bool { return x.Priority != 95 && x.Priority != 97 })
+			return append(r, zeroMark, everything)
+		})
+		if v := s.Violations(); len(v) != 0 {
+			t.Fatalf("%s: the starting point escapes: %v", name, v)
+		}
+		after, ok := s.WithoutPriority(rtnl.V4, 93)
+		if !ok {
+			t.Fatal("no rule 93")
+		}
+		v := Worsens(s, after)
+		if len(v) == 0 {
+			t.Fatalf("%s: forwarded traffic marked 0xca6c escapes once the rule in front is gone, and the deletion was approved", name)
+		}
+		found := false
+		for _, x := range v {
+			if strings.Contains(x.Packet, "mark 0xca6c") {
+				found = true
+			}
+		}
+		if name == "gluetun" && !found {
+			t.Errorf("the 0xca6c packets were not among the escapes: %v", v)
+		}
+	}
+}

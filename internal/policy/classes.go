@@ -273,13 +273,10 @@ func points(f rtnl.Family, states ...State) []packet {
 	// the contract's, none and everything.
 	markSet := map[uint32]bool{0: true, 0xffffffff: true, c.ControlMark: true, c.ControlMark | 0x21: true, contract.GluetunMark: true}
 	for _, r := range rules {
-		if r.FwMark.OK {
-			markSet[r.FwMark.V] = true
-			mask := uint32(0xffffffff)
-			if r.FwMask.OK {
-				mask = r.FwMask.V
-			}
-			markSet[r.FwMark.V^mask] = true
+		if mark, mask := r.EffectiveMark(); mask != 0 {
+			markSet[mark] = true
+			markSet[mark^mask] = true
+			markSet[mark^(mask&-mask)] = true // differs in the lowest bit the rule looks at
 		}
 	}
 	var marks []uint32
@@ -292,15 +289,8 @@ func points(f rtnl.Family, states ...State) []packet {
 	for _, m := range marks {
 		var g sig
 		for _, r := range rules {
-			if !r.FwMark.OK {
-				g.add(false)
-				continue
-			}
-			mask := uint32(0xffffffff)
-			if r.FwMask.OK {
-				mask = r.FwMask.V
-			}
-			g.add((r.FwMark.V^m)&mask == 0)
+			mark, mask := r.EffectiveMark()
+			g.add(mask != 0 && (mark^m)&mask == 0)
 		}
 		g.add(m == c.ControlMark)
 		g.add(m == contract.GluetunMark)

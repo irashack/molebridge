@@ -47,6 +47,27 @@ type Rule struct {
 	Bad bool
 }
 
+// EffectiveMark returns the firewall mark and mask a rule matches with, as
+// fib_rule_match evaluates them: a packet matches when (mark ^ rule.mark) &
+// mask is zero, so a mask of zero selects nothing. A dump omits a zero
+// FRA_FWMARK (fib_nl_fill_rule puts it only when it is nonzero) and so
+// describes "fwmark 0/0xffffffff" as a mask with no mark; and a request that
+// gives a nonzero mark and no mask gets the mask 0xffffffff
+// (fib_nl2rule). A missing mark is therefore mark 0, a missing mask is
+// 0xffffffff for a nonzero mark and 0 (no selector) otherwise.
+func (r Rule) EffectiveMark() (mark, mask uint32) {
+	if r.FwMark.OK {
+		mark = r.FwMark.V
+	}
+	switch {
+	case r.FwMask.OK:
+		mask = r.FwMask.V
+	case mark != 0:
+		mask = 0xffffffff
+	}
+	return mark, mask
+}
+
 // Invert reports FIB_RULE_INVERT, the "not" in "not iif wt0 lookup local".
 func (r Rule) Invert() bool { return r.Flags&FIBRuleInvert != 0 }
 
@@ -326,15 +347,11 @@ func (r Rule) Items() []string {
 	if r.Tos != 0 {
 		add("tos %d", r.Tos)
 	}
-	if r.FwMark.OK || r.FwMask.OK {
-		mask := uint32(0xffffffff)
-		if r.FwMask.OK {
-			mask = r.FwMask.V
-		}
+	if mark, mask := r.EffectiveMark(); mask != 0 {
 		if mask == 0xffffffff {
-			add("fwmark %#x", r.FwMark.V)
+			add("fwmark %#x", mark)
 		} else {
-			add("fwmark %#x/%#x", r.FwMark.V, mask)
+			add("fwmark %#x/%#x", mark, mask)
 		}
 	}
 	if r.IifName != "" {

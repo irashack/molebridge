@@ -3,6 +3,7 @@ package rtnl
 import (
 	"math/rand"
 	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -244,5 +245,47 @@ func TestDeleteMatchesAgreesWithTheTranscribedPredicate(t *testing.T) {
 	}
 	if agree < 1000 {
 		t.Errorf("only %d matching pairs: the draw does not exercise the predicate", agree)
+	}
+}
+
+// A dump describes "fwmark 0/0xffffffff" as a mask with no mark: the kernel
+// puts FRA_FWMARK only when it is nonzero (fib_nl_fill_rule). The rule matches
+// only unmarked packets; read as "no mark selector" it would match them all.
+func TestAMaskWithoutAMarkIsAZeroMarkSelector(t *testing.T) {
+	dumped, err := DecodeRule(Rule{Family: V4, Priority: 95, Action: FRActToTbl, Table: 51821, IifName: "wt0",
+		FwMask: Some(uint32(0xffffffff))}.Marshal()) // no FRA_FWMARK attribute, as the kernel dumps it
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dumped.FwMark.OK || !dumped.FwMask.OK {
+		t.Fatalf("not the shape of a kernel dump: %+v", dumped)
+	}
+	mark, mask := dumped.EffectiveMark()
+	if mark != 0 || mask != 0xffffffff {
+		t.Errorf("effective mark %#x/%#x", mark, mask)
+	}
+	explicit := Rule{Family: V4, Priority: 95, Action: FRActToTbl, Table: 51821, IifName: "wt0", FwMark: Some(uint32(0)), FwMask: Some(uint32(0xffffffff))}
+	if got, want := dumped.Items(), explicit.Items(); len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("the dumped rule and the one we install differ: %v vs %v", got, want)
+	}
+	// Defaults of a request: a nonzero mark without a mask gets all ones; no
+	// mark and no mask selects nothing; a mask of zero selects nothing.
+	for _, tc := range []struct {
+		r          Rule
+		mark, mask uint32
+	}{
+		{Rule{FwMark: Some(uint32(7))}, 7, 0xffffffff},
+		{Rule{}, 0, 0},
+		{Rule{FwMask: Some(uint32(0))}, 0, 0},
+		{Rule{FwMark: Some(uint32(0x1bd00)), FwMask: Some(uint32(0xffffff00))}, 0x1bd00, 0xffffff00},
+	} {
+		if m, k := tc.r.EffectiveMark(); m != tc.mark || k != tc.mask {
+			t.Errorf("%+v: %#x/%#x, want %#x/%#x", tc.r, m, k, tc.mark, tc.mask)
+		}
+	}
+	for _, it := range (Rule{Family: V4}).Items() {
+		if strings.HasPrefix(it, "fwmark") {
+			t.Errorf("a rule without a mark selector has %q", it)
+		}
 	}
 }
