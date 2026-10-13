@@ -4,8 +4,10 @@ package exit
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +29,44 @@ const piaConfText = "[Interface]\nPrivateKey = " + zeroKey + "\nMTU = 1420\nTabl
 // address) in a namespace of its own.
 func sysRig(t *testing.T) (*KernelSystem, *nstest.NS) {
 	t.Helper()
+	ks, ns, _ := sysRigLogged(t)
+	return ks, ns
+}
+
+// logSink collects the mutation owner's log lines.
+type logSink struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logSink) logf(format string, a ...any) {
+	l.mu.Lock()
+	l.lines = append(l.lines, fmt.Sprintf(format, a...))
+	l.mu.Unlock()
+}
+
+// count is the number of lines that contain text.
+func (l *logSink) count(text string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, line := range l.lines {
+		if strings.Contains(line, text) {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *logSink) len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.lines)
+}
+
+func sysRigLogged(t *testing.T) (*KernelSystem, *nstest.NS, *logSink) {
+	t.Helper()
+	logs := &logSink{}
 	ns := nstest.New(t, "sys")
 	if _, err := ns.TryIP("link", "add", "wt0", "type", "wireguard"); err != nil {
 		t.Skipf("no WireGuard: %v", err)
@@ -56,7 +96,7 @@ func sysRig(t *testing.T) (*KernelSystem, *nstest.NS) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mut := mutator.New(mutator.Options{Kernel: conn, Spec: spec, GuardRepairs: true, Logf: t.Logf})
+	mut := mutator.New(mutator.Options{Kernel: conn, Spec: spec, GuardRepairs: true, Logf: func(f string, a ...any) { logs.logf(f, a...); t.Logf(f, a...) }})
 	mut.Start()
 	t.Cleanup(func() { mut.Close(); conn.Close(); obs.Close(); tun.Close() })
 	ctx := context.Background()
@@ -70,7 +110,7 @@ func sysRig(t *testing.T) (*KernelSystem, *nstest.NS) {
 	}
 	ks := &KernelSystem{S: s, Spec: spec, Obs: obs, Mut: mut, Tun: tun, Generation: strings.Repeat("a", 32), NetNS: ns.Fd()}
 	var _ applier.System = ks
-	return ks, ns
+	return ks, ns, logs
 }
 
 func TestKernelSystemPIAAddressChangeIsOneTransaction(t *testing.T) {

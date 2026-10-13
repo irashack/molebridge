@@ -25,6 +25,18 @@ import (
 	"github.com/irashack/molebridge/internal/tunnel"
 )
 
+// Observer is the read side of the kernel the System uses: *rtnl.Conn, or a
+// fake in tests.
+type Observer interface {
+	Take(rtnl.Interest) (*rtnl.Snapshot, error)
+	TakeReadOnly(ctx context.Context, in rtnl.Interest) (*rtnl.Snapshot, error)
+	Links() ([]rtnl.Link, error)
+	Routes(f rtnl.Family, tables func(uint32) bool) ([]rtnl.Route, error)
+	Addrs(f rtnl.Family) ([]rtnl.Addr, error)
+}
+
+var _ Observer = (*rtnl.Conn)(nil)
+
 // KernelSystem is the worker's implementation of applier.System: every call
 // the Python applier made through `ip`, `wg`, `nft` and `curl` is one method,
 // answered through netlink, WireGuard's generic netlink and nftables. Reads go
@@ -36,7 +48,7 @@ type KernelSystem struct {
 
 	S    *Settings
 	Spec contract.Spec
-	Obs  *rtnl.Conn
+	Obs  Observer
 	Mut  *mutator.Mutator
 	Tun  *tunnel.Manager
 	// Generation is the launch generation: the native exit's owner generation.
@@ -539,9 +551,35 @@ func (k *KernelSystem) AddReturnPathRule(ctx context.Context, priority int, addr
 	return k.onOwner(ctx, "add a return-path rule", func(p piaOnTx) error { return p.AddReturnPathRule(ctx, priority, addr) })
 }
 
-// DeleteReturnPathRule removes the rule at priority from src.
+// DeleteReturnPathRule removes the return-path rule at priority from src. A
+// rule for a given source is the provider retiring that address (the tunnel
+// lost it, or has another): the mutation owner is told, in ONE job, so that it
+// stops expecting the address and deletes its pair together (94 and 98 both,
+// whichever priority was named), instead of restoring a pair the provider
+// removes. That is refused while the address is live on any interface, and
+// from an unstable look; the error says the retirement is unverified, nothing
+// has changed, and the provider's next tick asks again. Without a source the
+// rule at the priority, whichever it is, is deleted as a plain job (the
+// provider is about to put its own back).
 func (k *KernelSystem) DeleteReturnPathRule(ctx context.Context, priority int, src netip.Addr) error {
-	return k.onOwner(ctx, "remove a return-path rule", func(p piaOnTx) error { return p.DeleteReturnPathRule(ctx, priority, src) })
+	if !src.IsValid() {
+		return k.onOwner(ctx, "remove a return-path rule", func(p piaOnTx) error { return p.DeleteReturnPathRule(ctx, priority, src) })
+	}
+	if priority != contract.PrioReturnPath && priority != contract.PrioBackstop {
+		return errors.New("not a return-path priority")
+	}
+	defer k.invalidate()
+	f := rtnl.V4
+	if !src.Is4() {
+		f = rtnl.V6
+	}
+	if err := k.Mut.RetireReturnPath(ctx, f, src); err != nil {
+		if errors.Is(err, mutator.ErrReturnPathLive) {
+			return fmt.Errorf("the return-path address %s is still on an interface; its pair stays (unverified, will retry): %w", src, err)
+		}
+		return fmt.Errorf("the return-path address %s could not be retired (unverified, will retry): %w", src, err)
+	}
+	return nil
 }
 
 // ReplaceTunnelAddress is `ip -4 address replace <addr>/32 dev <exit>`.
