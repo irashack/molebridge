@@ -13,9 +13,9 @@ pass() { echo "PASS $1"; }
 hex=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 commit=1234567890abcdef1234567890abcdef12345678
 cat > "$work/coverage.json" <<'EOM'
-{"platforms":["docker-engine-linux","podman-rootless-quadlet","netbird-cloud"],
+{"platforms":["podman-rootless-quadlet"],
  "providers":["mullvad","pia","nordvpn"],"kinds":["native","gluetun","sidecar"],
- "drills":[{"id":"clean-install-from-bundle","result":"passed","note":"dropped"},{"id":"client-held","result":"passed"},{"id":"upgrade-from-0.7","result":"passed"}]}
+ "drills":[{"id":"ci-namespace-drills","result":"passed"},{"id":"live-drift-repair","result":"passed","note":"13-23 ms"},{"id":"lease-lapse","result":"passed"},{"id":"tunnel-loss","result":"passed"},{"id":"upgrade-from-0.7","result":"passed"}]}
 EOM
 echo '["https://example.net/evidence/1","run 42 notes"]' > "$work/evidence.json"
 
@@ -34,8 +34,8 @@ refuses() {
 }
 
 gen > "$work/predicate.json"
-jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "1"
-       and (.drills | length == 3) and (.drills[0] | keys == ["id","result"]) and (.evidence | length == 2)' "$work/predicate.json" >/dev/null ||
+jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "2"
+       and (.drills | length == 5) and (.drills[0] | keys == ["id","result"]) and (.evidence | length == 2)' "$work/predicate.json" >/dev/null ||
     fail "predicate content"
 pass "writes the predicate"
 
@@ -51,8 +51,8 @@ sh "$verify" acceptance --results "$work/results.json" --repo irashack/molebridg
     --image ghcr.io/irashack/molebridge >/dev/null || fail "promotion policy rejects the generated predicate"
 pass "generated predicate satisfies the promotion policy"
 
-jq '.drills |= map(select(.id != "client-held"))' "$work/coverage.json" > "$work/c2.json"
-refuses "a missing drill" 'client-held' sh "$gen" --repo irashack/molebridge --commit "$commit" --tag v0.8.0-rc.1 --image ghcr.io/irashack/molebridge --digest "sha256:$hex" --bundle-name molebridge-v0.8.0-rc.1.tar.gz --bundle-sha256 "$(printf 'b%.0s' $(seq 1 64))" --coverage "$work/c2.json" --evidence "$work/evidence.json"
+jq '.drills |= map(select(.id != "lease-lapse"))' "$work/coverage.json" > "$work/c2.json"
+refuses "a missing drill" 'lease-lapse' sh "$gen" --repo irashack/molebridge --commit "$commit" --tag v0.8.0-rc.1 --image ghcr.io/irashack/molebridge --digest "sha256:$hex" --bundle-name molebridge-v0.8.0-rc.1.tar.gz --bundle-sha256 "$(printf 'b%.0s' $(seq 1 64))" --coverage "$work/c2.json" --evidence "$work/evidence.json"
 jq '.drills[0].result = "failed"' "$work/coverage.json" > "$work/c3.json"
 refuses "a failed drill" 'did not pass' sh "$gen" --repo irashack/molebridge --commit "$commit" --tag v0.8.0-rc.1 --image ghcr.io/irashack/molebridge --digest "sha256:$hex" --bundle-name molebridge-v0.8.0-rc.1.tar.gz --bundle-sha256 "$(printf 'b%.0s' $(seq 1 64))" --coverage "$work/c3.json" --evidence "$work/evidence.json"
 jq '.providers = ["mullvad"]' "$work/coverage.json" > "$work/c4.json"
