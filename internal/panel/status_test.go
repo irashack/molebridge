@@ -267,9 +267,33 @@ func TestPanelExitsTakeAnOptionalKind(t *testing.T) {
 			t.Errorf("exit %d = %v, want %v", i, got, want[i])
 		}
 	}
-	_, err = ParseExits("a=mullvad/sidecar", "/state")
-	if err == nil || err.Error() != "PANEL_EXITS: a sidecar exit needs a gluetun provider (gluetun-<name>/sidecar), in 'a=mullvad/sidecar'" {
-		t.Fatalf("err = %v", err)
+	// Since 0.9.0 a native provider may be a sidecar too.
+	exits, err = ParseExits("p=pia/sidecar, m=mullvad/sidecar:Tunnel, n=nordvpn/sidecar, o=pia/overlay", "/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNative := [][4]string{{"p", "pia", "sidecar", "PIA"}, {"m", "mullvad", "sidecar", "Tunnel"},
+		{"n", "nordvpn", "sidecar", label("nordvpn")}, {"o", "pia", "overlay", "PIA"}}
+	for i, e := range exits {
+		if got := [4]string{e.ID, e.Provider, e.Kind, e.Label}; got != wantNative[i] {
+			t.Errorf("native exit %d = %v, want %v", i, got, wantNative[i])
+		}
+	}
+	// What is still invalid is still refused.
+	for entry, want := range map[string]string{
+		"a=examplevpn/sidecar": "PANEL_EXITS: provider must be one of " + strings.Join(providers.IDs(), ", ") + ", in 'a=examplevpn/sidecar'",
+		"a=pia/satellite":      "PANEL_EXITS: the kind after / is overlay or sidecar, in 'a=pia/satellite'",
+		"a=pia/Sidecar":        "PANEL_EXITS: the kind after / is overlay or sidecar, in 'a=pia/Sidecar'",
+		"a=pia/":               "PANEL_EXITS: the kind after / is overlay or sidecar, in 'a=pia/'",
+		"A=pia/sidecar":        "PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in 'A=pia/sidecar'",
+		"a=pia/sidecar:" + strings.Repeat("x", 41): "PANEL_EXITS: labels are at most 40 printable characters, in 'a=pia/sidecar:" + strings.Repeat("x", 41) + "'",
+	} {
+		if _, err := ParseExits(entry, "/state"); err == nil || err.Error() != want {
+			t.Errorf("%q: %v", entry, err)
+		}
+	}
+	if _, err := ParseExits("a=pia/sidecar, a=mullvad/sidecar", "/state"); err == nil || err.Error() != "PANEL_EXITS: duplicate exit id 'a'" {
+		t.Errorf("duplicate: %v", err)
 	}
 	for _, bad := range []string{"a=gluetun-mullvad/tunnel", "a=gluetun-mullvad/", "a=gluetun-mullvad/Sidecar"} {
 		if _, err := ParseExits(bad, "/state"); err == nil || !strings.HasPrefix(err.Error(), "PANEL_EXITS: the kind after / is overlay or sidecar") {
@@ -297,7 +321,12 @@ func TestASingleExitReadsExitKindAtStart(t *testing.T) {
 	}{
 		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "gluetun-mullvad"}, "sidecar", ""},
 		{map[string]string{"EXIT_KIND": "", "PROVIDER": "mullvad"}, "overlay", ""},
-		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "mullvad"}, "", "a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)"},
+		// The native sidecar (0.9.0): a sidecar on a native provider starts.
+		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "mullvad"}, "sidecar", ""},
+		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "pia"}, "sidecar", ""},
+		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "nordvpn"}, "sidecar", ""},
+		{map[string]string{"EXIT_KIND": "sidecar", "PROVIDER": "examplevpn"}, "", "PROVIDER must be one of: " + strings.Join(providers.IDs(), ", ")},
+		{map[string]string{"EXIT_KIND": "sidecar", "PANEL_EXITS": "a=pia/sidecar"}, "", ""},
 		{map[string]string{"EXIT_KIND": "tunnel"}, "", "EXIT_KIND must be overlay or sidecar"},
 		// PANEL_EXITS names each exit's kind; EXIT_KIND is then unused.
 		{map[string]string{"EXIT_KIND": "tunnel", "PANEL_EXITS": "a=mullvad"}, "", ""},

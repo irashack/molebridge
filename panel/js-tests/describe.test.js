@@ -26,6 +26,9 @@ test('each case shows the verdict the server judged, with no tier of its own', (
     'overlay-gluetun-tunnel-tier': ['ok', 'connected', 'tunnel checks only'],
     'sidecar-provider-tier': ['ok', 'connected', 'provider-confirmed'],
     'sidecar-tunnel-tier': ['unknown', 'switched, egress unverified', 'not confirmed'],
+    'sidecar-native-pia': ['ok', 'connected', 'provider-confirmed'],
+    'sidecar-native-firewall-failed': ['failed', 'failed', 'not confirmed'],
+    'sidecar-native-routing-failed': ['failed', 'failed', 'not confirmed'],
     'target-disagreement': ['failed', 'verification failed', 'not confirmed'],
     'stale': ['unknown', 'status stale', 'not confirmed'],
     'request-pending': ['applying', 'switching', 'not confirmed'],
@@ -93,4 +96,25 @@ test('record text is shown only where it is data, and reasons only from the voca
     status: '(unknown)', message: 'Healthy.', egress: '(unknown), Sweden', egress_tier: 'provider-confirmed',
     forwarded_port: 'none', checked_at: '(unknown)',
   });
+});
+
+test('a native sidecar: its protection is checked by Molebridge, and PIA\'s forwarded port shows', () => {
+  const view = describe(cases['sidecar-native-pia'].payload, TEXT);
+  const byName = Object.fromEntries(view.checks.map((c) => [c.name, c]));
+  assert.equal(view.kind, 'sidecar');
+  assert.equal(view.connection, 'Secure connection');
+  assert.equal(view.fields.forwarded_port, '43210');
+  for (const name of ['routing', 'traffic_protection', 'peer', 'egress']) assert.equal(byName[name].text, 'passed', name);
+  assert.equal(byName.handshake.text, 'passed, 12 s old');
+  for (const name of ['netbird', 'owner_record']) assert.equal(byName[name].text, 'not applicable', name);
+  assert.equal(byName.app_attachment.text, 'not checked by Molebridge (the host doctor)');
+  // The firewall failing: traffic protection failed, the contract still passed, and nothing reads as passed.
+  const firewall = describe(cases['sidecar-native-firewall-failed'].payload, TEXT);
+  const failed = Object.fromEntries(firewall.checks.map((c) => [c.name, c]));
+  assert.equal(failed.traffic_protection.text, 'failed');
+  assert.equal(failed.routing.text, 'passed');
+  assert.equal(firewall.connection, 'Connection needs attention');
+  assert.equal(firewall.note, 'The sidecar firewall is not as installed.');
+  const routing = describe(cases['sidecar-native-routing-failed'].payload, TEXT);
+  assert.deepEqual(routing.checks.filter((c) => c.state === 'fail').map((c) => c.name), ['routing', 'traffic_protection']);
 });
