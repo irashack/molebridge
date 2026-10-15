@@ -82,16 +82,16 @@ func TestProviderForBuildsEachNativeProvider(t *testing.T) {
 	}
 }
 
-func TestNewStopsAnUnknownProviderAndASidecarWithANativeOne(t *testing.T) {
+func TestNewStopsAnUnknownProviderAndKind(t *testing.T) {
 	k := newKernel(t)
 	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: BaseProvider{Name: "examplevpn"}, System: k}); err == nil ||
 		!strings.HasPrefix(err.Error(), "PROVIDER must be one of") {
 		t.Errorf("unknown provider: %v", err)
 	}
 	k.exit.Kind = "sidecar"
-	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: NewMullvad(), System: k}); err == nil ||
-		!strings.Contains(err.Error(), "a sidecar exit needs a gluetun provider") {
-		t.Errorf("sidecar with a native provider: %v", err)
+	// 0.9.0: a sidecar with a native provider is the native sidecar.
+	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: NewMullvad(), System: k}); err != nil {
+		t.Errorf("native sidecar: %v", err)
 	}
 	k.exit.Kind = "bridge"
 	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: NewMullvad(), System: k}); err == nil ||
