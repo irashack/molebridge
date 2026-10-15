@@ -10,6 +10,7 @@ package exit
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -130,6 +131,12 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	if l.traceHas("service run") {
 		t.Error("a native sidecar runs no NetBird")
 	}
+	// The startup gate: the guards are in, whatever the tunnel's state.
+	l.waitFor(10*time.Second, "health --guarded to pass", func() bool {
+		cmd := exec.Command("ip", "netns", "exec", l.exit.Name, filepath.Join(binDir, "molebridge"), "health", "--guarded")
+		cmd.Env = l.nativeSidecarEnv()
+		return cmd.Run() == nil
+	})
 
 	if !l.appSends() {
 		t.Error("the LAN gateway did not answer")
