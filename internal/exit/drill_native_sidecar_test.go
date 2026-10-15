@@ -104,6 +104,9 @@ func (l *lab) appSends() bool {
 func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	skipWithoutWireGuard(t)
 	l := newLab(t, false)
+	// The tunnel config's peer endpoint, on the host path's subnet: it must
+	// answer ARP for the handshake to be sent at all.
+	l.outside.IP("addr", "add", "198.51.100.10/32", "dev", "outside0")
 	l.leakCounter()
 	p := l.startEnv(l.nativeSidecarEnv())
 	l.waitFor(30*time.Second, "the firewall, the rules and the tunnel", func() bool {
