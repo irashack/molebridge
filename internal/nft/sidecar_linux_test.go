@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ func TestSidecarRuleEncoding(t *testing.T) {
 					f.LAN4 = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.51.100.128/25")}
 					f.LAN6 = []netip.Prefix{netip.MustParsePrefix("2001:db8::/33")}
 				}
-				table, chains, rules := sidecarRules(f)
+				table, chains, rules := sidecarRules(f, SidecarTable)
 				if table.Name != SidecarTable || table.Family != nftables.TableFamilyINet || len(chains) != 3 {
 					t.Fatalf("table %+v, chains %+v", table, chains)
 				}
@@ -73,10 +74,14 @@ func TestSidecarRuleEncoding(t *testing.T) {
 						prefix(unix.NFPROTO_IPV4, 16, []byte{198, 51, 100, 128}, []byte{255, 255, 255, 128}),
 						prefix(unix.NFPROTO_IPV6, 24, []byte{0x20, 1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, []byte{255, 255, 255, 255, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}))
 				}
-				wantOut = append(wantOut,
-					prefix(unix.NFPROTO_IPV6, 24, []byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, []byte{255, 192, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-					prefix(unix.NFPROTO_IPV6, 24, []byte{0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, []byte{255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}),
-					[]expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}})
+				for _, typ := range []byte{133, 135, 136, 143} {
+					wantOut = append(wantOut, []expr.Any{
+						&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+						&expr.Cmp{Register: 1, Data: []byte{58}},
+						&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+						&expr.Cmp{Register: 1, Data: []byte{typ}}, accept})
+				}
+				wantOut = append(wantOut, []expr.Any{&expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}})
 				mask := make([]byte, 4)
 				binary.NativeEndian.PutUint32(mask, 6)
 				wantIn := [][]expr.Any{append(iface(expr.MetaKeyIIFNAME, "tun0"), &expr.Ct{Key: expr.CtKeySTATE, Register: 1},
@@ -90,6 +95,20 @@ func TestSidecarRuleEncoding(t *testing.T) {
 					}
 				}
 				wantIn = append(wantIn, append(iface(expr.MetaKeyIIFNAME, "tun0"), &expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop}))
+				backstop, backChains, backRules := sidecarRules(f, SidecarBackstopTable)
+				if backstop.Name != SidecarBackstopTable || backstop.Family != table.Family || len(backChains) != 1 || len(backRules) != 1 {
+					t.Fatalf("backstop: %+v, chains %+v, rules %+v", backstop, backChains, backRules)
+				}
+				wantChain := *chains[0]
+				wantChain.Table = backstop
+				if !reflect.DeepEqual(backChains[0], &wantChain) || len(backRules["output"]) != len(wantOut) {
+					t.Fatal("backstop output chain differs")
+				}
+				for i, rule := range backRules["output"] {
+					if rule.Table != backstop || rule.Chain != backChains[0] || !reflect.DeepEqual(rule.Exprs, wantOut[i]) {
+						t.Errorf("backstop output rule %d differs", i+1)
+					}
+				}
 				for name, want := range map[string][][]expr.Any{"output": wantOut, "input": wantIn, "forward": nil} {
 					got := rules[name]
 					if len(got) != len(want) {
@@ -160,10 +179,15 @@ func TestSidecarValidationBeforeOpeningASocket(t *testing.T) {
 
 // Synthetic answers go through the library's real chain/rule decoders, not
 // just a comparison of the encoder's objects with themselves.
+type sidecarKernelTable struct {
+	table  *nftables.Table
+	chains []*nftables.Chain
+	rules  map[string][]*nftables.Rule
+}
+
 type sidecarKernel struct {
-	table    *nftables.Table
-	chains   []*nftables.Chain
-	rules    map[string][]*nftables.Rule
+	*sidecarKernelTable
+	backstop *sidecarKernelTable
 	batches  int
 	batch    []netlink.Message
 	fail     uint16
@@ -171,8 +195,12 @@ type sidecarKernel struct {
 }
 
 func newSidecarKernel(f SidecarFirewall) *sidecarKernel {
-	table, chains, rules := sidecarRules(f)
-	return &sidecarKernel{table: table, chains: chains, rules: rules}
+	table, chains, rules := sidecarRules(f, SidecarTable)
+	backstop, backChains, backRules := sidecarRules(f, SidecarBackstopTable)
+	return &sidecarKernel{
+		sidecarKernelTable: &sidecarKernelTable{table: table, chains: chains, rules: rules},
+		backstop:           &sidecarKernelTable{table: backstop, chains: backChains, rules: backRules},
+	}
 }
 
 func sidecarAttrs(attrs ...netlink.Attribute) []byte {
@@ -211,11 +239,13 @@ func (k *sidecarKernel) dial(req []netlink.Message) ([]netlink.Message, error) {
 	var reply []netlink.Message
 	switch kind {
 	case unix.NFT_MSG_GETTABLE:
-		if k.table != nil {
-			reply = append(reply, sidecarMessage(unix.NFT_MSG_NEWTABLE, sidecarAttrs(sidecarString(unix.NFTA_TABLE_NAME, k.table.Name), netlink.Attribute{Type: unix.NFTA_TABLE_FLAGS, Data: sidecarBE(k.table.Flags)})))
+		for _, state := range []*sidecarKernelTable{k.sidecarKernelTable, k.backstop} {
+			if state.table != nil {
+				reply = append(reply, sidecarMessage(unix.NFT_MSG_NEWTABLE, sidecarAttrs(sidecarString(unix.NFTA_TABLE_NAME, state.table.Name), netlink.Attribute{Type: unix.NFTA_TABLE_FLAGS, Data: sidecarBE(state.table.Flags)})))
+			}
 		}
 	case unix.NFT_MSG_GETCHAIN:
-		for _, ch := range k.chains {
+		for _, ch := range append(append([]*nftables.Chain{}, k.chains...), k.backstop.chains...) {
 			attrs := []netlink.Attribute{sidecarString(unix.NFTA_CHAIN_TABLE, ch.Table.Name), sidecarString(unix.NFTA_CHAIN_NAME, ch.Name), sidecarString(unix.NFTA_CHAIN_TYPE, string(ch.Type))}
 			if ch.Hooknum != nil && ch.Priority != nil {
 				attrs = append(attrs, netlink.Attribute{Type: unix.NFTA_CHAIN_HOOK | unix.NLA_F_NESTED, Data: sidecarAttrs(
@@ -231,13 +261,22 @@ func (k *sidecarKernel) dial(req []netlink.Message) ([]netlink.Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		var name string
+		var name, tableName string
 		for ad.Next() {
-			if ad.Type() == unix.NFTA_RULE_CHAIN {
+			switch ad.Type() {
+			case unix.NFTA_RULE_CHAIN:
 				name = ad.String()
+			case unix.NFTA_RULE_TABLE:
+				tableName = ad.String()
 			}
 		}
-		for _, r := range k.rules[name] {
+		state := k.sidecarKernelTable
+		if tableName == SidecarBackstopTable {
+			state = k.backstop
+		} else if tableName != SidecarTable {
+			return nil, fmt.Errorf("unexpected table %q", tableName)
+		}
+		for _, r := range state.rules[name] {
 			var es []netlink.Attribute
 			for _, e := range r.Exprs {
 				b, err := expr.Marshal(unix.NFPROTO_INET, e)
@@ -250,7 +289,7 @@ func (k *sidecarKernel) dial(req []netlink.Message) ([]netlink.Message, error) {
 			if k.wireEdit != nil {
 				encodedExprs = k.wireEdit(encodedExprs)
 			}
-			attrs := []netlink.Attribute{sidecarString(unix.NFTA_RULE_TABLE, SidecarTable), sidecarString(unix.NFTA_RULE_CHAIN, name),
+			attrs := []netlink.Attribute{sidecarString(unix.NFTA_RULE_TABLE, tableName), sidecarString(unix.NFTA_RULE_CHAIN, name),
 				{Type: unix.NFTA_RULE_EXPRESSIONS | unix.NLA_F_NESTED, Data: encodedExprs}, {Type: unix.NFTA_RULE_USERDATA, Data: r.UserData},
 				{Type: unix.NFTA_RULE_HANDLE, Data: []byte{0, 0, 0, 0, 0, 0, 0, 42}}}
 			reply = append(reply, sidecarMessage(unix.NFT_MSG_NEWRULE, sidecarAttrs(attrs...)))
@@ -287,7 +326,7 @@ func TestVerifySidecarKernelAnswers(t *testing.T) {
 	}{
 		{"correct", func(*sidecarKernel) {}, ""},
 		{"counters", func(k *sidecarKernel) {
-			k.rules["output"][7].Exprs[0] = &expr.Counter{Packets: 12, Bytes: 345}
+			k.rules["output"][9].Exprs[0] = &expr.Counter{Packets: 12, Bytes: 345}
 			k.rules["input"][3].Exprs[2] = &expr.Counter{Packets: 56, Bytes: 789}
 		}, ""},
 		{"missing table", func(k *sidecarKernel) { k.table = nil }, "no table inet molebridge_sidecar"},
@@ -312,7 +351,7 @@ func TestVerifySidecarKernelAnswers(t *testing.T) {
 		{"mark", func(k *sidecarKernel) { k.rules["output"][2].Exprs[1].(*expr.Cmp).Data[0] ^= 1 }, "chain output: rule 3 differs"},
 		{"verdict", func(k *sidecarKernel) { k.rules["output"][2].Exprs[2] = &expr.Verdict{Kind: expr.VerdictDrop} }, "chain output: rule 3 differs"},
 		{"comment", func(k *sidecarKernel) { k.rules["output"][2].UserData = []byte("changed") }, "chain output: rule 3 differs"},
-		{"missing rule", func(k *sidecarKernel) { k.rules["output"] = k.rules["output"][:7] }, "chain output: 7 rules, want 8"},
+		{"missing rule", func(k *sidecarKernel) { k.rules["output"] = k.rules["output"][:7] }, "chain output: 7 rules, want 10"},
 		{"extra rule", func(k *sidecarKernel) {
 			k.rules["forward"] = []*nftables.Rule{{Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}}}
 		}, "chain forward: 1 rules, want 0"},
@@ -326,11 +365,83 @@ func TestVerifySidecarKernelAnswers(t *testing.T) {
 			tc.edit(k)
 			fakeSidecar(t, k)
 			ok, reason, err := VerifySidecar(t.Context(), 0, f)
-			if err != nil || ok != (tc.reason == "") || reason != tc.reason {
-				t.Fatalf("got %t %q %v, want reason %q", ok, reason, err, tc.reason)
+			want := tc.reason
+			if want != "" && !strings.HasPrefix(want, "no table ") {
+				want = SidecarTable + ": " + want
+			}
+			if err != nil || ok != (want == "") || reason != want {
+				t.Fatalf("got %t %q %v, want reason %q", ok, reason, err, want)
 			}
 		})
 	}
+}
+
+// Mutate one table at a time while the other remains correct. The backstop
+// must be checked just as strictly as the main output chain.
+func TestVerifySidecarEachTableIndependently(t *testing.T) {
+	cases := []struct {
+		name   string
+		edit   func(*sidecarKernelTable)
+		reason string
+	}{
+		{"missing table", func(k *sidecarKernelTable) { k.table = nil }, "missing"},
+		{"flags", func(k *sidecarKernelTable) { k.table.Flags = unix.NFT_TABLE_F_DORMANT }, "table flags differ"},
+		{"missing output", func(k *sidecarKernelTable) { k.chains = k.chains[1:] }, "no chain output"},
+		{"extra chain", func(k *sidecarKernelTable) {
+			k.chains = append(k.chains, &nftables.Chain{Table: k.table, Name: "extra"})
+		}, "extra chain extra"},
+		{"policy", func(k *sidecarKernelTable) { p := nftables.ChainPolicyAccept; k.chains[0].Policy = &p }, "chain output: policy accept"},
+		{"no policy", func(k *sidecarKernelTable) { k.chains[0].Policy = nil }, "chain output: no policy"},
+		{"hook", func(k *sidecarKernelTable) { k.chains[0].Hooknum = nftables.ChainHookInput }, "chain output: hook differs"},
+		{"priority", func(k *sidecarKernelTable) { k.chains[0].Priority = nftables.ChainPriorityRaw }, "chain output: priority differs"},
+		{"type", func(k *sidecarKernelTable) { k.chains[0].Type = nftables.ChainTypeRoute }, "chain output: type differs"},
+		{"rule order", func(k *sidecarKernelTable) {
+			k.rules["output"][0], k.rules["output"][1] = k.rules["output"][1], k.rules["output"][0]
+		}, "chain output: rule 1 differs"},
+		{"mark", func(k *sidecarKernelTable) { k.rules["output"][2].Exprs[1].(*expr.Cmp).Data[0] ^= 1 }, "chain output: rule 3 differs"},
+		{"ICMPv6 protocol", func(k *sidecarKernelTable) { k.rules["output"][4].Exprs[1].(*expr.Cmp).Data[0] = unix.IPPROTO_UDP }, "chain output: rule 5 differs"},
+		{"ICMPv6 type", func(k *sidecarKernelTable) { k.rules["output"][4].Exprs[3].(*expr.Cmp).Data[0] = 128 }, "chain output: rule 5 differs"},
+		{"comment", func(k *sidecarKernelTable) { k.rules["output"][2].UserData = []byte("changed") }, "chain output: rule 3 differs"},
+		{"missing final drop", func(k *sidecarKernelTable) { k.rules["output"] = k.rules["output"][:8] }, "chain output: 8 rules, want 9"},
+		{"extra rule", func(k *sidecarKernelTable) {
+			k.rules["output"] = append(k.rules["output"], &nftables.Rule{Exprs: []expr.Any{&expr.Verdict{Kind: expr.VerdictAccept}}})
+		}, "chain output: 10 rules, want 9"},
+		{"runtime counters", func(k *sidecarKernelTable) { k.rules["output"][8].Exprs[0] = &expr.Counter{Packets: 42, Bytes: 1234} }, ""},
+	}
+	for _, name := range []string{SidecarTable, SidecarBackstopTable} {
+		for _, tc := range cases {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				f := sidecarFixture()
+				k := newSidecarKernel(f)
+				state := k.sidecarKernelTable
+				if name == SidecarBackstopTable {
+					state = k.backstop
+				}
+				tc.edit(state)
+				fakeSidecar(t, k)
+				want := tc.reason
+				if want == "missing" {
+					want = "no table inet " + name
+				} else if want != "" {
+					want = name + ": " + want
+				}
+				ok, reason, err := VerifySidecar(t.Context(), 0, f)
+				if err != nil || ok != (want == "") || reason != want {
+					t.Fatalf("got %t %q %v, want reason %q", ok, reason, err, want)
+				}
+			})
+		}
+	}
+	t.Run("backstop has no input", func(t *testing.T) {
+		f := sidecarFixture()
+		k := newSidecarKernel(f)
+		k.backstop.chains = append(k.backstop.chains, &nftables.Chain{Table: k.backstop.table, Name: "input"})
+		fakeSidecar(t, k)
+		ok, reason, err := VerifySidecar(t.Context(), 0, f)
+		if err != nil || ok || reason != "molebridge_sidecar_backstop: extra chain input" {
+			t.Fatalf("got %t %q %v", ok, reason, err)
+		}
+	})
 }
 
 func TestInstallSidecarIsOneBatchAndReadsBack(t *testing.T) {
@@ -347,15 +458,73 @@ func TestInstallSidecarIsOneBatchAndReadsBack(t *testing.T) {
 	if batch[0].Header.Type != unix.NFNL_MSG_BATCH_BEGIN || batch[len(batch)-1].Header.Type != unix.NFNL_MSG_BATCH_END {
 		t.Fatal("missing batch boundary")
 	}
-	for i, kind := range []uint16{unix.NFT_MSG_NEWTABLE, unix.NFT_MSG_DELTABLE, unix.NFT_MSG_NEWTABLE} {
-		if uint16(batch[i+1].Header.Type)&0xff != kind {
-			t.Fatalf("replacement operation %d: %+v", i, batch[i+1])
+	tableOps := make(map[string][]uint16)
+	chainNames := make(map[string][]string)
+	ruleCounts := make(map[string]int)
+	for _, msg := range batch[1 : len(batch)-1] {
+		kind := uint16(msg.Header.Type) & 0xff
+		attrs, err := netlink.UnmarshalAttributes(msg.Data[4:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := make(map[uint16][]byte)
+		for _, a := range attrs {
+			values[a.Type&sidecarAttrTypeMask] = a.Data
+		}
+		str := func(key uint16) string { return strings.TrimRight(string(values[key]), "\x00") }
+		switch kind {
+		case unix.NFT_MSG_NEWTABLE, unix.NFT_MSG_DELTABLE:
+			name := str(unix.NFTA_TABLE_NAME)
+			tableOps[name] = append(tableOps[name], kind)
+		case unix.NFT_MSG_NEWCHAIN:
+			name := str(unix.NFTA_CHAIN_TABLE)
+			chainNames[name] = append(chainNames[name], str(unix.NFTA_CHAIN_NAME))
+		case unix.NFT_MSG_NEWRULE:
+			name, chain := str(unix.NFTA_RULE_TABLE), str(unix.NFTA_RULE_CHAIN)
+			if name == SidecarBackstopTable && chain != "output" {
+				t.Fatalf("backstop contains chain %s", chain)
+			}
+			_, _, expected := sidecarRules(f, name)
+			if name == SidecarBackstopTable && !sidecarExpressionsEqual(values[unix.NFTA_RULE_EXPRESSIONS], expected["output"][ruleCounts[name]].Exprs) {
+				t.Fatal("backstop batch rule differs")
+			}
+			ruleCounts[name]++
+		default:
+			t.Fatalf("unexpected batch operation %d", kind)
 		}
 	}
-	// Acknowledging the batch alone is insufficient: the readback must match.
-	k.table = nil
-	if err := InstallSidecar(t.Context(), 0, f); err == nil || err.Error() != "nft: install the sidecar firewall: readback: no table inet molebridge_sidecar" {
-		t.Fatalf("%v", err)
+	for _, name := range []string{SidecarTable, SidecarBackstopTable} {
+		if !reflect.DeepEqual(tableOps[name], []uint16{unix.NFT_MSG_NEWTABLE, unix.NFT_MSG_DELTABLE, unix.NFT_MSG_NEWTABLE}) {
+			t.Fatalf("%s replacement operations: %v", name, tableOps[name])
+		}
+		_, chains, rules := sidecarRules(f, name)
+		var names []string
+		count := 0
+		for _, chain := range chains {
+			names = append(names, chain.Name)
+			count += len(rules[chain.Name])
+		}
+		if !reflect.DeepEqual(chainNames[name], names) || ruleCounts[name] != count {
+			t.Fatalf("%s: chains %v, rules %d; want %v, %d", name, chainNames[name], ruleCounts[name], names, count)
+		}
+	}
+	if len(tableOps) != 2 || len(chainNames) != 2 || len(ruleCounts) != 2 {
+		t.Fatal("batch contains unexpected tables")
+	}
+	// Acknowledging the batch alone is insufficient: both readbacks must match.
+	for _, name := range []string{SidecarTable, SidecarBackstopTable} {
+		t.Run("missing "+name, func(t *testing.T) {
+			k := newSidecarKernel(f)
+			if name == SidecarTable {
+				k.table = nil
+			} else {
+				k.backstop.table = nil
+			}
+			fakeSidecar(t, k)
+			if err := InstallSidecar(t.Context(), 0, f); err == nil || err.Error() != "nft: install the sidecar firewall: readback: no table inet "+name {
+				t.Fatalf("%v", err)
+			}
+		})
 	}
 }
 

@@ -22,6 +22,9 @@ import (
 // SidecarTable is the native sidecar's table, in family inet.
 const SidecarTable = "molebridge_sidecar"
 
+// SidecarBackstopTable independently enforces output if SidecarTable is lost.
+const SidecarBackstopTable = "molebridge_sidecar_backstop"
+
 const sidecarAttrTypeMask = ^uint16(unix.NLA_F_NESTED | unix.NLA_F_NET_BYTEORDER)
 
 // SidecarFirewall describes the namespace's native sidecar firewall.
@@ -60,7 +63,7 @@ func (f SidecarFirewall) validate() error {
 	return nil
 }
 
-// InstallSidecar replaces the table in one atomic batch and verifies the
+// InstallSidecar replaces both tables in one atomic batch and verifies the
 // committed chains and rules. netns is a namespace fd, or 0 for the caller's.
 func InstallSidecar(ctx context.Context, netns int, f SidecarFirewall) error {
 	if err := f.validate(); err != nil {
@@ -72,12 +75,14 @@ func InstallSidecar(ctx context.Context, netns int, f SidecarFirewall) error {
 		defer cancel()
 	}
 	err := withConn(ctx, netns, func(c *nftables.Conn) error {
-		table, chains, rules := sidecarRules(f)
-		replaceTable(c, table.Family, table.Name)
-		for _, chain := range chains {
-			c.AddChain(chain)
-			for _, rule := range rules[chain.Name] {
-				c.AddRule(rule)
+		for _, name := range []string{SidecarTable, SidecarBackstopTable} {
+			table, chains, rules := sidecarRules(f, name)
+			replaceTable(c, table.Family, table.Name)
+			for _, chain := range chains {
+				c.AddChain(chain)
+				for _, rule := range rules[chain.Name] {
+					c.AddRule(rule)
+				}
 			}
 		}
 		return c.Flush()
@@ -96,7 +101,7 @@ func InstallSidecar(ctx context.Context, netns int, f SidecarFirewall) error {
 	return nil
 }
 
-// VerifySidecar reports whether the live table has exactly f's chains and
+// VerifySidecar reports whether both live tables have exactly f's chains and
 // rules, in order. Runtime counters and kernel-assigned handles may differ.
 func VerifySidecar(ctx context.Context, netns int, f SidecarFirewall) (ok bool, reason string, err error) {
 	if err = f.validate(); err != nil {
@@ -113,8 +118,8 @@ func VerifySidecar(ctx context.Context, netns int, f SidecarFirewall) (ok bool, 
 	return ok, reason, nil
 }
 
-func sidecarRules(f SidecarFirewall) (*nftables.Table, []*nftables.Chain, map[string][]*nftables.Rule) {
-	table := &nftables.Table{Name: SidecarTable, Family: nftables.TableFamilyINet}
+func sidecarRules(f SidecarFirewall, tableName string) (*nftables.Table, []*nftables.Chain, map[string][]*nftables.Rule) {
+	table := &nftables.Table{Name: tableName, Family: nftables.TableFamilyINet}
 	drop, accept := nftables.ChainPolicyDrop, nftables.ChainPolicyAccept
 	chains := []*nftables.Chain{
 		{Name: "output", Table: table, Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookOutput, Priority: nftables.ChainPriorityFilter, Policy: &drop},
@@ -137,14 +142,26 @@ func sidecarRules(f SidecarFirewall) (*nftables.Table, []*nftables.Chain, map[st
 	}
 	// One rule per prefix avoids anonymous interval set IDs and preserves the
 	// input order when comparing kernel answers. Validation caps this at 16.
-	for _, prefixes := range [][]netip.Prefix{f.LAN4, f.LAN6, {
-		netip.MustParsePrefix("fe80::/10"), netip.MustParsePrefix("ff02::/16"),
-	}} {
+	for _, prefixes := range [][]netip.Prefix{f.LAN4, f.LAN6} {
 		for _, p := range prefixes {
 			add(out, sidecarPrefix(p)...)
 		}
 	}
+	// Only the kernel's link maintenance messages bypass the LAN allowlist.
+	// ICMPv6 datagram sockets cannot send these types; raw sockets require
+	// CAP_NET_RAW. In particular, UDP multicast/link-local is not exempt.
+	for _, typ := range []byte{133, 135, 136, 143} { // RS, NS, NA, MLDv2 report
+		add(out, &expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{unix.IPPROTO_ICMPV6}},
+			&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 0, Len: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{typ}}, &expr.Verdict{Kind: expr.VerdictAccept})
+	}
 	add(out, &expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop})
+	// Both base chains must accept output. Keep their rules identical and
+	// independent, so either table alone survives deletion of the other.
+	if tableName == SidecarBackstopTable {
+		return table, chains[:1], rules
+	}
 
 	es := sidecarInterface(expr.MetaKeyIIFNAME, f.ExitIf)
 	mask := make([]byte, 4)
@@ -193,7 +210,20 @@ func sidecarPrefix(p netip.Prefix) []expr.Any {
 }
 
 func verifySidecar(c *nftables.Conn, raw *netlink.Conn, f SidecarFirewall) (bool, string, error) {
-	table, wantChains, wantRules := sidecarRules(f)
+	for _, name := range []string{SidecarTable, SidecarBackstopTable} {
+		ok, reason, err := verifySidecarTable(c, raw, f, name)
+		if err != nil {
+			return false, "", fmt.Errorf("%s: %w", name, err)
+		}
+		if !ok {
+			return false, reason, nil
+		}
+	}
+	return true, "", nil
+}
+
+func verifySidecarTable(c *nftables.Conn, raw *netlink.Conn, f SidecarFirewall, name string) (bool, string, error) {
+	table, wantChains, wantRules := sidecarRules(f, name)
 	tables, err := c.ListTablesOfFamily(table.Family)
 	if err != nil {
 		return false, "", err
@@ -203,22 +233,26 @@ func verifySidecar(c *nftables.Conn, raw *netlink.Conn, f SidecarFirewall) (bool
 		if live.Name == table.Name && live.Family == table.Family {
 			found = true
 			if live.Flags != 0 {
-				return false, "table flags differ", nil
+				return false, name + ": table flags differ", nil
 			}
 		}
 	}
 	if !found {
-		return false, "no table inet molebridge_sidecar", nil
+		return false, "no table inet " + name, nil
 	}
 	chains, err := c.ListChainsOfTableFamily(table.Family)
 	if err != nil {
 		return false, "", err
 	}
+	expectedChains := make(map[string]bool)
+	for _, chain := range wantChains {
+		expectedChains[chain.Name] = true
+	}
 	liveChains := make(map[string]*nftables.Chain)
 	for _, chain := range chains {
 		if chain.Table != nil && chain.Table.Name == table.Name && chain.Table.Family == table.Family {
-			if chain.Name != "output" && chain.Name != "input" && chain.Name != "forward" {
-				return false, "extra chain " + chain.Name, nil
+			if !expectedChains[chain.Name] {
+				return false, name + ": extra chain " + chain.Name, nil
 			}
 			liveChains[chain.Name] = chain
 		}
@@ -226,10 +260,10 @@ func verifySidecar(c *nftables.Conn, raw *netlink.Conn, f SidecarFirewall) (bool
 	for _, want := range wantChains {
 		live := liveChains[want.Name]
 		if live == nil {
-			return false, "no chain " + want.Name, nil
+			return false, name + ": no chain " + want.Name, nil
 		}
 		if reason := sidecarChainDifference(live, want); reason != "" {
-			return false, "chain " + want.Name + ": " + reason, nil
+			return false, name + ": chain " + want.Name + ": " + reason, nil
 		}
 		rules, err := sidecarReadRules(raw, table, live)
 		if err != nil {
@@ -238,11 +272,11 @@ func verifySidecar(c *nftables.Conn, raw *netlink.Conn, f SidecarFirewall) (bool
 		expected := wantRules[want.Name]
 		for i := 0; i < len(rules) && i < len(expected); i++ {
 			if !sidecarExpressionsEqual(rules[i], expected[i].Exprs) {
-				return false, fmt.Sprintf("chain %s: rule %d differs", want.Name, i+1), nil
+				return false, fmt.Sprintf("%s: chain %s: rule %d differs", name, want.Name, i+1), nil
 			}
 		}
 		if len(rules) != len(expected) {
-			return false, fmt.Sprintf("chain %s: %d rules, want %d", want.Name, len(rules), len(expected)), nil
+			return false, fmt.Sprintf("%s: chain %s: %d rules, want %d", name, want.Name, len(rules), len(expected)), nil
 		}
 	}
 	return true, "", nil
