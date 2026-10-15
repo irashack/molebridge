@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/exit"
 )
 
@@ -98,6 +100,32 @@ func TestHealthRole(t *testing.T) {
 		t.Fatalf("%d %q", code, stdout.String())
 	}
 	if code := healthMain([]string{"x"}, env, &stdout, &stderr); code != 2 {
+		t.Errorf("usage: %d", code)
+	}
+}
+
+func TestHealthRoleGuarded(t *testing.T) {
+	env, dir := roleEnv(t)
+	if err := os.MkdirAll(filepath.Join(dir, "run", "molebridge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Skip("no boot id here")
+	}
+	line := fmt.Sprintf("molebridge-heartbeat 1 %s %d\n", strings.TrimSpace(string(boot)), int64(bootclock.System()()))
+	if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "guarded"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := healthMain([]string{"--guarded"}, env, &stdout, &stderr); code != 0 {
+		t.Fatalf("guarded: %d %q", code, stdout.String())
+	}
+	// The guards in place say nothing about the tunnel: plain health still fails.
+	if code := healthMain(nil, env, &stdout, &stderr); code != 1 {
+		t.Errorf("health without a heartbeat: %d", code)
+	}
+	if code := healthMain([]string{"--guarded", "x"}, env, &stdout, &stderr); code != 2 {
 		t.Errorf("usage: %d", code)
 	}
 }

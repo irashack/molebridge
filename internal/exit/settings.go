@@ -127,6 +127,13 @@ func HeartbeatPathOf(env map[string]string) string {
 	return filepath.Join(RunDirOf(env), "molebridge", "heartbeat")
 }
 
+// GuardedPathOf is the native sidecar's guard heartbeat in an environment's
+// runtime directory: written while its firewall and routing contract hold,
+// whether or not the tunnel is up (`molebridge health --guarded`).
+func GuardedPathOf(env map[string]string) string {
+	return filepath.Join(RunDirOf(env), "molebridge", "guarded")
+}
+
 // LeasePathOf is the lease state file of an environment's runtime directory.
 func LeasePathOf(env map[string]string) string {
 	return filepath.Join(RunDirOf(env), "molebridge", "lease.json")
@@ -134,6 +141,9 @@ func LeasePathOf(env map[string]string) string {
 
 // PathHeartbeat is the worker's heartbeat file on the tmpfs.
 func (s *Settings) PathHeartbeat() string { return filepath.Join(s.RunDir, "molebridge", "heartbeat") }
+
+// PathGuarded is the native sidecar's guard heartbeat on the tmpfs.
+func (s *Settings) PathGuarded() string { return filepath.Join(s.RunDir, "molebridge", "guarded") }
 
 // PathLease is the small file the supervisor exposes its lease state in.
 func (s *Settings) PathLease() string { return filepath.Join(s.RunDir, "molebridge", "lease.json") }

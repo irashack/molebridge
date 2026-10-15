@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -391,6 +392,7 @@ func (w *worker) run() int {
 		}
 		w.firewallOK.Store(true)
 		w.logf("the sidecar firewall is installed")
+		w.warnStrictReversePath()
 	}
 	if err := w.mut.Install(w.ctx); err != nil {
 		if w.ctx.Err() != nil {
@@ -402,6 +404,9 @@ func (w *worker) run() int {
 	}
 	if s.HasContract() {
 		w.logf("rules installed; the exit table holds its unreachable fallback")
+	}
+	if s.Routing.IsNativeSidecar() {
+		w.writeGuarded()
 	}
 
 	pipe, err := newPipeline(pipelineEnv{S: s, System: w.sys, Publish: w.publish, OwnerCheck: w.ownerCheckFor(), Log: func(l string) { w.logf("%s", l) }})
@@ -481,6 +486,44 @@ func (w *worker) tunnelParams() tunnel.Params {
 	return p
 }
 
+// writeGuarded renews the native sidecar's guard heartbeat while the firewall
+// read back as installed and the routing contract holds: what `molebridge
+// health --guarded` reads, so a Kubernetes startup probe can hold the
+// applications back until both guards are in place, before the tunnel is up.
+func (w *worker) writeGuarded() {
+	if !w.firewallOK.Load() || !w.mut.LastPass().ContractHolds {
+		return
+	}
+	if err := writeHeartbeat(w.s.PathGuarded(), w.clock()); err != nil {
+		w.warnEvery("guarded", time.Minute, "cannot write the guard heartbeat: %v", err)
+	}
+}
+
+// warnStrictReversePath says when the host interface filters reverse paths
+// strictly. The kernel validates a packet's source with a lookup from
+// loopback, which the sidecar's iif lo rules send to the tunnel: replies to the
+// exit's own traffic and the tunnel's UDP arriving on HOST_IF then fail strict
+// validation and are dropped, and the tunnel never comes up. Loose (2) or off
+// (0) is fine. A container usually cannot write the sysctl itself.
+func (w *worker) warnStrictReversePath() {
+	host := w.s.Routing.HostIf
+	read := func(name string) int {
+		b, err := os.ReadFile("/proc/sys/net/ipv4/conf/" + name + "/rp_filter")
+		if err != nil {
+			return -1
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return -1
+		}
+		return n
+	}
+	// The kernel uses the larger of the two values.
+	if max(read("all"), read(host)) == 1 {
+		w.logf("warning: net.ipv4.conf.%s.rp_filter is strict (1): replies arriving on %s are dropped and the tunnel cannot come up; set rp_filter to 0 or 2 for this namespace (docs/native-sidecar.md)", host, host)
+	}
+}
+
 // firewallLoop keeps a native sidecar's firewall exactly as installed: it is
 // read back every FirewallCheckInterval and, if anything differs, replaced in
 // one transaction. nftables announces no change the worker subscribes to, so
@@ -499,6 +542,7 @@ func (w *worker) firewallLoop() {
 			w.warnEvery("firewall-read", time.Minute, "the sidecar firewall cannot be read: %v", err)
 		case ok:
 			w.firewallOK.Store(true)
+			w.writeGuarded()
 		default:
 			w.firewallOK.Store(false)
 			if err := w.sys.InstallSidecarFirewall(w.ctx); err != nil {
