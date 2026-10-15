@@ -3,6 +3,7 @@ package exit
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/irashack/molebridge/internal/applier"
@@ -60,6 +61,9 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 	exit := applier.Exit{ExitIf: s.Routing.ExitIf, OverlayIf: s.Routing.OverlayIf, Table: fmt.Sprint(s.Routing.Table), Kind: s.Kind()}
 	if s.Routing.Overlay.IsValid() {
 		exit.Overlay = s.Routing.Overlay.String()
+	}
+	for _, p := range append(append([]netip.Prefix(nil), s.Routing.LAN...), s.Routing.LAN6...) {
+		exit.LAN = append(exit.LAN, p.String())
 	}
 	getenv := func(name string) string { return s.Env[name] }
 	prov, err := applier.ProviderFor(s.Provider, exit, getenv)
