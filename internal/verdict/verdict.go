@@ -81,6 +81,9 @@ func BackendOf(provider string) string {
 
 // RequiredChecks are the checks that must pass for this kind and backend.
 func RequiredChecks(kind, backend string) []string {
+	if kind == "sidecar" && backend == providers.BackendNative {
+		return []string{"routing", "traffic_protection", "peer", "handshake", "egress"}
+	}
 	if kind == "sidecar" {
 		return []string{"peer", "handshake", "egress"}
 	}
@@ -140,6 +143,9 @@ func (c Checks) JSONObject() validate.Obj {
 // FixedChecks are the checks that are "n/a" or "not-checked" for this kind and
 // backend.
 func FixedChecks(kind, backend string) Checks {
+	if kind == "sidecar" && backend == providers.BackendNative {
+		return Checks{{"netbird", "n/a"}, {"owner_record", "n/a"}, {"app_attachment", "not-checked"}}
+	}
 	if kind == "sidecar" {
 		return Checks{{"routing", "n/a"}, {"netbird", "n/a"}, {"owner_record", "n/a"},
 			{"traffic_protection", "not-checked"}, {"app_attachment", "not-checked"}}
@@ -158,8 +164,8 @@ type ExitConfig struct {
 	ID       string
 }
 
-// NewExitConfig validates the combination: a known provider, a known kind, and
-// for a sidecar a gluetun provider. An empty kind means "overlay".
+// NewExitConfig validates the combination: a known provider and a known kind.
+// An empty kind means "overlay".
 func NewExitConfig(provider, kind, id string) (ExitConfig, error) {
 	if kind == "" {
 		kind = "overlay"
@@ -170,11 +176,7 @@ func NewExitConfig(provider, kind, id string) (ExitConfig, error) {
 	if !contains(Kinds, kind) {
 		return ExitConfig{}, errors.New("EXIT_KIND must be overlay or sidecar")
 	}
-	c := ExitConfig{Provider: provider, Kind: kind, ID: id}
-	if kind == "sidecar" && c.Backend() != providers.BackendGluetun {
-		return ExitConfig{}, errors.New("a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)")
-	}
-	return c, nil
+	return ExitConfig{Provider: provider, Kind: kind, ID: id}, nil
 }
 
 // Backend is "gluetun" or "native".

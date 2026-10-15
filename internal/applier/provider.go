@@ -76,8 +76,8 @@ type Provider interface {
 	// provider that assigns the address per server installs rules 94 and 98
 	// with it.
 	RoutingStatus(ctx context.Context, a *Applier, requireAddress bool) (protected, fallback bool)
-	// MeasureGuards fills the overlay's own guard checks of an inspection:
-	// the routing contract, NetBird's kernel mode.
+	// MeasureGuards fills the guard checks of an inspection: the routing
+	// contract and NetBird's kernel mode or the native sidecar's firewall.
 	MeasureGuards(ctx context.Context, a *Applier, at string, f *Finding)
 
 	// NoPeerMessage is what an inspection says when there is not exactly one

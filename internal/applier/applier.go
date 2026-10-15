@@ -117,7 +117,7 @@ func New(cfg Config) (*Applier, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Refuses a sidecar with a native provider, at start.
+	// Validate the provider and kind before building the catalogue.
 	if _, err := verdict.NewExitConfig(spec.ID, cfg.Exit.Kind, ""); err != nil {
 		return nil, err
 	}
@@ -181,6 +181,8 @@ func (a *Applier) log(message string) { a.logf(message) }
 func (a *Applier) kind() string { return a.exit.Kind }
 
 func (a *Applier) backend() string { return verdict.BackendOf(a.hooks.ID()) }
+
+func (a *Applier) nativeSidecar() bool { return a.kind() == "sidecar" && a.backend() == "native" }
 
 func (a *Applier) exitConfig() verdict.ExitConfig {
 	return verdict.ExitConfig{Provider: a.hooks.ID(), Kind: a.kind()}
@@ -294,19 +296,23 @@ func sortedFamilies(addresses map[int]string) []int {
 // provider that assigns the address per server installs rules 94 and 98 with
 // it.
 func (a *Applier) DefaultRoutingStatus(ctx context.Context, requireAddress bool) (bool, bool) {
-	if err := a.sys.LinkExists(ctx, a.exit.OverlayIf); err != nil {
-		return false, false
+	if !a.nativeSidecar() {
+		if err := a.sys.LinkExists(ctx, a.exit.OverlayIf); err != nil {
+			return false, false
+		}
 	}
 	addresses, err := a.tunnelAddresses(ctx, requireAddress)
 	if err != nil {
 		return false, false
 	}
-	text, err := a.sys.ReadSysctl(ctx, ReturnPathSysctl)
-	if err != nil {
-		return false, false
+	protected, fallback := true, true
+	if !a.nativeSidecar() {
+		text, err := a.sys.ReadSysctl(ctx, ReturnPathSysctl)
+		if err != nil {
+			return false, false
+		}
+		protected = strings.TrimFunc(text, validate.IsSpace) == "1"
 	}
-	returnPath := strings.TrimFunc(text, validate.IsSpace) == "1"
-	protected, fallback := returnPath, true
 	var failure error
 	for _, family := range []int{4, 6} {
 		p, f, err := a.sys.RoutingStatus(ctx, family, addresses[family])
@@ -547,17 +553,30 @@ func (a *Applier) saveAttempt() error {
 
 // -- inspection --------------------------------------------------------------------------
 
-// DefaultMeasureGuards fills the overlay's own guards: the routing contract
-// (traffic protection) and NetBird's kernel mode. The exit's owner record is
-// the supervisor's check, left unknown here.
+// DefaultMeasureGuards fills the routing contract and traffic protection
+// checks, with NetBird's kernel mode on an overlay or the firewall on a native
+// sidecar. The overlay's owner record is the supervisor's check, left unknown
+// here.
 func (a *Applier) DefaultMeasureGuards(ctx context.Context, at string, f *Finding) {
 	protected, fallback := a.routingStatus(ctx, true)
-	native := a.netbirdNative(ctx)
 	routing := "fail"
 	if protected {
 		routing = "pass"
 	}
 	f.Checks = f.Checks.Set("routing", validate.Members("state", routing, "at", at, "fallback", fallback))
+	if a.nativeSidecar() {
+		firewall, _, err := a.sys.SidecarFirewall(ctx)
+		f.Safe = protected && firewall && err == nil
+		protection, from := "pass", "routing"
+		if !protected {
+			protection, f.Guard = "fail", RoutingFailed
+		} else if !firewall || err != nil {
+			protection, from, f.Guard = "fail", "firewall", SidecarFirewallFailed
+		}
+		f.Checks = f.Checks.Set("traffic_protection", validate.Members("state", protection, "at", at, "from", from))
+		return
+	}
+	native := a.netbirdNative(ctx)
 	f.Checks = f.Checks.Set("traffic_protection", validate.Members("state", routing, "at", at, "from", "routing"))
 	nb := "fail"
 	if native {
@@ -598,7 +617,7 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 		f.Message = EgressFailedMessage
 		return f
 	}
-	if a.kind() == "overlay" {
+	if a.kind() == "overlay" || a.nativeSidecar() {
 		a.hooks.MeasureGuards(ctx, a, at, f)
 	}
 	keys, err := a.peers(ctx)
@@ -1292,6 +1311,13 @@ func (a *Applier) gate(ctx context.Context, target *Selection) *gateResult {
 				"request will retry automatically.", ""}
 		}
 	}
+	if a.nativeSidecar() {
+		protected, _ := a.routingStatus(ctx, a.spec.AddressBeforeSwitch)
+		firewall, _, err := a.sys.SidecarFirewall(ctx)
+		if !protected || !firewall || err != nil {
+			return &gateResult{"pending", "Waiting for the tunnel's routing and firewall; request will retry automatically.", ""}
+		}
+	}
 	if _, err := a.peers(ctx); err != nil {
 		return &gateResult{"pending", "Waiting for the WireGuard interface; request will retry automatically.", ""}
 	}
@@ -1578,7 +1604,7 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 	if !validate.Recent(result["checked_at"], state.StatusMaxAge, a.wall()) {
 		return false
 	}
-	if a.kind() == "sidecar" {
+	if a.kind() == "sidecar" && a.backend() == "gluetun" {
 		if !a.hooks.ControlAnswers(ctx, a) {
 			return false
 		}
@@ -1589,5 +1615,9 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 		return false
 	}
 	protected, _ := a.routingStatus(ctx, true)
+	if a.nativeSidecar() {
+		firewall, _, err := a.sys.SidecarFirewall(ctx)
+		return protected && firewall && err == nil
+	}
 	return protected && a.netbirdNative(ctx)
 }
