@@ -110,7 +110,7 @@ func guardsHeld(spec contract.Spec) bool {
 
 // reconcile is the repair pass: look at the kernel, compare it with the
 // expected state, apply the ordered actions, look again, and go on until the
-// contract verifies or the rounds are spent. A sidecar has no contract.
+// contract verifies or the rounds are spent. A gluetun sidecar has no contract.
 //
 // A repair that changes rules 90-97 happens behind the temporary guard at
 // priority 80 (natively), which comes out once the result verifies; while it
@@ -129,7 +129,7 @@ func (tx *Tx) reconcile(reason string) (res PassResult) {
 			res.Err = err
 		}
 	}
-	if m.Expected().Config.IsSidecar() {
+	if m.Expected().Config.IsGluetunSidecar() {
 		res.ContractHolds, res.Verified = true, true
 		return
 	}
@@ -142,7 +142,7 @@ func (tx *Tx) reconcile(reason string) (res PassResult) {
 		spec := m.Expected()
 		// A guard left by an earlier pass is expected until a pass verifies.
 		for _, f := range families {
-			if !spec.TempGuard[f] && hasGuard(spec, f, snap.Rules[f]) {
+			if !spec.Config.IsNativeSidecar() && !spec.TempGuard[f] && hasGuard(spec, f, snap.Rules[f]) {
 				spec.TempGuard[f] = true
 				tx.SetSpec(spec)
 			}

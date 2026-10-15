@@ -142,7 +142,13 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 		}
 	}
 	var out []Action
-	for _, p := range addOrder {
+	order := addOrder
+	if spec.Config.IsNativeSidecar() {
+		// The terminal guard stands before the catch-all lookup, and both
+		// stand before any exception or removal, including after a restart.
+		order = []uint32{97, 96, 98, 89, 88, 90, 93, 94}
+	}
+	for _, p := range order {
 		for i, e := range want[p] {
 			if matched[p][i] {
 				continue

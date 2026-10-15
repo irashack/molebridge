@@ -7,6 +7,7 @@ package contract
 
 import (
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,7 @@ func TestNativeDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := nativeConfig()
-	if c != want {
+	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("%+v\n%+v", c, want)
 	}
 	// An empty setting is an unset one, as `${NAME:-default}` read it.
@@ -143,7 +144,7 @@ func TestGluetunConfigValidation(t *testing.T) { // test_gluetun_config_validati
 		}
 	}
 	c, err := ConfigFromEnv(env(gl(nil)))
-	if err != nil || c != gluetunConfig() {
+	if err != nil || !reflect.DeepEqual(c, gluetunConfig()) {
 		t.Fatalf("%+v %v", c, err)
 	}
 	c, err = ConfigFromEnv(env(gl(map[string]string{"HOST_IF": "enp3s0", "HOST_TABLE": "51900", "CONTROL_MARK": "0x2000"})))
@@ -181,7 +182,6 @@ func TestSidecarConfig(t *testing.T) {
 		t.Fatalf("a sidecar has no contract: %v", got)
 	}
 	for in, want := range map[string]map[string]string{
-		"EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun":                      {"EXIT_KIND": "sidecar"},
 		"with gluetun, EXIT_IF may hold only letters, digits and underscores": {"EXIT_KIND": "sidecar", "TUNNEL_BACKEND": "gluetun", "EXIT_IF": "wg-0"},
 	} {
 		if _, err := ConfigFromEnv(env(want)); err == nil || err.Error() != in {

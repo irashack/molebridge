@@ -7,11 +7,14 @@ import (
 )
 
 // Interest returns what a snapshot must contain to judge the contract: the
-// exit table, and with gluetun the host table and the main table.
+// exit table, with gluetun the host table and main, and with the native
+// sidecar main (its control and LAN paths). Snapshots also read all links.
 func (s Spec) Interest() rtnl.Interest {
 	t := []uint32{s.Config.Table}
 	if s.Config.IsGluetun() {
 		t = append(t, s.Config.HostTable, rtnl.TableMain)
+	} else if s.Config.IsNativeSidecar() {
+		t = append(t, rtnl.TableMain)
 	}
 	return rtnl.Interest{Tables: t}
 }
@@ -51,7 +54,7 @@ type Plan struct {
 	Family rtnl.Family
 	// ExitIf is the tunnel interface as the snapshot shows it.
 	ExitIf rtnl.Link
-	// HostIf is the namespace's host interface (the gluetun backend).
+	// HostIf is the namespace's host interface (gluetun or a native sidecar).
 	HostIf  rtnl.Link
 	Tunnel  TunnelMode
 	Address netip.Addr
@@ -110,6 +113,9 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 	c := s.Config
 	p := Plan{Family: f}
 	p.ExitIf, _ = snap.Link(c.ExitIf)
+	if c.IsNativeSidecar() {
+		p.HostIf, _ = snap.Link(c.HostIf)
+	}
 	up := p.ExitIf.Index != 0 && p.ExitIf.Up()
 	spec := s
 	if c.IsGluetun() {
