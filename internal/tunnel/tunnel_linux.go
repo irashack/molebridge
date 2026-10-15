@@ -329,6 +329,11 @@ func (m *Manager) Configure(ctx context.Context, name string, cfg wgtypes.Config
 type Params struct {
 	ExitIf string
 	Conf   *tunnelconf.Conf
+	// FirewallMark, when not zero, is the WireGuard device's fwmark: a native
+	// sidecar routes the device's own encapsulated UDP to the host by it, since
+	// everything else the namespace sends goes to the exit table. The overlay
+	// exit's device has none.
+	FirewallMark uint32
 }
 
 func notFound(err error) bool {
@@ -420,6 +425,10 @@ func (m *Manager) UpContext(ctx context.Context, p Params) (err error) {
 func (m *Manager) configure(ctx context.Context, p Params) error {
 	key := wgtypes.Key(p.Conf.PrivateKey)
 	cfg := wgtypes.Config{PrivateKey: &key, ReplacePeers: true}
+	if p.FirewallMark != 0 {
+		mark := int(p.FirewallMark)
+		cfg.FirewallMark = &mark
+	}
 	if peer := p.Conf.Peer; peer != nil {
 		pc := wgtypes.PeerConfig{
 			PublicKey:         wgtypes.Key(peer.PublicKey),
@@ -498,7 +507,9 @@ func (m *Manager) Cleanup(backend contract.Backend, exitIf, overlayIf string) er
 // worker is gone: the native backend deletes Molebridge's tunnel link and
 // NetBird's overlay link (a kernel WireGuard interface can keep forwarding in
 // a namespace another container holds); the gluetun backend deletes only the
-// overlay link and never touches gluetun's tunnel, which is not ours. Every
+// overlay link and never touches gluetun's tunnel, which is not ours. A native
+// sidecar has no overlay: it passes an empty overlayIf, and only its tunnel
+// link goes. Every
 // rule and the unreachable fallback stay in place. A link that is not there
 // is fine; one that is still there afterwards is an error. Every call ends by
 // ctx's deadline (DefaultBudget if it has none).
@@ -513,6 +524,9 @@ func (m *Manager) CleanupContext(ctx context.Context, backend contract.Backend, 
 	}
 	var failed []string
 	for _, name := range names {
+		if name == "" {
+			continue
+		}
 		err := m.rtDo(ctx, func(r routeAPI) error {
 			l, err := r.LinkByName(name)
 			if err != nil {

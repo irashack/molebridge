@@ -74,6 +74,9 @@ type worker struct {
 	ackExpiry atomic.Int64
 
 	tunnelUp atomic.Bool
+	// firewallOK is a native sidecar's firewall as last read back: installed
+	// and exactly as described.
+	firewallOK atomic.Bool
 	// fatalMsg is set when the generation must end with a failure (a gluetun
 	// monitor condemned NetBird).
 	fatalOnce sync.Once
@@ -306,7 +309,7 @@ func (w *worker) run() int {
 		sub  *rtnl.Subscriber
 		conn *rtnl.Conn
 	)
-	if s.Overlay() {
+	if s.HasContract() {
 		var err error
 		// Subscribe before the first snapshot, so no change between the
 		// snapshot and the watch is missed.
@@ -344,10 +347,15 @@ func (w *worker) run() int {
 	w.mut.Start()
 
 	w.loops = map[string]loopSource{LoopMutator: {w.mut.Progress, MutatorBound}}
-	if s.Overlay() {
+	if s.HasContract() {
+		var links []string
+		for _, l := range []string{s.Routing.ExitIf, s.Routing.OverlayIf, s.Routing.HostIf} {
+			if l != "" {
+				links = append(links, l)
+			}
+		}
 		wt := watch.New(watch.Config{Source: sub, Mutator: w.mut, Interval: s.Interval, Clock: w.clock,
-			Tables: spec.Interest().Tables, Links: []string{s.Routing.ExitIf, s.Routing.OverlayIf, s.Routing.HostIf},
-			Logf: w.libLogf})
+			Tables: spec.Interest().Tables, Links: links, Logf: w.libLogf})
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
 		go func() {
 			if err := wt.Run(w.ctx); err != nil {
@@ -368,6 +376,22 @@ func (w *worker) run() int {
 	// gives a new worker only StartupAllowance for it.
 	go w.renewLoop()
 
+	if s.Routing.IsNativeSidecar() {
+		// The firewall goes in before the rules: until the contract holds it
+		// alone keeps the applications sharing this namespace off the host
+		// path. A namespace that outlived an earlier run (a pod's, across a
+		// container restart) has the old table replaced in one transaction.
+		if err := w.sys.InstallSidecarFirewall(w.ctx); err != nil {
+			if w.ctx.Err() != nil {
+				return 0
+			}
+			w.logf("%v", err)
+			w.logf("the sidecar firewall could not be installed; no tunnel was started")
+			return 1
+		}
+		w.firewallOK.Store(true)
+		w.logf("the sidecar firewall is installed")
+	}
 	if err := w.mut.Install(w.ctx); err != nil {
 		if w.ctx.Err() != nil {
 			return 0
@@ -376,7 +400,7 @@ func (w *worker) run() int {
 		w.logf("the routing contract could not be installed; no tunnel was started")
 		return 1
 	}
-	if s.Overlay() {
+	if s.HasContract() {
 		w.logf("rules installed; the exit table holds its unreachable fallback")
 	}
 
@@ -393,10 +417,13 @@ func (w *worker) run() int {
 		wg.Add(1)
 		go func() { defer wg.Done(); f() }()
 	}
-	if s.Native() {
+	if s.NativeTunnel() {
 		spawn(func() { w.tunnelLoop(tun, obs) })
 	} else {
 		w.tunnelUp.Store(true)
+	}
+	if s.Routing.IsNativeSidecar() {
+		spawn(w.firewallLoop)
 	}
 	if s.Overlay() {
 		spawn(w.readinessLoop)
@@ -445,7 +472,45 @@ func (w *worker) publish(r validate.ObjectMarshaler) error {
 }
 
 func (w *worker) tunnelParams() tunnel.Params {
-	return tunnel.Params{ExitIf: w.s.Routing.ExitIf, Conf: w.s.Conf}
+	p := tunnel.Params{ExitIf: w.s.Routing.ExitIf, Conf: w.s.Conf}
+	if w.s.Routing.IsNativeSidecar() {
+		// Rule 93 sends the device's own UDP to the host by this mark;
+		// everything else the namespace sends goes to the exit table.
+		p.FirewallMark = w.s.Routing.TunnelMark()
+	}
+	return p
+}
+
+// firewallLoop keeps a native sidecar's firewall exactly as installed: it is
+// read back every FirewallCheckInterval and, if anything differs, replaced in
+// one transaction. nftables announces no change the worker subscribes to, so
+// this is a poll, not a watch.
+func (w *worker) firewallLoop() {
+	for {
+		if !sleepCtx(w.ctx, FirewallCheckInterval) {
+			return
+		}
+		ok, reason, err := w.sys.SidecarFirewall(w.ctx)
+		switch {
+		case w.ctx.Err() != nil:
+			return
+		case err != nil:
+			w.firewallOK.Store(false)
+			w.warnEvery("firewall-read", time.Minute, "the sidecar firewall cannot be read: %v", err)
+		case ok:
+			w.firewallOK.Store(true)
+		default:
+			w.firewallOK.Store(false)
+			if err := w.sys.InstallSidecarFirewall(w.ctx); err != nil {
+				w.warnEvery("firewall-install", time.Minute, "the sidecar firewall was not as installed (%s) and could not be replaced: %v", reason, err)
+				continue
+			}
+			w.logf("the sidecar firewall was not as installed (%s); reinstalled", reason)
+			if ok, _, err := w.sys.SidecarFirewall(w.ctx); err == nil && ok {
+				w.firewallOK.Store(true)
+			}
+		}
+	}
 }
 
 // tunnelLoop keeps the tunnel up: when the interface is missing or down it is
@@ -656,31 +721,24 @@ func (w *worker) notOperational() string {
 			return "NetBird is not running"
 		}
 	}
+	if w.s.Routing.IsNativeSidecar() {
+		res := w.mut.LastPass()
+		switch {
+		case !res.Verified || !w.tunnelUp.Load():
+			return "the routing contract is not verified"
+		case !w.firewallOK.Load():
+			return "the sidecar firewall is not as installed"
+		}
+	}
 	if !w.pipe.Healthy(w.ctx) {
 		return "the pipeline reports the namespace is not intact (" + w.diagnose() + ")"
 	}
 	return ""
 }
 
-// diagnose names what an unhealthy pipeline is missing, from the same reads
-// the pipeline makes; nothing here is secret.
-func (w *worker) diagnose() string {
+// routingDiagnosis names each family whose routing is not intact.
+func (w *worker) routingDiagnosis(ctx context.Context) []string {
 	var parts []string
-	ctx := w.ctx
-	if r, ok := readResult(w.s.PathResult()); !ok {
-		parts = append(parts, "no readable status record")
-	} else if st, _ := r["status"].(string); st != "ok" && st != "failed" {
-		parts = append(parts, "the last record is not a completed check")
-	}
-	if w.s.Kind() == "sidecar" {
-		if keys, err := w.sys.Peers(ctx); err != nil || len(keys) != 1 {
-			parts = append(parts, "not exactly one tunnel peer")
-		}
-		return strings.Join(parts, "; ")
-	}
-	if _, err := w.sys.Peers(ctx); err != nil {
-		parts = append(parts, "the tunnel interface has no WireGuard device")
-	}
 	addrs, err := w.sys.TunnelAddresses(ctx)
 	if err != nil {
 		parts = append(parts, "the tunnel addresses cannot be read")
@@ -696,6 +754,42 @@ func (w *worker) diagnose() string {
 			parts = append(parts, fmt.Sprintf("IPv%d routing is not intact", fam))
 		}
 	}
+	return parts
+}
+
+// diagnose names what an unhealthy pipeline is missing, from the same reads
+// the pipeline makes; nothing here is secret.
+func (w *worker) diagnose() string {
+	var parts []string
+	ctx := w.ctx
+	if r, ok := readResult(w.s.PathResult()); !ok {
+		parts = append(parts, "no readable status record")
+	} else if st, _ := r["status"].(string); st != "ok" && st != "failed" {
+		parts = append(parts, "the last record is not a completed check")
+	}
+	if w.s.Routing.IsGluetunSidecar() {
+		if keys, err := w.sys.Peers(ctx); err != nil || len(keys) != 1 {
+			parts = append(parts, "not exactly one tunnel peer")
+		}
+		return strings.Join(parts, "; ")
+	}
+	if w.s.Routing.IsNativeSidecar() {
+		if _, err := w.sys.Peers(ctx); err != nil {
+			parts = append(parts, "the tunnel interface has no WireGuard device")
+		}
+		parts = append(parts, w.routingDiagnosis(ctx)...)
+		if ok, _, err := w.sys.SidecarFirewall(ctx); err != nil || !ok {
+			parts = append(parts, "the sidecar firewall is not as installed")
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "the record may be stale")
+		}
+		return strings.Join(parts, "; ")
+	}
+	if _, err := w.sys.Peers(ctx); err != nil {
+		parts = append(parts, "the tunnel interface has no WireGuard device")
+	}
+	parts = append(parts, w.routingDiagnosis(ctx)...)
 	if v, err := w.sys.ReadSysctl(ctx, contract.ReturnPathSysctl); err != nil || !contract.ReturnPathEnabled(v) {
 		parts = append(parts, "icmp_errors_use_inbound_ifaddr is not 1")
 	}

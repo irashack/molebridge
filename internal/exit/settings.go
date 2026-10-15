@@ -97,6 +97,14 @@ func (s *Settings) Native() bool {
 // Overlay reports an exit with an overlay (a NetBird child), natively or not.
 func (s *Settings) Overlay() bool { return s.Routing.Kind == contract.Overlay }
 
+// NativeTunnel reports an exit that owns its tunnel: the native backend, as an
+// overlay exit or as a native sidecar.
+func (s *Settings) NativeTunnel() bool { return s.Routing.Backend == contract.Native }
+
+// HasContract reports an exit that installs and repairs a routing contract:
+// every overlay exit and the native sidecar. The gluetun sidecar has none.
+func (s *Settings) HasContract() bool { return s.Overlay() || s.Routing.IsNativeSidecar() }
+
 // Kind is "overlay" or "sidecar" and BackendName "native" or "gluetun", as the
 // status record and the cleanup argument name them.
 func (s *Settings) Kind() string { return string(s.Routing.Kind) }
@@ -233,7 +241,7 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	s.RunDir = orDefault(get("MOLEBRIDGE_RUN_DIR"), DefaultRunDir)
 	s.Server = get("SERVER")
 
-	if s.Native() {
+	if s.NativeTunnel() {
 		pv := tunnelconf.Provider(provider)
 		conf, err := tunnelconf.Load(s.ConfDir, cfg.ExitIf, pv, cfg.Table)
 		if err != nil {

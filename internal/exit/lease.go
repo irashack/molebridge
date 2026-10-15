@@ -38,6 +38,9 @@ const (
 	StartupAllowance = 30 * time.Second
 	// RenewEvery is the worker's renewal period.
 	RenewEvery = 2 * time.Second
+	// FirewallCheckInterval is how often a native sidecar reads its firewall
+	// back.
+	FirewallCheckInterval = 2 * time.Second
 )
 
 // LoopBounds returns the loops the settings' mode supervises and their bounds.
@@ -47,9 +50,10 @@ func LoopBounds(s *Settings) map[string]time.Duration {
 		b[LoopFwmark] = LoopBound
 		b[LoopLog] = LoopBound
 	}
-	if s.Routing.IsSidecar() {
-		// A sidecar has no contract and no watcher; its worker's one loop is
-		// the pipeline's tick, reported as the mutator's idle step.
+	if s.Routing.IsGluetunSidecar() {
+		// A gluetun sidecar has no contract and no watcher; its worker's one
+		// loop is the pipeline's tick, reported as the mutator's idle step. A
+		// native sidecar keeps its contract and watcher.
 		delete(b, LoopWatcher)
 	}
 	return b

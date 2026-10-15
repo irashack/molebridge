@@ -18,9 +18,11 @@ import (
 // tunnel link and NetBird's overlay link (a kernel WireGuard interface can
 // keep forwarding in a namespace another container holds); gluetun cleanup
 // deletes only the overlay link and never gluetun's tunnel, which is not ours.
-// Every rule and the unreachable fallback stay in place in both. A sidecar
-// owns neither link and does nothing. It changes nothing else and is bounded
-// by the supervisor, which kills it past its time.
+// Every rule and the unreachable fallback stay in place in both. A gluetun
+// sidecar owns neither link and does nothing; a native sidecar owns its tunnel
+// link alone, and its rules and firewall stay so the namespace it shares with
+// the applications stays closed. It changes nothing else and is bounded by the
+// supervisor, which kills it past its time.
 func RunCleanup(args []string, env map[string]string, stderr io.Writer) int {
 	var backend, kind string
 	for i := 0; i < len(args); i++ {
@@ -45,7 +47,7 @@ func RunCleanup(args []string, env map[string]string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, prefix+"usage: exit --cleanup --backend <native|gluetun> --kind <overlay|sidecar>")
 		return 2
 	}
-	if kind == "sidecar" {
+	if kind == "sidecar" && backend == "gluetun" {
 		fmt.Fprintln(stderr, prefix+"cleanup: a sidecar owns no interface; nothing to remove")
 		return 0
 	}
@@ -54,8 +56,12 @@ func RunCleanup(args []string, env map[string]string, stderr io.Writer) int {
 	if backend == "gluetun" {
 		exitDefault, b = "wg0", contract.Gluetun
 	}
-	exitIf, overlayIf := orDefault(env["EXIT_IF"], exitDefault), orDefault(env["OVERLAY_IF"], orDefault(env["NB_INTERFACE_NAME"], contract.DefaultOverlayIf))
-	if !contract.ValidInterfaceName(exitIf) || !contract.ValidInterfaceName(overlayIf) || exitIf == overlayIf {
+	exitIf := orDefault(env["EXIT_IF"], exitDefault)
+	overlayIf := "" // a native sidecar has no overlay
+	if kind == "overlay" {
+		overlayIf = orDefault(env["OVERLAY_IF"], orDefault(env["NB_INTERFACE_NAME"], contract.DefaultOverlayIf))
+	}
+	if !contract.ValidInterfaceName(exitIf) || (kind == "overlay" && (!contract.ValidInterfaceName(overlayIf) || exitIf == overlayIf)) {
 		fmt.Fprintln(stderr, prefix+"cleanup: invalid interface names")
 		return 1
 	}

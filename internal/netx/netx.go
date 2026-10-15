@@ -81,6 +81,10 @@ type Request struct {
 	// SocketMark sets this firewall mark on the connection (SO_MARK). Zero is
 	// no mark.
 	SocketMark uint32
+	// MarkResolver resolves the URL's host name with Go's own resolver over
+	// sockets that carry SocketMark too, so the lookup takes the same path as
+	// the connection. Without it the system's lookup sockets are unmarked.
+	MarkResolver bool
 
 	// RootCAs, when set, is the only authority the server's certificate is
 	// verified against (curl --cacert); otherwise the system roots are used.
@@ -166,6 +170,10 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 		connectTimeout = DefaultConnectTimeout
 	}
 	dialer := &net.Dialer{Timeout: connectTimeout, Control: bindControl(req.BindInterface, req.SocketMark)}
+	if req.MarkResolver && req.SocketMark != 0 {
+		lookup := &net.Dialer{Timeout: connectTimeout, Control: bindControl("", req.SocketMark)}
+		dialer.Resolver = &net.Resolver{PreferGo: true, Dial: lookup.DialContext}
+	}
 	network := "tcp"
 	switch req.Family {
 	case 4:

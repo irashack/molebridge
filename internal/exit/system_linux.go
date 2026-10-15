@@ -60,6 +60,11 @@ type KernelSystem struct {
 	snapMu sync.Mutex
 	snap   *rtnl.Snapshot
 	snapAt time.Time
+
+	// fwMu guards fwPort, the forwarded port a native sidecar's firewall
+	// admits (0: none).
+	fwMu   sync.Mutex
+	fwPort uint16
 }
 
 var (
@@ -629,6 +634,58 @@ func (k *KernelSystem) ApplyForwardRules(ctx context.Context, port int, target n
 	return k.Mut.Do(ctx, "apply the forward rules", func(tx *mutator.Tx) error {
 		return nft.ApplyForwardRules(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf(), port, target)
 	})
+}
+
+// -- the native sidecar --------------------------------------------------------
+
+// sidecarFirewall is the firewall this native sidecar holds, with the
+// forwarded port last set.
+func (k *KernelSystem) sidecarFirewall() nft.SidecarFirewall {
+	c := k.S.Routing
+	k.fwMu.Lock()
+	port := k.fwPort
+	k.fwMu.Unlock()
+	return nft.SidecarFirewall{ExitIf: c.ExitIf, TunnelMark: c.TunnelMark(), ControlMark: c.ControlMark,
+		LAN4: c.LANFor(rtnl.V4), LAN6: c.LANFor(rtnl.V6), ForwardedPort: port}
+}
+
+// InstallSidecarFirewall replaces the native sidecar's firewall in one
+// transaction, as one job on the mutation owner.
+func (k *KernelSystem) InstallSidecarFirewall(ctx context.Context) error {
+	return k.Mut.Do(ctx, "install the sidecar firewall", func(tx *mutator.Tx) error {
+		return nft.InstallSidecar(tx.Context(), k.NetNS, k.sidecarFirewall())
+	})
+}
+
+// SidecarFirewall reads the native sidecar's firewall back. It changes
+// nothing, so it is not a job on the mutation owner.
+func (k *KernelSystem) SidecarFirewall(ctx context.Context) (bool, string, error) {
+	return nft.VerifySidecar(ctx, k.NetNS, k.sidecarFirewall())
+}
+
+// SetForwardedPort reinstalls the native sidecar's firewall admitting port
+// (0: none) from the tunnel.
+func (k *KernelSystem) SetForwardedPort(ctx context.Context, port int) error {
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("invalid forwarded port %d", port)
+	}
+	k.fwMu.Lock()
+	k.fwPort = uint16(port)
+	k.fwMu.Unlock()
+	return k.InstallSidecarFirewall(ctx)
+}
+
+// Fetch sends one request. In a native sidecar every request not bound to the
+// tunnel carries the control mark, its name lookup included: rule 88 sends it
+// to the host and the firewall admits it there. Unmarked, it would go to the
+// exit table like the applications' traffic, and the provider's login and the
+// registration with a server's public address must not depend on the tunnel
+// they set up.
+func (k *KernelSystem) Fetch(ctx context.Context, req netx.Request) (netx.Response, error) {
+	if c := k.S.Routing; c.IsNativeSidecar() && req.BindInterface == "" && req.SocketMark == 0 {
+		req.SocketMark, req.MarkResolver = c.ControlMark, true
+	}
+	return k.Client.Fetch(ctx, req)
 }
 
 // RemoveForwardRules deletes the port-forwarding table.

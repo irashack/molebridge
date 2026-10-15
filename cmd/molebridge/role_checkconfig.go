@@ -27,7 +27,7 @@ func checkConfigMain(args []string, env map[string]string, stdout, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if s.Native() {
+	if s.NativeTunnel() {
 		fmt.Fprintf(stdout, "molebridge-exit: configuration accepted (%s/%s.conf: %s)\n", s.ConfDir, s.Routing.ExitIf, s.Conf.Families())
 	} else {
 		fmt.Fprintln(stdout, "molebridge-exit: configuration accepted")
