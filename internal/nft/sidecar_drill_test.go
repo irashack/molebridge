@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,18 +52,20 @@ func TestSidecarFirewallInstallReplaceAndDrift(t *testing.T) {
 	if strings.Contains(live, "41234") || strings.Count(live, "dport 42345") != 2 {
 		t.Fatalf("port replacement did not replace both rules:\n%s", live)
 	}
-	// The edit is made by nft in another process, not through the installer.
-	output := list(t, ns, "-a", "list", "chain", "inet", nft.SidecarTable, "output")
-	match := regexp.MustCompile(`(?m)oifname "lo" accept # handle ([0-9]+)`).FindStringSubmatch(output)
-	if len(match) != 2 {
-		t.Fatalf("no loopback rule handle:\n%s", output)
+	// Disturb each table independently through nft in another process.
+	for _, table := range []string{nft.SidecarTable, nft.SidecarBackstopTable} {
+		output := list(t, ns, "-a", "list", "chain", "inet", table, "output")
+		match := regexp.MustCompile(`(?m)oifname "lo" accept # handle ([0-9]+)`).FindStringSubmatch(output)
+		if len(match) != 2 {
+			t.Fatalf("no loopback rule handle:\n%s", output)
+		}
+		list(t, ns, "delete", "rule", "inet", table, "output", "handle", match[1])
+		verifySidecarDrill(t, ns, f, false, table+": chain output:")
+		installSidecarDrill(t, ns, f)
+		list(t, ns, "add", "chain", "inet", table, "output", "{ policy accept; }")
+		verifySidecarDrill(t, ns, f, false, table+": chain output: policy accept")
+		installSidecarDrill(t, ns, f)
 	}
-	list(t, ns, "delete", "rule", "inet", nft.SidecarTable, "output", "handle", match[1])
-	verifySidecarDrill(t, ns, f, false, "chain output:")
-	installSidecarDrill(t, ns, f)
-	list(t, ns, "add", "chain", "inet", nft.SidecarTable, "output", "{ policy accept; }")
-	verifySidecarDrill(t, ns, f, false, "chain output: policy accept")
-	installSidecarDrill(t, ns, f)
 	f.ForwardedPort = 0
 	installSidecarDrill(t, ns, f)
 	if live := list(t, ns, "list", "table", "inet", nft.SidecarTable); strings.Contains(live, "dport") {
@@ -95,12 +98,16 @@ func sidecarSend(ns *nstest.NS, device string, mark uint32, addr [4]byte, port i
 func sidecarListen(t *testing.T, ns *nstest.NS, address string) *net.UDPConn {
 	t.Helper()
 	var conn *net.UDPConn
+	network := "udp4"
+	if strings.HasPrefix(address, "[") {
+		network = "udp6"
+	}
 	if err := ns.Do(func() error {
-		addr, err := net.ResolveUDPAddr("udp4", address)
+		addr, err := net.ResolveUDPAddr(network, address)
 		if err != nil {
 			return err
 		}
-		conn, err = net.ListenUDP("udp4", addr)
+		conn, err = net.ListenUDP(network, addr)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -205,4 +212,150 @@ func TestSidecarFirewallPackets(t *testing.T) {
 	}
 	sidecarReceive(t, denied, "reply", true)
 	verifySidecarDrill(t, ns, f, true, "") // counters now differ from their installed zeros
+}
+
+// A host link with IPv4, IPv6 and explicit link-local addresses. No static
+// neighbour entries: the protected namespace must perform ND itself.
+func sidecarHostLink(t *testing.T) (*nstest.NS, *nstest.NS) {
+	t.Helper()
+	ns, peer := nstest.New(t, "sc-app"), nstest.New(t, "sc-out")
+	ns.Veth("host0", peer, "host1")
+	for _, endpoint := range []struct {
+		ns                 *nstest.NS
+		dev, v4, v6, local string
+	}{
+		{ns, "host0", "198.51.100.2/24", "2001:db8:1::2/64", "fe80::2/64"},
+		{peer, "host1", "198.51.100.1/24", "2001:db8:1::1/64", "fe80::1/64"},
+	} {
+		endpoint.ns.Sysctl("net.ipv6.conf.all.disable_ipv6=0", "net.ipv6.conf."+endpoint.dev+".disable_ipv6=0")
+		endpoint.ns.IP("addr", "add", endpoint.v4, "dev", endpoint.dev)
+		endpoint.ns.IP("-6", "addr", "add", endpoint.v6, "dev", endpoint.dev, "nodad")
+		endpoint.ns.IP("-6", "addr", "add", endpoint.local, "dev", endpoint.dev, "nodad")
+		endpoint.ns.IP("link", "set", endpoint.dev, "up")
+	}
+	return ns, peer
+}
+
+func sidecarLeakCounter(t *testing.T, peer *nstest.NS) {
+	t.Helper()
+	if out, err := peer.ExecInput(`table inet leak {
+  counter seen {}
+  chain pre {
+    type filter hook prerouting priority raw; policy accept;
+    udp dport 42345 counter name seen
+  }
+}
+`, "nft", "-f", "-"); err != nil {
+		t.Fatalf("leak counter: %v\n%s", err, out)
+	}
+}
+
+func sidecarLeaked(t *testing.T, peer *nstest.NS) int {
+	t.Helper()
+	out := list(t, peer, "list", "counter", "inet", "leak", "seen")
+	match := regexp.MustCompile(`packets ([0-9]+)`).FindStringSubmatch(out)
+	if len(match) != 2 {
+		t.Fatalf("no packet count: %s", out)
+	}
+	n, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestSidecarFirewallCapabilityFreeIPv6(t *testing.T) {
+	for _, dest := range []string{"ff02::1", "fe80::1"} {
+		t.Run(dest, func(t *testing.T) {
+			ns, peer := sidecarHostLink(t)
+			sidecarListen(t, peer, "[::]:42345")
+			sidecarLeakCounter(t, peer)
+			f := sidecarDrillFirewall()
+			installSidecarDrill(t, ns, f)
+			t.Run("protected", func(t *testing.T) {
+				sender := startSidecarSender(t, ns, "host0", dest)
+				sender.wait(t, 100, true)
+				if n := sidecarLeaked(t, peer); n != 0 {
+					t.Fatalf("%s: %d packets escaped", dest, n)
+				}
+			})
+			// Positive control: the same sender and destination reach outside
+			// when explicitly LAN-listed. Run this after the zero-count phase
+			// so queued control packets cannot contaminate that assertion.
+			f.LAN6 = append(f.LAN6, netip.PrefixFrom(netip.MustParseAddr(dest), 128))
+			installSidecarDrill(t, ns, f)
+			t.Run("explicit LAN", func(t *testing.T) {
+				sender := startSidecarSender(t, ns, "host0", dest)
+				sender.wait(t, 50, false)
+				if sidecarLeaked(t, peer) == 0 {
+					t.Fatal("LAN-listed sender did not reach the outside counter")
+				}
+			})
+		})
+	}
+}
+
+func TestSidecarFirewallIPv6NeighbourDiscovery(t *testing.T) {
+	ns, peer := sidecarHostLink(t)
+	installSidecarDrill(t, ns, sidecarDrillFirewall())
+	for _, endpoint := range []struct {
+		ns  *nstest.NS
+		dev string
+	}{{ns, "host0"}, {peer, "host1"}} {
+		endpoint.ns.IP("-6", "neigh", "flush", "dev", endpoint.dev)
+		if out := endpoint.ns.IP("-6", "neigh", "show", "dev", endpoint.dev); strings.TrimSpace(out) != "" {
+			t.Fatalf("neighbour cache was not empty: %s", out)
+		}
+	}
+	if out, err := ns.Exec("ping", "-6", "-c", "1", "-W", "3", "2001:db8:1::1"); err != nil {
+		t.Fatalf("LAN IPv6 neighbour discovery/ping: %v\n%s", err, out)
+	}
+	if out := ns.IP("-6", "neigh", "show", "to", "2001:db8:1::1", "dev", "host0"); !strings.Contains(out, "lladdr") || strings.Contains(out, "PERMANENT") {
+		t.Fatalf("no dynamically discovered neighbour: %s", out)
+	}
+}
+
+func TestSidecarFirewallSingleTableDeletion(t *testing.T) {
+	for _, table := range []string{nft.SidecarTable, nft.SidecarBackstopTable} {
+		t.Run(table, func(t *testing.T) {
+			ns, peer := sidecarHostLink(t)
+			// This neighbour is outside the LAN allowlist and has no route in
+			// the application namespace. SO_BINDTODEVICE's on-link fallback
+			// can nevertheless reach it when neither output chain is present.
+			peer.IP("addr", "add", "192.0.2.1/32", "dev", "host1")
+			sidecarListen(t, peer, "0.0.0.0:42345")
+			sidecarLeakCounter(t, peer)
+			f := sidecarDrillFirewall()
+			installSidecarDrill(t, ns, f)
+			t.Run("continuous sender", func(t *testing.T) {
+				sender := startSidecarSender(t, ns, "host0", "192.0.2.1")
+				sent := sender.wait(t, 100, true)
+				list(t, ns, "delete", "table", "inet", table)
+				verifySidecarDrill(t, ns, f, false, "no table inet "+table)
+				sent = sender.wait(t, sent+100, true)
+				if n := sidecarLeaked(t, peer); n != 0 {
+					t.Fatalf("after deleting %s: %d packets escaped", table, n)
+				}
+				// Repair with one table missing also stays closed while the
+				// same socket keeps sending across the atomic replacement.
+				installSidecarDrill(t, ns, f)
+				sender.wait(t, sent+100, true)
+				if n := sidecarLeaked(t, peer); n != 0 {
+					t.Fatalf("after reinstalling: %d packets escaped", n)
+				}
+			})
+			// Positive control after the protected phase: deleting both tables
+			// is outside the single-fault guarantee and must expose this path.
+			for _, name := range []string{nft.SidecarTable, nft.SidecarBackstopTable} {
+				list(t, ns, "delete", "table", "inet", name)
+			}
+			t.Run("unfiltered control", func(t *testing.T) {
+				sender := startSidecarSender(t, ns, "host0", "192.0.2.1")
+				sender.wait(t, 50, false)
+				if sidecarLeaked(t, peer) == 0 {
+					t.Fatal("unfiltered bound sender did not reach the outside counter")
+				}
+			})
+		})
+	}
 }
