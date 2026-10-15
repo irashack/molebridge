@@ -3,7 +3,10 @@
 Everything here is needed before [setup](setup.md). Where something has only
 been tested in one configuration, this page says so. [Testing](testing.md#080)
 is the record of what ran live at 0.8.0; "tested" statements below that name
-an earlier release are about that release.
+an earlier release are about that release. The sidecar forms ([gluetun](gluetun-sidecar.md)
+and [native](native-sidecar.md), the latter new in 0.9.0 and not yet run live)
+need no NetBird account: read the host, runtime and network parts, and skip
+[NetBird](#netbird).
 
 ## Host
 
@@ -14,7 +17,9 @@ an earlier release are about that release.
   no userspace fallback.
 - **nftables in the kernel** (`nf_tables`, which current distribution kernels
   include). The image has no iptables, so NetBird uses its nftables firewall,
-  and the exit's own PIA port-forwarding rules are nftables too. The exit
+  and the exit's own PIA port-forwarding rules are nftables too. A
+  [native sidecar](native-sidecar.md#the-firewall) installs its whole firewall
+  in nftables, with the `inet` family and the `meta mark` and `ct state` matches. The exit
   fails its `netbird` check without NetBird's firewall in place. On the
   0.8.0 live host NetBird created its `netbird` tables in nftables, as
   intended ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)).
@@ -32,6 +37,7 @@ an earlier release are about that release.
 | Docker Desktop | Untested |
 | arm64 Linux | The image is built and checked for arm64 in CI and the namespace drills passed on an arm64 VM; no live exit has run on arm64 |
 | Windows | Not supported |
+| A Kubernetes node, for the [native sidecar](native-sidecar.md#kubernetes) | Kubernetes 1.29 or later (sidecar containers); `wireguard` loadable on the node. Not yet run live ([testing](testing.md#090)) |
 
 - **amd64 or arm64.** The image is a multi-architecture index; the Compose
   files pin it by digest.
@@ -106,6 +112,7 @@ you want direct NetBird connections from a rootless or bridged setup (see
 | PIA, through the tunnel: HTTPS to `www.privateinternetaccess.com`; TCP 19999 to the server (port forwarding only) | Egress check, port forwarding |
 | NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list, latency probes. The `nordvpn-key` tool makes its one request to `api.nordvpn.com` from the throwaway container at setup |
 | NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
+| Native sidecar: the rows for its provider above. The exit's provider downloads, login and registration leave over the host's connection; the applications reach only `SIDECAR_LAN_CIDRS` outside the tunnel | As the provider's rows; a resolver inside `SIDECAR_LAN_CIDRS` is reached outside the tunnel ([DNS](native-sidecar.md#dns)) |
 | gluetun backend: what gluetun needs for its provider, including its server list updater and DNS, which go through the tunnel | Tunnel, server list |
 | gluetun backend with FastestVPN, IVPN, Surfshark or Windscribe: HTTPS to `api.ipify.org` and `ipv4.icanhazip.com` (and `api6.ipify.org`, `ipv6.icanhazip.com` for IPv6), through the tunnel and from the host | The tunnel checks, which compare the address seen through the tunnel with the host's own |
 

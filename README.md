@@ -35,7 +35,11 @@ Either way, the devices using the exit are NetBird peers.
 
 Separately, an experimental [gluetun sidecar](docs/gluetun-sidecar.md) lets
 Switchyard choose and check the server of an ordinary gluetun container
-that your other containers share, with no NetBird involved.
+that your other containers share, with no NetBird involved. The experimental
+[native sidecar](docs/native-sidecar.md), new in 0.9.0, gives those containers a
+tunnel that Molebridge builds itself, with PIA over WireGuard among the providers,
+and keeps their traffic in it with its own routing contract and firewall; it has
+not been run live yet ([testing](docs/testing.md#090)).
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
 (PIA) in a small web panel called Switchyard. Every device using the exit
@@ -275,12 +279,16 @@ Podman details, is in [requirements](docs/prerequisites.md).
   restarts on another server.
 - **NetBird only.** It relies on NetBird's exit-node routes and was never
   built or tested for Tailscale or other overlays.
-- **Exits only.** Molebridge carries traffic for NetBird devices, not for
-  other containers. To send a container's traffic through a VPN, use
-  [gluetun](https://github.com/qdm12/gluetun) directly; the experimental
-  [gluetun sidecar](docs/gluetun-sidecar.md) adds Switchyard to pick and
-  check its server. There, gluetun's firewall alone keeps the containers'
-  traffic in the tunnel, and only Mullvad and NordVPN can be verified.
+- **Exits only, with one exception.** Molebridge carries traffic for NetBird
+  devices, not for other containers, except in the experimental
+  [native sidecar](docs/native-sidecar.md), which exists for providers gluetun
+  can't drive over WireGuard with Molebridge, PIA first. Its routing contract and
+  firewall keep the containers' traffic in the tunnel. To send a container's
+  traffic through any other VPN, use [gluetun](https://github.com/qdm12/gluetun)
+  directly; the experimental [gluetun sidecar](docs/gluetun-sidecar.md) adds
+  Switchyard to pick and check its server. There, gluetun's firewall alone keeps
+  the containers' traffic in the tunnel, and only Mullvad and NordVPN can be
+  verified.
 
 ## Earlier testing
 
@@ -312,6 +320,7 @@ drills, PIA port forwarding against PIA itself, among others).
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
 - [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): the gluetun form, its routing rules and its checks; experimental.
 - [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that other containers share; experimental.
+- [Native sidecar](docs/native-sidecar.md): Molebridge's own tunnel, routing contract and firewall for containers that share the exit's namespace, including Kubernetes pods and PIA's forwarded port; experimental, new in 0.9.0.
 - [Architecture](docs/architecture.md): the processes, routing, trust boundaries and the switching sequence.
 - [Testing](docs/testing.md): what has been tested, where and at which revision.
 - [Roadmap](ROADMAP.md): ideas that aren't scheduled or built.

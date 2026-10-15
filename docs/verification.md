@@ -262,6 +262,106 @@ of reaching the exit. Repeat the ping with the tunnel down. The local-delivery r
 PIA, NordVPN and gluetun exits at 0.7.0; [testing](testing.md) says which protocols and families each
 covered.
 
+## A native sidecar
+
+The checks and drills above are for an overlay exit. A [native sidecar](native-sidecar.md)
+has no NetBird and no clients; its applications share the exit's namespace, so
+the property to check is that **their traffic can leave only by the tunnel**
+(except to `SIDECAR_LAN_CIDRS`), also while the tunnel is down and while the exit
+is stopped. These checks follow from the code and from the namespace drills
+([testing](testing.md#090)); none has been run on a live native sidecar yet.
+They use the Compose names: the exit container `molebridge-native-sidecar-exit`,
+tunnel interface `pia`, exit table `51821`, control mark `0x1bd00`, host
+interface `eth0`. Change them to your values. In Kubernetes, `kubectl exec` into
+the application container, and take the shell from a debug container in the pod.
+
+**Inside the namespace.** Start the shell as above, with `--network
+container:molebridge-native-sidecar-exit`.
+
+1. `ip rule` shows, and nothing else from priority 1 to 98: 88 (`fwmark 0x1bd00
+   iif lo lookup main`), 89 (the same, `unreachable`), one 90 for each IPv4 prefix
+   in `SIDECAR_LAN_CIDRS` (`to <prefix> iif lo lookup main`), 93 (`fwmark 0xca6d
+   iif lo lookup main`), 94 (`from` the tunnel's IPv4 address, `ipproto icmp` →
+   table 51821), 96 (`iif lo` → table 51821), 97 (`iif lo unreachable`) and 98
+   (`from` the tunnel's IPv4 address, `ipproto icmp unreachable`), with the
+   kernel's priority-0 `from all lookup local` still present. 94 and 98 appear
+   once PIA's registration has given the tunnel an address. `ip -6 rule` has the
+   same with the IPv6 prefixes, and 94 and 98 only for an IPv6 tunnel address.
+2. `ip route show table 51821` shows `default dev pia` and `unreachable default
+   metric 4096`; for IPv6 with PIA, only the fallback.
+3. `nft list table inet molebridge_sidecar` is the table in
+   [the native sidecar](native-sidecar.md#the-firewall): `output` and `forward`
+   with policy `drop`, `input` with policy `accept`, your prefixes in the output
+   chain, and with PIA's forwarded port two rules for it in `input`. Counters
+   differ.
+4. `docker compose exec exit molebridge status` prints `state: ok (connected)`,
+   with `routing=pass` and `traffic_protection=pass`.
+5. Provider egress, from the shell, as in the probe table above (`--interface
+   pia`).
+
+**From an application.** Use a tool in the application's own container, or a
+throwaway container joined to the exit's namespace without capabilities
+(`docker run --rm -it --network container:molebridge-native-sidecar-exit
+--cap-drop ALL <image with curl>`; Alpine's `apk add curl` downloads through the
+tunnel, so it works only once the exit is healthy). `<probe-url>` is the
+provider's status endpoint from the table above.
+
+1. `curl -4 -fsS <probe-url>`, with no `--interface`, succeeds and reports the
+   provider's egress (PIA: `"connected": true`).
+2. `curl -4 -fsS --max-time 10 --interface eth0 <probe-url>` fails. A socket
+   bound to the host interface is the case policy routing alone does not stop;
+   the firewall does. If it succeeds, the firewall is missing or the application
+   holds `NET_ADMIN`.
+3. A request to an address inside `SIDECAR_LAN_CIDRS`, such as the engine's
+   gateway or a host on your LAN, connects. A request to an address inside no
+   prefix, such as `192.0.2.1`, goes into the tunnel and fails by itself; run it
+   with the tunnel down, in the drills below, to see the difference.
+4. DNS: `cat /etc/resolv.conf` shows the resolvers the namespace uses. A resolver
+   inside `SIDECAR_LAN_CIDRS` answers outside the tunnel ([DNS](native-sidecar.md#dns)).
+   Run a DNS leak test from the application and check that the resolvers it names
+   are ones you accept.
+5. `capsh --print` or `grep CapEff /proc/self/status` in the application shows
+   no capability (`0000000000000000`).
+
+**Drills.** With a probe like step 1 running in the application, and the worker
+frozen to see the containment as in
+[the fail-closed drills](#fail-closed-drills), break one thing in the shell. A
+capture on the host interface for the probe's address, `tcpdump -ni eth0 'host
+<probe-ip>'`, must print nothing for the whole drill.
+
+| Drill | Break (in the shell) | Expect |
+|---|---|---|
+| Tunnel down | `ip link del pia` | The unbound probe fails at once on the unreachable fallback, as does `--interface eth0`; an address inside a LAN prefix still answers. The exit then logs `molebridge-exit: bringing the tunnel up` and `molebridge-exit: tunnel up` |
+| Tunnel route deleted | `ip route del default dev pia table 51821` | The probe fails until `molebridge-exit: IPv4 tunnel route through pia restored` |
+| Lookup rule deleted | `ip rule del priority 96` | The probe fails on rule 97 until `molebridge-exit: added IPv4 rule 96` |
+| Terminal rule deleted | `ip rule del priority 97` | The probe keeps working through rule 96; then `molebridge-exit: added IPv4 rule 97` |
+| Inserted bypass | `ip rule add lookup main priority 50` | Removed by the repair: `molebridge-exit: removed IPv4 rule 50: from all lookup main`. Nothing is promised about traffic before that |
+| Firewall table deleted | `nft delete table inet molebridge_sidecar` | Within about 2 seconds `molebridge-exit: the sidecar firewall was not as installed (no table inet molebridge_sidecar); reinstalled`. Until then the second layer is gone: `--interface eth0` would get out, which is why the table is read back every 2 seconds |
+| Firewall policy flipped | `nft add chain inet molebridge_sidecar output '{ policy accept; }'` | `molebridge-exit: the sidecar firewall was not as installed (chain output: policy accept); reinstalled` |
+| Firewall rule deleted | `nft delete rule inet molebridge_sidecar output handle <handle>` (from `nft -a list table inet molebridge_sidecar`) | `molebridge-exit: the sidecar firewall was not as installed (chain output: rule <n> differs); reinstalled`, or `chain output: <n> rules, want <m>` when the last rule went |
+| Exit stopped | `docker compose stop exit` | The probe fails, and the table and the rules are still in the application's namespace (`nft list table inet molebridge_sidecar` in a shell joined to the application's container). Recover with `docker compose up -d --force-recreate` ([recovery](native-sidecar.md#recovery)) |
+
+A check that runs while the break stands reports `traffic_protection` failed (and
+`routing` too, for a rule or the fallback) with the message "Sidecar firewall
+protection is incomplete; see docs/operations.md#recovery." or "Routing
+protection is incomplete; see docs/operations.md#recovery." The isolated drills
+that the same cases come from are in [testing](testing.md#090).
+
+**Port forwarding.** With PIA and `PIA_PORT_FORWARD=on`, once
+`jq .forwarded_port state/applier/result.json` prints a number:
+
+- `nft list table inet molebridge_sidecar` has a `tcp dport` and a `udp dport`
+  rule for that port in `input`, and none for any other. `nft list tables` shows
+  no `ip molebridge_forward` and no `inet molebridge_guard`.
+- Your application listens on that port. From outside, connect to the PIA egress
+  address and the port over TCP and UDP; both reach it. A connection to another
+  port on the tunnel address is dropped.
+- With `port-sync`, `docker compose logs port-sync` shows
+  `molebridge-port-sync: qBittorrent listens on <old>; set to <port>` once, and
+  qBittorrent's listening port is that number.
+- With `PIA_PORT_FORWARD=off` and the exit recreated, the input chain has no port
+  rules. Live forwarding against PIA has not been tested.
+
 ## Status and recovery
 
 ### Reading the status

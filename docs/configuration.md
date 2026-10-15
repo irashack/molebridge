@@ -15,18 +15,18 @@ default in the binary and appears here as an [override](#overrides).
 | `OVERLAY6_CIDR` | empty | IPv6 overlay range, if enabled, also written with its network address (`/1` to `/128`). |
 | `NB_HOSTNAME` | `molebridge-exit` | NetBird peer name. |
 | `NB_MANAGEMENT_URL` | `https://api.netbird.io` | NetBird management server. |
-| `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). The exit also reads `1`, `true` and `yes` as on and `0`, `false` and `no` as off, in any case; any other value stops it with `PIA_PORT_FORWARD must be on or off`. |
-| `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port; it must lie inside `OVERLAY_CIDR`. Required when forwarding is on; refused otherwise. |
+| `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` (in a [native sidecar](#native-sidecar), to the namespace itself) and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). The exit also reads `1`, `true` and `yes` as on and `0`, `false` and `no` as off, in any case; any other value stops it with `PIA_PORT_FORWARD must be on or off`. |
+| `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port; it must lie inside `OVERLAY_CIDR`. Required when forwarding is on; refused otherwise. A native sidecar refuses it in every case: its forwarded port reaches the namespace itself. |
 | `PANEL_PORT` | `8095` | Host loopback port for the panel. Compose reads it; the panel listens on 8080 inside its container. |
 | `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Unlisted names get 421, except on `/healthz`; loopback names are accepted. Form posts require an allowed origin. |
-| `PANEL_EXITS` | empty | Several exits in one Switchyard, as `id=provider[/kind][:label]`, where `kind` is `overlay` (the default) or `sidecar`. Empty means this one exit. `compose.yaml` passes it to the bundled panel; each exit's state must then be mounted under `/state/<id>` in a `compose.override.yaml`. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
+| `PANEL_EXITS` | empty | Several exits in one Switchyard, as `id=provider[/kind][:label]`, where `kind` is `overlay` (the default) or `sidecar`, and the provider is a native one (`mullvad`, `pia`, `nordvpn`: with `sidecar`, a [native sidecar](#native-sidecar)) or a `gluetun-*` one (a [gluetun sidecar](#gluetun-sidecar)). Empty means this one exit. `compose.yaml` passes it to the bundled panel; each exit's state must then be mounted under `/state/<id>` in a `compose.override.yaml`. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `PANEL_OIDC_ISSUER`, `PANEL_OIDC_CLIENT_ID`, `PANEL_PUBLIC_URL`, `PANEL_ADMIN_GROUPS` | empty | Optional sign-in, off while the issuer is empty. See [panel sign-in](#panel-sign-in). |
 | `GATUS_URL` | empty | Gatus base URL for health pushes, starting `http://` or `https://`; empty disables them. The token (`GATUS_TOKEN`) goes in `secrets/applier.env`; with no token nothing is pushed. |
 | `TZ` | `Etc/UTC` | Container time zone. |
 
-`.env.gluetun.example` and `.env.sidecar.example` have the same shape for the
-two gluetun forms; see [gluetun backend](#gluetun-backend) and
-[gluetun sidecar](#gluetun-sidecar).
+`.env.gluetun.example`, `.env.sidecar.example` and `.env.native-sidecar.example`
+have the same shape for the other three forms; see [gluetun backend](#gluetun-backend),
+[gluetun sidecar](#gluetun-sidecar) and [native sidecar](#native-sidecar).
 
 ### Overrides
 
@@ -120,8 +120,8 @@ changed in `.env`:
 
 | Setting | Value | Meaning |
 |---|---|---|
-| `TUNNEL_BACKEND` | `native` (`compose.yaml`) or `gluetun` | Who owns the tunnel. Unset means `native`; `wireguard` is read as `native`; any other value stops the exit with `TUNNEL_BACKEND must be native or gluetun`. |
-| `EXIT_KIND` | `overlay`, or `sidecar` in `compose.sidecar.yaml` | See [gluetun sidecar](#gluetun-sidecar). |
+| `TUNNEL_BACKEND` | `native` (`compose.yaml`, `compose.native-sidecar.yaml`) or `gluetun` | Who owns the tunnel. Unset means `native`; `wireguard` is read as `native`; any other value stops the exit with `TUNNEL_BACKEND must be native or gluetun`. |
+| `EXIT_KIND` | `overlay`, or `sidecar` in `compose.sidecar.yaml` and `compose.native-sidecar.yaml` | See [gluetun sidecar](#gluetun-sidecar) and [native sidecar](#native-sidecar). With `native` it selects the native sidecar; with `gluetun` and a `gluetun-*` provider, the gluetun sidecar. |
 | `STATE_DIR` | `/state` | Where the exit and the panel find `applier/` and `panel/`. The exit refuses to start unless `<STATE_DIR>/applier` is a directory it can write. |
 | `MOLEBRIDGE_KIND` | `overlay` or `sidecar`, on the `gluetun` service of the two gluetun files | Read by `routing/gluetun-preflight`, which refuses to start gluetun without a matching post-rules file (`overlay`) or with one (`sidecar`). |
 
@@ -275,9 +275,9 @@ settings above keep their meaning. `PROVIDER` and the PIA settings don't apply.
 | `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
 | `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). When `SERVER` is set, the exit converges to it and restores it after gluetun restarts. Otherwise a selection in the panel replaces these filters while gluetun runs, and the exit restores your last verified selection after a restart. |
 | `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the exit also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. Hours, minutes and seconds only, such as `24h`, `1h30m` or `90s`; anything else stops the exit at start with `invalid GLUETUN_UPDATER_PERIOD`. |
-| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. It can't be `lo`, `OVERLAY_IF` or `EXIT_IF`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. It can't be `lo`, `OVERLAY_IF` or `EXIT_IF`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. A [native sidecar](#native-sidecar) reads it too, with no host table. |
 | `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256 to 2147483647). Must differ from `EXIT_TABLE`; neither may be 51820 (gluetun) or 7120 (NetBird). |
-| `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. |
+| `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. A [native sidecar](#native-sidecar) uses it for the exit's own host-path sockets, with the same format. |
 | `NB_WIREGUARD_PORT` | `51820` | NetBird's WireGuard port, opened in gluetun's firewall. |
 | `FWMARK_GRACE` | `30` | See [repair and lease timing](#repair-and-lease-timing). |
 
@@ -334,11 +334,64 @@ above. The NetBird, overlay, table and mark settings don't apply.
 `compose.sidecar.yaml` sets `EXIT_KIND=sidecar` on the exit and the panel;
 it isn't read from `.env`. `EXIT_KIND` is `overlay` when unset, as in
 `compose.yaml` and `compose.gluetun.yaml`. The exit refuses to start with any
-other value, or as a sidecar without `TUNNEL_BACKEND=gluetun` and a
-`gluetun-*` provider; the panel refuses a sidecar on a native provider. A
-separate Switchyard names the kind in `PANEL_EXITS` instead, as
-`id=gluetun-<provider>/sidecar`. The exit's and the panel's kind must
-agree, or the panel shows "kind mismatch".
+other value. With `TUNNEL_BACKEND=gluetun` a sidecar needs a `gluetun-*`
+provider; with `TUNNEL_BACKEND=native` it is the [native sidecar](#native-sidecar)
+(before 0.9.0 the exit refused that combination). A separate Switchyard names
+the kind in `PANEL_EXITS` instead, as `id=<provider>/sidecar`. The exit's and
+the panel's kind must agree, or the panel shows "kind mismatch".
+
+## Native sidecar
+
+Experimental, new in 0.9.0; see [the native sidecar](native-sidecar.md) for setup
+and what has been tested. Copy `.env.native-sidecar.example` to `.env`; it sets
+`COMPOSE_FILE=compose.native-sidecar.yaml`. `PROVIDER`, `EXIT_IF`, `SERVER`,
+the tunnel config, the PIA login, the panel settings and the Gatus settings
+mean what they mean for a native overlay exit. The NetBird and overlay settings
+don't apply: `OVERLAY_CIDR`, `OVERLAY6_CIDR` and `OVERLAY_IF` are refused when
+set, and `NB_*` and `WT_*` are ignored. Tables 51820 and 7120 are not reserved,
+because no gluetun and no NetBird runs.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SIDECAR_LAN_CIDRS` | empty | The networks the applications may reach outside the tunnel, as comma-separated IPv4 and IPv6 prefixes written with their network addresses: no `/0`, no duplicates, at most 16 entries in all, spaces around an entry dropped. In Compose, the engine's network; in Kubernetes, the pod and Service ranges and anything that connects to the application. Anything in the namespace can reach these without the tunnel, and a resolver inside them answers outside it ([DNS](native-sidecar.md#dns)). The refusals are in [the native sidecar](native-sidecar.md#settings). `.env.native-sidecar.example` sets the documentation range `198.51.100.0/24`; replace it. |
+| `PROVIDER`, `EXIT_IF` | `pia`, `pia` in `.env.native-sidecar.example` | As in `.env`; `EXIT_IF` names the tunnel interface and its config file. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host (not `lo`, not `EXIT_IF`). The deletion check judges the exit's control-marked path against it and the watcher follows it; the firewall does not use it. An override in `.env`. |
+| `EXIT_TABLE` | `51821` | The exit table, whole number 256 to 2147483647; also the tunnel device's firewall mark, so it must differ from `CONTROL_MARK`. An override. |
+| `CONTROL_MARK` | `0x1bd00` | The mark on the exit's own host-path sockets (the provider's login and downloads, PIA's registration, the Gatus push, and their name lookups): lowercase hexadecimal, leading `0x`, no leading zero, low byte zero. Set in the exit's environment only; the Compose file doesn't pass it. |
+| `PIA_PORT_FORWARD` | `off` | `on` forwards one PIA port to the namespace itself ([port forwarding](native-sidecar.md#port-forwarding)). `PIA_PORT_FORWARD_TARGET` is refused. |
+| `COMPOSE_PROFILES` | `example` in `.env.native-sidecar.example` | `example` runs a busybox that only sleeps, standing in for your applications; remove it once yours are in. `port-sync` runs the port-sync service. |
+| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | Where the `port-sync` service reaches qBittorrent's Web API. Passed from `.env` by the Compose file; the other port-sync settings below are fixed there. |
+
+`compose.native-sidecar.yaml` sets `EXIT_KIND=sidecar` and `TUNNEL_BACKEND=native`
+on the exit, and `EXIT_KIND=sidecar` on the panel; neither is read from `.env`.
+The combinations the exit accepts are:
+
+| `EXIT_KIND` | `TUNNEL_BACKEND` | `PROVIDER` | Result |
+|---|---|---|---|
+| `overlay` | `native` | `mullvad`, `pia`, `nordvpn` | A native overlay exit |
+| `overlay` | `gluetun` | `gluetun-*` | A gluetun overlay exit |
+| `sidecar` | `gluetun` | `gluetun-*` | A gluetun sidecar |
+| `sidecar` | `native` | `mullvad`, `pia`, `nordvpn` | A native sidecar |
+
+Anything else is refused: `PROVIDER must be mullvad, pia or nordvpn` for a
+`gluetun-*` provider with the native backend, and
+`TUNNEL_BACKEND=gluetun needs a gluetun provider (PROVIDER=gluetun-<name>)` for
+a native provider with gluetun.
+
+### The port-sync role
+
+`molebridge port-sync` is a separate container with no capabilities, in the
+namespace of the application whose port it sets
+([tools reference](tools-reference.md#port-sync)). It reads
+`STATE_DIR/applier/result.json` and writes nothing.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PORT_SYNC_CLIENT` | required | The only value is `qbittorrent`. |
+| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | qBittorrent's Web API: an `http` URL to a loopback IP address, with no user name, path, query or fragment. |
+| `PORT_SYNC_USERNAME_FILE`, `PORT_SYNC_PASSWORD_FILE` | empty | Files holding qBittorrent's Web UI login, one value per file, at most 1 KiB, not empty. Set both or neither. With neither, the role sends no login and relies on qBittorrent's setting that skips authentication for clients on localhost. |
+| `PORT_SYNC_INTERVAL` | `30` | Seconds between passes: a whole number from 10 to 300. |
+| `STATE_DIR` | `/state` | Where the role finds `applier/result.json`; mount the exit's `state/applier` read-only. |
 
 ## The tunnel config
 

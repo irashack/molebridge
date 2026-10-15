@@ -32,14 +32,18 @@ operational, and says why it isn't, at most once a minute for each reason:
   in its blacklist, or isn't right; see [below](#netbirds-settings-and-profile).
 - `NetBird has not been started yet`: the contract isn't verified yet, or NetBird is
   still starting.
-- `the routing contract is not verified`: see `not ready:` further down.
+- `the routing contract is not verified`: see `not ready:` further down. A native
+  sidecar says it too when its tunnel interface is down.
+- `the sidecar firewall is not as installed`: a native sidecar's firewall differs from
+  what the exit installed; see [a native sidecar](#a-native-sidecar).
 - `NetBird is not running`.
 - `the pipeline reports the namespace is not intact (<what>)`. `<what>` is one or more
   of, separated by `;`: `no readable status record`, `the last record is not a completed
-  check`, `not exactly one tunnel peer` (a sidecar), `the tunnel interface has no
+  check`, `not exactly one tunnel peer` (a gluetun sidecar), `the tunnel interface has no
   WireGuard device`, `the tunnel addresses cannot be read`, `IPv4 routing is not intact`,
   `IPv6 routing is not intact`, `icmp_errors_use_inbound_ifaddr is not 1`, `the overlay
-  interface is not kernel WireGuard`, `NetBird's kernel firewall is not present` and `the
+  interface is not kernel WireGuard`, `NetBird's kernel firewall is not present`,
+  `the sidecar firewall is not as installed` (a native sidecar) and `the
   record may be stale`. With PIA, before you choose a region, expect `IPv4 routing is not
   intact`: a fresh PIA tunnel has no address yet.
 
@@ -54,18 +58,20 @@ again. The refusals, by setting:
 |---|---|
 | `EXIT_KIND must be overlay or sidecar` | A setting other than `overlay` or `sidecar`; the Compose files set it |
 | `TUNNEL_BACKEND must be native or gluetun` | The Compose files set it |
-| `EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun` | A sidecar on the native backend |
-| `PROVIDER must be mullvad, pia or nordvpn` | An unknown provider on the native backend |
+| `PROVIDER must be mullvad, pia or nordvpn` | An unknown provider on the native backend, including a native sidecar, or a `gluetun-*` provider with it |
 | `PROVIDER must be one of: <ids>` | An unknown provider on the gluetun backend |
 | `TUNNEL_BACKEND=gluetun needs a gluetun provider (PROVIDER=gluetun-<name>)` | A native provider with the gluetun backend |
-| `invalid interface name`, `overlay and exit interfaces must differ` | `OVERLAY_IF` or `EXIT_IF`: up to 15 characters, letters, digits and underscore first, then also `.` and `-` |
+| `invalid interface name`, `overlay and exit interfaces must differ` | `OVERLAY_IF` or `EXIT_IF`: up to 15 characters, letters, digits and underscore first, then also `.` and `-`. A native sidecar has no `OVERLAY_IF` and reads only the first message, for `EXIT_IF` |
 | `with gluetun, EXIT_IF may hold only letters, digits and underscores` | gluetun's own rule for `VPN_INTERFACE` |
-| `EXIT_TABLE must be numeric`, `EXIT_TABLE must be canonical decimal`, `EXIT_TABLE must be 256..2147483647` | The same three for `HOST_TABLE` |
+| `EXIT_TABLE must be numeric`, `EXIT_TABLE must be canonical decimal`, `EXIT_TABLE must be 256..2147483647` | The same three for `HOST_TABLE`. A native sidecar has no `HOST_TABLE` |
 | `HOST_TABLE and EXIT_TABLE must differ`, `tables 51820 (gluetun) and 7120 (NetBird) are taken` | gluetun backend |
+| `OVERLAY_CIDR is for the overlay kind; a sidecar has no overlay`, and the same for `OVERLAY6_CIDR` and `OVERLAY_IF` | A native sidecar with one of the three set |
 | `OVERLAY_CIDR must be an IPv4 CIDR`, `OVERLAY_CIDR must use the network address`, `invalid IPv4 prefix`, `IPv4 default routes and leading zeroes are forbidden`, `IPv4 address needs four octets`, `invalid IPv4 octet`, `IPv4 leading zeroes are forbidden` | `OVERLAY_CIDR` is required and must be a network address such as `192.0.2.0/24` |
 | `OVERLAY6_CIDR must be an IPv6 CIDR`, `OVERLAY6_CIDR must use the network address`, `invalid IPv6 prefix`, `invalid OVERLAY6_CIDR` | The same for the IPv6 range |
-| `invalid HOST_IF`, `HOST_IF must name the namespace's host interface, not lo, the overlay or the tunnel` | gluetun backend |
-| `CONTROL_MARK must be lowercase hexadecimal like 0x1bd00`, `... , low byte zero` | gluetun backend |
+| `invalid HOST_IF`, `HOST_IF must name the namespace's host interface, not lo, the overlay or the tunnel` | gluetun backend and native sidecar |
+| `CONTROL_MARK must be lowercase hexadecimal like 0x1bd00`, `... , low byte zero` | gluetun backend and native sidecar |
+| `CONTROL_MARK and EXIT_TABLE must differ` | Native sidecar |
+| `SIDECAR_LAN_CIDRS must have at most 16 entries`, `SIDECAR_LAN_CIDRS: empty entry is not a network prefix`, `SIDECAR_LAN_CIDRS: <entry> is not a network prefix`, `SIDECAR_LAN_CIDRS: <entry> is a default route`, `SIDECAR_LAN_CIDRS: <entry> must use the network address`, `SIDECAR_LAN_CIDRS: <entry> is duplicated` | Native sidecar; see [a native sidecar](#a-native-sidecar) |
 | `ROUTING_RECONCILE_INTERVAL must be 2..60 seconds` | Whole seconds |
 | `GUARD_GRACE must be 5..30 seconds` | Whole seconds, canonical decimal; the lease's length |
 | `NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface <if> (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it` | A first enrollment with `NB_EXTRA_IFACE_BLACKLIST` removed or overridden to something that doesn't cover `EXIT_IF` |
@@ -78,7 +84,9 @@ contract could not be installed: <family problems> (<cause>); the temporary guar
 (priority 80) stays`, where a problem is a family and a part (`IPv4 rules`, `IPv4 exit`, with
 gluetun `IPv4 host` or `IPv4 nodefault`, and `unprotected` for a tunnel address
 without its return-path rules; the same for IPv6). No tunnel exists then, and the temporary priority-80 rules
-already added stay in place, so nothing is forwarded.
+already added stay in place, so nothing is forwarded. A native sidecar has no
+temporary guard: its line is `the routing contract could not be installed: <cause>`,
+and the firewall, installed first, holds the applications meanwhile.
 
 **`molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not
 supported: <reason>; regenerate it with prepare-config (docs/setup.md)`.** The
@@ -211,6 +219,117 @@ example a Compose override that removed the tmpfs; the container exits with stat
 `molebridge-exit: the only arguments are the internal --worker and --cleanup` and
 `molebridge-exit: the worker is started by the supervisor only` mean a role was started by hand
 that only the supervisor starts.
+
+### A native sidecar
+
+The refusals of a native sidecar's settings are in the table above. This section
+is the rest.
+
+**`molebridge-exit: the sidecar firewall could not be installed; no tunnel was
+started`, and the container exits with status 1.** The exit installs its
+firewall first, and couldn't. The line before it says why: `nft: install the
+sidecar firewall: <cause>`, `nft: open netlink: <cause>`, `nft: install the sidecar
+firewall: readback: <what differs>` (the table was written and the read-back
+found something other than what was installed; `<what differs>` is one of the
+reasons below). The exit gives each of these 10 seconds. Likely causes are a
+kernel without `nf_tables` (or its `inet` family, or the `meta mark` and `ct state`
+matches), a container without `NET_ADMIN`, or a netlink socket the engine blocks. No tunnel exists
+and the applications, if they are running, stay closed: the previous firewall
+and rules, if there are any, stay. Fix the cause and recreate or restart the
+exit. `check-config` does not test this; it reads settings only.
+
+**`molebridge-exit: the routing contract could not be installed; no tunnel was
+started`.** The line before it, `the routing contract could not be installed:
+<cause>`, names the cause: a kernel refusal of a rule, or `the contract does not
+verify`. The firewall is already in place. This also needs `NET_ADMIN`, and
+policy-routing support in the kernel.
+
+**`molebridge-exit: the sidecar firewall is installed`** is the normal line that
+follows a successful install, before `rules installed; the exit table holds its
+unreachable fallback`, `bringing the tunnel up` and `tunnel up`.
+
+**`molebridge-exit: the sidecar firewall was not as installed (<reason>);
+reinstalled`.** The exit reads the firewall back every 2 seconds and found it
+changed, and replaced it. Something in the namespace changed the table, usually a
+process with `NET_ADMIN`: your own tooling, or an application that was given the
+capability. Find it and take the capability away. The reasons are:
+
+| Reason | Meaning |
+|---|---|
+| `no table inet molebridge_sidecar` | The table is gone |
+| `table flags differ` | The table carries flags |
+| `extra chain <name>` | A chain other than `output`, `input` and `forward` |
+| `no chain <name>` | One of the three is missing |
+| `chain <name>: hook differs`, `priority differs`, `type differs`, `device differs` | The chain's definition differs |
+| `chain <name>: no policy`, `policy accept`, `policy drop`, `policy differs` | The policy is not the one the chain needs (`output` and `forward` drop, `input` accepts). The reason names what the chain has |
+| `chain <name>: rule <n> differs` | The n-th rule is not the one installed, or has a comment |
+| `chain <name>: <n> rules, want <m>` | A rule was added or deleted |
+
+While it differs, `traffic_protection` fails with "Sidecar firewall protection
+is incomplete; see docs/operations.md#recovery.", and a switch waits with
+"Waiting for the tunnel's routing and firewall; request will retry
+automatically." Both clear when the next check finds the table right.
+
+**`molebridge-exit: the sidecar firewall was not as installed (<reason>) and
+could not be replaced: <cause>`, or `molebridge-exit: the sidecar firewall cannot
+be read: <cause>`.** The same, but the replacement failed or the read-back
+itself did (at most one line a minute for each). The exit stays not operational
+and retries every 2 seconds. Look for the cause in the line, as for the install
+above.
+
+**`molebridge-exit: not operational: the sidecar firewall is not as installed`**
+is the heartbeat withheld for the same reason, and `not operational: the routing
+contract is not verified` the same for the contract or a tunnel interface that is
+down ([the list above](#startup)).
+
+**"Waiting for the tunnel's routing and firewall; request will retry
+automatically."** A server change is held until both the contract and the
+firewall verify, as above. If it persists, read the exit's log for the lines
+above and for the repairer's.
+
+**"Sidecar firewall protection is incomplete; see docs/operations.md#recovery."**
+The firewall is not as installed, or cannot be read. The exit repairs it by itself
+within seconds, so this normally clears on the next check; read the exit's log for
+`the sidecar firewall was not as installed`. If it persists, recreate the exit
+([recovery](operations.md#recovery)).
+
+**"Routing protection is incomplete; see docs/operations.md#recovery."** For a
+native sidecar this is a rule or the fallback route missing or wrong. The
+repairer puts them back; look for its lines in the exit's log
+([drift and repair](architecture.md#drift-and-repair)). If it keeps being wrong,
+something else in the namespace is changing rules, or a `kept IPv4 rule ...` line
+says the deletion check refused a repair.
+
+**The application can't reach something on the network.** Anything outside
+`SIDECAR_LAN_CIDRS` goes into the tunnel, and anything the tunnel can't carry
+fails. A client of the application that sits outside `SIDECAR_LAN_CIDRS`, such as
+the engine's gateway for a published port or a node address in Kubernetes, gets
+no replies, because the replies go into the tunnel. Add its network to
+`SIDECAR_LAN_CIDRS` and recreate the exit.
+
+**PIA registration fails with a tunnel address in `SIDECAR_LAN_CIDRS`.** The exit
+refuses an address PIA hands out when it lies inside one of the LAN prefixes or the
+namespace's own, because rule 90 would send traffic for it to the host. The panel
+shows "Peer update failed; retrying automatically." and the exit tries again on its
+backoff ([retries](operations.md#retries)). Narrow `SIDECAR_LAN_CIDRS`.
+
+**`molebridge-exit: applier: port forwarding failed`, and `port_forward_error`
+"Port forwarding is unavailable; retrying."** PIA's forwarding calls failed, or the
+firewall couldn't be given the port. The exit takes the forwarded port out of the
+firewall, tries again after a minute and keeps the exit's connected state. Check
+that the selected region offers forwarding.
+
+**`PIA_PORT_FORWARD_TARGET is for the overlay kind; a sidecar's forwarded port
+reaches the namespace itself`.** The exit started with a target set. Unset
+`PIA_PORT_FORWARD_TARGET`: a sidecar needs none. It is refused even with
+forwarding off. The messages `PIA_PORT_FORWARD needs PIA_PORT_FORWARD_TARGET, an
+overlay IPv4 address` and `PIA_PORT_FORWARD_TARGET is set but PIA_PORT_FORWARD is
+off` are the overlay's; a sidecar never prints them.
+
+**The forwarded port is bound but the application doesn't get connections.** The
+application must listen on `forwarded_port` itself. With qBittorrent, run
+[`port-sync`](tools-reference.md#port-sync) and read its log; the messages are in
+the tools reference. `no forwarded port yet` is normal until PIA has allotted one.
 
 ### NetBird's settings and profile
 
@@ -440,6 +559,14 @@ restarted.** The application stayed in gluetun's old namespace. The exit can't s
 that. Run the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace),
 then recreate gluetun and the application together.
 
+**A native sidecar's application carries no traffic after the exit was recreated or
+restarted under Compose.** The same, with the exit as the owner: the application is
+in the exit's old namespace, where the rules and the firewall keep it closed and
+no tunnel exists. Run the attachment procedure, then recreate the exit and the
+application together ([recovery](native-sidecar.md#recovery)). In a Kubernetes pod
+the namespace survives a container restart, and the exit rebuilds the tunnel
+in it.
+
 ## The panel
 
 **The panel stops at start with `molebridge panel: refusing to start: <reason>`.**
@@ -462,12 +589,12 @@ refused:
 
 - `PROVIDER must be one of: <ids>`: the panel's `PROVIDER` (single-exit panel) is not a
   provider id.
-- `EXIT_KIND must be overlay or sidecar`, and `a sidecar exit needs a gluetun provider
-  (PROVIDER=gluetun-<name>)`: the single-exit panel's kind.
+- `EXIT_KIND must be overlay or sidecar`: the single-exit panel's kind. Since 0.9.0 a
+  sidecar may use a native provider (a [native sidecar](native-sidecar.md)); 0.8.0
+  refused it with `a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)`.
 - `PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in '<entry>'`,
   `PANEL_EXITS: provider must be one of <ids>, in '<entry>'`,
   `PANEL_EXITS: the kind after / is overlay or sidecar, in '<entry>'`,
-  `PANEL_EXITS: a sidecar exit needs a gluetun provider (gluetun-<name>/sidecar), in '<entry>'`,
   `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
@@ -730,7 +857,7 @@ fallback route is missing, the lease isn't live, or the local-delivery rule was 
 exit repairs rules itself within milliseconds, so this normally clears on the next check. If
 it persists, read the exit's log (`not ready:` and the repairer's lines), and
 `docker compose exec exit molebridge status` for `lease: lapsed`; a native exit whose lease isn't held has stopped renewing it
-([why the exit stopped itself](#why-the-exit-stopped-itself)). For the gluetun forms it can
+([why the exit stopped itself](#why-the-exit-stopped-itself)). For a native sidecar see [a native sidecar](#a-native-sidecar). For the gluetun forms it can
 also mean the exit was left in an old namespace: [recreate](operations.md#recovery) gluetun
 and the exit together.
 

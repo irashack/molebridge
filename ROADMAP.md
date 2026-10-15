@@ -14,6 +14,12 @@ says what it would take as far as we know today.
   had live passes with NordVPN on rootless Podman only, the latest an upgrade
   to 0.8.0; [testing](docs/testing.md) records the gaps that keep it
   experimental.
+- **A native sidecar** (0.9.0, experimental, not yet run live): Molebridge's own
+  tunnel for containers that share the exit's namespace, with a routing contract
+  and an nftables firewall that keep their traffic in it, so an application can use
+  PIA over WireGuard, plus `molebridge port-sync` for qBittorrent
+  ([the native sidecar](docs/native-sidecar.md)). Its live acceptance on
+  Kubernetes is still to be recorded ([testing](docs/testing.md#090)).
 - **One signed image, pull and run** (0.8.0, experimental, live-tested on
   rootless Podman only): the Python and the routing shell were ported to one
   Go binary (`routing/gluetun-preflight`, which runs inside gluetun, is the

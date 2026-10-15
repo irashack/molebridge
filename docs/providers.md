@@ -1,6 +1,7 @@
 # VPN providers
 
-Each Molebridge exit uses one provider. A native exit sets it with `PROVIDER`
+Each Molebridge exit uses one provider. A native exit, overlay or
+[native sidecar](native-sidecar.md), sets it with `PROVIDER`
 in `.env`; with the gluetun backend you set `GLUETUN_PROVIDER` instead, and
 Compose gives the exit and the panel the registry id
 `gluetun-<provider>`. These ids also name providers in `PANEL_EXITS`:
@@ -14,7 +15,10 @@ Compose gives the exit and the panel the registry id
 
 The `gluetun-*` ids also serve the experimental [gluetun
 sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
-be verified.
+be verified. The native ids also serve the experimental [native
+sidecar](native-sidecar.md) (new in 0.9.0, not yet run live): Molebridge's own
+tunnel for containers that share the exit's namespace, and the only form that
+offers PIA to them.
 
 To offer more than one, run one exit per provider with different
 `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and `PANEL_PORT`, each with its own
@@ -38,7 +42,10 @@ PIA has no account-wide WireGuard key. To connect to a server, the exit:
 
 So with PIA the exit also sets the interface's IPv4 address, the
 return-path rule (priority 94) and its backstop (priority 98) on every
-switch, and it holds the PIA login.
+switch, and it holds the PIA login. In a native sidecar the same transaction
+runs; the address PIA hands out must also lie outside `SIDECAR_LAN_CIDRS` and the
+namespace's own addresses, or the exit refuses it
+([troubleshooting](troubleshooting.md#a-native-sidecar)).
 The private key is never sent to PIA or printed, because registration needs
 only the public key.
 
@@ -216,6 +223,17 @@ The service on the target must listen on the forwarded port itself; there's
 no port translation. You also need a NetBird policy that lets the exit peer
 reach that port on the target.
 
+**In a native sidecar** the port reaches the namespace itself, so
+`PIA_PORT_FORWARD_TARGET` is refused and nothing is forwarded to another device.
+The steps above are the same up to the nftables table: there is no
+`ip molebridge_forward` and no `inet molebridge_guard`. The sidecar firewall's
+input chain admits new TCP and UDP connections from the tunnel to the forwarded
+port, and the exit installs the firewall again each time the port changes or
+goes away. The application must listen on the forwarded port itself; for
+qBittorrent, [`molebridge port-sync`](tools-reference.md#port-sync) keeps its
+listening port in step. See [the native sidecar](native-sidecar.md#port-forwarding).
+Like the overlay's, it has not been tested against PIA itself.
+
 A healthy exit doesn't mean forwarding works. Forwarding errors appear as
 `port_forward_error` in `result.json`, without changing the exit's connected
 state; the panel's Diagnostics shows only the forwarded port, or `none`.
@@ -278,11 +296,12 @@ How it differs from a native provider:
   without marking them, so for Surfshark only the ordinary and static-IP
   servers (`xx-yyy.prod.surfshark.com`, `xx-yyy-st001.prod.surfshark.com`)
   are listed.
-- Other gluetun providers aren't available in 0.8.0. AirVPN and ProtonVPN list
+- Other gluetun providers aren't available in 0.9.0. AirVPN and ProtonVPN list
   several servers under one name, and gluetun's `custom` provider has no list,
   so the panel can't select their servers; the exit refuses a `PROVIDER` that
   isn't in its registry. PIA stays native: its port forwarding and per-server
-  addresses don't fit this backend.
+  addresses don't fit this backend. For a container's traffic, PIA over WireGuard
+  is the [native sidecar](native-sidecar.md).
 - What a DNS leak test shows depends on the provider; nothing has been
   recorded for this backend yet.
 

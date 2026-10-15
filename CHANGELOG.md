@@ -4,6 +4,74 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.9.0 — unreleased
+
+**Experimental.** The native sidecar: an exit that other containers share, with
+a tunnel Molebridge builds itself, and a routing contract and a firewall of its
+own that keep those containers' traffic in the tunnel. It exists so that an
+application can use PIA over WireGuard; Molebridge's gluetun forms don't offer
+PIA, and gluetun supports PIA over OpenVPN only. Nothing has run live yet: the
+unit tests, `go vet` and the namespace drills pass, the live acceptance on
+Kubernetes is still to be recorded, and Docker Engine, podman-compose and the
+Compose file itself are untested ([testing](docs/testing.md#090)). Nothing
+changes for the overlay kinds and the gluetun sidecar.
+
+**The native sidecar** ([the page](docs/native-sidecar.md)).
+- `EXIT_KIND=sidecar` with `TUNNEL_BACKEND=native` and `PROVIDER` `mullvad`, `pia`
+  or `nordvpn`. The exit owns the namespace's tunnel as a native overlay exit
+  does; the applications share the namespace (`network_mode: service:exit`, or the
+  containers of a Kubernetes pod) and send their own traffic through it. There is
+  no NetBird and nothing is forwarded.
+- Two layers keep the applications' traffic in the tunnel, both installed before
+  the tunnel exists and left in place when the exit stops or restarts: a routing
+  contract (rules 88 to 98 and the exit table's fallback, repaired and judged like
+  the overlay's) and an nftables firewall, table `inet molebridge_sidecar`, which
+  stops what policy routing alone does not, a socket bound to an interface. The
+  firewall is read back every 2 seconds and replaced in one transaction when it
+  differs. A restart of the exit inside a kept namespace, as in a Kubernetes pod,
+  leaves the applications closed and the exit rebuilds the tunnel.
+- New setting `SIDECAR_LAN_CIDRS`: the networks the applications may reach outside
+  the tunnel (at most 16 prefixes, no default route). `HOST_IF` and `CONTROL_MARK`
+  apply to this form too. Molebridge does not tunnel or configure DNS; a resolver
+  inside `SIDECAR_LAN_CIDRS` answers outside the tunnel ([DNS](docs/native-sidecar.md#dns)).
+- The exit's own requests that are not through the tunnel carry the control mark
+  and resolve their names over marked sockets, so they take the host path.
+- Status: `kind: "sidecar"`, `backend: "native"`; required checks `routing`,
+  `traffic_protection` (the contract and the firewall), `peer`, `handshake` and
+  `egress`; `app_attachment` stays `not-checked` ([the status
+  record](docs/architecture.md#the-status-record)). New messages: "Sidecar firewall
+  protection is incomplete; see docs/operations.md#recovery." and "Waiting for the
+  tunnel's routing and firewall; request will retry automatically."
+  ([troubleshooting](docs/troubleshooting.md#a-native-sidecar)).
+- PIA's port forwarding works in a sidecar without a target: the firewall's input
+  chain admits the forwarded port, and `forwarded_port` in `result.json` and
+  Diagnostics shows it ([port forwarding](docs/native-sidecar.md#port-forwarding)).
+- `compose.native-sidecar.yaml` and `.env.native-sidecar.example`, in the release
+  bundle. A Kubernetes pod example is in the page; it is not a packaged or
+  supported form.
+- Switchyard shows a native sidecar as a tab (`id=pia/sidecar` in `PANEL_EXITS`).
+
+**`molebridge port-sync`.** A new role for a container with no capabilities in the
+application's namespace. It keeps qBittorrent's listening port on the port the
+exit's record names, through qBittorrent's Web API on loopback, and writes nothing
+([tools reference](docs/tools-reference.md#port-sync)). qBittorrent is the only
+client.
+
+**Refusals removed.** `EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun`, and the
+panel's `a sidecar exit needs a gluetun provider` (for `PANEL_EXITS` and for a
+single-exit panel), are gone: a sidecar takes a native provider. New refusals
+cover the settings above (`SIDECAR_LAN_CIDRS`, `OVERLAY_*` set for a sidecar, and
+`PIA_PORT_FORWARD_TARGET` for a sidecar).
+
+**Release acceptance.** The acceptance policy now names the Kubernetes platform and
+the native-sidecar kind, and its upgrade drill is from 0.8 (was 0.7)
+(`tools/acceptance-policy.json`).
+
+**Upgrade.** Nothing is needed for a 0.8.x install: the Compose files for the overlay
+forms and the gluetun sidecar are unchanged except for the image they pin, and state
+files and records are read as before. To use the native sidecar, follow [its set-up](docs/native-sidecar.md#set-up).
+A 0.8.0 Switchyard refuses a sidecar on a native provider; use the 0.9.0 one for those.
+
 ## 0.8.0 — 2026-10-13
 
 **Experimental, and not a 1.0.** A rewrite for adoption: one signed image,

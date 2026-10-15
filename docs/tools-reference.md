@@ -11,8 +11,9 @@ image you verified: [setup](setup.md#2-configure) sets `IMAGE` to it, and the
 commands there use `"$IMAGE"` where this page shows the reference.
 
 The image's other roles are not tools: `exit` and `panel` are the two
-containers, `health` is the exit's container health check, and `status` prints the
-exit's verdict from inside it ([other roles](#other-roles)).
+containers, `health` is the exit's container health check, `status` prints the
+exit's verdict from inside it ([other roles](#other-roles)), and `port-sync` is a
+container of a [native sidecar](native-sidecar.md) ([port-sync](#port-sync)).
 
 This page is the reference. Where the tools sit in the setup order is in
 [setup.md](setup.md).
@@ -404,11 +405,95 @@ docker compose run --rm --no-deps exit check-config
 (For the gluetun forms, start gluetun first: the exit joins its namespace.) On success it
 prints, for a native exit,
 `molebridge-exit: configuration accepted (/config/wg_confs/<EXIT_IF>.conf: an IPv4 address and an IPv6 address)`
-(or `an IPv4 address`, or `no address (the exit sets it)` for PIA), and for the other kinds
+(or `an IPv4 address`, or `no address (the exit sets it)` for PIA; a native sidecar prints the same line), and for the other kinds
 `molebridge-exit: configuration accepted`; then, for an overlay exit,
 `NetBird gate: configuration accepted`. A refusal is the one line the exit would print at start,
 on standard error, with exit status `1` ([troubleshooting](troubleshooting.md#startup)). A usage error
 (`usage: molebridge check-config (settings come from the environment)`) exits `2`.
+
+## port-sync
+
+Keeps qBittorrent's listening port on the port PIA forwarded to a
+[native sidecar](native-sidecar.md#port-forwarding). It is a container, not a
+throwaway tool: run it with no capabilities, in the same network namespace as
+qBittorrent (in Compose, `network_mode: service:exit`; in Kubernetes, a further
+container of the pod), so the exit never holds qBittorrent's credentials. It
+writes nothing and starts no process.
+
+```
+molebridge port-sync
+```
+
+It takes no arguments; settings come from the environment
+([configuration](configuration.md#the-port-sync-role)):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PORT_SYNC_CLIENT` | required | `qbittorrent`, the only client |
+| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | qBittorrent's Web API: `http`, a loopback IP address (`127.0.0.0/8` or `[::1]`), an optional port, no user name, path, query or fragment |
+| `PORT_SYNC_USERNAME_FILE`, `PORT_SYNC_PASSWORD_FILE` | empty | The Web UI login, one value per file (at most 1 KiB, one trailing newline removed, not empty). Both or neither. With neither the role sends no login |
+| `PORT_SYNC_INTERVAL` | `30` | Seconds between passes, a whole number from 10 to 300 |
+| `STATE_DIR` | `/state` | The exit's state directory; the role reads `applier/result.json` there |
+
+**What it does.** At once, and then every `PORT_SYNC_INTERVAL` seconds, it reads
+`result.json` with the same strict reader the panel uses (at most 16 KiB,
+duplicate keys refused). It acts only when the record is no more than 150
+seconds old, its `kind` is `sidecar`, and `forwarded_port` is an integer from
+1024 to 65535. Then it asks qBittorrent for `GET /api/v2/app/preferences`, and
+if `listen_port` is not that port, sends `POST /api/v2/app/setPreferences` with
+`json={"listen_port":<port>,"random_port":false,"upnp":false}`. With
+credentials it logs in first (`POST /api/v2/auth/login`) and keeps the session
+cookie in memory; after a 403 it logs in again once and repeats the request.
+It sends qBittorrent's own address as the `Referer`, which qBittorrent checks.
+Neither the password nor the cookie is ever logged.
+
+**Messages.** Every line goes to standard error, starts `molebridge-port-sync: `
+and is fixed text. A change is logged every time:
+`molebridge-port-sync: qBittorrent listens on <old>; set to <new>`. A pass that
+finds the port already right logs nothing. Each kind of failure is logged at
+most once a minute:
+
+| Message | Meaning |
+|---|---|
+| `no current status record from the exit` | `result.json` is missing, malformed, over 16 KiB or older than 150 seconds |
+| `the status record is not a sidecar's` | `kind` is not `sidecar` |
+| `no forwarded port yet` | The record has no `forwarded_port`. Said once, until a port appears |
+| `the status record's forwarded_port is not an integer from 1024 to 65535` | The record's value is out of range |
+| `qBittorrent could not be reached (<reason>)` | `<reason>` is `request timed out` (10 seconds), `request failed`, `response exceeds its size limit` or `request canceled` |
+| `qBittorrent refused the request (HTTP 403); it needs the login: set PORT_SYNC_USERNAME_FILE and PORT_SYNC_PASSWORD_FILE` | No credentials are set and qBittorrent wants them |
+| `qBittorrent refused the request (HTTP 403) after a new login` | The login worked and the request was refused anyway |
+| `the login credential files cannot be read (PORT_SYNC_USERNAME_FILE, PORT_SYNC_PASSWORD_FILE)` | A file changed or vanished after the start check |
+| `qBittorrent refused the login (HTTP 403); it may have banned this address after failed logins` | qBittorrent bans an address after repeated failed logins |
+| `qBittorrent answered the login with HTTP <n>` | Any other status |
+| `qBittorrent refused the user name or password` | qBittorrent answered `Fails.` |
+| `qBittorrent answered the login with an unexpected body` | Neither `Ok.` nor `Fails.` |
+| `qBittorrent accepted the login but sent no session cookie` | No `SID` (or, from qBittorrent 5, `QBT_SID_<port>`) cookie |
+| `qBittorrent answered the preferences request with HTTP <n>` | Not 200 |
+| `qBittorrent's preferences are not a JSON object`, `qBittorrent's preferences have no integer listen_port` | An answer in a shape the role does not accept (bounded to 256 KiB) |
+| `qBittorrent answered the port change with HTTP <n>` | The `setPreferences` request was not 200 |
+
+**Refusals at start.** A bad setting prints one line of the form
+`molebridge-port-sync: <reason>` and exits with status `1`, before anything is
+sent. The reasons are:
+
+- `PORT_SYNC_CLIENT is required (the only client is qbittorrent)` and
+  `PORT_SYNC_CLIENT must be qbittorrent`;
+- `PORT_SYNC_URL must be an http URL (https is refused: the application is on a loopback address)`,
+  `PORT_SYNC_URL must not contain a user name or password`,
+  `PORT_SYNC_URL must not contain a query or fragment`,
+  `PORT_SYNC_URL must not contain a path`,
+  `PORT_SYNC_URL must name a loopback IP address (127.0.0.0/8 or [::1])` (a host
+  name such as `localhost` is refused too) and `PORT_SYNC_URL has an invalid port`;
+- `PORT_SYNC_USERNAME_FILE and PORT_SYNC_PASSWORD_FILE must be set together or not at all`;
+- `PORT_SYNC_USERNAME_FILE: <reason>` or `PORT_SYNC_PASSWORD_FILE: <reason>`, where
+  the reason is `cannot be opened`, `is not a regular file`, `cannot be read`,
+  `is larger than 1 KiB` or `is empty`;
+- `PORT_SYNC_INTERVAL must be a whole number of seconds from 10 to 300`.
+
+**Exit status.** `0` after `SIGTERM` or `SIGINT`, `1` for a refusal at start,
+`2` for an argument (`usage: molebridge port-sync (settings come from the environment)`).
+It never exits because qBittorrent or the record is unavailable: it logs and
+tries again at the next interval.
 
 ## Other roles
 
@@ -420,4 +505,5 @@ come from the environment, and none takes arguments.
 | `exit` | The exit container's supervisor. It starts itself again as `--worker` and `--cleanup`; those two flags are internal, and any other argument prints `molebridge-exit: the only arguments are the internal --worker and --cleanup`. A refused setting prints one line on standard error and the exit stops; most settings are refused before anything changes, and the provider's own settings after the routing rules are in place, still before NetBird starts ([what the exit checks at start](operations.md#what-the-exit-checks-at-start)). | `1` a refusal or an unexpected stop, `2` bad arguments; the stop statuses are in [the stop sequence](architecture.md#the-stop-sequence) |
 | `panel` | Switchyard. A refused setting prints `molebridge panel: <reason>`; a failed isolation check prints `molebridge panel: refusing to start: <reason>` ([the panel's isolation check](configuration.md#the-panels-isolation-check)). | `1` a refusal, `2` for an argument (`usage: molebridge panel (settings come from the environment)`) |
 | `health` | The container health check. Prints nothing and exits `0` while the worker's heartbeat is no more than 15 seconds old (written every 5 seconds while the operational checks pass); otherwise prints `unhealthy: <reason>`. A failed provider verification never makes it fail ([health](architecture.md#health)). | `0` healthy, `1` unhealthy, `2` for an argument (`usage: molebridge health`) |
+| `port-sync` | Keeps qBittorrent's listening port on a native sidecar's forwarded port; see [port-sync](#port-sync). | `0` after a stop signal, `1` a refusal at start, `2` for an argument |
 | `status` | Prints the exit's verdict from `state/applier/result.json` and the panel's request: `state: <state> (<label>)`, `reasons:`, `egress tier:` when there is one, `checks:`, `message:` and `configured server:` when present, then `heartbeat:` (fresh, stale or none) and `lease:`. Run it inside the exit: `docker compose exec exit molebridge status`. Nothing printed is secret. It doesn't check a sidecar's attachment or the host. | `0` when the state is `ok`, `1` otherwise or for a bad `PROVIDER` or `EXIT_KIND`, `2` for an argument (`usage: molebridge status`) |

@@ -1,7 +1,9 @@
 # Setup
 
 This takes the signed release bundle to a working exit. It assumes everything
-in [requirements](prerequisites.md) is ready. Plan for about half an hour,
+in [requirements](prerequisites.md) is ready. It is for the NetBird exit; the
+[gluetun sidecar](gluetun-sidecar.md) and the [native sidecar](native-sidecar.md)
+have their own set-up pages and share step 1. Plan for about half an hour,
 most of it in the NetBird dashboard.
 
 **What was tested.** Molebridge 0.8.0 is experimental. It has run live only on
@@ -375,7 +377,11 @@ way, with these differences:
   [verification](verification.md) name it. The gluetun form has its own checks:
   [verification in the gluetun guide](gluetun-netbird-exit.md#verification).
 
-For the gluetun sidecar, which has no NetBird, see [the sidecar](gluetun-sidecar.md).
+The two sidecar forms have no NetBird. For an ordinary gluetun that your other
+containers share, see [the gluetun sidecar](gluetun-sidecar.md). For a tunnel
+Molebridge builds itself, which is how to use PIA over WireGuard for your
+containers, see [the native sidecar](native-sidecar.md); it follows steps 1 and 3
+here (verify the download, create the tunnel config) and has its own set-up.
 
 Next: [Switchyard](switchyard.md) covers using the panel, and
 [operations](operations.md) covers upgrades, recovery and boot on Podman.

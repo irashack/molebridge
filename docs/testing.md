@@ -10,10 +10,71 @@ history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
 switcher revisions were replaced by a rebase merge, also with identical trees:
 `07c7b41` → `56ac2cc` and `0d518e4` → `40c461c`.
 
-Sections below the 0.8.0 one record what ran at earlier revisions, and use the
+Sections below the 0.9.0 and 0.8.0 ones record what ran at earlier revisions, and use the
 container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
+
+## 0.9.0
+
+0.9.0 adds the [native sidecar](native-sidecar.md) (`EXIT_KIND=sidecar` with
+`TUNNEL_BACKEND=native`, `compose.native-sidecar.yaml`) and the `port-sync` role.
+**Neither has run live.** What is recorded here is what the unit tests and the
+isolated namespace drills show; the live acceptance on Kubernetes has not been
+recorded yet. Nothing changes for the overlay exits and the gluetun sidecar, and
+the 0.8.0 record below is still the record for them.
+
+### Run so far
+
+| What | How | Where and what |
+|---|---|---|
+| Unit tests and `go vet` | `go test ./...`, `go vet ./...` | Pass on the 0.9.0 branch, Go 1.27.2 |
+| Namespace drills | `go test -tags drill ./internal/...` | Passed in a privileged rootful Podman 5.8.6 container on Debian forky/sid, kernel 7.2.8 (amd64), including the drills new for the native sidecar, below |
+
+The new drills, for the native sidecar:
+
+- The contract installs exactly, both from a clean namespace and from one that
+  kept a previous run's rules.
+- Every rule deleted, and a `lookup main` rule inserted at priority 50, is
+  repaired within the 250 ms bound.
+- With the tunnel route absent, an unmarked send fails, and a LAN send and a
+  control-marked send leave by the host interface.
+- The firewall installs, is replaced atomically with a new port, and a deleted
+  rule or a flipped policy is detected.
+- At packet level: an unmarked socket bound to the host interface is dropped;
+  LAN and control-marked sends pass; the tunnel passes; inbound on the tunnel to a
+  port other than the forwarded one is dropped.
+
+The drill run did not use a live provider, a container engine's networking or a
+cluster: it is a kernel in a disposable namespace. It does not show that a real
+tunnel comes up, that PIA's registration and port forwarding work against PIA, or
+how an engine's DNS and published ports behave.
+
+### Live acceptance
+
+The acceptance policy for 0.9.0 (`tools/acceptance-policy.json`) names a
+Kubernetes platform and a native-sidecar kind, with an upgrade from 0.8 as one of
+its drills.
+
+<!-- live acceptance: to be recorded -->
+
+### Not tested at 0.9.0
+
+- Any native sidecar on a live host: the Kubernetes acceptance above is not
+  recorded yet.
+- Docker Engine and podman-compose. `compose.native-sidecar.yaml` has not been run
+  on any engine, and has not yet been through `docker compose config`.
+- Mullvad and NordVPN as native sidecars, live. PIA is the reason for the form.
+- A live run against PIA's port forwarding as a native sidecar, until the
+  acceptance records it. PIA port forwarding has not been tested against PIA at
+  any version.
+- `molebridge port-sync` against a running qBittorrent.
+- DNS: which resolvers an application's namespace uses under Docker and under
+  Kubernetes, and what a leak test shows.
+- staticcheck, govulncheck, shellcheck and `docker compose config` on the 0.9.0
+  code (CI runs them).
+- Everything in the [0.8.0 list](#not-tested-at-080) that applies to the other
+  forms.
 
 ## 0.8.0
 

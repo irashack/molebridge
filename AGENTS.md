@@ -46,9 +46,12 @@ never in a public issue or commit message.
   desired-state files and form posts are untrusted. Validate before use
   (bounded reads, strict UTF-8, duplicate JSON keys refused); escape before
   rendering.
-- **Exits only:** Molebridge never ships its own tunnel for other containers'
-  traffic; that is gluetun's job. The image holds no credentials: keys,
-  logins and tokens come from files you mount.
+- **Exits only:** Molebridge ships its own tunnel for other containers' traffic
+  only in the native sidecar (for providers gluetun can't drive over WireGuard
+  with Molebridge, PIA first), and that sidecar owns its fail-closed guarantee
+  with the routing contract and the firewall; everything else stays gluetun's
+  job. The image holds no credentials: keys, logins and tokens come from files
+  you mount.
 - **Honest status:** state what was tested and where. Untested platforms, and
   behavior described but not verified, say so.
 

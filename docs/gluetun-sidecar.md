@@ -7,7 +7,9 @@ through gluetun's tunnel. Nothing is forwarded for other devices: there is no
 NetBird peer and no Molebridge routing contract. That is the NetBird exit,
 the `overlay` kind (`compose.yaml` or
 [`compose.gluetun.yaml`](gluetun-netbird-exit.md)). The sidecar is the
-`sidecar` kind, `EXIT_KIND=sidecar`.
+`sidecar` kind, `EXIT_KIND=sidecar`. If you want Molebridge to build the tunnel
+itself, and to keep your applications' traffic in it, with PIA over WireGuard or
+Mullvad or NordVPN, use the [native sidecar](native-sidecar.md) instead.
 
 **What has been tested.** At 0.8.0 a sidecar with gluetun and NordVPN, upgraded from 0.7.0
 on rootless Podman with Quadlet units, reported healthy; nothing else was run on it, and the

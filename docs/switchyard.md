@@ -172,6 +172,20 @@ Glance-style dashboards. `PANEL_THEME` picks light, dark, or `auto` (follow the
 viewer's system). All animation stops when the system asks for reduced
 motion.
 
+### A native sidecar's tab
+
+A [native sidecar](native-sidecar.md) is an exit like the others in the panel: its
+tab lists the provider's servers (or PIA's regions) and switches them as a native
+overlay exit does, in the provider's colors. It says "tunnel" where an overlay
+exit says "exit". Diagnostics lists the same checks, with differences: Traffic
+protection is checked by Molebridge (the routing contract and the firewall),
+NetBird kernel mode and Owner record are not applicable, and App attachment is
+"not checked by Molebridge (the host doctor)": you check it with the
+[attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace).
+With PIA port forwarding on, Diagnostics also shows the Forwarded port, or `none`.
+Switching drops the applications' open connections. The tab does not show the
+resolver the applications use ([DNS](native-sidecar.md#dns)).
+
 ## Embedding in a dashboard
 
 `/embed` is a compact view for iframe widgets. Allow your dashboard's origin
@@ -241,15 +255,16 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
   backend `gluetun-<provider>`, such as `gluetun-surfshark`
   ([the ids](providers.md)).
 - `kind` is optional: `overlay`, the default, for a NetBird exit, or
-  `sidecar` for a [gluetun sidecar](gluetun-sidecar.md), which needs a
-  `gluetun-<provider>`. It must match the exit's `EXIT_KIND`; a
+  `sidecar` for a [gluetun sidecar](gluetun-sidecar.md) (with a
+  `gluetun-<provider>`) or, since 0.9.0, a [native sidecar](native-sidecar.md)
+  (with `mullvad`, `pia` or `nordvpn`), such as `torrents=pia/sidecar:Torrents`.
+  It must match the exit's `EXIT_KIND`; a
   status record of the other kind shows as "kind mismatch", never as
   connected. A single-exit panel reads `EXIT_KIND` instead.
 - `label` is optional (40 characters at most). It defaults to the provider's
   name.
 
-The panel refuses to start if an entry is malformed, or names a sidecar on a
-native provider. Without `PANEL_EXITS` it
+The panel refuses to start if an entry is malformed. Without `PANEL_EXITS` it
 serves a single exit from `$STATE_DIR/panel` and `$STATE_DIR/applier`.
 
 Run it as one more container beside the exits, mounting each exit's state

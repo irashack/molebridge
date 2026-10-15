@@ -28,8 +28,11 @@ passed in the last 150 seconds:
   local-delivery rule that replaces the kernel's priority-0 rule;
 - with a native exit, a live lease: the supervisor's `owner_record` check.
 
-A [gluetun sidecar](gluetun-sidecar.md) has no NetBird or routing checks.
-A record older than 150 seconds, malformed or dated in the future counts as
+A [gluetun sidecar](gluetun-sidecar.md) has no NetBird or routing checks. A
+[native sidecar](native-sidecar.md) has no NetBird, but it does check its
+routing contract and its firewall: its required checks are `routing`,
+`traffic_protection`, `peer`, `handshake` and `egress`, with no lease check
+(`owner_record` is `n/a`). A record older than 150 seconds, malformed or dated in the future counts as
 unknown, whatever it says, and so does one written for another kind or
 provider than the panel is configured for.
 
@@ -68,7 +71,8 @@ provider than the panel is configured for.
   operational only: it passes while the worker's heartbeat is at most 15
   seconds old, and otherwise prints `unhealthy: <why>` and exits 1. The worker
   writes the heartbeat every 5 seconds while the tunnel interface exists, the
-  contract holds, NetBird is running and a completed check, `ok` or `failed`,
+  contract holds, NetBird is running (a native sidecar: the firewall is as
+  installed) and a completed check, `ok` or `failed`,
   is less than 150 seconds old. An exit that is up but not verified, on
   another server than `SERVER`, or without a peer stays healthy; the panel,
   `/readyz` and `status` report it, and the exit repairs a missing peer
@@ -209,6 +213,16 @@ sidecar's `compose.apps.yaml` services are in the project when it is listed in
 `COMPOSE_FILE`; services you run elsewhere need their own recreate command, in
 the order gluetun first, then the dependents.
 
+**A native sidecar** under Compose has the same rule with the exit as the
+owner: recreate the exit and every application together, the exit first. The
+applications left in the old namespace are not exposed, because the rules and the
+firewall stay there, but they have no tunnel. The command is
+`docker compose up -d --force-recreate`; to list every container that joins the
+exit, run the command above with `molebridge-native-sidecar-exit` for
+`molebridge-gluetun`. In a Kubernetes pod a container restart keeps the namespace,
+and the exit rebuilds the tunnel by itself
+([the native sidecar](native-sidecar.md#recovery)).
+
 **Then check, in this order.** Recovery has succeeded in two different senses,
 and only the second is about traffic:
 
@@ -227,7 +241,7 @@ host that doesn't depend on this exit.
 
 ## Upgrades
 
-Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8:
+Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8, or from 0.8 to 0.9:
 
 1. [Verify the new download](setup.md#1-download-and-verify) as for a first
    install. The signature covers the bundle's Compose files and the image, not
@@ -250,6 +264,11 @@ Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8:
    updates arrive inside the image, as a new Molebridge release.
 4. After any change to routing or the image, run the
    [verification](verification.md) drills again.
+
+0.9.0 adds `compose.native-sidecar.yaml`, `.env.native-sidecar.example` and the
+`port-sync` role. An existing 0.8.x install needs nothing else: the overlay forms
+and the gluetun sidecar behave as in 0.8.0, and their Compose files change only in
+the image they pin.
 
 To roll back, put the previous bundle's files back and run the same two
 commands. State files have stayed readable across releases so far, but take
@@ -372,6 +391,9 @@ putting 0.7's files back and starting them: the state files stayed readable.
 
 ### What the exit checks at start
 
+A native sidecar differs in its first changes: after the settings, it installs its
+firewall, and only then the routing contract and the tunnel
+([the native sidecar](native-sidecar.md#how-it-keeps-traffic-in-the-tunnel)).
 Most checks run before the exit changes anything, with one line per refusal
 and nothing taken from a secret file. They check that the provider, backend and kind agree; that the
 tunnel config (native only) is a regular readable file, not a symlink, within
@@ -409,7 +431,7 @@ overrides or the files on your host.
   ```sh
   stat -c '%a %U %n' secrets/netbird.env secrets/applier.env \
     secrets/gluetun/wireguard_private_key secrets/gluetun/auth.toml secrets/gluetun/api_key 2>/dev/null
-  stat -c '%a %U %n' tunnel/wg_confs/*.conf secrets/pia/*
+  stat -c '%a %U %n' tunnel/wg_confs/*.conf secrets/pia/* secrets/port-sync/*
   ```
 
   (On macOS and the BSDs use `stat -f '%Lp %Su %N'`.) A file that doesn't exist
@@ -456,6 +478,21 @@ overrides or the files on your host.
   docker port molebridge-gluetun
   docker port molebridge-switchyard    # 127.0.0.1:8095 by default
   ```
+- **A native sidecar's applications.** They must hold no capability, be in the
+  exit's namespace, and mount none of the exit's secrets. Name each one; the
+  second field is the capabilities added, the third those dropped, and the last
+  the network mode (`container:<the exit's id>`):
+
+  ```sh
+  docker inspect -f '{{.Name}} {{.HostConfig.CapAdd}} {{.HostConfig.CapDrop}} {{.HostConfig.NetworkMode}}' my-downloader
+  docker inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' my-downloader |
+    grep -E '/(tunnel|secrets)(/|$)' && echo 'FAIL: the application mounts a credential' || echo 'ok'
+  ```
+
+  The second field must be empty (no capability added) and the third `[ALL]`.
+  The `port-sync` container's only credential is `secrets/port-sync`, mode 0600;
+  it mounts `state/applier` read-only. Publish an application's port on the
+  `exit` service, not on the application: it has no network of its own.
 - **The identity volume is the intended one** (step 4 above), before any
   recovery that might leave it empty.
 - **Every dependent shares the namespace** (the next section), for the gluetun
@@ -464,7 +501,9 @@ overrides or the files on your host.
 ### Checking that containers share gluetun's namespace
 
 For a gluetun overlay exit or a sidecar, the owner is `gluetun` and the exit
-and your applications are dependents. The engine's record of a dependent
+and your applications are dependents. For a native sidecar the owner is the
+exit and the members are your applications (and `port-sync` and the example
+application when they run): `sh attach.sh molebridge-native-sidecar-exit my-downloader`. The engine's record of a dependent
 (`container:<id>`) names the owner by id, and an id survives a restart that
 gives the owner a new namespace, so the record isn't proof. The test compares
 the **namespace objects themselves**: a throwaway probe container joins each
@@ -608,7 +647,7 @@ The state worth keeping is small:
 |---|---|---|
 | `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
 | `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the exit registers it again on its own. NordVPN: run `nordvpn-key` again with a new access token |
-| `secrets/` | Setup key, PIA login, Gatus token; with gluetun, the provider's WireGuard key, the role file and the API key | Re-create them; for gluetun, `gluetun-auth --rotate` writes a new role file and key |
+| `secrets/` | Setup key, PIA login, Gatus token; with gluetun, the provider's WireGuard key, the role file and the API key; with a native sidecar, the qBittorrent login for `port-sync` | Re-create them; for gluetun, `gluetun-auth --rotate` writes a new role file and key |
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
@@ -652,7 +691,9 @@ rather than as a new peer.
 ## DNS
 
 Molebridge configures no DNS. Devices keep the resolver they already use, and
-their traffic leaves through the provider.
+their traffic leaves through the provider. In a [native sidecar](native-sidecar.md#dns)
+the applications use the namespace's resolver: one inside `SIDECAR_LAN_CIDRS`
+answers outside the tunnel, and one outside it is reached through the tunnel.
 
 With Mullvad, plain DNS (port 53) from a device appears not to reach that
 resolver. This is observed, not documented by Mullvad, from one device check
@@ -930,6 +971,9 @@ access token as in [setup](setup.md#3-create-the-tunnel-config), then
 recreate the exit. The exit applies the saved server again on its own.
 
 ## Removing
+
+A native or gluetun sidecar has no NetBird: see [the native sidecar](native-sidecar.md#removing)
+and [the gluetun sidecar](gluetun-sidecar.md#removing). For an overlay exit:
 
 1. In NetBird, delete the exit route and the access policy.
 2. On rootless Podman, disable the boot unit first:
