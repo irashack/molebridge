@@ -52,7 +52,9 @@ func (s State) classify(p packet, prot map[netip.Addr]bool, hostSubnets []netip.
 	if c.IsNativeSidecar() {
 		switch p.mark {
 		case c.ControlMark:
-			return class{name: "control-marked traffic the exit sends", devs: []uint32{s.HostIdx}}
+			// Meant for the host; into the tunnel is no escape either (a
+			// tunnel address with a subnet puts a route for it in main).
+			return class{name: "control-marked traffic the exit sends", devs: []uint32{s.HostIdx, s.ExitIdx}}
 		case c.TunnelMark():
 			return class{any: true} // WireGuard's own socket
 		}
