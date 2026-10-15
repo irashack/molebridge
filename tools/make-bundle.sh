@@ -55,7 +55,7 @@ done
 [ -n "$tar_cmd" ] || die "GNU tar is required (gtar on a Mac)"
 
 # Required files, then any optional ones.
-required=".env.example .env.gluetun.example .env.sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
+required=".env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
 optional=""
 files=
 for f in $required; do

@@ -153,7 +153,7 @@ $step. Verify each architecture's SBOM attestation (the manifests the signed ind
 
    The SBOM documents are also attached to this release.
 
-$((step + 1)). Start the exit with the verified files only: edit \`.env\` from \`.env.example\` (or \`.env.sidecar.example\`), then \`docker compose up -d\`. The Compose files reference the image by digest, so the image that runs is the one verified above.
+$((step + 1)). Start the exit with the verified files only: edit \`.env\` from \`.env.example\` (or \`.env.gluetun.example\`, \`.env.sidecar.example\` or \`.env.native-sidecar.example\`, each of which selects its own Compose file), then \`docker compose up -d\`. The Compose files reference the image by digest, so the image that runs is the one verified above.
 
 Architecture manifests: linux/amd64 \`$amd64\`, linux/arm64 \`$arm64\`.
 EOM

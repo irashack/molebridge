@@ -45,9 +45,23 @@ services:
   exit:
     image: ghcr.io/irashack/molebridge:v0.8.0-rc.1@sha256:3333333333333333333333333333333333333333333333333333333333333333
 EOM
+cat > "$src/compose.native-sidecar.yaml" <<'EOM'
+# Pull ghcr.io/irashack/molebridge:<tag> for the native sidecar.
+services:
+  exit:
+    image: ghcr.io/irashack/molebridge:v0.8.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    build:
+      context: .
+  port-sync:
+    image: ghcr.io/irashack/molebridge:v0.8.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    command: ["port-sync"]
+  switchyard:
+    image: "${MOLEBRIDGE_IMAGE:-ghcr.io/irashack/molebridge:0.8}"
+EOM
 printf 'MOLEBRIDGE_IMAGE=ghcr.io/irashack/molebridge:0.8\nPROVIDER=mullvad\n' > "$src/.env.example"
 printf 'G=1\n' > "$src/.env.gluetun.example"
 printf 'X=1\n' > "$src/.env.sidecar.example"
+printf 'COMPOSE_FILE=compose.native-sidecar.yaml\nN=1\n' > "$src/.env.native-sidecar.example"
 printf '#!/usr/bin/env sh\necho "docker run ghcr.io/irashack/molebridge:<tag> gluetun-auth"\n' > "$src/routing/gluetun-preflight"
 printf 'MIT\n' > "$src/LICENSE"
 printf 'notices\n' > "$src/THIRD_PARTY.md"
@@ -65,7 +79,7 @@ mkdir -p "$work/o1"
 archive=$(run v0.8.0 "$digest" "$work/o1")
 [ "$archive" = "$work/o1/molebridge-v0.8.0.tar.gz" ] || fail "archive path: $archive"
 members=$($tar -tzf "$archive" | tr '\n' ' ')
-want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
+want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.native-sidecar.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.native-sidecar.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
 [ "$members" = "$want" ] || fail "member list: $members"
 pass "member list"
 
@@ -79,9 +93,13 @@ grep -q "^    image: $ref\$" "$x/compose.gluetun.yaml" || fail "digest reference
 [ "$(grep -c "$ref" "$x/compose.gluetun.yaml")" = 2 ] || fail "bare name rewritten"
 grep -q "Pull $ref for the sidecar" "$x/compose.sidecar.yaml" || fail "placeholder in a comment"
 grep -q "image: $ref\$" "$x/compose.sidecar.yaml" || fail "tag and digest replaced"
+grep -q "Pull $ref for the native sidecar" "$x/compose.native-sidecar.yaml" || fail "placeholder in the native sidecar's comment"
+[ "$(grep -c "image: $ref\$" "$x/compose.native-sidecar.yaml")" = 2 ] || fail "native sidecar: tag and digest replaced"
+grep -q "image: \"\${MOLEBRIDGE_IMAGE:-$ref}\"\$" "$x/compose.native-sidecar.yaml" || fail "native sidecar: default rewritten"
+grep -q '^COMPOSE_FILE=compose.native-sidecar.yaml$' "$x/.env.native-sidecar.example" || fail "native sidecar env example content"
 grep -q "^MOLEBRIDGE_IMAGE=$ref\$" "$x/.env.example" || fail ".env rewrite"
 grep -q "docker run $ref gluetun-auth" "$x/routing/gluetun-preflight" || fail "preflight diagnostic"
-grep -q ':0.8\|<tag>\|2222\|3333' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
+grep -q ':0.8\|<tag>\|2222\|3333\|4444' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
 pass "image references rewritten in every form"
 
 # Metadata: owner 0, one mtime, normalized modes.
@@ -120,6 +138,19 @@ printf 'MIT\n' > "$src/LICENSE"
 mv "$src/.env.gluetun.example" "$work/env.gluetun.bak"
 refuses "a missing gluetun env example" 'missing bundle file: .env.gluetun.example' v0.8.0 "$digest" "$work/o3"
 mv "$work/env.gluetun.bak" "$src/.env.gluetun.example"
+mv "$src/.env.native-sidecar.example" "$work/env.native.bak"
+refuses "a missing native sidecar env example" 'missing bundle file: .env.native-sidecar.example' v0.8.0 "$digest" "$work/o3"
+mv "$work/env.native.bak" "$src/.env.native-sidecar.example"
+mv "$src/compose.native-sidecar.yaml" "$work/compose.native.bak"
+refuses "a missing native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$work/o3"
+printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.native-sidecar.yaml"
+refuses "a native sidecar compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$work/o3"
+printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge-ci:x\n' > "$src/compose.native-sidecar.yaml"
+refuses "another package in the native sidecar compose file" 'still names the image' v0.8.0 "$digest" "$work/o3"
+rm "$src/compose.native-sidecar.yaml"; ln -s compose.yaml "$src/compose.native-sidecar.yaml"
+refuses "a symlinked native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$work/o3"
+rm "$src/compose.native-sidecar.yaml"
+mv "$work/compose.native.bak" "$src/compose.native-sidecar.yaml"
 cp "$src/compose.yaml" "$work/compose.yaml.bak"
 printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.yaml"
 refuses "a compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$work/o3"

@@ -56,9 +56,30 @@ services:
   switchyard:
     image: ghcr.io/irashack/molebridge:0.8
 EOM
+cat > "$src/compose.native-sidecar.yaml" <<'EOM'
+services:
+  exit:
+    image: ghcr.io/irashack/molebridge:0.8
+    environment:
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: native
+  switchyard:
+    image: ghcr.io/irashack/molebridge:0.8
+    environment:
+      EXIT_KIND: sidecar
+  example-app:
+    profiles: [example]
+    image: docker.io/example/app:1
+    network_mode: service:exit
+  port-sync:
+    profiles: [port-sync]
+    image: ghcr.io/irashack/molebridge:0.8
+    network_mode: service:exit
+EOM
 echo 'PROVIDER=mullvad' > "$src/.env.example"
 echo 'GLUETUN_PROVIDER=nordvpn' > "$src/.env.gluetun.example"
 echo 'X=1' > "$src/.env.sidecar.example"
+printf 'COMPOSE_PROFILES=example\n' > "$src/.env.native-sidecar.example"
 echo MIT > "$src/LICENSE"; echo notices > "$src/THIRD_PARTY.md"
 
 make() { BUNDLE_SOURCE=$src sh "$here/make-bundle.sh" v0.8.0-rc.1 "$digest" "$1" >/dev/null; }
@@ -96,6 +117,34 @@ cp "$work/bad/c" "$work/bad/s/molebridge-v0.8.0-rc.1/compose.yaml"
 tar -czf "$work/bad/noexit.tar.gz" -C "$work/bad/s" molebridge-v0.8.0-rc.1
 sh "$here/check-bundle.sh" "$work/bad/noexit.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native form without its exit service"
 pass "refuses a native form without its exit service"
+
+# The native sidecar form: port-sync runs only in its profile, and an unpinned
+# image there must still be caught; the services and the kinds must be right.
+bad_native() { # name sed-expression
+    mkdir -p "$work/bad/n-$1"
+    tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/n-$1"
+    sed "$2" "$work/bad/n-$1/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml" > "$work/bad/c" &&
+        cp "$work/bad/c" "$work/bad/n-$1/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml"
+    tar -czf "$work/bad/n-$1.tar.gz" -C "$work/bad/n-$1" molebridge-v0.8.0-rc.1
+}
+bad_native unpinned '/port-sync:/,$ s#image: ghcr.io/irashack/molebridge:.*#image: ghcr.io/irashack/molebridge:0.8#'
+sh "$here/check-bundle.sh" "$work/bad/n-unpinned.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted an unpinned port-sync image"
+pass "refuses a native sidecar whose port-sync image is not pinned"
+bad_native noport '/port-sync:/,$ s#port-sync:#port-sync-gone:#'
+sh "$here/check-bundle.sh" "$work/bad/n-noport.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar without port-sync"
+pass "refuses a native sidecar without its port-sync service"
+bad_native backend 's/TUNNEL_BACKEND: native/TUNNEL_BACKEND: gluetun/'
+sh "$here/check-bundle.sh" "$work/bad/n-backend.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar with the wrong backend"
+pass "refuses a native sidecar form that is not the native backend"
+bad_native panelkind '/switchyard:/,/example-app:/ s/EXIT_KIND: sidecar/EXIT_KIND: overlay/'
+sh "$here/check-bundle.sh" "$work/bad/n-panelkind.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar panel of the wrong kind"
+pass "refuses a native sidecar form whose panel is not the sidecar kind"
+mkdir -p "$work/bad/m"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/m"
+rm "$work/bad/m/molebridge-v0.8.0-rc.1/.env.native-sidecar.example"
+tar -czf "$work/bad/nonative.tar.gz" -C "$work/bad/m" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/nonative.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a bundle without the native sidecar's env example"
+pass "refuses a bundle without the native sidecar's env example"
 
 rm "$work/bad/x/molebridge-v0.8.0-rc.1/routing/gluetun-preflight"
 tar -czf "$work/bad/nopreflight.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1
