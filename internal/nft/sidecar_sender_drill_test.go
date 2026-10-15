@@ -150,7 +150,8 @@ func startSidecarSender(t *testing.T, ns *nstest.NS, device, dest string) *sidec
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	// Not t.Context(): it is cancelled before the cleanup below waits.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns.Name, exe, "-test.run=^TestSidecarCapabilityFreeSender$")
 	cmd.Env = append(os.Environ(), "MOLEBRIDGE_NFT_SENDER=drop", "MOLEBRIDGE_NFT_DEVICE="+device, "MOLEBRIDGE_NFT_DEST="+dest)
 	var stderr bytes.Buffer

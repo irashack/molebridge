@@ -287,8 +287,15 @@ func TestSidecarFirewallCapabilityFreeIPv6(t *testing.T) {
 			t.Run("explicit LAN", func(t *testing.T) {
 				sender := startSidecarSender(t, ns, "host0", dest)
 				sender.wait(t, 50, false)
-				if sidecarLeaked(t, peer) == 0 {
-					t.Fatal("LAN-listed sender did not reach the outside counter")
+				// The first sends wait for neighbour discovery: poll.
+				deadline := time.Now().Add(5 * time.Second)
+				for sidecarLeaked(t, peer) == 0 {
+					if time.Now().After(deadline) {
+						n1, _ := ns.Exec("ip", "-6", "neigh", "show", "dev", "host0")
+						t.Fatalf("LAN-listed sender did not reach the outside counter (neighbours: %s)", n1)
+					}
+					sender.wait(t, 10, false)
+					time.Sleep(50 * time.Millisecond)
 				}
 			})
 		})
