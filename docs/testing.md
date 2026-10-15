@@ -44,9 +44,26 @@ The new drills, for the native sidecar:
 - At packet level: an unmarked socket bound to the host interface is dropped;
   LAN and control-marked sends pass; the tunnel passes; inbound on the tunnel to a
   port other than the forwarded one is dropped.
+- The end-to-end drill (`internal/exit/drill_native_sidecar_test.go`), on the
+  same Debian forky/sid, kernel 7.2.8, Podman 5.8.6 privileged container as the
+  other drills: the real `molebridge` binary runs as a native sidecar in a
+  namespace, with a tunnel config whose peer does not exist, and counts what
+  reaches a destination outside by the host path. It checks that:
+  - `molebridge health --guarded` passes once the guards are in;
+  - unbound and `eth0`-bound pings to a destination outside the LAN prefix
+    never arrive outside, and the LAN gateway answers;
+  - the tunnel's handshake leaves by the host path, through its fwmark;
+  - a deleted firewall is reinstalled and the reinstall is logged;
+  - after a killed worker the tunnel link is gone, the rules and the firewall
+    stay, the failure record marks the five required checks `unknown`, and
+    nothing leaks;
+  - a second run in the same namespace ends with one firewall and one copy of
+    each rule;
+  - a requested stop exits 0 and leaves the guards in place.
 
 The drill run did not use a live provider, a container engine's networking or a
-cluster: it is a kernel in a disposable namespace. It does not show that a real
+cluster: it is a kernel in a disposable namespace, and the end-to-end drill's
+peer never answers. It does not show that a real
 tunnel comes up, that PIA's registration and port forwarding work against PIA, or
 how an engine's DNS and published ports behave.
 

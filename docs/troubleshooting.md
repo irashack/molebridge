@@ -248,6 +248,33 @@ policy-routing support in the kernel.
 follows a successful install, before `rules installed; the exit table holds its
 unreachable fallback`, `bringing the tunnel up` and `tunnel up`.
 
+**`molebridge-exit: warning: net.ipv4.conf.<HOST_IF>.rp_filter is strict (1):
+replies arriving on <HOST_IF> are dropped and the tunnel cannot come up; set
+rp_filter to 0 or 2 for this namespace (docs/native-sidecar.md)`.** The exit
+logs this once, after the firewall is installed, when the larger of
+`net.ipv4.conf.all.rp_filter` and `net.ipv4.conf.<HOST_IF>.rp_filter` is 1
+(the kernel uses the larger). Under strict filtering the kernel validates a
+reply's source with a route lookup from loopback, which the sidecar's `iif lo`
+rules send to the tunnel, so replies to the exit's own requests and the
+tunnel's UDP arriving on `HOST_IF` are dropped. The exit keeps running, but the
+tunnel never comes up. Loose (2) or
+off (0) works. Read both values with `cat
+/proc/sys/net/ipv4/conf/all/rp_filter` and the same for `HOST_IF`, in the exit
+container. A container usually cannot write them itself; in Compose, `sysctls:`
+on the exit service can, and elsewhere the node's setting or the network plugin
+decides ([prerequisites](native-sidecar.md#prerequisites)). On the k0s cluster
+with Cilium this form was tested against, pods had `all=0` and `eth0=2`.
+
+**A Kubernetes pod stays in `Init` and the application never starts, or the exit
+is restarted during its startup probe.** The startup probe `molebridge health
+--guarded` prints `unhealthy: <reason>` and exits 1 until the worker has
+installed the firewall and the routing contract; `no heartbeat yet` means it
+hasn't yet. Read the exit's log with `kubectl logs <pod> -c exit` for the install
+errors above. A probe with too few failures allowed (the example allows 30 at 2
+seconds apart) restarts the exit before it finishes. A usage line,
+`usage: molebridge health [--guarded]`, means the probe's command has another
+argument.
+
 **`molebridge-exit: the sidecar firewall was not as installed (<reason>);
 reinstalled`.** The exit reads the firewall back every 2 seconds and found it
 changed, and replaced it. Something in the namespace changed the table, usually a

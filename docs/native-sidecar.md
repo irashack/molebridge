@@ -18,7 +18,8 @@ the exit.
 
 **What has been tested.** At 0.9.0 the unit tests and `go vet` pass, and the
 namespace drills passed in a privileged rootful Podman container on Debian
-forky/sid, kernel 7.2.8 (amd64), including the drills for this form. No native
+forky/sid, kernel 7.2.8 (amd64), including the drills for this form and an
+end-to-end drill of the real binary. No native
 sidecar has run live: the live acceptance on Kubernetes has not been recorded
 yet. Docker Engine, podman-compose, the Compose form, Mullvad and NordVPN as
 native sidecars, and PIA's port forwarding against PIA are untested, and
@@ -41,6 +42,36 @@ OpenVPN only, and Molebridge's gluetun forms don't offer PIA. Choose the
 gluetun sidecar when you need one of gluetun's other providers, or want
 gluetun's own firewall and features. Mullvad and NordVPN work in both; only
 the gluetun sidecar has had a live pass.
+
+## Prerequisites
+
+Besides the [host requirements](prerequisites.md) (kernel WireGuard and
+nftables), the namespace must not filter reverse paths strictly. The kernel
+validates the source of an arriving packet with a route lookup back to it, and
+for a reply to the exit's own traffic that lookup runs from loopback. The
+sidecar's `iif lo` rules send a lookup from loopback to the tunnel, so under
+strict filtering the replies to the exit's own requests and the tunnel's UDP
+arriving on `HOST_IF` are dropped, and the tunnel never comes up. Strict means
+that the larger of `net.ipv4.conf.all.rp_filter` and
+`net.ipv4.conf.<HOST_IF>.rp_filter` is 1, because the kernel uses the larger.
+Loose (2) and off (0) both work.
+
+The exit reads both values after it installs the firewall. If the larger is 1
+it logs this line (here with `eth0` as `HOST_IF`):
+
+```text
+molebridge-exit: warning: net.ipv4.conf.eth0.rp_filter is strict (1): replies arriving on eth0 are dropped and the tunnel cannot come up; set rp_filter to 0 or 2 for this namespace (docs/native-sidecar.md)
+```
+
+The exit goes on running; the warning is the only sign it gives. A container
+usually cannot write this sysctl itself. In Compose, `sysctls:` on the exit
+service can set it. In Kubernetes the value a pod starts with comes from the
+node and the network plugin: on the k0s cluster with Cilium that this form was
+tested against, pods had `all=0` and `eth0=2`, so nothing needed changing.
+Check yours with `kubectl exec <pod> -c exit -- cat
+/proc/sys/net/ipv4/conf/all/rp_filter` and the same path for `eth0`. If the
+warning does not go away, see
+[troubleshooting](troubleshooting.md#a-native-sidecar).
 
 ## What is checked, and by whom
 
@@ -103,11 +134,14 @@ that kept a previous run's rules.
 The deletion check judges every rule or route the repairer would delete
 ([the deletion check](architecture.md#the-deletion-check-and-what-it-assumes)).
 For a native sidecar a packet to loopback or a local address may end anywhere;
-a control-marked packet may leave only by `HOST_IF` or the tunnel, or be
-refused; a WireGuard-marked packet or one to a `SIDECAR_LAN_CIDRS` prefix may
+a control-marked packet may leave only by `HOST_IF` or the tunnel interface, or
+be refused; a WireGuard-marked packet or one to a `SIDECAR_LAN_CIDRS` prefix may
 end anywhere; and any other packet may leave only by the tunnel interface or be
-refused. A route out of the host interface for such a packet is an escape, and
-a deletion that would allow it is kept.
+refused. Neither `HOST_IF` nor the tunnel is an escape for a control-marked
+packet: rule 88 looks it up in the main table, and a tunnel address with a
+subnet puts a route for that subnet in main. A control-marked packet that would
+leave by any other device is an escape, and so is an unmarked packet that would
+leave by the host interface; a deletion that would allow either is kept.
 
 No sysctl is needed. A native overlay exit sets
 `net.ipv4.icmp_errors_use_inbound_ifaddr` for the errors it generates on
@@ -185,8 +219,10 @@ route anything. The namespace drills check both, in [testing](testing.md#090).
 
 The exit's own requests must not depend on the tunnel they set up, so in a
 native sidecar every request that is not bound to the tunnel interface carries
-the control mark, `CONTROL_MARK`. Rule 88 sends it to the main table, the
-firewall admits it, and it leaves by the host interface. That covers the
+the control mark, `CONTROL_MARK`. Rule 88 sends it to the main table and the
+firewall admits it. In the main table it leaves by the host interface, except
+that a tunnel address with a subnet puts a route for that subnet in main, so a
+request to an address in that subnet can go into the tunnel. That covers the
 provider's login and server-list downloads, PIA's token and its registration
 with the server's public address, and the Gatus push. The exit resolves those
 requests' host names with Go's own resolver over sockets that carry the same
@@ -465,11 +501,16 @@ spec:
         capabilities:
           drop: [ALL]
           add: [NET_ADMIN, NET_RAW]    # add DAC_OVERRIDE only if the files are not owned by the exit's user
-      startupProbe:                    # the application starts when this passes
+      startupProbe:                    # required: the application starts when this passes
+        exec:
+          command: ["/usr/local/bin/molebridge", "health", "--guarded"]
+        periodSeconds: 2
+        failureThreshold: 30
+      readinessProbe:                  # optional: the pod is ready once the tunnel is up
         exec:
           command: ["/usr/local/bin/molebridge", "health"]
-        periodSeconds: 5
-        failureThreshold: 60
+        periodSeconds: 10
+      # no livenessProbe: the exit's own lease stops a hung worker
       volumeMounts:
         - {name: run, mountPath: /run}
         - {name: state, mountPath: /state/applier}
@@ -527,14 +568,39 @@ never from values on a command line. The notes that go with it:
   the tunnel if its service is in these ranges ([DNS](#dns)).
 - **The Kubernetes version.** The exit is an init container with
   `restartPolicy: Always`, which needs Kubernetes 1.29 or later. The kubelet
-  starts the application when the exit's startup probe passes.
-- **The startup probe is `molebridge health`.** It passes when the exit is
-  operational: the tunnel interface is up, the contract and the firewall are
-  verified and a completed check is less than 150 seconds old. That is not the
-  same as verified egress, which is what `molebridge status` reports
-  ([health](operations.md#health)). The exit becomes healthy about a minute
-  after it starts. With PIA and no `SERVER` it stays unhealthy until a region is
+  starts the next container, here the application, when the exit's startup
+  probe passes.
+- **The startup probe is required, and it is `molebridge health --guarded`.**
+  A sidecar container without a startup probe counts as started as soon as its
+  process runs, and the kubelet then starts the application containers. That
+  is before the exit has installed its firewall and its rules, and until it
+  has, nothing keeps their traffic off the host path. `health --guarded` passes
+  only after both are in place ([below](#the-startup-gate)). Leave it out and
+  the pod has a window at every start in which the applications are not
+  protected.
+- **No liveness probe.** A hung worker is the supervisor's job: its lease
+  stops the container, and the kubelet restarts it ([the
+  lease](architecture.md#the-lease)). A liveness probe would restart the exit
+  for a tunnel that is merely down, and the pod's namespace would stay closed
+  meanwhile.
+- **The readiness probe is optional and can be `molebridge health`.** It
+  passes when the exit is operational: the tunnel interface is up, the
+  contract and the firewall are verified and a completed check is less than 150
+  seconds old. That is not the same as verified egress, which is what
+  `molebridge status` reports ([health](operations.md#health)). The exit
+  becomes healthy about a minute after it starts, and the pod is not ready
+  before that. With PIA and no `SERVER` it stays unhealthy until a region is
   chosen, and there is no panel in this pod, so set `SERVER`.
+- **Strict reverse-path filtering breaks the tunnel.** See
+  [prerequisites](#prerequisites). Pods on the k0s cluster with Cilium that
+  this was tested against had `all=0` and `eth0=2`, which is fine.
+- **Where the pod's MTU is lower than the tunnel's, the tunnel's packets are
+  fragmented.** This is a known limitation. The tunnel's MTU is 1420 by default
+  and the tunnel config accepts 1280 to 1500, and the tunnel's encapsulated UDP
+  packets leave by the pod's host interface. Cilium on a NetBird overlay sets
+  an MTU of 1280 on the pod's default route, so each outer packet larger than
+  that is fragmented on the way out. It works, because Cilium tracks IPv4
+  fragments, at some CPU cost, which has not been measured.
 - **No sysctl is needed**, so the pod needs no unsafe-sysctl allowance.
 - **`wireguard` must be loadable on the node.** A container can't load kernel
   modules; check with `modprobe wireguard` on the node
@@ -555,6 +621,28 @@ never from values on a command line. The notes that go with it:
 
 Read the exit's log with `kubectl logs downloader -c exit` and its verdict with
 `kubectl exec downloader -c exit -- molebridge status`.
+
+### The startup gate
+
+`molebridge health --guarded` reads a second heartbeat,
+`/run/molebridge/guarded`. The worker renews it every 2 seconds while the
+firewall reads back as installed and the routing contract holds, whether or not
+the tunnel is up. The check passes while that heartbeat is at most 15 seconds
+old. Before the first one it prints `unhealthy: no heartbeat yet` and exits 1; an
+unknown argument prints `usage: molebridge health [--guarded]` and exits 2. The
+heartbeat stops when the firewall or the contract no longer holds, and it is
+not removed when the exit stops, so it goes stale 15 seconds later.
+
+Plain `molebridge health` also needs the tunnel interface and a completed
+check, so it waits for the provider as well. As a startup probe that is the
+wrong question: a slow login or a region nobody has chosen would run the probe
+out of failures, and the kubelet would restart the exit for it. The guard
+heartbeat asks only whether the application's traffic is kept off the host
+path, which is what has to be true before the application starts.
+
+Under Compose the applications' `depends_on` with `condition:
+service_healthy` stays on the full health check. It waits for the tunnel as
+well, so the applications start only after the guards are in place too.
 
 ## Recovery
 

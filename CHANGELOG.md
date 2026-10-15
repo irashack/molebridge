@@ -46,6 +46,24 @@ changes for the overlay kinds and the gluetun sidecar.
 - PIA's port forwarding works in a sidecar without a target: the firewall's input
   chain admits the forwarded port, and `forwarded_port` in `result.json` and
   Diagnostics shows it ([port forwarding](docs/native-sidecar.md#port-forwarding)).
+- `molebridge health --guarded` (usage: `molebridge health [--guarded]`): passes
+  while the native sidecar's guard heartbeat, which the worker renews every 2
+  seconds while the firewall reads back as installed and the routing contract
+  holds, whether or not the tunnel is up, is at most 15 seconds old. In a
+  Kubernetes pod it is the exit's required startup probe: without one, the
+  application containers start as soon as the exit process runs, before the
+  firewall and the rules exist ([the startup
+  gate](docs/native-sidecar.md#the-startup-gate)).
+- The exit logs a warning when the larger of `net.ipv4.conf.all.rp_filter` and
+  `net.ipv4.conf.<HOST_IF>.rp_filter` is 1: strict reverse-path filtering drops
+  the replies the sidecar's `iif lo` rules send to the tunnel, and the tunnel
+  cannot come up ([prerequisites](docs/native-sidecar.md#prerequisites)).
+- The deletion check treats the exit's own control-marked traffic as safe out of
+  `HOST_IF` or the tunnel interface, and anything else as an escape.
+- Known limitation: where a pod's routes carry a smaller MTU than the tunnel's
+  encapsulated packets (Cilium on a NetBird overlay sets 1280), the tunnel's
+  outer packets are fragmented; it works at some CPU cost
+  ([Kubernetes](docs/native-sidecar.md#kubernetes)).
 - `compose.native-sidecar.yaml` and `.env.native-sidecar.example`, in the release
   bundle. A Kubernetes pod example is in the page; it is not a packaged or
   supported form.

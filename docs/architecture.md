@@ -448,6 +448,16 @@ down), `the sidecar firewall is not as installed` (a native sidecar), `NetBird
 is not running` or `the pipeline reports the namespace is not intact (<what>)`. Docker and Podman don't restart unhealthy
 containers by themselves; the supervisor's lease is what stops a hung worker.
 
+A native sidecar has a second, narrower heartbeat for Kubernetes: `molebridge
+health --guarded` reads `/run/molebridge/guarded`, which the worker renews every
+2 seconds while the firewall reads back as installed and the routing contract
+holds, whether or not the tunnel is up, and passes while it is no more than 15
+seconds old. It is the exit's startup probe: a sidecar container without one
+counts as started when its process runs, and the applications would start before
+the firewall and the rules exist ([the startup
+gate](native-sidecar.md#the-startup-gate)). Its usage line is `usage: molebridge
+health [--guarded]`.
+
 ### Capabilities, and why
 
 `cap_drop: [ALL]`, then:
@@ -1362,11 +1372,15 @@ steps. If the firewall can't be installed, it exits with
 `the sidecar firewall could not be installed; no tunnel was started`. A pod's
 namespace outlives the container, so the new worker replaces the old table
 atomically, repairs the old rules and only then builds a tunnel.
+The guard heartbeat is first written once the rules are installed, before the
+tunnel is built, and the firewall's 2-second read-back renews it.
 
 **The exit's own traffic.** The exit's requests that are not bound to the
 tunnel carry the control mark (`CONTROL_MARK`) and resolve their names over
-marked sockets (`netx.Request.MarkResolver`): rule 88 sends them to the host
-and the firewall admits them. This is applied once, in the exit's
+marked sockets (`netx.Request.MarkResolver`): rule 88 sends them to the main
+table and the firewall admits them. They leave by the host interface, or go into
+the tunnel when main routes them there (a tunnel address with a subnet puts a
+route for it in main); the deletion check accepts either and no other device. This is applied once, in the exit's
 `KernelSystem.Fetch`. Requests bound to the tunnel interface follow rule 96.
 
 **Checks.** The required checks are `routing`, `traffic_protection`, `peer`,

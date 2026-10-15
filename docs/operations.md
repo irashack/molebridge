@@ -81,7 +81,10 @@ provider than the panel is configured for.
   check's job: the supervisor's lease stops NetBird and the container itself
   ([the lease](architecture.md#the-lease)). When the worker withholds the
   heartbeat it logs `molebridge-exit: not operational: <reason>`
-  ([troubleshooting](troubleshooting.md#startup)).
+  ([troubleshooting](troubleshooting.md#startup)). A native sidecar in a
+  Kubernetes pod also has `molebridge health --guarded`, which passes while the
+  firewall and the routing contract are in place, whether or not the tunnel is
+  up: the pod's startup probe ([the startup gate](native-sidecar.md#the-startup-gate)).
 
 The reason codes in `status` and in `/api/status` come from the
 [verdict](architecture.md#the-verdict): `no-status`, `unsupported-schema`,
