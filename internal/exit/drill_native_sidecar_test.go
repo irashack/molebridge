@@ -9,6 +9,8 @@ package exit
 // path, which only a leak could.
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -107,6 +109,16 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	// The tunnel config's peer endpoint, on the host path's subnet: it must
 	// answer ARP for the handshake to be sent at all.
 	l.outside.IP("addr", "add", "198.51.100.10/32", "dev", "outside0")
+	// WireGuard starts no handshake with the lab's all-zero keys (a zero
+	// private key gives no identity): use RFC 7748's test vectors, so the
+	// handshake the application's traffic starts shows which path the
+	// tunnel's UDP takes. They are public test values, not secrets.
+	conf := "[Interface]\nPrivateKey = dwdtCnMYpX08FsFyUbJmRd9ML4frwJkqsXf7pR25LCo=\nAddress = 203.0.113.2/32\nMTU = 1420\nTable = off\n" +
+		"PostUp = ip route replace default dev %i table 51821\nPreDown = ip route del default dev %i table 51821\n\n" +
+		"[Peer]\nPublicKey = 3p7bfXt9wbTTW2HC7OQ1Nz+DQ8hbeGdNrfx+FG+IK08=\nEndpoint = 198.51.100.10:51820\nAllowedIPs = 0.0.0.0/0\n"
+	if err := os.WriteFile(filepath.Join(l.confDir, dExit+".conf"), []byte(conf), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	l.leakCounter()
 	p := l.startEnv(l.nativeSidecarEnv())
 	l.waitFor(30*time.Second, "the firewall, the rules and the tunnel", func() bool {
@@ -130,6 +142,14 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	// above started arrived outside.
 	if n := l.counted("handshake"); n == 0 {
 		t.Error("no handshake reached the peer's endpoint: the tunnel's fwmark is not routed to the host")
+		for _, args := range [][]string{{"ip", "route", "get", dTarget4}, {"ping", "-4", "-c", "1", "-W", "1", dTarget4},
+			{"ip", "route", "get", "198.51.100.10", "mark", "0xca6d"}, {"ip", "-s", "-d", "link", "show", dExit}, {"ip", "-4", "rule"}, {"ip", "-4", "route", "show", "table", "all"},
+			{"nft", "list", "ruleset"}, {"ip", "neigh"}} {
+			out, err := l.exit.Exec(args[0], args[1:]...)
+			t.Logf("exit$ %s (%v)\n%s", strings.Join(args, " "), err, out)
+		}
+		out, _ := l.outside.Exec("nft", "list", "ruleset")
+		t.Logf("outside$ nft list ruleset\n%s", out)
 	}
 
 	// A deleted firewall comes back within a few of its 2-second checks.
