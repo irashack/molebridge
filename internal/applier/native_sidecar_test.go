@@ -410,3 +410,20 @@ func TestNativeSidecarIPv6EvidenceHasNoOverlayExemption(t *testing.T) {
 		t.Error("tunnel IPv6 counted as host IPv6")
 	}
 }
+
+func TestNativeSidecarPIARefusesAnAddressInsideTheLAN(t *testing.T) {
+	a, k, _ := nativeSidecarSetup(t, "pia", false)
+	a.exit.LAN = []string{"10.0.0.0/24", "2001:db8::/64"}
+	relay, _ := a.catalog.Relays().Get(piaRegion)
+	_, err := piaOf(a).register(context.Background(), a, relay)
+	if err == nil || err.Error() != "PIA tunnel address collides with this namespace" {
+		t.Fatalf("collision with SIDECAR_LAN_CIDRS: %v", err)
+	}
+	if k.countCalls("ChangePIAAddress") != 0 || len(k.mutations) != 0 {
+		t.Error("refused registration mutated the tunnel")
+	}
+	a.exit.LAN = []string{"192.0.2.0/24"}
+	if _, err := piaOf(a).register(context.Background(), a, relay); err != nil {
+		t.Fatalf("a LAN elsewhere: %v", err)
+	}
+}

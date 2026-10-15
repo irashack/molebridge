@@ -102,6 +102,9 @@ type Exit struct {
 	ExitIf, OverlayIf, Table string
 	// Overlay is the IPv4 overlay network in CIDR form.
 	Overlay string
+	// LAN are a native sidecar's SIDECAR_LAN_CIDRS in CIDR form: the
+	// networks its applications reach outside the tunnel.
+	LAN []string
 	// Kind is "overlay" (a NetBird exit) or "sidecar" (an ordinary gluetun
 	// other containers share).
 	Kind string

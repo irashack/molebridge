@@ -438,6 +438,14 @@ func (p *piaProvider) register(ctx context.Context, a *Applier, region *provider
 			return registration{}, errors.New("invalid overlay network")
 		}
 		taken = append(taken, overlay)
+	} else {
+		// A tunnel address inside one of the applications' LAN networks
+		// would be routed to the host by the sidecar's LAN rule.
+		for _, text := range a.exit.LAN {
+			if network, err := netip.ParsePrefix(text); err == nil && network.Addr().Is4() {
+				taken = append(taken, network)
+			}
+		}
 	}
 	namespace, err := a.sys.NamespaceIPv4Prefixes(ctx, a.exit.ExitIf)
 	if err != nil {
