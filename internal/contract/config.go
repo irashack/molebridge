@@ -23,7 +23,7 @@ const (
 // Kind is the exit kind.
 type Kind string
 
-// The two kinds. A sidecar has no contract, no overlay and no NetBird.
+// The two kinds. A sidecar has no overlay and no NetBird.
 const (
 	Overlay Kind = "overlay"
 	Sidecar Kind = "sidecar"
@@ -62,10 +62,14 @@ type Config struct {
 	Overlay, Overlay6 netip.Prefix
 	OverlayIf, ExitIf string
 	Table             uint32
-	// The gluetun backend only.
+	// HostIf and ControlMark are also used by the native sidecar.
+	// HostTable is used only by the gluetun backend.
 	HostIf      string
 	HostTable   uint32
 	ControlMark uint32
+	// LAN and LAN6 are the native sidecar's allowed host-path destinations,
+	// split by family in input order.
+	LAN, LAN6 []netip.Prefix
 }
 
 // IsGluetun reports the gluetun backend.
@@ -73,6 +77,23 @@ func (c Config) IsGluetun() bool { return c.Backend == Gluetun }
 
 // IsSidecar reports the sidecar kind.
 func (c Config) IsSidecar() bool { return c.Kind == Sidecar }
+
+// IsNativeSidecar reports the sidecar kind with a native tunnel.
+func (c Config) IsNativeSidecar() bool { return c.Kind == Sidecar && c.Backend == Native }
+
+// IsGluetunSidecar reports the sidecar kind with a gluetun tunnel.
+func (c Config) IsGluetunSidecar() bool { return c.Kind == Sidecar && c.Backend == Gluetun }
+
+// TunnelMark is the native sidecar tunnel device's fwmark.
+func (c Config) TunnelMark() uint32 { return c.Table }
+
+// LANFor returns the native sidecar's allowed prefixes for a family.
+func (c Config) LANFor(f rtnl.Family) []netip.Prefix {
+	if f == rtnl.V6 {
+		return c.LAN6
+	}
+	return c.LAN
+}
 
 // OverlayFor returns the overlay range of a family, or the zero Prefix.
 func (c Config) OverlayFor(family rtnl.Family) netip.Prefix {
@@ -295,10 +316,7 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if backend == "native" {
 		backend = Native // the spelling the Compose files use
 	}
-	if kind == Sidecar {
-		if backend != Gluetun {
-			return Config{}, refuse("EXIT_KIND=sidecar needs TUNNEL_BACKEND=gluetun")
-		}
+	if kind == Sidecar && backend == Gluetun {
 		exitIf := env.get("EXIT_IF", DefaultGluetunExitIf)
 		if !validGluetunInterface(exitIf) {
 			return Config{}, refuse("with gluetun, EXIT_IF may hold only letters, digits and underscores")
@@ -308,6 +326,9 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	}
 	if backend != Native && backend != Gluetun {
 		return Config{}, refuse("TUNNEL_BACKEND must be native or gluetun")
+	}
+	if kind == Sidecar {
+		return nativeSidecarConfig(env)
 	}
 	// The tunnel interface's default is the backend's: mullvad natively, wg0
 	// (gluetun's) with gluetun, as the NetBird profile check and the sidecar
@@ -368,6 +389,77 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return c, nil
+}
+
+// nativeSidecarConfig reads no overlay or NetBird configuration. The host
+// path is main, so there is no separate HOST_TABLE to configure or reserve.
+func nativeSidecarConfig(env Getenv) (Config, error) {
+	for _, name := range []string{"OVERLAY_CIDR", "OVERLAY6_CIDR", "OVERLAY_IF"} {
+		if env(name) != "" {
+			return Config{}, refuse("%s is for the overlay kind; a sidecar has no overlay", name)
+		}
+	}
+	c := Config{Kind: Sidecar, Backend: Native, ExitIf: env.get("EXIT_IF", DefaultExitIf), HostIf: env.get("HOST_IF", DefaultHostIf)}
+	if !ValidInterfaceName(c.ExitIf) {
+		return Config{}, refuse("invalid interface name")
+	}
+	if !ValidInterfaceName(c.HostIf) {
+		return Config{}, refuse("invalid HOST_IF")
+	}
+	if c.HostIf == "lo" || c.HostIf == c.ExitIf {
+		return Config{}, refuse("HOST_IF must name the namespace's host interface, not lo, the overlay or the tunnel")
+	}
+	var err error
+	if c.Table, err = parseTable("EXIT_TABLE", env.get("EXIT_TABLE", strconv.Itoa(DefaultExitTable))); err != nil {
+		return Config{}, err
+	}
+	if c.ControlMark, err = ControlMarkValue(env.get("CONTROL_MARK", DefaultControlMark)); err != nil {
+		return Config{}, err
+	}
+	if c.ControlMark == c.Table {
+		return Config{}, refuse("CONTROL_MARK and EXIT_TABLE must differ")
+	}
+	if c.LAN, c.LAN6, err = parseSidecarLAN(env("SIDECAR_LAN_CIDRS")); err != nil {
+		return Config{}, err
+	}
+	return c, nil
+}
+
+func parseSidecarLAN(value string) (lan, lan6 []netip.Prefix, err error) {
+	if value == "" {
+		return nil, nil, nil
+	}
+	entries := strings.Split(value, ",")
+	if len(entries) > 16 {
+		return nil, nil, refuse("SIDECAR_LAN_CIDRS must have at most 16 entries")
+	}
+	seen := map[netip.Prefix]bool{}
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			return nil, nil, refuse("SIDECAR_LAN_CIDRS: empty entry is not a network prefix")
+		}
+		p, err := netip.ParsePrefix(entry)
+		if err != nil || p.Addr().Is4In6() {
+			return nil, nil, refuse("SIDECAR_LAN_CIDRS: %s is not a network prefix", entry)
+		}
+		if p.Bits() == 0 {
+			return nil, nil, refuse("SIDECAR_LAN_CIDRS: %s is a default route", entry)
+		}
+		if p != p.Masked() {
+			return nil, nil, refuse("SIDECAR_LAN_CIDRS: %s must use the network address", entry)
+		}
+		if seen[p] {
+			return nil, nil, refuse("SIDECAR_LAN_CIDRS: %s is duplicated", entry)
+		}
+		seen[p] = true
+		if p.Addr().Is4() {
+			lan = append(lan, p)
+		} else {
+			lan6 = append(lan6, p)
+		}
+	}
+	return lan, lan6, nil
 }
 
 // ReconcileInterval reads ROUTING_RECONCILE_INTERVAL: whole seconds, 2 to 60,

@@ -50,7 +50,7 @@ var ErrUnsafeDeletion = errors.New("refused: the deletion could let protected tr
 // treated as if everything were foreign: a snapshot per deletion.
 func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool)) (after policy.State, changed bool, err error) {
 	spec := tx.m.Expected()
-	if spec.Config.IsSidecar() {
+	if spec.Config.IsGluetunSidecar() {
 		return policy.State{}, false, nil
 	}
 	if len(tx.retiring) > 0 {

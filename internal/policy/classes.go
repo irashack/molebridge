@@ -34,7 +34,7 @@ import (
 // classify says what is asked of a packet, and whether anything is.
 func (s State) classify(p packet, prot map[netip.Addr]bool, hostSubnets []netip.Prefix) class {
 	c := s.Spec.Config
-	if p.iif == c.OverlayIf {
+	if !c.IsNativeSidecar() && p.iif == c.OverlayIf {
 		return class{name: "traffic arriving on " + c.OverlayIf, devs: []uint32{s.ExitIdx}}
 	}
 	if p.iif != "lo" {
@@ -48,6 +48,20 @@ func (s State) classify(p packet, prot map[netip.Addr]bool, hostSubnets []netip.
 	}
 	if p.dst.IsLoopback() {
 		return class{any: true}
+	}
+	if c.IsNativeSidecar() {
+		switch p.mark {
+		case c.ControlMark:
+			return class{name: "control-marked traffic the exit sends", devs: []uint32{s.HostIdx}}
+		case c.TunnelMark():
+			return class{any: true} // WireGuard's own socket
+		}
+		for _, prefix := range c.LANFor(p.f) {
+			if prefix.Contains(p.dst) {
+				return class{any: true}
+			}
+		}
+		return class{name: "unmarked traffic the namespace sends", devs: []uint32{s.ExitIdx}}
 	}
 	icmp := p.proto == 1 && p.f == rtnl.V4 || p.proto == 58 && p.f == rtnl.V6
 	fromTunnel := prot[p.src]
@@ -170,7 +184,7 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 	var routes []rtnl.Route
 	prot := map[netip.Addr]bool{}
 	locals := map[netip.Addr]bool{}
-	var hostSubnets []netip.Prefix
+	var hostSubnets, lan []netip.Prefix
 	for _, st := range states {
 		rules = append(rules, st.Rules[f]...)
 		for _, rs := range st.Routes[f] {
@@ -183,6 +197,7 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 			locals[a] = true
 		}
 		hostSubnets = append(hostSubnets, st.hostSubnets(f)...)
+		lan = append(lan, st.Spec.Config.LANFor(f)...)
 	}
 	// Candidate addresses.
 	var prefixes []netip.Prefix
@@ -194,6 +209,14 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 	}
 	prefixes = append(prefixes, c.OverlayFor(f))
 	prefixes = append(prefixes, hostSubnets...)
+	prefixes = append(prefixes, lan...)
+	if c.IsNativeSidecar() {
+		loopback := netip.MustParsePrefix("127.0.0.0/8")
+		if f == rtnl.V6 {
+			loopback = netip.MustParsePrefix("::1/128")
+		}
+		prefixes = append(prefixes, loopback)
+	}
 	for a := range prot {
 		prefixes = append(prefixes, netip.PrefixFrom(a, a.BitLen()))
 	}
@@ -246,6 +269,9 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 		for _, h := range hostSubnets {
 			g.add(h.Contains(a))
 		}
+		for _, p := range lan {
+			g.add(p.Contains(a))
+		}
 		return g.b.String()
 	}
 	pick := func(sigOf func(netip.Addr) string) []netip.Addr {
@@ -272,6 +298,9 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 	// Marks: the values the rules select on, their complements within the mask,
 	// the contract's, none and everything.
 	markSet := map[uint32]bool{0: true, 0xffffffff: true, c.ControlMark: true, c.ControlMark | 0x21: true, contract.GluetunMark: true}
+	if c.IsNativeSidecar() {
+		markSet[c.TunnelMark()] = true
+	}
 	for _, r := range rules {
 		if mark, mask := r.EffectiveMark(); mask != 0 {
 			markSet[mark] = true
@@ -294,6 +323,9 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 		}
 		g.add(m == c.ControlMark)
 		g.add(m == contract.GluetunMark)
+		if c.IsNativeSidecar() {
+			g.add(m == c.TunnelMark())
+		}
 		if k := g.b.String(); !markSigs[k] {
 			markSigs[k] = true
 			mk = append(mk, m)
@@ -369,12 +401,16 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 			l3s = append(l3s, true)
 		}
 	}
-	total := 2 * len(mk) * len(protos) * len(toses) * len(sports) * len(dports) * len(uids) * len(l3s) * len(srcs) * len(dsts)
+	iifs := []string{c.OverlayIf, "lo"}
+	if c.IsNativeSidecar() {
+		iifs = []string{"lo"}
+	}
+	total := len(iifs) * len(mk) * len(protos) * len(toses) * len(sports) * len(dports) * len(uids) * len(l3s) * len(srcs) * len(dsts)
 	if total > maxPoints {
 		return nil, true
 	}
 	var out []packet
-	for _, iif := range []string{c.OverlayIf, "lo"} {
+	for _, iif := range iifs {
 		for _, m := range mk {
 			for _, pr := range protos {
 				for _, tos := range toses {
@@ -507,7 +543,7 @@ var tooManyClasses = Violation{Class: "the model", Packet: "the rules", Outcome:
 
 // Violations lists every protected packet that can reach a forbidden place.
 func (s State) Violations() []Violation {
-	if s.Spec.Config.IsSidecar() {
+	if s.Spec.Config.IsGluetunSidecar() {
 		return nil
 	}
 	pts, tooMany := allPoints(s)
@@ -526,7 +562,7 @@ func (s State) Violations() []Violation {
 // one that has become real. When the two walks differ in a way that cannot be
 // told to be safe, the answer is to refuse.
 func Worsens(before, after State) []Violation {
-	if before.Spec.Config.IsSidecar() {
+	if before.Spec.Config.IsGluetunSidecar() {
 		return nil
 	}
 	clsAfter := after.classifier()

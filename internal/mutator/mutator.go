@@ -62,7 +62,7 @@ type Options struct {
 	OpTimeout, IdleStep time.Duration
 	// GuardRepairs puts the temporary priority-80 guard in front of repairs
 	// that change rules 90-97, the native backend's practice. The install
-	// always uses it.
+	// uses it for overlay exits. Native sidecars never use it.
 	GuardRepairs bool
 	// Logf receives one line per repair; it must not block.
 	Logf func(format string, args ...any)
@@ -116,6 +116,9 @@ type op struct {
 
 // New creates the owner; Start runs it.
 func New(o Options) *Mutator {
+	if o.Spec.Config.IsNativeSidecar() {
+		o.GuardRepairs = false
+	}
 	if o.OpTimeout <= 0 {
 		o.OpTimeout = DefaultOpTimeout
 	}

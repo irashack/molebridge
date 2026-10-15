@@ -71,33 +71,30 @@ func FamilyStatus(spec Spec, f rtnl.Family, rules []rtnl.Rule, routes []rtnl.Rou
 		}
 		st.ReturnPath[f] = []netip.Addr{opt.TunnelAddress}
 	}
-	expected := map[uint32]rtnl.Rule{}
-	for _, r := range st.Rules(f) {
-		expected[r.Priority] = r
-	}
-	found := map[uint32]bool{}
+	expected := st.Rules(f)
+	found := make([]bool, len(expected))
 	rulesOK := true
 	for _, r := range rules {
-		if LocalRuleAdmitsOverlay(r, c.OverlayIf) {
+		if !c.IsNativeSidecar() && LocalRuleAdmitsOverlay(r, c.OverlayIf) {
 			rulesOK = false
 		}
-		// Past 97, only the priorities Molebridge owns are judged: 98 natively,
-		// 102-104 with gluetun. gluetun's own rules (98-101) and NetBird's
-		// (105, 110) are not.
-		if r.Priority > PrioIngressReject && !st.Owned(r.Priority) {
+		if !st.Owned(r.Priority) {
 			continue
 		}
-		want, ok := expected[r.Priority]
-		if !ok || found[r.Priority] {
-			rulesOK = false
-			continue
+		matched := false
+		for i, want := range expected {
+			if !found[i] && r.Priority == want.Priority && exactRule(r, want) {
+				found[i], matched = true, true
+				break
+			}
 		}
-		found[r.Priority] = true
-		if !exactRule(r, want) {
+		if !matched {
 			rulesOK = false
 		}
 	}
-	rulesOK = rulesOK && len(found) == len(expected)
+	for _, ok := range found {
+		rulesOK = rulesOK && ok
+	}
 
 	routesOK, tunnelDefault := true, false
 	for _, r := range routes {
@@ -344,8 +341,10 @@ type RoutingOptions struct {
 // the supervisor's to judge, not this function's.
 func RoutingStatus(spec Spec, snap *rtnl.Snapshot, opt RoutingOptions) (protected, fallback bool) {
 	c := spec.Config
-	if _, ok := snap.Link(c.OverlayIf); !ok {
-		return false, false
+	if !c.IsNativeSidecar() {
+		if _, ok := snap.Link(c.OverlayIf); !ok {
+			return false, false
+		}
 	}
 	link, ok := snap.Link(c.ExitIf)
 	if !ok {
@@ -366,7 +365,7 @@ func RoutingStatus(spec Spec, snap *rtnl.Snapshot, opt RoutingOptions) (protecte
 	if !addresses[rtnl.V4].IsValid() && opt.RequireAddress {
 		return false, false
 	}
-	protected, fallback = opt.ReturnPath, true
+	protected, fallback = opt.ReturnPath || c.IsNativeSidecar(), true
 	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
 		ready, fb := FamilyStatus(spec, f, snap.Rules[f], snap.RoutesInTable(f, c.Table),
 			StatusOptions{TunnelAddress: addresses[f], ExitIfIndex: link.Index})

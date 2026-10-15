@@ -40,7 +40,7 @@ var ErrReturnPathLive = errors.New("mutator: the return-path address is still li
 func (m *Mutator) RetireReturnPath(ctx context.Context, f rtnl.Family, addr netip.Addr) error {
 	return m.Do(ctx, fmt.Sprintf("retire the %s return-path address", f), func(tx *Tx) error {
 		spec := tx.Spec()
-		if spec.Config.IsSidecar() || spec.Config.IsGluetun() {
+		if spec.Config.IsGluetunSidecar() || spec.Config.IsGluetun() {
 			return nil
 		}
 		if !addr.IsValid() || (f == rtnl.V4) != addr.Is4() {

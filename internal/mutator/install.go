@@ -51,7 +51,7 @@ func (e *InstallError) Unwrap() error { return e.Cause }
 func (m *Mutator) Install(ctx context.Context) error {
 	return m.Do(ctx, "install the routing contract", func(tx *Tx) error {
 		spec := tx.Spec()
-		if spec.Config.IsSidecar() {
+		if spec.Config.IsGluetunSidecar() {
 			return nil
 		}
 		snap, err := tx.Snapshot()
@@ -63,6 +63,16 @@ func (m *Mutator) Install(ctx context.Context) error {
 			if res := tx.reconcile("install"); res.ContractHolds {
 				return nil
 			}
+		}
+		if spec.Config.IsNativeSidecar() {
+			// The firewall is installed by the caller first. The sidecar has
+			// no local or temporary guard; Diff installs 97, then 96 before
+			// exceptions or removals, even in a namespace kept across restarts.
+			res := tx.reconcile("install")
+			if !res.ContractHolds {
+				return fmt.Errorf("the routing contract could not be installed: %w", orUnverified(res.Err))
+			}
+			return nil
 		}
 		for _, f := range families {
 			want := spec.RulesAt(f, contract.PrioLocalGuard)
@@ -138,7 +148,7 @@ func hasExact(rules []rtnl.Rule, want rtnl.Rule) bool {
 func (m *Mutator) ChangeReturnPath(ctx context.Context, f rtnl.Family, old, next netip.Addr, change func(*Tx) error) error {
 	return m.Do(ctx, fmt.Sprintf("change the %s return-path address", f), func(tx *Tx) error {
 		before := tx.Spec()
-		if before.Config.IsGluetun() || before.Config.IsSidecar() {
+		if before.Config.IsGluetun() || before.Config.IsGluetunSidecar() {
 			return fmt.Errorf("the return-path address is the native backend's")
 		}
 		if !next.IsValid() || (f == rtnl.V4) != next.Is4() || (old.IsValid() && (f == rtnl.V4) != old.Is4()) {
