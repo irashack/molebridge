@@ -17,7 +17,8 @@ import (
 var exitIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // ParseExits parses PANEL_EXITS: comma-separated `id=provider[/kind][:label]`,
-// kind being overlay (the default) or sidecar. Each exit's state is
+// kind being overlay (the default) or sidecar (a gluetun provider's, or since
+// 0.9.0 a native provider's: the native sidecar). Each exit's state is
 // $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one exit
 // whose state is $STATE_DIR itself (no exits are returned).
 func ParseExits(raw, stateDir string) ([]Exit, error) {
@@ -45,9 +46,6 @@ func ParseExits(raw, stateDir string) ([]Exit, error) {
 		}
 		if kind == "" {
 			kind = "overlay"
-		}
-		if _, err := verdict.NewExitConfig(provider, kind, exitID); err != nil {
-			return nil, fmt.Errorf("PANEL_EXITS: a sidecar exit needs a gluetun provider (gluetun-<name>/sidecar), in %s", repr)
 		}
 		if label == "" {
 			label = spec.Label
@@ -98,7 +96,7 @@ func ConfigFromEnv(env map[string]string) (*Config, error) {
 	// names each exit's kind itself, and this is then unused.
 	exitKind := envOr(env, "EXIT_KIND", "overlay")
 	if len(exits) == 0 {
-		// Refuses an unknown kind, or a sidecar on a native provider, at start.
+		// Refuses an unknown kind at start.
 		if _, err := verdict.NewExitConfig(provider, exitKind, ""); err != nil {
 			return nil, err
 		}

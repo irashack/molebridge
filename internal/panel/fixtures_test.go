@@ -180,6 +180,13 @@ func unmeasurableSidecar() map[string]any {
 	return record
 }
 
+// nativePIASidecar is a connected native sidecar on PIA (routing contract and
+// firewall both passing) with a forwarded port.
+func nativePIASidecar() map[string]any {
+	return schema2(recOpts{Provider: "pia", Kind: "sidecar",
+		Extra: map[string]any{"port_forward": true, "forwarded_port": 43210}})
+}
+
 // legacy is a 0.6 overlay record (no schema).
 func legacy(status string, fields map[string]any) map[string]any {
 	if status == "" {
@@ -243,6 +250,19 @@ var consumerCases = map[string]consumerCase{
 		func() map[string]any { return request(serverOf("gluetun-mullvad")) }, "ok", "connected", "provider"},
 	"sidecar-tunnel-tier": {"gluetun-surfshark", "sidecar", unmeasurableSidecar,
 		func() map[string]any { return request(serverOf("gluetun-surfshark")) }, "unknown", "switched, egress unverified", ""},
+	// The native sidecar (0.9.0): PIA's own WireGuard tunnel, with a forwarded port.
+	"sidecar-native-pia": {"pia", "sidecar", nativePIASidecar,
+		func() map[string]any { return request(serverOf("pia")) }, "ok", "connected", "provider"},
+	"sidecar-native-firewall-failed": {"pia", "sidecar", func() map[string]any {
+		record := nativePIASidecar()
+		record["status"], record["message"] = "failed", "The sidecar firewall is not as installed."
+		record["checks"].(map[string]any)["traffic_protection"] = map[string]any{"state": "fail", "at": record["checked_at"], "from": "firewall"}
+		return record
+	}, func() map[string]any { return request(serverOf("pia")) }, "failed", "failed", ""},
+	"sidecar-native-routing-failed": {"pia", "sidecar", func() map[string]any {
+		return schema2(recOpts{Provider: "pia", Kind: "sidecar", Status: "failed",
+			Checks: map[string]any{"routing": "fail", "traffic_protection": map[string]any{"state": "fail", "at": nowISO(), "from": "routing"}}})
+	}, func() map[string]any { return request(serverOf("pia")) }, "failed", "failed", ""},
 	"unsupported-schema": {"mullvad", "overlay", func() map[string]any { return schema2(recOpts{Extra: map[string]any{"schema": 3}}) },
 		func() map[string]any { return request(serverOf("mullvad")) }, "unknown", "unsupported status version", ""},
 	"kind-mismatch": {"gluetun-mullvad", "overlay", func() map[string]any { return schema2(recOpts{Provider: "gluetun-mullvad", Kind: "sidecar"}) },

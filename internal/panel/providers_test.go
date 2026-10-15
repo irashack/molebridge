@@ -465,3 +465,49 @@ func merge(base, changes map[string]any) map[string]any {
 }
 
 var _ = url.QueryEscape
+
+// -- the native sidecar (0.9.0): a sidecar on a native provider ---------------------------
+
+func TestANativeSidecarPageHasPIAsRegionsAndForwardedPort(t *testing.T) {
+	h := newHarness(t, map[string]string{"PROVIDER": "pia", "EXIT_KIND": "sidecar"}, nil)
+	page := h.render(nil, nativePIASidecar(), piaCatalogue("pia"), nil)
+	mustContain(t, page, ` data-kind="sidecar" `, `data-provider="pia"`, `value="ex_example"`, "port forwarding · virtual location",
+		"Molebridge / tunnel control", "<h2>Current tunnel</h2>", "Secure connection", `<dd data-f="egress_tier">provider-confirmed</dd>`,
+		`<dd data-f="forwarded_port">43210</dd>`, `<dd data-check="routing" data-check-state="pass">passed</dd>`,
+		`<dd data-check="traffic_protection" data-check-state="pass">passed</dd>`,
+		`<dd data-check="netbird" data-check-state="n/a">not applicable</dd>`,
+		`<dd data-check="app_attachment" data-check-state="not-checked">not checked by Molebridge (the host doctor)</dd>`)
+	mustNotContain(t, page, "Mullvad", "Molebridge / exit control", "gluetun's firewall")
+	// No forwarded port, no row; a port-less record still shows none.
+	record := nativePIASidecar()
+	delete(record, "port_forward")
+	delete(record, "forwarded_port")
+	mustNotContain(t, h.render(nil, record, piaCatalogue("pia"), nil), "Forwarded port")
+	record["port_forward"] = true
+	mustContain(t, h.render(nil, record, piaCatalogue("pia"), nil), `<dd data-f="forwarded_port">none</dd>`)
+}
+
+func TestANativeSidecarsRegionIsSelectableAsOnAPIAOverlay(t *testing.T) {
+	h := newHarness(t, map[string]string{"PANEL_EXITS": "tunnel=pia/sidecar:Torrents"}, nil)
+	ex := h.exit("tunnel")
+	mustWrite(t, ex.RelaysPath, piaCatalogue("pia"))
+	mustWrite(t, ex.ResultPath, nativePIASidecar())
+	page := h.get("/?exit=tunnel", "", nil)
+	mustContain(t, page.Body, `value="ex_example"`, `data-f="forwarded_port">43210<`, "<h2>Torrents tunnel</h2>")
+	// The API reports the sidecar kind and the forwarded port.
+	payload := jsonBody(t, h.get("/api/status?exit=tunnel", "", nil))
+	if v := payload["verdict"].(map[string]any); v["kind"] != "sidecar" || v["state"] != "ok" {
+		t.Fatalf("verdict = %v", v)
+	}
+	if r := payload["result"].(map[string]any); r["forwarded_port"] != float64(43210) {
+		t.Fatalf("result = %v", r)
+	}
+	nonce, token := h.pageTokens("", "tunnel", "")
+	if a := h.post("/select", [][2]string{{"server", "ex_other"}, {"csrf_token", token}, {"exit", "tunnel"}}, "csrf_nonce="+nonce, ""); a.Status != 400 {
+		t.Fatalf("a region the catalogue does not list: %d", a.Status)
+	}
+	a := h.post("/select", [][2]string{{"server", "ex_example"}, {"csrf_token", token}, {"exit", "tunnel"}}, "csrf_nonce="+nonce, "")
+	if a.Status != 303 || readDesired(ex)["server"] != "ex_example" {
+		t.Fatalf("select: %d %v", a.Status, readDesired(ex))
+	}
+}

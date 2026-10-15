@@ -8,7 +8,8 @@
 //
 // Schema 2 states every check explicitly (CheckStates) and says which exit kind
 // wrote it: "overlay" (a NetBird exit, native or gluetun backend) or "sidecar"
-// (an ordinary gluetun other containers share). Records written before schema 2
+// (a tunnel other containers share: an ordinary gluetun, or, since 0.9.0, the
+// native sidecar, Molebridge's own tunnel with a native provider). Records written before schema 2
 // (0.6 and earlier) are read as overlay records (legacy). Any other schema is
 // never connected.
 //
@@ -82,6 +83,13 @@ func BackendOf(provider string) string {
 // RequiredChecks are the checks that must pass for this kind and backend.
 func RequiredChecks(kind, backend string) []string {
 	if kind == "sidecar" {
+		if backend == providers.BackendNative {
+			// The native sidecar keeps its applications' traffic in the tunnel
+			// itself (routing contract and firewall), so it judges both.
+			return []string{"routing", "traffic_protection", "peer", "handshake", "egress"}
+		}
+		// A gluetun sidecar has no contract of ours, and gluetun's firewall is
+		// not ours to check.
 		return []string{"peer", "handshake", "egress"}
 	}
 	if backend == providers.BackendNative {
@@ -141,6 +149,11 @@ func (c Checks) JSONObject() validate.Obj {
 // backend.
 func FixedChecks(kind, backend string) Checks {
 	if kind == "sidecar" {
+		if backend == providers.BackendNative {
+			// No NetBird and no owner lease; the host doctor attaches the
+			// application.
+			return Checks{{"netbird", "n/a"}, {"owner_record", "n/a"}, {"app_attachment", "not-checked"}}
+		}
 		return Checks{{"routing", "n/a"}, {"netbird", "n/a"}, {"owner_record", "n/a"},
 			{"traffic_protection", "not-checked"}, {"app_attachment", "not-checked"}}
 	}
@@ -154,12 +167,13 @@ func FixedChecks(kind, backend string) Checks {
 // ExitConfig is the reader's own configuration of one exit.
 type ExitConfig struct {
 	Provider string
-	Kind     string // "overlay" or "sidecar"
+	Kind     string // "overlay", or "sidecar" (a gluetun sidecar or a native sidecar)
 	ID       string
 }
 
-// NewExitConfig validates the combination: a known provider, a known kind, and
-// for a sidecar a gluetun provider. An empty kind means "overlay".
+// NewExitConfig validates the combination: a known provider and a known kind.
+// A sidecar takes any provider: a gluetun provider makes the gluetun sidecar,
+// a native one (since 0.9.0) the native sidecar. An empty kind means "overlay".
 func NewExitConfig(provider, kind, id string) (ExitConfig, error) {
 	if kind == "" {
 		kind = "overlay"
@@ -170,11 +184,13 @@ func NewExitConfig(provider, kind, id string) (ExitConfig, error) {
 	if !contains(Kinds, kind) {
 		return ExitConfig{}, errors.New("EXIT_KIND must be overlay or sidecar")
 	}
-	c := ExitConfig{Provider: provider, Kind: kind, ID: id}
-	if kind == "sidecar" && c.Backend() != providers.BackendGluetun {
-		return ExitConfig{}, errors.New("a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)")
-	}
-	return c, nil
+	return ExitConfig{Provider: provider, Kind: kind, ID: id}, nil
+}
+
+// gluetunSidecar is the sidecar of 0.8.0: an ordinary gluetun that other
+// containers share. The native sidecar is the other sidecar.
+func (c ExitConfig) gluetunSidecar() bool {
+	return c.Kind == "sidecar" && c.Backend() == providers.BackendGluetun
 }
 
 // Backend is "gluetun" or "native".
@@ -341,9 +357,12 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 	failed, expired, unmeasured := problems.failed, problems.expired, problems.unmeasured
 	outcome, _ := selection["outcome"].(string)
 	rejected := outcome == "rejected" || outcome == "mutation-failed"
-	// A tunnel-tier sidecar can't compare its egress with the host's own
-	// address: switched, never verified, and not a measured failure.
-	if exit.Kind == "sidecar" && !rejected && len(failed) == 1 && failed[0] == "egress" {
+	// A tunnel-tier gluetun sidecar can't compare its egress with the host's
+	// own address: switched, never verified, and not a measured failure. Only
+	// the gluetun sidecar: a native sidecar's providers confirm the egress
+	// themselves (provider tier), so for it an egress failure, whatever reason
+	// the record gives, is a measured failure and falls through to rule 8.
+	if exit.gluetunSidecar() && !rejected && len(failed) == 1 && failed[0] == "egress" {
 		allChecks, _ := object(record["checks"])
 		if egress, isObject := object(allChecks["egress"]); isObject && egress["reason"] == "host-address-not-measurable" {
 			text := "Switched; the egress couldn't be compared with this host's address."
@@ -480,7 +499,7 @@ func readChecks(exit ExitConfig, record map[string]any, now time.Time) (display 
 			return display, found, false
 		}
 		if stateText == "pass" || stateText == "fail" {
-			if !validShape(name, check, stateText, kind, exit.Spec()) {
+			if !validShape(name, check, stateText, exit) {
 				return display, found, false
 			}
 			if !fresh(check["at"], now) {
@@ -508,7 +527,9 @@ func readChecks(exit ExitConfig, record map[string]any, now time.Time) (display 
 		display.set(name, stateText)
 	}
 	if contains(required, "traffic_protection") && display.Get("traffic_protection") == "pass" {
-		// Overlay traffic protection is the routing contract itself.
+		// Traffic protection is the routing contract itself (the overlay), or
+		// the contract and the firewall together (the native sidecar); a pass
+		// is only ever "from" routing, as a failure names the firewall alone.
 		protection, _ := object(raw["traffic_protection"])
 		if protection["from"] != "routing" || display.Get("routing") == "fail" {
 			return display, found, false
@@ -534,7 +555,8 @@ func leaseLapsed(check map[string]any, now time.Time) bool {
 }
 
 // validShape applies strict types to the checks that carry measurements.
-func validShape(name string, check map[string]any, stateText, kind string, spec *providers.Provider) bool {
+func validShape(name string, check map[string]any, stateText string, exit ExitConfig) bool {
+	spec := exit.Spec()
 	switch name {
 	case "handshake":
 		age := check["age_s"]
@@ -581,8 +603,9 @@ func validShape(name string, check map[string]any, stateText, kind string, spec 
 				return false
 			}
 			// The tunnel tier counts only where the provider has no stronger
-			// check, and never for a sidecar.
-			if tier == providers.TierTunnel && (kind == "sidecar" || spec == nil || spec.EgressTier != providers.TierTunnel) {
+			// check, and never for a gluetun sidecar (it can't measure the
+			// host's address). A native sidecar follows the overlay's rule.
+			if tier == providers.TierTunnel && (exit.gluetunSidecar() || spec == nil || spec.EgressTier != providers.TierTunnel) {
 				return false
 			}
 		}
@@ -634,6 +657,8 @@ func legacy(exit ExitConfig, record map[string]any, target Target, now time.Time
 		checks = append(checks, Check{name, "legacy"})
 	}
 	checks = append(checks, Check{"app_attachment", "n/a"})
+	// Records without a schema are 0.6 overlay records: either sidecar is a
+	// kind mismatch.
 	if exit.Kind != "overlay" {
 		return with(Verdict{State: "unknown", Label: "kind mismatch", Reasons: []string{"kind-mismatch"}})
 	}

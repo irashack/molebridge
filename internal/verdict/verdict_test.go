@@ -93,6 +93,13 @@ func record(t testing.TB, o opts, changes map[string]any) map[string]any {
 		} else {
 			checks["owner_record"] = map[string]any{"state": "n/a"}
 		}
+	} else if backend == "native" {
+		// The native sidecar (0.9.0): its own contract and firewall.
+		checks["routing"] = map[string]any{"state": "pass", "at": at(5), "fallback": true}
+		checks["traffic_protection"] = map[string]any{"state": "pass", "at": at(5), "from": "routing"}
+		checks["netbird"] = map[string]any{"state": "n/a"}
+		checks["owner_record"] = map[string]any{"state": "n/a"}
+		checks["app_attachment"] = map[string]any{"state": "not-checked", "by": "the host doctor"}
 	} else {
 		checks["routing"] = map[string]any{"state": "n/a"}
 		checks["netbird"] = map[string]any{"state": "n/a"}
@@ -175,6 +182,16 @@ func sidecarVerdict(t testing.TB, result any) Verdict {
 	return panel(t, result, request(gluetunHost), "gluetun-nordvpn", "sidecar")
 }
 
+// nativeSidecar is a healthy record of a native sidecar (a PIA tunnel other
+// containers share).
+func nativeSidecar(t testing.TB, changes map[string]any) map[string]any {
+	return record(t, opts{kind: "sidecar", provider: "pia", server: "ex_example", families: []string{"4"}}, changes)
+}
+
+func nativeSidecarVerdict(t testing.TB, result any) Verdict {
+	return panel(t, result, request("ex_example"), "pia", "sidecar")
+}
+
 func reasonsOf(v Verdict) string { return strings.Join(v.Reasons, ",") }
 
 // -- schema 2 -------------------------------------------------------------------------
@@ -189,6 +206,96 @@ func TestAHealthyRecordIsConnectedForEveryKind(t *testing.T) {
 	}
 	v = sidecarVerdict(t, sidecar(t, nil))
 	if v.State != "ok" || v.Checks.Get("traffic_protection") != "not-checked" || v.Checks.Get("routing") != "n/a" {
+		t.Errorf("%+v", v)
+	}
+}
+
+func TestANativeSidecarIsJudgedOnItsOwnContractAndFirewall(t *testing.T) {
+	v := nativeSidecarVerdict(t, nativeSidecar(t, nil))
+	if v.State != "ok" || v.Label != "connected" || v.Tier != "provider" || v.Kind != "sidecar" {
+		t.Errorf("%+v", v)
+	}
+	for name, want := range map[string]string{"routing": "pass", "traffic_protection": "pass", "peer": "pass", "handshake": "pass",
+		"egress": "pass", "netbird": "n/a", "owner_record": "n/a", "app_attachment": "not-checked"} {
+		if v.Checks.Get(name) != want {
+			t.Errorf("%s = %q, want %q", name, v.Checks.Get(name), want)
+		}
+	}
+	// The firewall failing is a failed tunnel, though the contract holds.
+	failedFirewall := withCheck(nativeSidecar(t, nil), "traffic_protection", map[string]any{"state": "fail", "from": "firewall"})
+	v = nativeSidecarVerdict(t, failedFirewall)
+	if v.State != "failed" || v.Label != "failed" || reasonsOf(v) != "traffic_protection-failed" ||
+		v.Checks.Get("routing") != "pass" || v.Checks.Get("traffic_protection") != "fail" {
+		t.Errorf("%+v", v)
+	}
+	// Routing failing takes the protection with it.
+	failedRouting := withCheck(nativeSidecar(t, nil), "routing", map[string]any{"state": "fail"})
+	withCheck(failedRouting, "traffic_protection", map[string]any{"state": "fail", "from": "routing"})
+	v = nativeSidecarVerdict(t, failedRouting)
+	if v.State != "failed" || reasonsOf(v) != "routing-failed,traffic_protection-failed" {
+		t.Errorf("%+v", v)
+	}
+	// A passing protection beside a failed routing contradicts itself.
+	contradiction := withCheck(nativeSidecar(t, nil), "routing", map[string]any{"state": "fail"})
+	if v := nativeSidecarVerdict(t, contradiction); v.Label != "invalid status record" {
+		t.Errorf("%+v", v)
+	}
+	// A pass is "from" the routing contract, never from the firewall alone.
+	if v := nativeSidecarVerdict(t, withCheck(nativeSidecar(t, nil), "traffic_protection", map[string]any{"from": "firewall"})); v.Label != "invalid status record" {
+		t.Errorf("%+v", v)
+	}
+	// A record that claims backend native and kind sidecar without a routing
+	// check (a gluetun sidecar's record shape) is not connected, and neither is
+	// one that waives routing or the protection.
+	for name, change := range map[string]func(map[string]any){
+		"routing absent":    func(c map[string]any) { delete(c, "routing") },
+		"protection absent": func(c map[string]any) { delete(c, "traffic_protection") },
+		"routing n/a":       func(c map[string]any) { c["routing"] = map[string]any{"state": "n/a"} },
+		"protection not-checked": func(c map[string]any) {
+			c["traffic_protection"] = map[string]any{"state": "not-checked", "by": "gluetun's firewall"}
+		},
+	} {
+		result := nativeSidecar(t, nil)
+		change(result["checks"].(map[string]any))
+		if v := nativeSidecarVerdict(t, result); v.State == "ok" || v.Label != "invalid status record" {
+			t.Errorf("%s: %+v", name, v)
+		}
+	}
+	// A routing check that has aged out is expired evidence, not a pass.
+	aged := withCheck(nativeSidecar(t, nil), "routing", map[string]any{"at": at(400)})
+	if v := nativeSidecarVerdict(t, aged); v.State != "unknown" || reasonsOf(v) != "routing-expired" {
+		t.Errorf("%+v", v)
+	}
+	// The kind and the backend are never defaulted.
+	if v := panel(t, nativeSidecar(t, map[string]any{"backend": "gluetun"}), request("ex_example"), "pia", "sidecar"); v.Label != "provider mismatch" {
+		t.Errorf("%+v", v)
+	}
+	if v := panel(t, nativeSidecar(t, nil), request("ex_example"), "pia", "overlay"); v.Label != "kind mismatch" {
+		t.Errorf("%+v", v)
+	}
+	if v := panel(t, rec(t, nil), request(host), "mullvad", "sidecar"); v.Label != "kind mismatch" {
+		t.Errorf("an overlay record: %+v", v)
+	}
+}
+
+func TestANativeSidecarsEgressFailureIsAFailureNeverAnUnverifiedSwitch(t *testing.T) {
+	// The unverified switch is the gluetun sidecar's: only it can't compare its
+	// egress with the host's address. A native sidecar whose record gave that
+	// reason anyway is failed.
+	sc := nativeSidecar(t, map[string]any{"status": "failed", "message": "Tunnel egress is not confirmed."})
+	sc["checks"].(map[string]any)["egress"] = map[string]any{"state": "fail", "at": at(5), "server": "ex_example", "tier": nil,
+		"reason": "host-address-not-measurable", "expected_families": []any{"4"}, "families": map[string]any{"4": "unknown"}}
+	sc["egress_ips"] = map[string]any{}
+	sc["selection"].(map[string]any)["outcome"] = "applied-unverified"
+	v := nativeSidecarVerdict(t, sc)
+	if v.State != "failed" || v.Label != "failed" || reasonsOf(v) != "egress-failed" {
+		t.Errorf("%+v", v)
+	}
+	// The tunnel tier follows the overlay's rule: only a provider whose own
+	// check is the tunnel's can have it.
+	tunnel := nativeSidecar(t, map[string]any{})
+	tunnel["checks"].(map[string]any)["egress"].(map[string]any)["tier"] = "tunnel"
+	if v := nativeSidecarVerdict(t, tunnel); v.Label != "invalid status record" {
 		t.Errorf("%+v", v)
 	}
 }
@@ -222,7 +329,13 @@ func TestASidecarReaderRefusesAnOverlayRecordAndANativeProvider(t *testing.T) {
 	if pm(t, rec(t, nil)).State != "ok" {
 		t.Error("overlay record not ok")
 	}
-	if _, err := NewExitConfig("mullvad", "sidecar", ""); err == nil || err.Error() != "a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)" {
+	// Since 0.9.0 a sidecar takes a native provider too (the native sidecar).
+	for _, provider := range []string{"mullvad", "pia", "nordvpn", "gluetun-nordvpn"} {
+		if c, err := NewExitConfig(provider, "sidecar", ""); err != nil || c.Kind != "sidecar" {
+			t.Errorf("%s: %+v %v", provider, c, err)
+		}
+	}
+	if _, err := NewExitConfig("examplevpn", "sidecar", ""); err == nil || err.Error() != "unknown provider" {
 		t.Errorf("got %v", err)
 	}
 	if _, err := NewExitConfig("mullvad", "satellite", ""); err == nil || err.Error() != "EXIT_KIND must be overlay or sidecar" {
@@ -725,8 +838,15 @@ func TestChecksOrderFollowsPython(t *testing.T) {
 	}
 	if strings.Join(RequiredChecks("overlay", "native"), ",") != "routing,netbird,owner_record,peer,handshake,egress,traffic_protection" ||
 		strings.Join(RequiredChecks("overlay", "gluetun"), ",") != "routing,netbird,peer,handshake,egress,traffic_protection" ||
-		strings.Join(RequiredChecks("sidecar", "gluetun"), ",") != "peer,handshake,egress" {
+		strings.Join(RequiredChecks("sidecar", "gluetun"), ",") != "peer,handshake,egress" ||
+		strings.Join(RequiredChecks("sidecar", "native"), ",") != "routing,traffic_protection,peer,handshake,egress" {
 		t.Error("required checks")
+	}
+	if got := fmt.Sprint(FixedChecks("sidecar", "native")); got != "[{netbird n/a} {owner_record n/a} {app_attachment not-checked}]" {
+		t.Error(got)
+	}
+	if got := fmt.Sprint(FixedChecks("sidecar", "gluetun")); got != "[{routing n/a} {netbird n/a} {owner_record n/a} {traffic_protection not-checked} {app_attachment not-checked}]" {
+		t.Error(got)
 	}
 	if BackendOf("mullvad") != "native" || BackendOf("gluetun-ivpn") != "gluetun" || BackendOf("nope") != "native" {
 		t.Error("BackendOf")
@@ -844,7 +964,14 @@ func TestTunnelTierCountsOnlyForAProviderWithoutItsOwnCheck(t *testing.T) {
 		}
 	}
 	// A kind the provider can't have is an unknown provider too, as in Python.
-	if s, l := StatusView(nil, nil, "mullvad", "sidecar", now); s != "unknown" || l != "unknown provider" {
+	// A sidecar takes a native provider since 0.9.0; an unknown provider or kind is still refused.
+	if s, l := StatusView(nil, nil, "mullvad", "sidecar", now); s != "unknown" || l != "awaiting status" {
+		t.Errorf("%s %s", s, l)
+	}
+	if s, l := StatusView(nil, nil, "examplevpn", "sidecar", now); s != "unknown" || l != "unknown provider" {
+		t.Errorf("%s %s", s, l)
+	}
+	if s, l := StatusView(nil, nil, "mullvad", "satellite", now); s != "unknown" || l != "unknown provider" {
 		t.Errorf("%s %s", s, l)
 	}
 }
@@ -966,7 +1093,7 @@ func FuzzAssess(f *testing.F) {
 		if err != nil {
 			return
 		}
-		for _, provider := range []string{"mullvad", "gluetun-ivpn"} {
+		for _, provider := range []string{"mullvad", "pia", "gluetun-ivpn"} {
 			for _, kind := range []string{"overlay", "sidecar"} {
 				exit, err := NewExitConfig(provider, kind, "")
 				if err != nil {
