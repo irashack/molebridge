@@ -68,15 +68,24 @@ func (l *lab) counted(name string) int {
 	return 0
 }
 
+// sidecarTables counts the firewall's tables (the main one and its backstop:
+// 2 when installed).
 func (l *lab) sidecarTables() int {
 	out, _ := l.exit.Exec("nft", "list", "tables")
-	return strings.Count(out, "inet molebridge_sidecar")
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		switch strings.TrimSpace(line) {
+		case "table inet molebridge_sidecar", "table inet molebridge_sidecar_backstop":
+			n++
+		}
+	}
+	return n
 }
 
 // sidecarInstalled: the firewall, rules 96 and 97 in both families, and the
 // exit table's fallback.
 func (l *lab) sidecarInstalled() bool {
-	if l.sidecarTables() != 1 {
+	if l.sidecarTables() != 2 {
 		return false
 	}
 	for _, f := range []string{"-4", "-6"} {
@@ -163,7 +172,7 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	if out, err := l.exit.Exec("nft", "delete", "table", "inet", "molebridge_sidecar"); err != nil {
 		t.Fatalf("nft: %v\n%s", err, out)
 	}
-	l.waitFor(10*time.Second, "the firewall to be reinstalled", func() bool { return l.sidecarTables() == 1 })
+	l.waitFor(10*time.Second, "the firewall to be reinstalled", func() bool { return l.sidecarTables() == 2 })
 	l.waitFor(5*time.Second, "the reinstall to be logged", func() bool {
 		return strings.Contains(p.out.String(), "the sidecar firewall was not as installed (")
 	})
