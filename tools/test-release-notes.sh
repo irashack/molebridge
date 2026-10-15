@@ -20,6 +20,9 @@ echo "$rel" | grep -qF "$wf/acceptance.yml@refs/heads/main" || fail "acceptance 
 echo "$rel" | grep -qF "ghcr.io/irashack/molebridge@$i" || fail "index reference"
 echo "$rel" | grep -qF -- "--source-digest $c" || fail "source commit"
 echo "$rel" | grep -qF "attestations/live-acceptance/v1" || fail "acceptance predicate type"
+for envfile in .env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example; do
+    echo "$rel" | grep -qF "$envfile" || fail "release notes do not name $envfile"
+done
 pass "release notes name the three identities and the commit"
 
 cand=$(sh "$notes" --kind candidate --tag v0.8.0-rc.2 --commit "$c" --digest "$i" --amd64 "$a" --arm64 "$b")

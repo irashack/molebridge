@@ -55,8 +55,9 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   container. `tools/` holds the release and image scripts (`make-bundle.sh`,
   `check-bundle.sh`, `check-image.sh`, `check-compose.sh`, `release-notes.sh` and the
   acceptance tooling) and `tools/fixtures/` the data tests share.
-- `compose.yaml`, `compose.gluetun.yaml` and `compose.sidecar.yaml`: the supported
-  Compose forms, with `.env.example`, `.env.gluetun.example` and `.env.sidecar.example`.
+- `compose.yaml`, `compose.gluetun.yaml`, `compose.sidecar.yaml` and
+  `compose.native-sidecar.yaml`: the supported Compose forms, with `.env.example`,
+  `.env.gluetun.example`, `.env.sidecar.example` and `.env.native-sidecar.example`.
 
 Test files ported from the 0.7 Python suite usually name their Python file in a header
 comment, and their test names stay close to the Python ones, so the two can be compared.
@@ -81,6 +82,8 @@ for provider in mullvad pia nordvpn; do
 done
 docker compose --env-file .env.gluetun.example -f compose.gluetun.yaml config --quiet
 docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
+docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
+COMPOSE_PROFILES=example,port-sync docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
 sh tools/check-compose.sh
 sh tools/check-doc-links.sh
 ```

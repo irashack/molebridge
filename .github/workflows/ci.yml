@@ -33,7 +33,8 @@ jobs:
           # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
       - name: Compose files
-        # Each form against its own example environment, the native form for
+        # Each form against its own example environment (the native sidecar
+        # also with its port-sync profile on), the native form for
         # every provider, then the trust boundary as Compose resolves it
         # (tools/check-compose.sh). No .env is written: the examples are read
         # with --env-file.
@@ -44,6 +45,8 @@ jobs:
           done
           docker compose --env-file .env.gluetun.example -f compose.gluetun.yaml config --quiet
           docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
+          docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
+          COMPOSE_PROFILES=example,port-sync docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
           sh tools/check-compose.sh
       - name: gluetun preflight
         # The wrapper runs inside gluetun's Alpine image: test it under the
@@ -198,7 +201,7 @@ jobs:
           sh tools/test-make-acceptance-predicate.sh
           sh tools/test-release-notes.sh
       - name: Bundle from the repository's Compose files
-        # The bundle built from the Compose files installs all three forms
+        # The bundle built from the Compose files installs all four forms
         # without a checkout.
         run: |
           digest=sha256:$(printf '0%.0s' $(seq 1 64))

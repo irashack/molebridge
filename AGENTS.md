@@ -68,9 +68,11 @@ never in a public issue or commit message.
   and `shellcheck` on the shell scripts (`routing/gluetun-preflight` and
   `tools/*.sh`); and `docker compose config` against `.env.example` (with
   `PROVIDER` set to each of `mullvad`, `pia` and `nordvpn`),
-  `compose.gluetun.yaml` against `.env.gluetun.example` and
-  `compose.sidecar.yaml` against `.env.sidecar.example` (`tools/check-compose.sh`
-  checks the trust boundary as Compose resolves it). Update the docs a change
+  `compose.gluetun.yaml` against `.env.gluetun.example`,
+  `compose.sidecar.yaml` against `.env.sidecar.example` and
+  `compose.native-sidecar.yaml` against `.env.native-sidecar.example`
+  (`tools/check-compose.sh` checks the trust boundary as Compose resolves it).
+  Update the docs a change
   affects in the same commit, and run `sh tools/check-doc-links.sh`.
 
 ## Writing docs
