@@ -272,3 +272,15 @@ func TestErrorsCarryNoRequestData(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+func TestResponseHeadersAreReturned(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Set-Cookie", "SID=abc; HttpOnly")
+		io.WriteString(w, "Ok.")
+	}))
+	defer server.Close()
+	response, err := Client{}.Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true})
+	if err != nil || response.Header.Get("Set-Cookie") != "SID=abc; HttpOnly" {
+		t.Errorf("%v %+v", err, response)
+	}
+}

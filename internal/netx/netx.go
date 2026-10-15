@@ -110,6 +110,8 @@ type Request struct {
 type Response struct {
 	Status int
 	Body   []byte
+	// Header holds the answer's headers (a caller reading Set-Cookie).
+	Header http.Header
 }
 
 // Client sends requests. The zero value is ready to use; it keeps no
@@ -214,7 +216,7 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 	if response.StatusCode >= 400 && !req.AnyStatus {
 		return Response{}, ErrStatus
 	}
-	return Response{Status: response.StatusCode, Body: raw}, nil
+	return Response{Status: response.StatusCode, Body: raw, Header: response.Header}, nil
 }
 
 func classify(ctx context.Context, err error) error {
