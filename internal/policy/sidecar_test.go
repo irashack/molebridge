@@ -40,7 +40,10 @@ func TestNativeSidecarClasses(t *testing.T) {
 			}
 		}
 		p.mark = s.Spec.Config.ControlMark
-		if cl := cls(p); cl.any || !cl.allows(Outcome{Kind: viaDev, Dev: hostIdx}) || cl.allows(Outcome{Kind: viaDev, Dev: exitIdx}) {
+		// The host is where it belongs; the tunnel is no escape either. Any
+		// other device is.
+		if cl := cls(p); cl.any || !cl.allows(Outcome{Kind: viaDev, Dev: hostIdx}) || !cl.allows(Outcome{Kind: viaDev, Dev: exitIdx}) ||
+			cl.allows(Outcome{Kind: viaDev, Dev: 9}) {
 			t.Fatalf("control: %+v", cl)
 		}
 		p.dst = lan // control traffic stays restricted even for a LAN destination
@@ -118,10 +121,11 @@ func TestNativeSidecarExitTableHostRouteIsAnEscape(t *testing.T) {
 				t.Fatalf("LAN/control host path: %v", outs)
 			}
 		}
-		// Control marked traffic is unsafe if main itself points at another device.
-		bad = s.WithRoute(rtnl.Route{Family: f, Table: rtnl.TableMain, Dst: zero(f), Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(exitIdx))})
+		// Control marked traffic is unsafe if main itself points at a device
+		// that is neither the host's nor the tunnel.
+		bad = s.WithRoute(rtnl.Route{Family: f, Table: rtnl.TableMain, Dst: zero(f), Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(9))})
 		if v := bad.Violations(); len(v) == 0 {
-			t.Fatal("control marked traffic may leave only through HOST_IF")
+			t.Fatal("control marked traffic may leave only through HOST_IF or the tunnel")
 		}
 	}
 }
