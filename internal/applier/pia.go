@@ -105,7 +105,7 @@ type PIAConfig struct {
 	// SecretsDir holds the username and password files (/run/secrets/pia).
 	SecretsDir string
 	// PortForward turns the optional forwarded port on; ForwardTarget is the
-	// overlay address it reaches.
+	// overlay address it reaches, empty for a sidecar's namespace.
 	PortForward   bool
 	ForwardTarget string
 	// Choose picks the index of the region's server to register on; random when
@@ -135,7 +135,11 @@ func NewPIAFromEnv(exit Exit, getenv func(string) string) (Provider, error) {
 		return nil, err
 	}
 	target := getenv("PIA_PORT_FORWARD_TARGET")
-	if forward {
+	if exit.Kind == "sidecar" {
+		if target != "" {
+			return nil, errors.New("PIA_PORT_FORWARD_TARGET is for the overlay kind; a sidecar's forwarded port reaches the namespace itself")
+		}
+	} else if forward {
 		// A forwarded port is useful only when it reaches a device, and a port
 		// with no destination would answer from the exit namespace.
 		address, perr := netip.ParseAddr(target)
@@ -427,11 +431,22 @@ func (p *piaProvider) register(ctx context.Context, a *Applier, region *provider
 		addresses[i] = address
 	}
 	peer, vip := addresses[0], addresses[1]
-	overlay, err := netip.ParsePrefix(a.exit.Overlay)
-	if err != nil {
-		return registration{}, errors.New("invalid overlay network")
+	var taken []netip.Prefix
+	if !a.nativeSidecar() {
+		overlay, err := netip.ParsePrefix(a.exit.Overlay)
+		if err != nil {
+			return registration{}, errors.New("invalid overlay network")
+		}
+		taken = append(taken, overlay)
+	} else {
+		// A tunnel address inside one of the applications' LAN networks
+		// would be routed to the host by the sidecar's LAN rule.
+		for _, text := range a.exit.LAN {
+			if network, err := netip.ParsePrefix(text); err == nil && network.Addr().Is4() {
+				taken = append(taken, network)
+			}
+		}
 	}
-	taken := []netip.Prefix{overlay}
 	namespace, err := a.sys.NamespaceIPv4Prefixes(ctx, a.exit.ExitIf)
 	if err != nil {
 		return registration{}, err
@@ -716,17 +731,21 @@ func (p *piaProvider) ReleaseSignature(a *Applier, why string) (string, bool) {
 }
 
 // BeforeTick keeps the tunnel's address and rules consistent, installs the
-// ingress guard and clears a leftover forwarding table, each retried every
+// ingress guard and clears a leftover forwarding table on an overlay, or
+// clears the native sidecar firewall's forwarded port. Each is retried every
 // tick until it succeeds.
 func (p *piaProvider) BeforeTick(ctx context.Context, a *Applier) {
 	_ = p.reconcileTunnel(ctx, a)
-	if !p.guardInstalled {
+	if a.nativeSidecar() {
+		// The exit installs the sidecar firewall before starting the applier.
+		p.guardInstalled = true
+	} else if !p.guardInstalled {
 		if err := a.sys.InstallIngressGuard(ctx); err == nil {
 			p.guardInstalled = true
 		}
 	}
 	if !p.forwardReconciled {
-		// A namespace that outlived the applier can still carry the table from
+		// A namespace that outlived the applier can still admit the port from
 		// an earlier run, perhaps one with forwarding on. Retried every tick
 		// until it succeeds.
 		if err := p.removeForwardRules(ctx, a); err == nil {
@@ -865,8 +884,8 @@ func (p *piaProvider) reconcileTunnel(ctx context.Context, a *Applier) error {
 // -- optional port forwarding ------------------------------------------------------------------
 
 // maintainForward keeps one forwarded port bound on the current server and
-// pointed at the configured overlay address. It runs only while the verdict on
-// the last published record is ok.
+// admitted in the sidecar namespace or pointed at the configured overlay
+// address. It runs only while the verdict on the last published record is ok.
 func (p *piaProvider) maintainForward(ctx context.Context, a *Applier) {
 	var last any
 	if p.lastResult != nil {
@@ -968,16 +987,25 @@ func (p *piaProvider) applyForwardRules(ctx context.Context, a *Applier, port in
 	if p.nftPort == port {
 		return nil
 	}
-	if err := a.sys.ApplyForwardRules(ctx, port, netip.MustParseAddr(p.cfg.ForwardTarget)); err != nil {
+	var err error
+	if a.nativeSidecar() {
+		err = a.sys.SetForwardedPort(ctx, port)
+	} else {
+		err = a.sys.ApplyForwardRules(ctx, port, netip.MustParseAddr(p.cfg.ForwardTarget))
+	}
+	if err != nil {
 		return err
 	}
 	p.nftPort = port
 	return nil
 }
 
-// removeForwardRules removes the forwarding table whether or not forwarding is
-// on now.
+// removeForwardRules removes the forwarding table or clears the native
+// sidecar firewall's forwarded port whether or not forwarding is on now.
 func (p *piaProvider) removeForwardRules(ctx context.Context, a *Applier) error {
 	p.nftPort = 0
+	if a.nativeSidecar() {
+		return a.sys.SetForwardedPort(ctx, 0)
+	}
 	return a.sys.RemoveForwardRules(ctx)
 }

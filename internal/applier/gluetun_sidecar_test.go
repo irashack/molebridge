@@ -20,8 +20,6 @@ func sidecarFixture(t testing.TB, provider string) *glFixture {
 
 func TestSidecarConfigurationRefusals(t *testing.T) {
 	for _, env := range []map[string]string{
-		{"EXIT_KIND": "sidecar", "TUNNEL_BACKEND": "wireguard"},
-		{"EXIT_KIND": "sidecar"},
 		{"EXIT_KIND": "sidecar", "TUNNEL_BACKEND": "gluetun", "EXIT_IF": "wg-0"},
 		{"EXIT_KIND": "exit", "TUNNEL_BACKEND": "gluetun", "OVERLAY_CIDR": "192.0.2.0/24"},
 	} {
@@ -37,15 +35,15 @@ func TestSidecarConfigurationRefusals(t *testing.T) {
 	}
 }
 
-func TestASidecarNeedsAGluetunProvider(t *testing.T) {
+func TestASidecarAcceptsANativeProvider(t *testing.T) {
 	k := newKernel(t)
 	k.exit.Kind = "sidecar"
-	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: NewNordVPN(), System: k}); err == nil {
-		t.Error("a sidecar with a native provider was accepted")
+	if _, err := New(Config{StateDir: t.TempDir(), Exit: k.exit, Provider: NewNordVPN(), System: k}); err != nil {
+		t.Errorf("a sidecar with a native provider was refused: %v", err)
 	}
 	getenv, _ := gluetunEnv(t, map[string]string{"OVERLAY_CIDR": ""})
 	if _, err := ProviderFor("nordvpn", Exit{Kind: "sidecar", ExitIf: "wg0"}, getenv); err != nil {
-		t.Errorf("the native provider is built, and New refuses it: %v", err)
+		t.Errorf("the native provider could not be built: %v", err)
 	}
 }
 

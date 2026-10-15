@@ -54,6 +54,14 @@ type System interface {
 	// return-path rules 94 and 98 are judged. The owner record is not part of
 	// it: the supervisor's lease is (decision D7).
 	RoutingStatus(ctx context.Context, family int, tunnelAddress string) (protected, fallback bool, err error)
+	// SidecarFirewall is whether the native sidecar's firewall (table inet
+	// molebridge_sidecar) is exactly as the exit installed it; reason says what
+	// differs. Native sidecar only.
+	SidecarFirewall(ctx context.Context) (ok bool, reason string, err error)
+	// SetForwardedPort reinstalls the native sidecar's firewall so that its input
+	// chain admits port (TCP and UDP) from the tunnel; 0 admits none. One queued
+	// job on the mutation owner, atomic like InstallIngressGuard.
+	SetForwardedPort(ctx context.Context, port int) error
 	// ReadSysctl returns the text of a /proc/sys file.
 	ReadSysctl(ctx context.Context, path string) (string, error)
 	// OverlayKernelWireGuard is whether the overlay interface exists and is a

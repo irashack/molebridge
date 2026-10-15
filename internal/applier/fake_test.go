@@ -75,6 +75,10 @@ type kernel struct {
 	fallbackMissing map[int]bool
 	rules           map[int][]Rule
 
+	sidecarFirewallOK  bool
+	sidecarFirewallErr error
+	forwardedPorts     []int
+
 	// WireGuard
 	keys             []string
 	endpoints        map[string]string
@@ -117,7 +121,7 @@ type kernel struct {
 }
 
 func newKernel(t testing.TB) *kernel {
-	k := &kernel{t: t, overlayPresent: true, overlayWG: true, netbirdChains: true, tunnelPresent: true,
+	k := &kernel{t: t, sidecarFirewallOK: true, overlayPresent: true, overlayWG: true, netbirdChains: true, tunnelPresent: true,
 		returnPath: "1\n", keys: []string{testKey}, age: 1, egressOK: true, publicKey: otherKey,
 		exit:       Exit{ExitIf: testExitIf, OverlayIf: testOverlay, Table: testTable, Overlay: testOverlay4, Kind: "overlay"},
 		routeFault: map[int]bool{}, routeMissing: map[int]bool{}, fallbackMissing: map[int]bool{},
@@ -627,6 +631,19 @@ func (k *kernel) nft(what string) error {
 		return errInjected
 	}
 	k.nftOps = append(k.nftOps, what)
+	return nil
+}
+
+func (k *kernel) SidecarFirewall(context.Context) (bool, string, error) {
+	k.record("SidecarFirewall")
+	return k.sidecarFirewallOK, "injected difference", k.sidecarFirewallErr
+}
+
+func (k *kernel) SetForwardedPort(_ context.Context, port int) error {
+	if err := k.nft(fmt.Sprintf("sidecar-port %d", port)); err != nil {
+		return err
+	}
+	k.forwardedPorts = append(k.forwardedPorts, port)
 	return nil
 }
 

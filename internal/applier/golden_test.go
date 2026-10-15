@@ -124,14 +124,15 @@ func TestRecordsMatchThePythonApplierByteForByte(t *testing.T) {
 		t.Errorf("%d scenarios, %d golden records", len(scenarios), len(golden))
 	}
 	for name, run := range scenarios {
-		want, ok := golden[name]
-		if !ok {
-			t.Errorf("%s: no golden record", name)
-			continue
-		}
-		a, r := run(t)
-		if got := recordText(t, a, r); got != normalized(want) {
-			t.Errorf("%s differs:\n go: %s\npy: %s", name, got, normalized(want))
-		}
+		t.Run(name, func(t *testing.T) {
+			want, ok := golden[name]
+			if !ok {
+				t.Fatalf("%s: no golden record", name)
+			}
+			a, r := run(t)
+			if got := recordText(t, a, r); got != normalized(want) {
+				t.Errorf("%s differs:\n go: %s\npy: %s", name, got, normalized(want))
+			}
+		})
 	}
 }

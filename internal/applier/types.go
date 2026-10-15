@@ -55,9 +55,10 @@ var SwitchTimeoutSec = float64(state.SwitchTimeouts["native"])
 const (
 	NetbirdModeFailed = "NetBird is not running kernel WireGuard with its kernel firewall on the overlay " +
 		"interface; see the troubleshooting guide."
-	RoutingFailed  = "Routing protection is incomplete; see docs/operations.md#recovery."
-	InvalidDesired = "Invalid desired-state file; no change applied."
-	Unlisted       = "Requested server is not in a fresh trusted relay catalogue; no change applied."
+	SidecarFirewallFailed = "Sidecar firewall protection is incomplete; see docs/operations.md#recovery."
+	RoutingFailed         = "Routing protection is incomplete; see docs/operations.md#recovery."
+	InvalidDesired        = "Invalid desired-state file; no change applied."
+	Unlisted              = "Requested server is not in a fresh trusted relay catalogue; no change applied."
 	// EgressFailedMessage is what an inspection says when a call failed.
 	EgressFailedMessage = "Tunnel inspection or egress check failed."
 )
@@ -101,6 +102,9 @@ type Exit struct {
 	ExitIf, OverlayIf, Table string
 	// Overlay is the IPv4 overlay network in CIDR form.
 	Overlay string
+	// LAN are a native sidecar's SIDECAR_LAN_CIDRS in CIDR form: the
+	// networks its applications reach outside the tunnel.
+	LAN []string
 	// Kind is "overlay" (a NetBird exit) or "sidecar" (an ordinary gluetun
 	// other containers share).
 	Kind string
