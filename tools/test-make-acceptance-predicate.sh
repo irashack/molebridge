@@ -13,9 +13,9 @@ pass() { echo "PASS $1"; }
 hex=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 commit=1234567890abcdef1234567890abcdef12345678
 cat > "$work/coverage.json" <<'EOM'
-{"platforms":["podman-rootless-quadlet"],
- "providers":["mullvad","pia","nordvpn"],"kinds":["native","gluetun","sidecar"],
- "drills":[{"id":"ci-namespace-drills","result":"passed"},{"id":"live-drift-repair","result":"passed","note":"13-23 ms"},{"id":"lease-lapse","result":"passed"},{"id":"tunnel-loss","result":"passed"},{"id":"upgrade-from-0.7","result":"passed"}]}
+{"platforms":["podman-rootless-quadlet","kubernetes"],
+ "providers":["mullvad","pia","nordvpn"],"kinds":["native","gluetun","sidecar","native-sidecar"],
+ "drills":[{"id":"ci-namespace-drills","result":"passed"},{"id":"live-drift-repair","result":"passed","note":"13-23 ms"},{"id":"lease-lapse","result":"passed"},{"id":"tunnel-loss","result":"passed"},{"id":"upgrade-from-0.8","result":"passed"}]}
 EOM
 echo '["https://example.net/evidence/1","run 42 notes"]' > "$work/evidence.json"
 
