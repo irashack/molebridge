@@ -85,21 +85,12 @@ func Healthy(path string, clock bootclock.Clock) (bool, string) {
 	return true, ""
 }
 
-// netNamespace names the caller's network namespace as the kernel does
-// ("net:[4026532001]"), or "" when it can't be read.
-func netNamespace() string {
-	name, err := os.Readlink("/proc/self/ns/net")
-	if err != nil {
-		return ""
-	}
-	return name
-}
-
 // writeGuarded records, atomically, that a native sidecar's guards held just
 // now, in this network namespace: "molebridge-guarded 1 <boot id> <netns>
 // <boot-clock nanoseconds>". The namespace binds the evidence to the guards
 // it is about: a file that outlived its namespace (a pod's emptyDir across a
-// sandbox recreation) proves nothing about the new one.
+// sandbox recreation) proves nothing about the new one. netNamespace names it
+// by its cookie, which the kernel never reuses within a boot.
 func writeGuarded(path string, now time.Duration) error {
 	ns := netNamespace()
 	if ns == "" {

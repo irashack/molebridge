@@ -62,7 +62,8 @@ changes for the overlay kinds and the gluetun sidecar.
   while the native sidecar's guard heartbeat, which the worker renews every 2
   seconds while the firewall reads back as installed and the routing contract
   holds, whether or not the tunnel is up, is at most 15 seconds old and was
-  written in the same network namespace as the check runs in. In a
+  written in the same network namespace as the check runs in (named by the
+  kernel's namespace cookie; before 5.14, by its reusable inode number). In a
   Kubernetes pod it is the exit's required startup probe: without one, the
   application containers start as soon as the exit process runs, before the
   firewall and the rules exist ([the startup

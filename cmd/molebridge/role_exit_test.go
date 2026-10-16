@@ -113,9 +113,9 @@ func TestHealthRoleGuarded(t *testing.T) {
 	if err != nil {
 		t.Skip("no boot id here")
 	}
-	ns, err := os.Readlink("/proc/self/ns/net")
-	if err != nil {
-		t.Skip("no network namespace link here")
+	ns := exit.NetNamespace()
+	if ns == "" {
+		t.Skip("no network namespace here")
 	}
 	line := fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", strings.TrimSpace(string(boot)), ns, int64(bootclock.System()()))
 	if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "guarded"), []byte(line), 0o644); err != nil {
@@ -138,6 +138,18 @@ func TestHealthRoleGuarded(t *testing.T) {
 	stdout.Reset()
 	if code := healthMain([]string{"--guarded"}, env, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "another network namespace") {
 		t.Errorf("another namespace's evidence: %d %q", code, stdout.String())
+	}
+	// Where the kernel has namespace cookies, this namespace's inode number
+	// is not enough: a destroyed namespace's number is given to new ones.
+	if inode, err := os.Readlink("/proc/self/ns/net"); err == nil && strings.HasPrefix(ns, "netns-cookie:") {
+		recycled := fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", strings.TrimSpace(string(boot)), inode, int64(bootclock.System()()))
+		if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "guarded"), []byte(recycled), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		stdout.Reset()
+		if code := healthMain([]string{"--guarded"}, env, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "another network namespace") {
+			t.Errorf("evidence naming the namespace by its inode number: %d %q", code, stdout.String())
+		}
 	}
 	if code := healthMain([]string{"--guarded", "x"}, env, &stdout, &stderr); code != 2 {
 		t.Errorf("usage: %d", code)

@@ -706,9 +706,15 @@ Read the exit's log with `kubectl logs downloader -c exit` and its verdict with
 firewall reads back as installed and the routing contract holds, whether or not
 the tunnel is up. The check passes while that heartbeat is at most 15 seconds
 old and was written in the same network namespace as the check runs in: the
-heartbeat records the namespace (`/proc/self/ns/net`), because a pod's `/run`
-volume can outlive its network namespace when Kubernetes recreates the pod's
-sandbox, and the guards of the old namespace say nothing about the new one.
+heartbeat records the namespace, because a pod's `/run` volume can outlive its
+network namespace when Kubernetes recreates the pod's sandbox, and the guards
+of the old namespace say nothing about the new one. It names the namespace by
+the kernel's namespace cookie, which is never reused within a boot. Kernels
+before 5.14 have no cookie, and there it falls back to the inode number of
+`/proc/self/ns/net`, which the kernel can give a new namespace once the old
+one is gone: on such a kernel a sandbox recreated within those 15 seconds can
+pass the check before the worker has removed the old heartbeat. Use 5.14 or
+later for Kubernetes.
 The worker also removes the file before it installs anything. Before the first
 heartbeat the check prints `unhealthy: no guard heartbeat yet` and exits 1;
 another namespace's prints `unhealthy: the guard heartbeat is from another
