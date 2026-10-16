@@ -53,10 +53,16 @@ changes for the overlay kinds and the gluetun sidecar.
 - PIA's port forwarding works in a sidecar without a target: the firewall's input
   chain admits the forwarded port, and `forwarded_port` in `result.json` and
   Diagnostics shows it ([port forwarding](docs/native-sidecar.md#port-forwarding)).
+- `compose.native-sidecar.yaml`'s example application has `restart: "no"`: after a
+  reboot the engine starts restarting containers without waiting for
+  `depends_on`, which would let an application run before the guards exist.
+  Start the stack at boot with `docker compose up -d --wait`
+  ([starting at boot](docs/native-sidecar.md#starting-at-boot)).
 - `molebridge health --guarded` (usage: `molebridge health [--guarded]`): passes
   while the native sidecar's guard heartbeat, which the worker renews every 2
   seconds while the firewall reads back as installed and the routing contract
-  holds, whether or not the tunnel is up, is at most 15 seconds old. In a
+  holds, whether or not the tunnel is up, is at most 15 seconds old and was
+  written in the same network namespace as the check runs in. In a
   Kubernetes pod it is the exit's required startup probe: without one, the
   application containers start as soon as the exit process runs, before the
   firewall and the rules exist ([the startup

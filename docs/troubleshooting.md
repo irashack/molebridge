@@ -268,8 +268,10 @@ with Cilium this form was tested against, pods had `all=0` and `eth0=2`.
 **A Kubernetes pod stays in `Init` and the application never starts, or the exit
 is restarted during its startup probe.** The startup probe `molebridge health
 --guarded` prints `unhealthy: <reason>` and exits 1 until the worker has
-installed the firewall and the routing contract; `no heartbeat yet` means it
-hasn't yet. Read the exit's log with `kubectl logs <pod> -c exit` for the install
+installed the firewall and the routing contract; `no guard heartbeat yet`
+means it hasn't yet, and `the guard heartbeat is from another network
+namespace` that the file on `/run` is an earlier sandbox's (the new worker
+removes it and writes its own once the guards are in). Read the exit's log with `kubectl logs <pod> -c exit` for the install
 errors above. A probe with too few failures allowed (the example allows 30 at 2
 seconds apart) restarts the exit before it finishes. A usage line,
 `usage: molebridge health [--guarded]`, means the probe's command has another

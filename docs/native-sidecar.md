@@ -504,6 +504,43 @@ needed.
    ([operations](operations.md#checking-that-containers-share-gluetuns-namespace))
    after every start, recreation or reboot.
 
+### Starting at boot
+
+`depends_on` with `condition: service_healthy` holds your applications back
+only when `docker compose up` starts them. After a reboot or an engine
+restart, Docker starts every `restart: unless-stopped` or `restart: always`
+container by itself, without waiting for anything, and an application that
+shares the exit's namespace can then run before the exit has installed its
+firewall and rules, while the namespace still has the host's routes. Nothing
+keeps its traffic in the tunnel in that window.
+
+So give your applications `restart: "no"`, as `example-app` has, and start
+the stack at boot with Compose, which waits for the exit to be healthy. The
+exit and `port-sync` keep `unless-stopped` (port-sync only reads a file and
+talks to the namespace's loopback). For example, a systemd unit:
+
+```ini
+[Unit]
+Description=Molebridge native sidecar and its applications
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/path/to/molebridge
+ExecStart=/usr/bin/docker compose up -d --wait
+
+[Install]
+WantedBy=multi-user.target
+```
+
+With Podman and Quadlet units, give each application's unit `Requires=` and
+`After=` on the exit's, and an `ExecStartPre=` that waits for
+`molebridge health --guarded` in the exit container
+([the startup gate](#the-startup-gate)). Neither form has been tested at boot
+([testing](testing.md#090)).
+
 ## Kubernetes
 
 The example runs the exit as a Kubernetes sidecar container beside an
@@ -668,10 +705,17 @@ Read the exit's log with `kubectl logs downloader -c exit` and its verdict with
 `/run/molebridge/guarded`. The worker renews it every 2 seconds while the
 firewall reads back as installed and the routing contract holds, whether or not
 the tunnel is up. The check passes while that heartbeat is at most 15 seconds
-old. Before the first one it prints `unhealthy: no heartbeat yet` and exits 1; an
-unknown argument prints `usage: molebridge health [--guarded]` and exits 2. The
-heartbeat stops when the firewall or the contract no longer holds, and it is
-not removed when the exit stops, so it goes stale 15 seconds later.
+old and was written in the same network namespace as the check runs in: the
+heartbeat records the namespace (`/proc/self/ns/net`), because a pod's `/run`
+volume can outlive its network namespace when Kubernetes recreates the pod's
+sandbox, and the guards of the old namespace say nothing about the new one.
+The worker also removes the file before it installs anything. Before the first
+heartbeat the check prints `unhealthy: no guard heartbeat yet` and exits 1;
+another namespace's prints `unhealthy: the guard heartbeat is from another
+network namespace`; an unknown argument prints `usage: molebridge health
+[--guarded]` and exits 2. The heartbeat stops when the firewall or the
+contract no longer holds, and it is not removed when the exit stops, so it
+goes stale 15 seconds later.
 
 Plain `molebridge health` also needs the tunnel interface and a completed
 check, so it waits for the provider as well. As a startup probe that is the
@@ -682,7 +726,9 @@ path, which is what has to be true before the application starts.
 
 Under Compose the applications' `depends_on` with `condition:
 service_healthy` stays on the full health check. It waits for the tunnel as
-well, so the applications start only after the guards are in place too.
+well, so the applications start only after the guards are in place too, when
+Compose starts them: see [starting at boot](#starting-at-boot) for what the
+engine does after a reboot.
 
 ## Recovery
 

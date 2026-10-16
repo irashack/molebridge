@@ -263,6 +263,8 @@ ok nsc "the applications share the exit's namespace, hardened, with no capabilit
   '"$defs"' [.services["example-app"], .services["port-sync"] |
   .network_mode == "service:exit" and hardened and jsonlog and (has("cap_add") | not) and (has("sysctls") | not) and
   .ports == null and .depends_on.exit.restart == true] | length == 2 and all'
+ok nsc "the example application is not restarted by the engine (a reboot would start it before the guards)" '
+  .services["example-app"].restart == "no"'
 ok nsc "the example application is pinned, only sleeps, mounts nothing and waits for a healthy exit" '
   .services["example-app"] as $a |
   ($a.image | test("^docker.io/library/busybox:[0-9.]+@sha256:[0-9a-f]{64}$")) and

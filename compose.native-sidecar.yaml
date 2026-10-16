@@ -119,7 +119,14 @@ services:
     profiles: [example]
     image: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-example-app"
-    restart: unless-stopped
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run before the exit has installed its firewall and
+    # rules, with the host's routes open to it. Start the stack at boot with
+    # `docker compose up -d`, which waits for the exit to be healthy
+    # (docs/native-sidecar.md#starting-at-boot). Give your applications the
+    # same policy.
+    restart: "no"
     network_mode: service:exit
     init: true
     command: ["sleep", "2147483647"]
