@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.9.0 — unreleased
+## 0.9.0 — 2026-10-16
 
 **Experimental.** The native sidecar: an exit that other containers share, with
 a tunnel Molebridge builds itself, and a routing contract and a firewall of its

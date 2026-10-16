@@ -99,6 +99,36 @@ The acceptance policy for 0.9.0 (`tools/acceptance-policy.json`) names a
 Kubernetes platform and a native-sidecar kind, with an upgrade from 0.8 as one of
 its drills.
 
+#### v0.9.0-rc.2, 2026-10-16
+
+The candidate `ghcr.io/irashack/molebridge:v0.9.0-rc.2`, index digest
+`sha256:812801af2fae2df9f185475ad84197ebcd914ddf9a1826f5851eae142e610048`
+(commit `bf8c5fc`: rc.1 and the `port-sync` login fix below), signature
+verified with cosign, on the same host, replacing rc.1 on every project with
+no setting changed. Every project came back healthy with its required checks
+passing.
+
+- **port-sync**, live against qBittorrent 5.2.4: on a fresh start it logged
+  `no forwarded port yet`, then `qBittorrent listens on 37336; set to 51583`
+  once PIA forwarded a port; a TCP connection from the host's own uplink to
+  PIA's exit address and that port reached qBittorrent.
+- **Drift** on the native overlay exits (Mullvad, PIA, NordVPN), as at rc.1:
+  repaired in 10 to 13 ms.
+- **Tunnel loss** on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.8 to 1.4 s); a fresh verified egress
+  1.3 to 8.2 s after the deletion.
+- **Lease lapse** on NordVPN: NetBird stopped 32.3 s after the worker froze,
+  the exit stopped with exit 1 and the guards in place, and it reported a
+  verified egress 104.8 s after the freeze.
+- **The native sidecar in its pod**: IPv4 rules 97, 96 and 88 and IPv6 rule
+  97 deleted one at a time were back in 7 to 9 ms; the firewall's main table
+  deleted was back in 0.9 s and its backstop in 2.0 s (one 2-second check),
+  the other table enforcing meanwhile; nothing in the pod restarted.
+- **A recreated pod sandbox**, between rc.1 and rc.2 (a CNI change on the
+  node restarted the pod): the new network namespace had only `eth0`, `lo`
+  and the tunnel, `molebridge health --guarded` passed before qBittorrent
+  started, and the exit reported `ok`.
+
 #### v0.9.0-rc.1, 2026-10-16
 
 The candidate `ghcr.io/irashack/molebridge:v0.9.0-rc.1`, index digest
