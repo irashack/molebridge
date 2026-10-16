@@ -45,6 +45,11 @@ The new drills, for the native sidecar:
 - At packet level: an unmarked socket bound to the host interface is dropped;
   LAN and control-marked sends pass; the tunnel passes; inbound on the tunnel to a
   port other than the forwarded one is dropped.
+- With the DNS rules (`SIDECAR_HOST_RESOLVERS` set): an unmarked UDP send to a LAN
+  address on port 53 or 853 is refused and never arrives, one to port 54
+  arrives, a control-marked send to port 53 arrives, and a send into the tunnel
+  on port 53 leaves. A firewall installed without the rules reads back as
+  different.
 - IPv6 on the host link, with the firewall's ICMPv6 rule (neighbour discovery
   only; see [the firewall](native-sidecar.md#the-firewall)), on the same kernel
   and container as the drills above:
@@ -68,6 +73,10 @@ The new drills, for the native sidecar:
   - `molebridge health --guarded` passes once the guards are in;
   - unbound and `eth0`-bound pings to a destination outside the LAN prefix
     never arrive outside, and the LAN gateway answers;
+  - with `SIDECAR_HOST_RESOLVERS` naming the LAN gateway, an application's UDP
+    to it on port 53 or 853 is refused and nothing arrives on 853, while the
+    exit's own lookups reach it on 53 by the host path, whatever the
+    namespace's `/etc/resolv.conf` names;
   - the tunnel's handshake leaves by the host path, through its fwmark;
   - a deleted firewall table is reinstalled and the reinstall is logged, and
     the namespace has both tables (`inet molebridge_sidecar` and
@@ -98,16 +107,19 @@ its drills.
 - Any native sidecar on a live host: the Kubernetes acceptance above is not
   recorded yet.
 - Docker Engine and podman-compose. `compose.native-sidecar.yaml` has not been run
-  on any engine, and has not yet been through `docker compose config`.
+  on any engine; it has been through `docker compose config` (above).
 - Mullvad and NordVPN as native sidecars, live. PIA is the reason for the form.
 - A live run against PIA's port forwarding as a native sidecar, until the
   acceptance records it. PIA port forwarding has not been tested against PIA at
   any version.
 - `molebridge port-sync` against a running qBittorrent.
-- DNS: which resolvers an application's namespace uses under Docker and under
-  Kubernetes, and what a leak test shows.
-- staticcheck, govulncheck, shellcheck and `docker compose config` on the 0.9.0
-  code (CI runs them).
+- DNS on a live engine: which resolvers an application's namespace uses under
+  Docker, and what a leak test shows on either platform until the acceptance
+  records it. `SIDECAR_HOST_RESOLVERS`'s resolver override has unit tests
+  (several resolvers, a truncated answer retried over TCP) and the drills above.
+- shellcheck on the 0.9.0 scripts (CI runs it). staticcheck, govulncheck, the
+  panel's script tests and `tools/check-compose.sh` (with the standalone Docker
+  Compose 2.39.4) ran locally on the 0.9.0 branch and passed.
 - Everything in the [0.8.0 list](#not-tested-at-080) that applies to the other
   forms.
 
