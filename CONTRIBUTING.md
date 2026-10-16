@@ -52,7 +52,7 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   strict I/O, validation, HTTP client and boot clock.
 - `internal/drill/` and `internal/nstest/` are the namespace drills (below).
 - `routing/gluetun-preflight` is the one runtime shell script: it runs inside gluetun's
-  container. `tools/` holds the release and image scripts (`make-bundle.sh`,
+  container. `routing/embed.go` embeds it in the binary for the `gluetun-preflight` tool. `tools/` holds the release and image scripts (`make-bundle.sh`,
   `check-bundle.sh`, `check-image.sh`, `check-compose.sh`, `release-notes.sh` and the
   acceptance tooling) and `tools/fixtures/` the data tests share.
 - `compose.yaml`, `compose.gluetun.yaml`, `compose.sidecar.yaml` and

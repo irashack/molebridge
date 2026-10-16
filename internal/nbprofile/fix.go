@@ -32,13 +32,29 @@ type FixOptions struct {
 	beforeRename func()
 }
 
-// FixResult says what FixBlacklist did.
+// FixRequest is what FixProfile changes besides adding the tunnel interface.
+type FixRequest struct {
+	// Add are more interfaces to exclude from NetBird's connection
+	// candidates, such as the host interface of a runtime the peer moved to.
+	Add []string
+	// ClearExternalIPMap empties NATExternalIPs, the addresses `netbird up
+	// --external-ip-map` stored, which a peer that moved runtime no longer has.
+	ClearExternalIPMap bool
+}
+
+// FixResult says what FixBlacklist or FixProfile did.
 type FixResult struct {
 	// Path is the profile it examined.
 	Path string
-	// Changed is false when the tunnel interface was already excluded and
-	// nothing was written.
+	// Changed is false when the tunnel interface (and every requested
+	// interface) was already excluded, no external-IP map needed clearing,
+	// and nothing was written.
 	Changed bool
+	// Added are the interfaces written to IFaceBlackList, in order.
+	Added []string
+	// ClearedExternalIPMap is true when NATExternalIPs held entries and was
+	// emptied.
+	ClearedExternalIPMap bool
 }
 
 func ownerOf(fi fs.FileInfo) (int, int, bool) {
@@ -124,6 +140,21 @@ func FixBlacklist(p Paths, tunnelIF string) (FixResult, error) {
 
 // FixBlacklistWith is FixBlacklist with injected system calls.
 func FixBlacklistWith(p Paths, tunnelIF string, o FixOptions) (FixResult, error) {
+	return FixProfileWith(p, tunnelIF, FixRequest{}, o)
+}
+
+// FixProfile is FixBlacklist that also adds the interfaces in r.Add and, with
+// r.ClearExternalIPMap, empties NATExternalIPs: the edits a peer moved to
+// another runtime needs. It refuses as FixBlacklist does, and also when an
+// interface name in r.Add is invalid or NATExternalIPs is not a list of
+// strings (both checked only with r.ClearExternalIPMap); NATExternalIPs that is
+// absent, null or empty is left alone.
+func FixProfile(p Paths, tunnelIF string, r FixRequest) (FixResult, error) {
+	return FixProfileWith(p, tunnelIF, r, FixOptions{})
+}
+
+// FixProfileWith is FixProfile with injected system calls.
+func FixProfileWith(p Paths, tunnelIF string, r FixRequest, o FixOptions) (FixResult, error) {
 	if o.Fchown == nil {
 		o.Fchown = func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) }
 	}
@@ -135,6 +166,11 @@ func FixBlacklistWith(p Paths, tunnelIF string, o FixOptions) (FixResult, error)
 	}
 	if err := checkTunnelName(tunnelIF); err != nil {
 		return FixResult{}, err
+	}
+	for _, name := range r.Add {
+		if !ValidInterfaceName(name) {
+			return FixResult{}, fixErr("the interface name to add is invalid (--add)")
+		}
 	}
 	if why, seen := daemonVisible(p, o); seen {
 		return FixResult{}, fixErr("%s; stop the exit first", why)
@@ -169,25 +205,96 @@ func FixBlacklistWith(p Paths, tunnelIF string, o FixOptions) (FixResult, error)
 	if !ok {
 		return res, fixErr("the stored NetBird profile %s has an IFaceBlackList that is not a list of strings", path)
 	}
+	held := false
+	if r.ClearExternalIPMap {
+		if len(l.root.lookup("natexternalips")) > 1 {
+			return res, fixErr("the stored NetBird profile %s repeats a field in another case", path)
+		}
+		if held, ok = externalIPMapOf(l); !ok {
+			return res, fixErr("the stored NetBird profile %s has a NATExternalIPs that is not a list of strings", path)
+		}
+	}
 	// Already excluded as NetBird's filter reads the list (an entry that is a
-	// prefix of the name, filter.go:13-35): nothing to do.
-	if covers(st.entries, tunnelIF) {
+	// prefix of the name, filter.go:13-35) needs nothing.
+	var add []string
+	for _, name := range append([]string{tunnelIF}, r.Add...) {
+		if !covers(st.entries, name) && !contains(add, name) {
+			add = append(add, name)
+		}
+	}
+	clear := held
+	if len(add) == 0 && !clear {
 		return res, nil
 	}
-	out, err := spliceBlacklist(l, st, tunnelIF)
-	if err != nil {
-		return res, err
+	out := l.data
+	if len(add) > 0 {
+		var err error
+		if out, err = spliceBlacklist(l, st, add); err != nil {
+			return res, err
+		}
+	}
+	if clear {
+		var err error
+		if out, err = clearExternalIPMap(out); err != nil {
+			return res, err
+		}
 	}
 	if err := replaceFile(path, l, out, o); err != nil {
 		return res, err
 	}
-	res.Changed = true
+	res.Changed, res.Added, res.ClearedExternalIPMap = true, add, clear
 	return res, nil
 }
 
-// spliceBlacklist returns the profile text with the tunnel interface added to
-// IFaceBlackList. Only one span of l.data is replaced or inserted into.
-func spliceBlacklist(l loaded, st listState, tunnel string) ([]byte, error) {
+// externalIPMapOf reports whether the root's NATExternalIPs holds entries,
+// and false in ok when it is something other than absent, null or a list of
+// strings.
+func externalIPMapOf(l loaded) (held, ok bool) {
+	idx := l.root.lookup("natexternalips")
+	if len(idx) == 0 {
+		return false, true
+	}
+	m := l.root.members[idx[0]]
+	switch m.kind {
+	case kindNull:
+		return false, true
+	case kindArray:
+		entries, _, ok := stringArray(l.data, m)
+		return ok && len(entries) > 0, ok
+	}
+	return false, false
+}
+
+// clearExternalIPMap returns data with NATExternalIPs' value replaced by an
+// empty list, and checks the result.
+func clearExternalIPMap(data []byte) ([]byte, error) {
+	root, err := scan(data, true)
+	if err != nil {
+		return nil, fixErr("internal error: the edited profile would not be valid JSON")
+	}
+	idx := root.lookup("natexternalips")
+	if len(idx) != 1 {
+		return nil, fixErr("internal error: the edited profile has no NATExternalIPs to clear")
+	}
+	m := root.members[idx[0]]
+	out := make([]byte, 0, len(data))
+	out = append(out, data[:m.valStart]...)
+	out = append(out, "[]"...)
+	out = append(out, data[m.valEnd:]...)
+	again, err := scan(out, true)
+	if err != nil || len(again.members) != len(root.members) {
+		return nil, fixErr("internal error: the edited profile would not be valid JSON")
+	}
+	if held, ok := externalIPMapOf(loaded{data: out, root: again}); !ok || held {
+		return nil, fixErr("internal error: the edited profile would keep NATExternalIPs")
+	}
+	return out, nil
+}
+
+// spliceBlacklist returns the profile text with the interfaces in add (none
+// already present) appended to IFaceBlackList. Only one span of l.data is
+// replaced or inserted into.
+func spliceBlacklist(l loaded, st listState, add []string) ([]byte, error) {
 	data, root := l.data, l.root
 	unit, sep := styleOf(data, root)
 	var start, end int
@@ -202,20 +309,23 @@ func spliceBlacklist(l loaded, st listState, tunnel string) ([]byte, error) {
 		if lead == "" && len(st.elems) == 1 {
 			lead = sep
 		}
-		start, end, repl = last.end, last.end, ","+lead+quote(tunnel)
+		start, end = last.end, last.end
+		for _, name := range add {
+			repl += "," + lead + quote(name)
+		}
 	case st.member >= 0:
 		// Null or empty: NetBird would fill its defaults, so write them.
 		m := root.members[st.member]
 		lead := leadBefore(data, m.keyStart)
 		start, end = m.valStart, m.valEnd
-		repl = arrayText(withTunnel(DefaultInterfaceBlacklist(), tunnel), lead, unit, sep)
+		repl = arrayText(withEntries(DefaultInterfaceBlacklist(), add), lead, unit, sep)
 	case len(root.members) > 0:
 		last := root.members[len(root.members)-1]
 		lead := leadBefore(data, last.keyStart)
 		colon := string(data[last.keyEnd:last.valStart])
 		start, end = last.valEnd, last.valEnd
 		repl = "," + lead + quote("IFaceBlackList") + colon +
-			arrayText(withTunnel(DefaultInterfaceBlacklist(), tunnel), lead, unit, sep)
+			arrayText(withEntries(DefaultInterfaceBlacklist(), add), lead, unit, sep)
 	default:
 		// An empty root object.
 		inner := string(data[root.open+1 : root.close])
@@ -228,7 +338,7 @@ func spliceBlacklist(l loaded, st listState, tunnel string) ([]byte, error) {
 		}
 		start, end = root.open+1, root.open+1
 		repl = lead + quote("IFaceBlackList") + ":" + sep +
-			arrayText(withTunnel(DefaultInterfaceBlacklist(), tunnel), lead, unit, sep)
+			arrayText(withEntries(DefaultInterfaceBlacklist(), add), lead, unit, sep)
 	}
 
 	out := make([]byte, 0, len(data)+len(repl))
@@ -243,8 +353,13 @@ func spliceBlacklist(l loaded, st listState, tunnel string) ([]byte, error) {
 		return nil, fixErr("internal error: the edited profile would not be valid JSON")
 	}
 	chk, ok := blacklistOf(loaded{data: out, root: again})
-	if !ok || !contains(chk.entries, tunnel) || len(again.members) < len(root.members) {
+	if !ok || len(again.members) < len(root.members) {
 		return nil, fixErr("internal error: the edited profile would not hold the entry")
+	}
+	for _, name := range add {
+		if !contains(chk.entries, name) {
+			return nil, fixErr("internal error: the edited profile would not hold the entry")
+		}
 	}
 	for _, old := range st.entries {
 		if !contains(chk.entries, old) {
@@ -254,9 +369,11 @@ func spliceBlacklist(l loaded, st listState, tunnel string) ([]byte, error) {
 	return out, nil
 }
 
-func withTunnel(list []string, tunnel string) []string {
-	if !contains(list, tunnel) {
-		list = append(list, tunnel)
+func withEntries(list []string, add []string) []string {
+	for _, name := range add {
+		if !contains(list, name) {
+			list = append(list, name)
+		}
 	}
 	return list
 }

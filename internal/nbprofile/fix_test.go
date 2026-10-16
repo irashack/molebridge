@@ -598,7 +598,7 @@ func FuzzFixBlacklistSplice(f *testing.F) {
 		if !ok || covers(st.entries, "mullvad") {
 			return
 		}
-		out, err := spliceBlacklist(l, st, "mullvad")
+		out, err := spliceBlacklist(l, st, []string{"mullvad"})
 		if err != nil {
 			t.Fatalf("splice failed on valid input %q: %v", data, err)
 		}
@@ -619,4 +619,141 @@ func FuzzFixBlacklistSplice(f *testing.F) {
 			t.Fatalf("the first byte changed: %q -> %q", data, out)
 		}
 	})
+}
+
+// New in 0.9.1: the edits for a peer that moved to another runtime.
+
+func TestFixProfileAddsMoreInterfacesInOrder(t *testing.T) {
+	for _, c := range []struct {
+		list string
+		add  []string
+		want string
+	}{
+		{`["wt0"]`, []string{"eth0"}, `["wt0", "mullvad", "eth0"]`},
+		{`["wt0", "mullvad"]`, []string{"eth0", "net1"}, `["wt0", "mullvad", "eth0", "net1"]`},
+		{`["wt0", "mullvad", "eth"]`, []string{"eth0"}, `["wt0", "mullvad", "eth"]`},
+		{`["wt0", "mullvad"]`, []string{"eth0", "eth0", "mullvad"}, `["wt0", "mullvad", "eth0"]`},
+	} {
+		f := newFixture(t)
+		path := f.write("default.json", listProfile(c.list))
+		res, err := FixProfileWith(f.paths, "mullvad", FixRequest{Add: c.add}, fixOpts())
+		if err != nil || res.Changed != (c.want != c.list) {
+			t.Errorf("%s + %v: %+v, %v", c.list, c.add, res, err)
+			continue
+		}
+		if got, _ := os.ReadFile(path); string(got) != listProfile(c.want) {
+			t.Errorf("%s + %v:\n%s", c.list, c.add, got)
+		}
+	}
+	// An empty list gets NetBird's defaults, then the tunnel and the extra.
+	f := newFixture(t)
+	path := f.write("default.json", "{\"IFaceBlackList\":[]}")
+	res, err := FixProfileWith(f.paths, "mullvad", FixRequest{Add: []string{"eth0"}}, fixOpts())
+	if err != nil || !reflect.DeepEqual(res.Added, []string{"mullvad", "eth0"}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	var got struct{ IFaceBlackList []string }
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := append(DefaultInterfaceBlacklist(), "mullvad", "eth0"); !reflect.DeepEqual(got.IFaceBlackList, want) {
+		t.Errorf("%v", got.IFaceBlackList)
+	}
+}
+
+func TestFixProfileRefusesAnInvalidInterfaceToAdd(t *testing.T) {
+	f := newFixture(t)
+	text := listProfile(`["wt0"]`)
+	path := f.write("default.json", text)
+	for _, name := range []string{"", "a/b", "eth 0", "abcdefghijklmnopq"} {
+		if _, err := FixProfileWith(f.paths, "mullvad", FixRequest{Add: []string{name}}, fixOpts()); err == nil ||
+			!strings.Contains(err.Error(), "--add") {
+			t.Errorf("%q: %v", name, err)
+		}
+	}
+	if got, _ := os.ReadFile(path); string(got) != text {
+		t.Errorf("changed:\n%s", got)
+	}
+}
+
+func TestFixProfileClearsTheExternalIPMap(t *testing.T) {
+	const in = "{\n    \"PrivateKey\": \"AAAA\",\n    \"NATExternalIPs\": [\n        \"198.51.100.10/eth0\"\n    ],\n    \"IFaceBlackList\": [\n        \"wt0\",\n        \"mullvad\"\n    ],\n    \"WgPort\": 51825\n}\n"
+	const want = "{\n    \"PrivateKey\": \"AAAA\",\n    \"NATExternalIPs\": [],\n    \"IFaceBlackList\": [\n        \"wt0\",\n        \"mullvad\"\n    ],\n    \"WgPort\": 51825\n}\n"
+	f := newFixture(t)
+	path := f.write("default.json", in)
+	res, err := FixProfileWith(f.paths, "mullvad", FixRequest{ClearExternalIPMap: true}, fixOpts())
+	if err != nil || !res.Changed || !res.ClearedExternalIPMap || len(res.Added) != 0 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != want {
+		t.Fatalf("edited profile:\n%s", got)
+	}
+	// Both edits at once, and the case NetBird doesn't write but reads.
+	f = newFixture(t)
+	path = f.write("default.json", "{\"natexternalips\":[\"198.51.100.10\"],\"IFaceBlackList\":[\"wt0\"]}")
+	res, err = FixProfileWith(f.paths, "mullvad", FixRequest{Add: []string{"eth0"}, ClearExternalIPMap: true}, fixOpts())
+	if err != nil || !res.ClearedExternalIPMap || !reflect.DeepEqual(res.Added, []string{"mullvad", "eth0"}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "{\"natexternalips\":[],\"IFaceBlackList\":[\"wt0\",\"mullvad\",\"eth0\"]}" {
+		t.Fatalf("edited profile:\n%s", got)
+	}
+}
+
+func TestFixProfileLeavesAnAbsentOrEmptyExternalIPMap(t *testing.T) {
+	for _, text := range []string{
+		listProfile(`["wt0", "mullvad"]`),
+		"{\"NATExternalIPs\":null,\"IFaceBlackList\":[\"mullvad\"]}",
+		"{\"NATExternalIPs\":[],\"IFaceBlackList\":[\"mullvad\"]}",
+	} {
+		f := newFixture(t)
+		path := f.write("default.json", text)
+		res, err := FixProfileWith(f.paths, "mullvad", FixRequest{ClearExternalIPMap: true}, fixOpts())
+		if err != nil || res.Changed {
+			t.Errorf("%q: %+v %v", text, res, err)
+		}
+		if got, _ := os.ReadFile(path); string(got) != text {
+			t.Errorf("%q: content changed", text)
+		}
+	}
+	// Without the flag a stored map is kept.
+	f := newFixture(t)
+	text := "{\"NATExternalIPs\":[\"198.51.100.10\"],\"IFaceBlackList\":[\"wt0\"]}"
+	path := f.write("default.json", text)
+	if _, err := FixProfileWith(f.paths, "mullvad", FixRequest{}, fixOpts()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "198.51.100.10") {
+		t.Errorf("the map went without the flag:\n%s", got)
+	}
+}
+
+func TestFixProfileRefusesAnExternalIPMapItCannotRead(t *testing.T) {
+	for _, text := range []string{
+		"{\"NATExternalIPs\":\"198.51.100.10\",\"IFaceBlackList\":[\"wt0\"]}",
+		"{\"NATExternalIPs\":[1],\"IFaceBlackList\":[\"wt0\"]}",
+		"{\"NATExternalIPs\":[],\"natexternalips\":[\"198.51.100.10\"],\"IFaceBlackList\":[\"wt0\"]}",
+	} {
+		f := newFixture(t)
+		path := f.write("default.json", text)
+		if _, err := FixProfileWith(f.paths, "mullvad", FixRequest{ClearExternalIPMap: true}, fixOpts()); err == nil {
+			t.Errorf("%q: accepted", text)
+		}
+		if got, _ := os.ReadFile(path); string(got) != text {
+			t.Errorf("%q: content changed", text)
+		}
+	}
+}
+
+func TestFixBlacklistIgnoresTheExternalIPMapWithoutTheFlag(t *testing.T) {
+	f := newFixture(t)
+	path := f.write("default.json", "{\"NATExternalIPs\":\"odd\",\"IFaceBlackList\":[\"wt0\"]}")
+	res, err := FixBlacklistWith(f.paths, "mullvad", fixOpts())
+	if err != nil || !res.Changed {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "{\"NATExternalIPs\":\"odd\",\"IFaceBlackList\":[\"wt0\",\"mullvad\"]}" {
+		t.Errorf("%s", got)
+	}
 }

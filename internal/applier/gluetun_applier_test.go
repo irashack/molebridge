@@ -1010,6 +1010,9 @@ func TestFailedUpdatesAreRetriedABoundedNumberOfTimes(t *testing.T) {
 		if f.provider.updateState != want {
 			t.Fatalf("attempt %d: state %q", attempt, f.provider.updateState)
 		}
+		if r := f.a.inspect(t); attempt < UpdateAttempts && r.Get("server_list_update") != UpdateWaitRetry {
+			t.Fatalf("attempt %d: server_list_update %v", attempt, r.Get("server_list_update"))
+		}
 		f.update()
 		if f.control.updates != attempt { // waits before the next try
 			t.Fatalf("attempt %d: %d updates", attempt, f.control.updates)
@@ -1022,6 +1025,9 @@ func TestFailedUpdatesAreRetriedABoundedNumberOfTimes(t *testing.T) {
 	}
 	if r := f.a.inspect(t); r.Get("server_list_update") != "failed" {
 		t.Errorf("server_list_update %v", r.Get("server_list_update"))
+	}
+	if !f.k.logged("(the updater is crashed); attempt 1 of 3") || !f.k.logged("gave up after 3 attempts") {
+		t.Errorf("logs %v", f.k.logs)
 	}
 }
 
@@ -1064,15 +1070,103 @@ func TestNoUpdateUntilTheTunnelAnswers(t *testing.T) {
 			f.k.age = UpdateHandshakeSec + 10
 		}
 		f.update()
+		f.update()
 		if f.control.updates != 0 || f.provider.updateAttempts != 0 || f.provider.updateState != "" {
 			t.Errorf("%s: %d updates, %d attempts, state %q", broken, f.control.updates, f.provider.updateAttempts, f.provider.updateState)
+		}
+		if r := f.a.inspect(t); r.Get("server_list_update") != UpdateWaitTunnel {
+			t.Errorf("%s: server_list_update %v", broken, r.Get("server_list_update"))
+		}
+		if n := countLogs(f.k, "its update waits: gluetun's tunnel doesn't answer yet"); n != 1 {
+			t.Errorf("%s: logged %d times: %v", broken, n, f.k.logs)
 		}
 		f.k.tunnel, f.k.age = hostA, 1
 		f.update()
 		if f.control.updates != 1 {
 			t.Errorf("%s: %d updates once the tunnel answers", broken, f.control.updates)
 		}
+		if r := f.a.inspect(t); r.Get("server_list_update") != "updating" {
+			t.Errorf("%s: server_list_update %v", broken, r.Get("server_list_update"))
+		}
 	}
+}
+
+func TestAnUpdateWaitsForGluetunsVPNAndSaysSo(t *testing.T) {
+	f := staleFixture(t, glOptions{})
+	f.control.status = "starting"
+	f.update()
+	f.update()
+	if f.control.updates != 0 || f.provider.updateAttempts != 0 {
+		t.Errorf("%d updates, %d attempts", f.control.updates, f.provider.updateAttempts)
+	}
+	if r := f.a.inspect(t); r.Get("server_list_update") != UpdateWaitVPN {
+		t.Errorf("server_list_update %v", r.Get("server_list_update"))
+	}
+	if n := countLogs(f.k, "its update waits: gluetun's VPN is starting, not running"); n != 1 {
+		t.Errorf("logged %d times: %v", n, f.k.logs)
+	}
+	f.control.status = "running"
+	f.update()
+	if f.control.updates != 1 || f.provider.updateAttempts != 1 {
+		t.Errorf("%d updates, %d attempts once the VPN runs", f.control.updates, f.provider.updateAttempts)
+	}
+}
+
+func TestControlServerFailuresCountTowardTheAttempts(t *testing.T) {
+	// A VPN status that gluetun's control server can't give used to be retried
+	// every UpdateRetrySec without end.
+	f := staleFixture(t, glOptions{})
+	f.control.statusErr = ErrGluetunRequest
+	for attempt := 1; attempt <= UpdateAttempts; attempt++ {
+		f.update()
+		if f.provider.updateAttempts != attempt {
+			t.Fatalf("attempt %d: %d attempts", attempt, f.provider.updateAttempts)
+		}
+		want := UpdateWaitControl
+		if attempt == UpdateAttempts {
+			want = "failed"
+		}
+		if r := f.a.inspect(t); r.Get("server_list_update") != want {
+			t.Fatalf("attempt %d: server_list_update %v", attempt, r.Get("server_list_update"))
+		}
+		f.k.now += UpdateRetrySec
+	}
+	f.update()
+	if f.control.updates != 0 || f.provider.updateAttempts != UpdateAttempts || f.provider.updateState != "failed" {
+		t.Errorf("%d updates, %d attempts, state %q", f.control.updates, f.provider.updateAttempts, f.provider.updateState)
+	}
+	if !f.k.logged("update failed (its control server: gluetun control request failed); attempt 1 of 3") {
+		t.Errorf("logs %v", f.k.logs)
+	}
+}
+
+func TestAnUpdaterStatusTheControlServerCantGiveCountsAsAFailedAttempt(t *testing.T) {
+	f := staleFixture(t, glOptions{})
+	f.update()
+	f.control.updaterErr = ErrGluetunRequest
+	f.update()
+	if f.provider.updateState != "" || f.provider.updateAttempts != 1 {
+		t.Fatalf("state %q, %d attempts", f.provider.updateState, f.provider.updateAttempts)
+	}
+	if r := f.a.inspect(t); r.Get("server_list_update") != UpdateWaitControl {
+		t.Errorf("server_list_update %v", r.Get("server_list_update"))
+	}
+	f.control.updaterErr = nil
+	f.k.now += UpdateRetrySec
+	f.update()
+	if f.control.updates != 2 || f.provider.updateState != "updating" {
+		t.Errorf("%d updates, state %q", f.control.updates, f.provider.updateState)
+	}
+}
+
+func countLogs(k *glKernel, substr string) int {
+	n := 0
+	for _, l := range k.logs {
+		if strings.Contains(l, substr) {
+			n++
+		}
+	}
+	return n
 }
 
 func TestTheLiveServerIsFoundByAnyOfItsAddresses(t *testing.T) {

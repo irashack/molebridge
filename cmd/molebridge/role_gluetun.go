@@ -17,4 +17,9 @@ func init() {
 		func(args []string) int {
 			return gluetun.PostRulesMain(args, gluetun.Defaults(toolsEnv(), os.Stdout, os.Stderr))
 		})
+	register("gluetun-preflight",
+		"write the preflight script gluetun's entrypoint runs, for a deployment without the source tree",
+		func(args []string) int {
+			return gluetun.PreflightMain(args, gluetun.Defaults(toolsEnv(), os.Stdout, os.Stderr))
+		})
 }

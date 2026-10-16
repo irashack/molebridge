@@ -11,4 +11,5 @@
 !LICENSE
 !THIRD_PARTY.md
 !panel/static/
+!routing/
 **/*_test.go

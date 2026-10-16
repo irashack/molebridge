@@ -348,3 +348,45 @@ func TestPostRulesUsage(t *testing.T) {
 		t.Error("help")
 	}
 }
+
+// New in 0.9.1: the image carries the preflight script.
+func TestPreflightWritesTheScriptOfTheSourceTree(t *testing.T) {
+	want, err := os.ReadFile("../../../routing/gluetun-preflight")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(t.TempDir(), "preflight")
+	o, stdout, stderr := opts(nil, 0)
+	if code := PreflightMain([]string{dir}, o); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("%d %s", code, stderr)
+	}
+	path := filepath.Join(dir, "gluetun-preflight")
+	if want := "Wrote " + path + "; mount it into gluetun at /usr/local/bin/molebridge-gluetun-preflight.\n"; stdout.String() != want {
+		t.Errorf("stdout %q", stdout)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(want) {
+		t.Error("the written script is not routing/gluetun-preflight")
+	}
+	if m := mode(t, path); m != 0o755 {
+		t.Errorf("mode %v", m)
+	}
+	// Written again over itself; a symlink is refused.
+	o2, _, _ := opts(nil, 0)
+	if code := PreflightMain([]string{dir}, o2); code != 0 {
+		t.Error("rewrite failed")
+	}
+	link := filepath.Join(t.TempDir(), "gluetun-preflight")
+	if err := os.Symlink(path, link); err != nil {
+		t.Fatal(err)
+	}
+	o3, _, stderr3 := opts(nil, 0)
+	if code := PreflightMain([]string{filepath.Dir(link)}, o3); code != 1 || !strings.Contains(stderr3.String(), "must be a regular file") {
+		t.Errorf("symlink: %d %q", code, stderr3)
+	}
+	for _, args := range [][]string{nil, {"a", "b"}, {"--ipv4-only", dir}} {
+		o4, _, stderr4 := opts(nil, 0)
+		if code := PreflightMain(args, o4); code != 2 || stderr4.String() != "usage: molebridge gluetun-preflight DIR\n" {
+			t.Errorf("%v: %d %q", args, code, stderr4)
+		}
+	}
+}

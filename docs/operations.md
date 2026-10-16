@@ -636,6 +636,32 @@ a usage error is 2. The full messages are in [the tools
 reference](tools-reference.md#fix-blacklist) and
 [troubleshooting](troubleshooting.md#netbirds-settings-and-profile).
 
+**Moving an enrolled exit to another runtime** (Podman to Kubernetes, say)
+keeps its identity, but the stored profile still describes the old place. Two
+more edits, in the same run with the exit stopped:
+
+- `--add IFACE` also adds `IFACE` to the list (repeat it for more), for an
+  interface the new runtime gives the namespace that NetBird must not offer as a
+  candidate. `NB_EXTRA_IFACE_BLACKLIST` is applied only when a peer enrolls.
+- `--clear-external-ip-map` empties `NATExternalIPs`, the addresses an earlier
+  `netbird up --external-ip-map` stored ([exits on a private container
+  network](#exits-on-a-private-container-network)), when the new runtime has no
+  such forward. A stale map makes the peer advertise an address that no longer
+  reaches it.
+
+```sh
+docker run --rm --user <owner uid>:<owner gid> \
+  -e EXIT_IF=<name> -e TUNNEL_BACKEND=<native|gluetun> \
+  -v molebridge_netbird-data:/var/lib/netbird \
+  "$IMAGE" fix-blacklist --add eth0 --clear-external-ip-map
+```
+
+Each change prints its own line (`added the interface <if> ...`, `cleared the
+external-IP map (NATExternalIPs) of the stored NetBird profile <path>`); the tool
+refuses an invalid interface name, and with `--clear-external-ip-map` a
+`NATExternalIPs` that isn't a list of strings. Without the flags it behaves as
+before.
+
 Then start the exit: `docker compose up -d exit`. After `netbird up` the exit reads
 the profile again and admits traffic only if the entry is there. To see the result
 without printing the profile, check the direct path:

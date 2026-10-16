@@ -633,6 +633,53 @@ the namespace (`eth0` with the option string there, which sets `-I eth0`).
 Gluetun's control server stays unpublished. The tools run as `podman run` without
 `--user`, as in [the tools reference](tools-reference.md).
 
+## Kubernetes
+
+Molebridge ships no manifests for the gluetun forms. A gluetun overlay exit with
+NordVPN has run as one pod on Kubernetes (k0s with Cilium) on the 0.8.0 image,
+with the preflight mounted from a ConfigMap of the script; the
+`gluetun-preflight` tool below is new in 0.9.1 and has not run there. Put
+`gluetun` and `exit` in one pod, so they share its network namespace as
+`network_mode: service:gluetun` does, and keep the settings and mounts of
+`compose.gluetun.yaml`. Four things differ from Compose:
+
+- **The preflight script isn't in a source tree you can mount.** Write it with
+  an init container on the Molebridge image, `args: ["gluetun-preflight",
+  "/preflight"]` into an `emptyDir` mounted at `/preflight`, and mount that
+  volume into `gluetun` read-only at `/usr/local/bin/molebridge-gluetun-preflight`
+  with `subPath: gluetun-preflight` ([the tool](tools-reference.md#gluetun-preflight)).
+  Keep gluetun's `command: ["/bin/sh",
+  "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]`.
+- **Keep gluetun's server list on a persistent volume.** Mount it at gluetun's
+  `/gluetun` (or the directory of `STORAGE_FILEPATH`), and the same volume into
+  `exit` read-only for `GLUETUN_SERVERS_FILE`. An `emptyDir` is lost with the
+  pod: each new pod starts from gluetun's built-in list (2024 data for NordVPN
+  in v3.41.3), refuses servers newer than that until the exit's refresh has run,
+  and with `SERVER_HOSTNAMES` naming such a server gluetun doesn't start at all.
+  `server_list_update` in `molebridge status` says what a refresh waits for
+  ([the exit with gluetun](architecture.md#the-exit-with-gluetun)).
+- **No user namespace for this pod.** gluetun needs `/dev/net/tun`, which the pod
+  gets as a `hostPath` volume of type `CharDevice`; with `hostUsers: false` runc
+  can't idmap-mount a device node (`failed to set MOUNT_ATTR_IDMAP`), so the pod
+  doesn't start. Leave `hostUsers` unset or `true`, and keep the capabilities to
+  Compose's: `NET_ADMIN` for gluetun, and `NET_ADMIN`, `NET_RAW` and
+  `DAC_OVERRIDE` for `exit` with a read-only root.
+- **IPv6 in the pod.** Cilium and most CNIs give a dual-stack pod an IPv6 address
+  where rootless Podman's pasta (`-4`) gives none. gluetun then also adds a
+  `::/0` route on its tunnel, and with a provider that carries no IPv6 over
+  WireGuard (NordVPN) that fails and its start loops. Set
+  `WIREGUARD_ALLOWED_IPS=0.0.0.0/0` on gluetun; forwarded IPv6 then fails closed
+  at the exit's unreachable fallback, as on Podman.
+
+Mount every Secret file with `subPath`: a Secret volume presents its files as
+symbolic links, which the exit refuses for its key and token files. A container
+restart keeps the pod's namespace, its interfaces and the routing contract; a
+new pod is a new namespace, and NetBird sees its new interfaces. List the pod's
+other interfaces (the cluster one, say) in `NB_EXTRA_IFACE_BLACKLIST` before the
+peer enrolls; for a peer enrolled elsewhere, stop the exit and run `fix-blacklist
+--add <if>`, with `--clear-external-ip-map` if it stored a pasta forward
+([operations](operations.md#netbird-interface-blacklist)).
+
 ## DNS inside the namespace
 
 Containers that join gluetun's namespace, the exit and NetBird in it included, resolve names

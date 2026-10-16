@@ -53,8 +53,9 @@ Rules that hold for every tool:
   Messages are fixed text, with only the paths and setting names you supplied.
 - Exit status: `0` success, `1` a refusal, `2` a usage error. For
   `prepare-config`, `nordvpn-key`, `gluetun-auth` and `gluetun-post-rules`,
-  `-h` or `--help` prints the tool's help and exits `0`. `fix-blacklist` and
-  `check-config` take no arguments and answer any with their usage line and `2`.
+  `-h` or `--help` prints the tool's help and exits `0`; so does
+  `gluetun-preflight`. `check-config` takes no arguments, and `fix-blacklist`
+  only the flags below; both answer anything else with their usage line and `2`.
 - A role name the binary doesn't know prints `molebridge: unknown role "<name>"`
   and the list of roles, and exits `2`; so does running it with no role.
 - A tool never reads the network except `nordvpn-key`, which makes the one
@@ -71,6 +72,7 @@ must be edited or the values passed with `-e`.
 | `nordvpn-key` | `<out>/nordvpn.conf` (0600) | `EXIT_TABLE` | [below](#nordvpn-key) |
 | `gluetun-auth` | `<dir>/auth.toml`, `<dir>/api_key` (0600) | none | [below](#gluetun-auth) |
 | `gluetun-post-rules` | `<dir>/post-rules.txt` (0644) | routing settings | [below](#gluetun-post-rules) |
+| `gluetun-preflight` | `<dir>/gluetun-preflight` (0755) | none | [below](#gluetun-preflight) |
 | `fix-blacklist` | the NetBird profile, in place | `EXIT_IF`, `TUNNEL_BACKEND`, `NB_STATE_DIR` | [below](#fix-blacklist) |
 | `check-config` | nothing | the exit's settings | [below](#check-config) |
 
@@ -327,6 +329,38 @@ Messages:
 Refusals exit `1`. Usage error: `usage: molebridge gluetun-post-rules
 [--ipv4-only] DIR`, exit `2`.
 
+## gluetun-preflight
+
+Writes `routing/gluetun-preflight`, the script gluetun's entrypoint runs in
+both gluetun forms, from the image, for a deployment that has no Molebridge
+source tree to mount it from: a Kubernetes init container that shares an
+`emptyDir` with gluetun, for one ([the gluetun exit on
+Kubernetes](gluetun-netbird-exit.md#kubernetes)). The script is the one of the
+image's release, byte for byte.
+
+```
+molebridge gluetun-preflight DIR
+```
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/routing:/out" \
+  ghcr.io/irashack/molebridge:<tag> gluetun-preflight /out
+```
+
+- Output: `DIR/gluetun-preflight`, mode `0755`, replaced atomically. Mount it
+  into gluetun read-only at `/usr/local/bin/molebridge-gluetun-preflight` and
+  keep the Compose files' entrypoint, `["/bin/sh",
+  "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]`.
+- A symlinked `DIR`, a symlinked `gluetun-preflight` and a non-regular file there
+  are refused.
+
+Messages: `Wrote <DIR>/gluetun-preflight; mount it into gluetun at
+/usr/local/bin/molebridge-gluetun-preflight.`; `FAIL <DIR>/gluetun-preflight must
+be a regular file; remove what is there.`; `FAIL unable to inspect local
+configuration.` for any operating-system error. Refusals exit `1`. Usage error:
+`usage: molebridge gluetun-preflight DIR`, exit `2`.
+
 ## fix-blacklist
 
 Adds the tunnel interface to the interface blacklist of the stored NetBird
@@ -335,8 +369,13 @@ with the exit **stopped**. It is operator-invoked and never runs by itself. The
 daemon created the identity files, so the tool runs as their owner.
 
 ```
-molebridge fix-blacklist
+molebridge fix-blacklist [--add IFACE]... [--clear-external-ip-map]
 ```
+
+`--add IFACE` (or `--add=IFACE`, repeatable) adds `IFACE` to the list as well,
+and `--clear-external-ip-map` empties `NATExternalIPs`, which `netbird up
+--external-ip-map` stores: the two edits an enrolled exit needs when it moves
+to another runtime ([operations](operations.md#netbird-interface-blacklist)).
 
 Docker, as the owner of the profile (find the uid and gid with `ls -ln` on the
 volume's `default.json`, or on the legacy `config.json`):
@@ -358,7 +397,7 @@ podman run --rm --userns=keep-id:uid=<owner uid>,gid=<owner gid> \
 ```
 
 For a legacy profile at `/etc/netbird/config.json`, add the containing
-directory: `-v <legacy directory>:/etc/netbird`. It takes no arguments; the
+directory: `-v <legacy directory>:/etc/netbird`. The
 settings are the exit's non-secret ones, so it resolves the same profile the
 daemon will load: `TUNNEL_BACKEND` (`native`, the default, or `gluetun`; the older
 spelling `wireguard` is accepted too),
@@ -371,7 +410,10 @@ another container, which is why you stop the exit first), when the active
 profile is not the default, when no identity exists (it never creates one),
 when the JSON is malformed or ambiguous (a repeated key, or a field name
 outside printable ASCII), when `IFaceBlackList` isn't a list of strings, or
-when it cannot preserve the file's mode, owner and group. It
+when it cannot preserve the file's mode, owner and group; also when an
+`--add` name is not a valid interface name, and, with
+`--clear-external-ip-map`, when `NATExternalIPs` is not absent, null or a list of
+strings. It
 reproduces NetBird's default filling when the list is absent, null or empty,
 keeps every operator exclusion and every other field byte for byte, and
 replaces the file atomically.
@@ -379,7 +421,13 @@ replaces the file atomically.
 Prints `fix-blacklist: added the tunnel interface <if> to the interface
 blacklist of the stored NetBird profile <path>` or `fix-blacklist: the stored
 NetBird profile <path> already excludes the tunnel interface <if>; nothing
-changed`. Refusals go to standard error with exit status `1`; a usage error
+changed`. With the flags, each change is a line of its own: `fix-blacklist:
+added the interface <if> to the interface blacklist of the stored NetBird
+profile <path>`, `fix-blacklist: cleared the external-IP map (NATExternalIPs) of
+the stored NetBird profile <path>`; with nothing to do, `fix-blacklist: the
+stored NetBird profile <path> already excludes the interfaces <if>, <if>[ and has
+no external-IP map]; nothing changed`. An absent, null or empty `NATExternalIPs`
+is left as it is. Refusals go to standard error with exit status `1`; a usage error
 exits `2`.
 
 ## check-config

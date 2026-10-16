@@ -1,6 +1,7 @@
-// Package gluetun holds the gluetun-auth and gluetun-post-rules roles:
-// tools/molebridge.py's gluetun_auth and gluetun_post_rules as container
-// tools. Neither calls a container engine. Paths in the messages are the
+// Package gluetun holds the gluetun-auth, gluetun-post-rules and
+// gluetun-preflight roles: tools/molebridge.py's gluetun_auth and
+// gluetun_post_rules as container tools, and a copy of the preflight script
+// the image carries. None calls a container engine. Paths in the messages are the
 // directories the caller mounted, where the Python tool printed
 // repository-relative paths.
 package gluetun
@@ -19,6 +20,7 @@ import (
 	"github.com/irashack/molebridge/internal/contract"
 	"github.com/irashack/molebridge/internal/gluetunauth"
 	"github.com/irashack/molebridge/internal/tools/privfile"
+	"github.com/irashack/molebridge/routing"
 )
 
 // checkError is a refusal with a fixed message (host_tools.CheckError); the
@@ -85,6 +87,20 @@ ip6tables. Recreate gluetun afterwards to apply the file.
 
 On rootless Podman drop --user: the default mapping makes the container's root
 you, so the files are yours.
+`
+
+// PreflightHelp documents gluetun-preflight.
+const PreflightHelp = `Usage: molebridge gluetun-preflight DIR
+
+Writes the preflight script gluetun's entrypoint runs (DIR/gluetun-preflight,
+mode 0755), the routing/gluetun-preflight of this image's release, for a
+deployment with no Molebridge source tree, such as a Kubernetes init container
+that shares an emptyDir with gluetun. Mount the file into gluetun read-only
+at /usr/local/bin/molebridge-gluetun-preflight and keep gluetun's entrypoint
+["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"].
+
+  docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/routing:/out" \
+    ghcr.io/irashack/molebridge:<tag> gluetun-preflight /out
 `
 
 // parseArgs reads "[--flag ...] DIR". The flags may come before or after DIR.
@@ -268,5 +284,32 @@ func PostRulesMain(args []string, o Options) int {
 		return report(o, err)
 	}
 	fmt.Fprintf(o.Stdout, "Wrote %s; recreate gluetun to apply it.\n", path)
+	return 0
+}
+
+// -- gluetun-preflight -------------------------------------------------------
+
+// PreflightMain is the gluetun-preflight role.
+func PreflightMain(args []string, o Options) int {
+	dir, _, help, ok := parseArgs(args)
+	switch {
+	case help:
+		io.WriteString(o.Stdout, PreflightHelp)
+		return 0
+	case !ok:
+		fmt.Fprintln(o.Stderr, "usage: molebridge gluetun-preflight DIR")
+		return 2
+	}
+	path := filepath.Join(dir, "gluetun-preflight")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return report(o, err)
+	}
+	if info, err := os.Lstat(path); isSymlink(path) || isSymlink(dir) || (err == nil && !info.Mode().IsRegular()) {
+		return report(o, checkError(path+" must be a regular file; remove what is there."))
+	}
+	if err := privfile.Write(path, routing.GluetunPreflight, 0o755); err != nil {
+		return report(o, err)
+	}
+	fmt.Fprintf(o.Stdout, "Wrote %s; mount it into gluetun at /usr/local/bin/molebridge-gluetun-preflight.\n", path)
 	return 0
 }

@@ -46,6 +46,7 @@ package applier
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"net/url"
 	"os"
@@ -100,6 +101,17 @@ const (
 	TransitionSamples = 3
 	// EchoTimeout bounds one marked echo.
 	EchoTimeout = 10 * time.Second
+)
+
+// Why an owed refresh of gluetun's server list hasn't started, as
+// server_list_update reports it.
+const (
+	UpdateWaitTunnel  = "waiting-for-tunnel"
+	UpdateWaitControl = "waiting-for-control-server"
+	UpdateWaitVPN     = "waiting-for-vpn"
+	// UpdateWaitRetry: an attempt failed otherwise; the next starts after
+	// UpdateRetrySec.
+	UpdateWaitRetry = "waiting-to-retry"
 )
 
 // GluetunSwitchTimeoutSec: gluetun restarts its VPN loop on a settings change;
@@ -294,9 +306,11 @@ type gluetunProvider struct {
 
 	// The one refresh of gluetun's server list this process may start:
 	// updateState is "" (not needed or not yet), "updating", "done" or
-	// "failed".
+	// "failed". updateWait is why a refresh that is owed hasn't started
+	// (an UpdateWait value), "" otherwise.
 	updateThreshold float64
 	updateState     string
+	updateWait      string
 	updateAttempts  int
 	updateStarted   float64
 	nextUpdate      float64
@@ -596,11 +610,14 @@ func (g *gluetunProvider) Echo(ctx context.Context, a *Applier, rawURL string, f
 	return egress.ParseEcho(raw, family)
 }
 
-// PublishDefaults: whether gluetun is refreshing its server list, or gave up.
+// PublishDefaults: whether gluetun is refreshing its server list, gave up, or
+// owes a refresh that waits, and for what.
 func (g *gluetunProvider) PublishDefaults() validate.Obj {
 	var update any
 	if g.updateState == "updating" || g.updateState == "failed" {
 		update = g.updateState
+	} else if g.updateWait != "" {
+		update = g.updateWait
 	}
 	return validate.Members("server_list_update", update)
 }
@@ -839,27 +856,59 @@ func (g *gluetunProvider) MeasureGuards(ctx context.Context, a *Applier, at stri
 // tunnelWorks: gluetun's tunnel carries traffic now: one peer with a
 // handshake in the last UpdateHandshakeSec. gluetun's VPN status says
 // "running" while it still tries servers that don't answer, so the update waits
-// for this instead of starting into a tunnel that fails.
-func (g *gluetunProvider) tunnelWorks(ctx context.Context, a *Applier) bool {
+// for this instead of starting into a tunnel that fails. Otherwise it says
+// what it saw.
+func (g *gluetunProvider) tunnelWorks(ctx context.Context, a *Applier) (bool, string) {
 	keys, err := a.peers(ctx)
-	if err != nil || len(keys) != 1 {
-		return false
+	if err != nil {
+		return false, "its interface can't be read"
+	}
+	if len(keys) != 1 {
+		return false, fmt.Sprintf("it has %d peers", len(keys))
 	}
 	age, err := a.handshakeAge(ctx, keys[0])
-	return err == nil && age != nil && *age < UpdateHandshakeSec
+	if err != nil || age == nil {
+		return false, "its peer has no handshake"
+	}
+	if *age >= UpdateHandshakeSec {
+		return false, fmt.Sprintf("its last handshake was %d seconds ago", *age)
+	}
+	return true, ""
+}
+
+// waitUpdate records why the owed refresh hasn't started, logging each change
+// of reason once.
+func (g *gluetunProvider) waitUpdate(a *Applier, reason, detail string) {
+	if reason != g.updateWait {
+		a.log("applier: gluetun's server list is out of date; its update waits: " + detail)
+	}
+	g.updateWait = reason
 }
 
 // updateServers starts one refresh of gluetun's server list when its data is
 // old and gluetun's tunnel works, and follows it. gluetun's updater fetches the
 // provider's public list through the tunnel, from gluetun's own process, and
 // doesn't restart the VPN. Bounded: UpdateAttempts starts per process, each
-// given UpdateTimeoutSec. The new data reaches the catalogue through its usual
-// re-read when the file changes.
+// given UpdateTimeoutSec; a failed answer of gluetun's control server counts as
+// an attempt. While the refresh is owed but waits for gluetun's tunnel or VPN,
+// server_list_update says which. The new data reaches the catalogue through
+// its usual re-read when the file changes.
 func (g *gluetunProvider) updateServers(ctx context.Context, a *Applier) {
 	if g.updateThreshold <= 0 || g.updateState == "done" || g.updateState == "failed" {
 		return
 	}
 	now := a.clock()
+	failed := func(wait, what string) {
+		g.updateState, g.updateWait = "", wait
+		g.nextUpdate = now + UpdateRetrySec
+		if g.updateAttempts >= UpdateAttempts {
+			g.updateState, g.updateWait = "failed", ""
+			a.log(fmt.Sprintf("applier: gluetun's server list update failed (%s); gave up after %d attempts", what, g.updateAttempts))
+			return
+		}
+		a.log(fmt.Sprintf("applier: gluetun's server list update failed (%s); attempt %d of %d, retrying in %d seconds",
+			what, g.updateAttempts, UpdateAttempts, UpdateRetrySec))
+	}
 	if g.updateState == "updating" {
 		status, err := g.client.UpdaterStatus(ctx)
 		if err != nil {
@@ -874,11 +923,13 @@ func (g *gluetunProvider) updateServers(ctx context.Context, a *Applier) {
 		if (status == "starting" || status == "running") && now-g.updateStarted < UpdateTimeoutSec {
 			return
 		}
-		g.updateState = ""
-		g.nextUpdate = now + UpdateRetrySec
-		a.log("applier: gluetun's server list update failed")
-		if g.updateAttempts >= UpdateAttempts {
-			g.updateState = "failed"
+		switch {
+		case err != nil:
+			failed(UpdateWaitControl, "its control server: "+controlFailure(err))
+		case status == "starting" || status == "running":
+			failed(UpdateWaitRetry, fmt.Sprintf("not finished after %d seconds", UpdateTimeoutSec))
+		default:
+			failed(UpdateWaitRetry, "the updater is "+status)
 		}
 		return
 	}
@@ -890,35 +941,42 @@ func (g *gluetunProvider) updateServers(ctx context.Context, a *Applier) {
 	if relays.Len() == 0 || (known && age <= g.updateThreshold) {
 		// Nothing read yet (gluetun hasn't written the file), or fresh enough.
 		if relays.Len() > 0 {
-			g.updateState = "done"
+			g.updateState, g.updateWait = "done", ""
 		}
 		return
 	}
-	if !g.tunnelWorks(ctx, a) {
+	if ok, seen := g.tunnelWorks(ctx, a); !ok {
+		g.waitUpdate(a, UpdateWaitTunnel, "gluetun's tunnel doesn't answer yet ("+seen+")")
 		return
-	}
-	failed := func() {
-		g.nextUpdate = now + UpdateRetrySec
-		if g.updateAttempts >= UpdateAttempts {
-			g.updateState = "failed"
-		}
 	}
 	status, err := g.client.VPNStatus(ctx)
 	if err != nil {
-		failed()
+		g.updateAttempts++
+		failed(UpdateWaitControl, "its control server: "+controlFailure(err))
 		return
 	}
 	if status != "running" {
+		g.waitUpdate(a, UpdateWaitVPN, "gluetun's VPN is "+status+", not running")
 		return
 	}
 	g.updateAttempts++
 	if _, err := g.client.StartUpdate(ctx); err != nil {
-		failed()
+		failed(UpdateWaitControl, "its control server: "+controlFailure(err))
 		return
 	}
-	g.updateState, g.updateStarted = "updating", now
+	g.updateState, g.updateWait, g.updateStarted = "updating", "", now
 	a.nextHealth = 0
-	a.log("applier: asked gluetun to update its server list")
+	a.log(fmt.Sprintf("applier: asked gluetun to update its server list (attempt %d of %d)", g.updateAttempts, UpdateAttempts))
+}
+
+// controlFailure is a control-client error's fixed message; any other error
+// is reported without its detail.
+func controlFailure(err error) string {
+	var known GluetunError
+	if errors.As(err, &known) {
+		return known.Error()
+	}
+	return string(ErrGluetunRequest)
 }
 
 // dataAge is the seconds since gluetun's provider data was dated, or false.

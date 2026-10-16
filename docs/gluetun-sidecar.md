@@ -213,6 +213,18 @@ and without it they stay in the old namespace. Either way the attachment check f
 all of them are restarted together. The attachment procedure has not been run on Podman
 in this form.
 
+## Kubernetes
+
+The gluetun sidecar runs in one pod with the applications, like the exit's
+[Kubernetes form](gluetun-netbird-exit.md#kubernetes): write the preflight with
+the `gluetun-preflight` tool into an `emptyDir`, keep gluetun's server list on a
+persistent volume, leave the pod out of user namespaces, and set
+`WIREGUARD_ALLOWED_IPS=0.0.0.0/0` when the pod has IPv6 and the provider carries
+none (the IPv6 loop was first seen with this form). The NetBird notes there
+don't apply. Molebridge ships no manifests. A gluetun sidecar with NordVPN has run
+as one pod on k0s with Cilium on the 0.8.0 image, beside an application that only
+waits; no drill was run there.
+
 ## Removing
 
 `docker compose down` stops and removes the containers. Add `-v` to also delete gluetun's

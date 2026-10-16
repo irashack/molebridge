@@ -380,6 +380,7 @@ type fakeGluetun struct {
 	updater      string
 	updates      int
 	updateFails  bool
+	updaterErr   error
 	// onPut replaces the default PUT behavior (the reconnecting kernel).
 	onPut func(host string)
 }
@@ -421,7 +422,12 @@ func (f *fakeGluetun) StartUpdate(context.Context) (string, error) {
 	return "running", nil
 }
 
-func (f *fakeGluetun) UpdaterStatus(context.Context) (string, error) { return f.updater, nil }
+func (f *fakeGluetun) UpdaterStatus(context.Context) (string, error) {
+	if f.updaterErr != nil {
+		return "", f.updaterErr
+	}
+	return f.updater, nil
+}
 
 // -- reconnecting ------------------------------------------------------------------------------------
 

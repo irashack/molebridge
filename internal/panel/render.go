@@ -438,7 +438,14 @@ func providerNote(provider string) string {
 
 // serverListUpdate is the gluetun applier's one refresh of gluetun's server
 // list after it starts.
-var serverListUpdate = map[string]string{"updating": "; updating server list", "failed": "; server list update failed"}
+var serverListUpdate = map[string]string{
+	"updating":                   "; updating server list",
+	"failed":                     "; server list update failed",
+	"waiting-for-tunnel":         "; server list update waits for gluetun's tunnel",
+	"waiting-for-vpn":            "; server list update waits for gluetun's VPN",
+	"waiting-for-control-server": "; server list update waits for gluetun's control server",
+	"waiting-to-retry":           "; server list update failed, retrying",
+}
 
 // catalogueAgeText is "fetched <time>", and for a list read from gluetun the
 // date of gluetun's provider data, which is what says how current it is.

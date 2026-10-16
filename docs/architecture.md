@@ -1172,7 +1172,14 @@ The exit therefore starts one refresh itself (`PUT /v1/updater/status`)
 once gluetun's VPN is running and its tunnel has had a handshake in the
 last 150 seconds (gluetun reports running while it still tries servers that
 don't answer), when the data is older than the period or than 7 days: at most three tries per exit start, each given 15 minutes and retried 5 minutes after a failure,
-reported as `server_list_update` in `result.json`. gluetun's updater
+reported as `server_list_update` in `result.json`. A failed answer of gluetun's
+control server counts as a try. While a refresh is owed but hasn't started,
+`server_list_update` says what it waits for, and the exit logs each change of
+reason once (`applier: gluetun's server list is out of date; its update waits:
+...`): `waiting-for-tunnel` (no single peer with a recent handshake),
+`waiting-for-vpn` (gluetun's VPN isn't `running`),
+`waiting-for-control-server` (the control server failed; retried after
+5 minutes) or `waiting-to-retry` (the last run failed or timed out). gluetun's updater
 fetches the provider's public list from gluetun's own process, so through
 the tunnel, and doesn't restart the VPN; for Surfshark and FastestVPN it
 also resolves every server name. Only providers whose servers one gluetun filter selects exactly

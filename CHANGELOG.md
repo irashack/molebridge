@@ -4,6 +4,43 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.9.1 — unreleased
+
+**Experimental.** Three fixes found moving the gluetun forms to Kubernetes. The
+unit tests and `go vet` pass; nothing here has run on a live exit yet
+([testing](docs/testing.md#091)).
+
+**gluetun's server-list refresh says why it waits.** With the gluetun backend
+the exit starts one refresh of gluetun's server list when the data is old. A
+first pod with gluetun's built-in 2024 NordVPN list never started it in
+14 minutes, with nothing in the log or the record to say why.
+- `server_list_update` in `result.json` now also names what an owed refresh
+  waits for: `waiting-for-tunnel` (no single peer with a handshake in the last
+  150 seconds), `waiting-for-vpn` (gluetun's VPN status isn't `running`),
+  `waiting-for-control-server` (gluetun's control server failed to answer) or
+  `waiting-to-retry` (the last run failed or timed out). The panel shows it
+  beside the relay list.
+- The log says it once per change of reason (`applier: gluetun's server list
+  is out of date; its update waits: ...`, with what was seen), and each failed
+  try with its cause and count.
+- A failed answer of gluetun's control server counts toward the three tries.
+  It used to be retried every 5 minutes without end.
+
+**`gluetun-preflight` writes the preflight script from the image**
+([tools](docs/tools-reference.md#gluetun-preflight)), for a deployment without a
+Molebridge source tree, such as a Kubernetes init container. The gluetun pages
+have a Kubernetes section: the preflight, a persistent server list, no user
+namespace for a pod that mounts `/dev/net/tun`, and
+`WIREGUARD_ALLOWED_IPS=0.0.0.0/0` when the pod has IPv6
+([the exit](docs/gluetun-netbird-exit.md#kubernetes),
+[the sidecar](docs/gluetun-sidecar.md#kubernetes)).
+
+**`fix-blacklist --add IFACE` and `--clear-external-ip-map`**, for an enrolled
+exit that moved to another runtime: the first adds another interface to the
+stored profile's blacklist, the second empties a stored `--external-ip-map`
+([operations](docs/operations.md#netbird-interface-blacklist)). Without them the
+tool does what it did.
+
 ## 0.9.0 — 2026-10-16
 
 **Experimental.** The native sidecar: an exit that other containers share, with

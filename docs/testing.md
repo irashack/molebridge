@@ -15,6 +15,18 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.9.1
+
+0.9.1 changes the gluetun backend's server-list refresh (it reports why it
+waits, and a control-server failure counts as a try), adds the
+`gluetun-preflight` tool and `fix-blacklist`'s `--add` and
+`--clear-external-ip-map`. Run so far: `go test ./...`, `go vet ./...` and
+`gofmt -l` pass on the 0.9.1 branch with Go 1.27.2, with a test for each
+waiting path and each new option. Not run: the namespace drills (nothing in
+routing, the tunnel or the mutation owner changed), a live exit on any
+platform, and the new tool in a Kubernetes init container. The 0.9.0 and 0.8.0
+records below still hold for everything else.
+
 ## 0.9.0
 
 0.9.0 adds the [native sidecar](native-sidecar.md) (`EXIT_KIND=sidecar` with
