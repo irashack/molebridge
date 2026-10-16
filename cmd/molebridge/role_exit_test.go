@@ -113,7 +113,11 @@ func TestHealthRoleGuarded(t *testing.T) {
 	if err != nil {
 		t.Skip("no boot id here")
 	}
-	line := fmt.Sprintf("molebridge-heartbeat 1 %s %d\n", strings.TrimSpace(string(boot)), int64(bootclock.System()()))
+	ns, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		t.Skip("no network namespace link here")
+	}
+	line := fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", strings.TrimSpace(string(boot)), ns, int64(bootclock.System()()))
 	if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "guarded"), []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +128,16 @@ func TestHealthRoleGuarded(t *testing.T) {
 	// The guards in place say nothing about the tunnel: plain health still fails.
 	if code := healthMain(nil, env, &stdout, &stderr); code != 1 {
 		t.Errorf("health without a heartbeat: %d", code)
+	}
+	// Evidence from another network namespace (a pod's emptyDir that outlived
+	// its sandbox) proves nothing about this one.
+	other := fmt.Sprintf("molebridge-guarded 1 %s net:[1] %d\n", strings.TrimSpace(string(boot)), int64(bootclock.System()()))
+	if err := os.WriteFile(filepath.Join(dir, "run", "molebridge", "guarded"), []byte(other), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := healthMain([]string{"--guarded"}, env, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "another network namespace") {
+		t.Errorf("another namespace's evidence: %d %q", code, stdout.String())
 	}
 	if code := healthMain([]string{"--guarded", "x"}, env, &stdout, &stderr); code != 2 {
 		t.Errorf("usage: %d", code)

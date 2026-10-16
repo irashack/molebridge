@@ -141,11 +141,17 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 		t.Error("a native sidecar runs no NetBird")
 	}
 	// The startup gate: the guards are in, whatever the tunnel's state.
-	l.waitFor(10*time.Second, "health --guarded to pass", func() bool {
-		cmd := exec.Command("ip", "netns", "exec", l.exit.Name, filepath.Join(binDir, "molebridge"), "health", "--guarded")
+	guarded := func(ns string) bool {
+		cmd := exec.Command("ip", "netns", "exec", ns, filepath.Join(binDir, "molebridge"), "health", "--guarded")
 		cmd.Env = l.nativeSidecarEnv()
 		return cmd.Run() == nil
-	})
+	}
+	l.waitFor(10*time.Second, "health --guarded to pass", func() bool { return guarded(l.exit.Name) })
+	// The same fresh heartbeat read from another namespace (a pod's /run that
+	// outlived its sandbox) must not pass: those guards are not there.
+	if guarded(l.outside.Name) {
+		t.Error("health --guarded accepted another namespace's guard heartbeat")
+	}
 
 	if !l.appSends() {
 		t.Error("the LAN gateway did not answer")

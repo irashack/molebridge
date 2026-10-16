@@ -85,6 +85,67 @@ func Healthy(path string, clock bootclock.Clock) (bool, string) {
 	return true, ""
 }
 
+// netNamespace names the caller's network namespace as the kernel does
+// ("net:[4026532001]"), or "" when it can't be read.
+func netNamespace() string {
+	name, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// writeGuarded records, atomically, that a native sidecar's guards held just
+// now, in this network namespace: "molebridge-guarded 1 <boot id> <netns>
+// <boot-clock nanoseconds>". The namespace binds the evidence to the guards
+// it is about: a file that outlived its namespace (a pod's emptyDir across a
+// sandbox recreation) proves nothing about the new one.
+func writeGuarded(path string, now time.Duration) error {
+	ns := netNamespace()
+	if ns == "" {
+		return fmt.Errorf("the network namespace can't be named")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", readBootID(), ns, int64(now))), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Guarded is `molebridge health --guarded`: the guard heartbeat is from this
+// boot and this network namespace, and fresh on the boot clock.
+func Guarded(path string, clock bootclock.Clock) (bool, string) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, "no guard heartbeat yet"
+	}
+	f := strings.Fields(string(b))
+	if len(f) != 5 || f[0] != "molebridge-guarded" || f[1] != "1" {
+		return false, "the guard heartbeat is unreadable"
+	}
+	if f[2] != readBootID() {
+		return false, "the guard heartbeat is from another boot"
+	}
+	if ns := netNamespace(); ns == "" || f[3] != ns {
+		return false, "the guard heartbeat is from another network namespace"
+	}
+	at, err := strconv.ParseInt(f[4], 10, 64)
+	if err != nil || at < 0 {
+		return false, "the guard heartbeat is unreadable"
+	}
+	age := clock() - time.Duration(at)
+	switch {
+	case age < 0:
+		return false, "the guard heartbeat is from the future"
+	case age > MaxHeartbeatAge():
+		return false, fmt.Sprintf("the guards were last seen in place %d seconds ago", int(age/time.Second))
+	}
+	return true, ""
+}
+
 // readResult reads the published status record, bounded and strictly.
 //
 //lint:ignore U1000 linux-only: called from worker_linux.go

@@ -378,6 +378,9 @@ func (w *worker) run() int {
 	go w.renewLoop()
 
 	if s.Routing.IsNativeSidecar() {
+		// Whatever an earlier run left on the tmpfs says nothing about this
+		// run's guards (Guarded also refuses another namespace's).
+		_ = os.Remove(s.PathGuarded())
 		// The firewall goes in before the rules: until the contract holds it
 		// alone keeps the applications sharing this namespace off the host
 		// path. A namespace that outlived an earlier run (a pod's, across a
@@ -494,7 +497,7 @@ func (w *worker) writeGuarded() {
 	if !w.firewallOK.Load() || !w.mut.LastPass().ContractHolds {
 		return
 	}
-	if err := writeHeartbeat(w.s.PathGuarded(), w.clock()); err != nil {
+	if err := writeGuarded(w.s.PathGuarded(), w.clock()); err != nil {
 		w.warnEvery("guarded", time.Minute, "cannot write the guard heartbeat: %v", err)
 	}
 }

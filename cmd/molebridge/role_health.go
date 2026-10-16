@@ -26,15 +26,15 @@ func init() {
 // installed. It is the startup gate for applications that share the
 // namespace: before it passes, nothing keeps their traffic off the host path.
 func healthMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
-	path := exit.HeartbeatPathOf(env)
+	check := func() (bool, string) { return exit.Healthy(exit.HeartbeatPathOf(env), bootclock.System()) }
 	switch {
 	case len(args) == 1 && args[0] == "--guarded":
-		path = exit.GuardedPathOf(env)
+		check = func() (bool, string) { return exit.Guarded(exit.GuardedPathOf(env), bootclock.System()) }
 	case len(args) != 0:
 		fmt.Fprintln(stderr, "usage: molebridge health [--guarded]")
 		return 2
 	}
-	ok, why := exit.Healthy(path, bootclock.System())
+	ok, why := check()
 	if !ok {
 		fmt.Fprintf(stdout, "unhealthy: %s\n", why)
 		return 1
