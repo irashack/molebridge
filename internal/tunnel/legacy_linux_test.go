@@ -54,28 +54,37 @@ func TestALegacyHandleGroupSharesOneAbsoluteDeadline(t *testing.T) {
 	var all []*legacyLK
 	var mu sync.Mutex
 	m := &Manager{legacy: legacy{openLK: func() (linkAPI, error) {
-		f := &legacyLK{per: 40 * time.Millisecond, closed: make(chan struct{})}
+		f := &legacyLK{per: 100 * time.Millisecond, closed: make(chan struct{})}
 		mu.Lock()
 		all = append(all, f)
 		mu.Unlock()
 		return f, nil
 	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
+	completed := 0
 	err := m.legacyLinkDo(ctx, func(h linkAPI) error {
 		for i := 0; i < 3; i++ {
 			if err := h.(*legacyLK).wait(); err != nil {
 				return err
 			}
+			completed++
 		}
 		return nil
 	})
 	if !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("%v", err)
 	}
-	if took := time.Since(start); took > 110*time.Millisecond {
-		t.Errorf("took %v for a 70 ms deadline", took)
+	// Three calls of 100 ms each under one 150 ms deadline: the deadline ends
+	// the group, so not all three complete. Counted rather than timed, so a
+	// loaded runner's scheduling delay cannot fail it; the bound below only
+	// catches a deadline that never fires.
+	if completed >= 3 {
+		t.Errorf("all %d calls completed under one 150 ms deadline", completed)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("took %v for a 150 ms deadline", took)
 	}
 	select {
 	case <-all[0].closed:
