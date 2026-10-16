@@ -25,6 +25,9 @@ func (l *lab) nativeSidecarEnv() []string {
 		"TUNNEL_BACKEND=native", "EXIT_KIND=sidecar", "PROVIDER=mullvad", "EXIT_IF=" + dExit,
 		// The host path's gateway only: the destination is not LAN.
 		"SIDECAR_LAN_CIDRS=198.51.100.2/32,2001:db8:2::2/128",
+		// The applications' resolvers are in the tunnel: their DNS to the
+		// LAN gateway is dropped.
+		"SIDECAR_HOST_RESOLVERS=198.51.100.2",
 		"STATE_DIR=" + l.stateDir, "TUNNEL_CONF_DIR=" + l.confDir, "MOLEBRIDGE_RUN_DIR=" + l.runDir,
 		"GUARD_GRACE=5", "ROUTING_RECONCILE_INTERVAL=10", "TZ=UTC",
 	}
@@ -37,11 +40,15 @@ func (l *lab) leakCounter() {
 	script := `table inet leak {
   counter target {}
   counter handshake {}
+  counter lan_dns {}
+  counter host_dns {}
   chain pre {
     type filter hook prerouting priority raw; policy accept;
     ip daddr ` + dTarget4 + ` counter name target
     ip6 daddr ` + dTarget6 + ` counter name target
     ip daddr 198.51.100.10 udp dport 51820 counter name handshake
+    ip daddr 198.51.100.2 udp dport 853 counter name lan_dns
+    ip daddr 198.51.100.2 udp dport 53 counter name host_dns
   }
 }
 `
@@ -159,6 +166,21 @@ func TestDrillNativeSidecarKeepsTheNamespaceClosed(t *testing.T) {
 	if n := l.leaked(); n != 0 {
 		t.Fatalf("%d packets reached the destination by the host path", n)
 	}
+	// An application's lookup to a resolver on the LAN goes nowhere: the
+	// output hook refuses the send. The exit's own marked lookups go to the
+	// same resolver on port 53, so the counter outside watches 853, which
+	// only the application uses.
+	for _, port := range []string{"53", "853"} {
+		if out, err := l.exit.Exec("bash", "-c", "echo lookup > /dev/udp/198.51.100.2/"+port); err == nil {
+			t.Errorf("an application's DNS to the LAN (port %s) was sent: %s", port, out)
+		}
+	}
+	if n := l.counted("lan_dns"); n != 0 {
+		t.Errorf("%d of the application's lookups reached the LAN resolver", n)
+	}
+	// The exit's own lookups (unbound, so marked) ask SIDECAR_HOST_RESOLVERS
+	// by the host path, whatever the namespace's resolv.conf says.
+	l.waitFor(20*time.Second, "the exit's own lookups to reach SIDECAR_HOST_RESOLVERS", func() bool { return l.counted("host_dns") > 0 })
 	// The tunnel's own UDP carries its fwmark (EXIT_TABLE) and so reaches the
 	// peer's endpoint by the host path (rule 93): the handshake the sends
 	// above started arrived outside.
