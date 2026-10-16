@@ -16,7 +16,7 @@ Compose gives the exit and the panel the registry id
 The `gluetun-*` ids also serve the experimental [gluetun
 sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
 be verified. The native ids also serve the experimental [native
-sidecar](native-sidecar.md) (new in 0.9.0, not yet run live): Molebridge's own
+sidecar](native-sidecar.md) (new in 0.9.0, run live with PIA on Kubernetes): Molebridge's own
 tunnel for containers that share the exit's namespace, and the only form that
 offers PIA to them.
 

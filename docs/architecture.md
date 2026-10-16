@@ -1329,7 +1329,7 @@ overlay exit's says "exit".
 
 ## The native sidecar
 
-New in 0.9.0, experimental, and not yet run live ([testing](testing.md#090)).
+New in 0.9.0 and experimental; run live with PIA on Kubernetes ([testing](testing.md#090)).
 `EXIT_KIND=sidecar` with `TUNNEL_BACKEND=native` and Mullvad, PIA or NordVPN, in
 `compose.native-sidecar.yaml`. It exists because PIA over WireGuard has no
 other home: Molebridge's gluetun forms don't offer PIA. The procedure, the

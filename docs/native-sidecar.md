@@ -19,12 +19,10 @@ the exit.
 **What has been tested.** At 0.9.0 the unit tests and `go vet` pass, and the
 namespace drills passed in a privileged rootful Podman container on Debian
 forky/sid, kernel 7.2.8 (amd64), including the drills for this form and an
-end-to-end drill of the real binary. No native
-sidecar has run live: the live acceptance on Kubernetes has not been recorded
-yet. Docker Engine, podman-compose, the Compose form, Mullvad and NordVPN as
-native sidecars, and PIA's port forwarding against PIA are untested, and
-`compose.native-sidecar.yaml` has not been through `docker compose config`
-yet. Exactly what ran, and what did not, is in [testing](testing.md#090).
+end-to-end drill of the real binary. It has run live with PIA, port
+forwarding included, on Kubernetes (k0s with Cilium) beside qBittorrent, in the
+form of the example below. Docker Engine, podman-compose, the Compose form on
+a live engine, and Mullvad and NordVPN as native sidecars are untested. Exactly what ran, and what did not, is in [testing](testing.md#090).
 
 ## When to use it
 
@@ -577,7 +575,7 @@ With Podman and Quadlet units, give each application's unit `Requires=` and
 The example runs the exit as a Kubernetes sidecar container beside an
 application, and `port-sync` as a further container. This is the form the live
 acceptance on Kubernetes uses, but it is not a packaged or supported form:
-Molebridge ships no manifests, and nothing in it has run live yet
+Molebridge ships no manifests. It has run live in this form, with PIA
 ([testing](testing.md#090)). Adapt it, and check it with the
 [verification](verification.md#a-native-sidecar) drills in your own cluster.
 

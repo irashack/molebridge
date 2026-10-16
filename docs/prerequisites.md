@@ -4,7 +4,7 @@ Everything here is needed before [setup](setup.md). Where something has only
 been tested in one configuration, this page says so. [Testing](testing.md#080)
 is the record of what ran live at 0.8.0; "tested" statements below that name
 an earlier release are about that release. The sidecar forms ([gluetun](gluetun-sidecar.md)
-and [native](native-sidecar.md), the latter new in 0.9.0 and not yet run live)
+and [native](native-sidecar.md), the latter new in 0.9.0 and run live with PIA on Kubernetes only)
 need no NetBird account: read the host, runtime and network parts, and skip
 [NetBird](#netbird).
 

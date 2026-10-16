@@ -10,10 +10,10 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 a tunnel Molebridge builds itself, and a routing contract and a firewall of its
 own that keep those containers' traffic in the tunnel. It exists so that an
 application can use PIA over WireGuard; Molebridge's gluetun forms don't offer
-PIA, and gluetun supports PIA over OpenVPN only. Nothing has run live yet: the
-unit tests, `go vet` and the namespace drills pass, the live acceptance on
-Kubernetes is still to be recorded, and Docker Engine, podman-compose and the
-Compose file itself are untested ([testing](docs/testing.md#090)). Nothing
+PIA, and gluetun supports PIA over OpenVPN only. It has run live once, with PIA
+on Kubernetes (k0s with Cilium) beside qBittorrent; the unit tests, `go vet` and
+the namespace drills pass, and Docker Engine, podman-compose and the Compose
+file on a live engine are untested ([testing](docs/testing.md#090)). Nothing
 changes for the overlay kinds and the gluetun sidecar.
 
 **The native sidecar** ([the page](docs/native-sidecar.md)).

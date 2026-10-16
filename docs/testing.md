@@ -19,9 +19,8 @@ tested, not instructions; the current commands are in the other pages.
 
 0.9.0 adds the [native sidecar](native-sidecar.md) (`EXIT_KIND=sidecar` with
 `TUNNEL_BACKEND=native`, `compose.native-sidecar.yaml`) and the `port-sync` role.
-**Neither has run live.** What is recorded here is what the unit tests and the
-isolated namespace drills show; the live acceptance on Kubernetes has not been
-recorded yet. Nothing changes for the overlay exits and the gluetun sidecar, and
+The live acceptance of the first candidate is recorded below, under Live
+acceptance. Nothing changes for the overlay exits and the gluetun sidecar, and
 the 0.8.0 record below is still the record for them.
 
 ### Run so far
@@ -100,19 +99,72 @@ The acceptance policy for 0.9.0 (`tools/acceptance-policy.json`) names a
 Kubernetes platform and a native-sidecar kind, with an upgrade from 0.8 as one of
 its drills.
 
-<!-- live acceptance: to be recorded -->
+#### v0.9.0-rc.1, 2026-10-16
+
+The candidate `ghcr.io/irashack/molebridge:v0.9.0-rc.1`, index digest
+`sha256:850c1ddde82155e164b24af89f691de859c1c0805126ec2b70fcac0dfea561ed`
+(commit `ab031d7`, signature verified with cosign against the release
+workflow), pulled from the registry on the homelab's Dryad (Debian, kernel
+7.2.8, amd64).
+
+**Upgrade from 0.8.** Every 0.8.0 project there moved to the candidate with no
+setting changed: the native Mullvad, PIA and NordVPN exits, the gluetun
+overlay exit, the gluetun sidecar, three more native exits and Switchyard, as
+rootless Podman Quadlet units. Each came back healthy with its required checks
+passing.
+
+**Drills on the native overlay exits** (Mullvad, PIA, NordVPN), from the exit's
+namespace:
+
+- Drift: IPv4 rules 97, 95 and 1 and IPv6 rule 97 deleted one at a time, and a
+  foreign `lookup main` rule added at 96: each repaired in 13 to 17 ms
+  (polling included).
+- Tunnel loss: the tunnel interface deleted. The exit table held only its
+  unreachable fallback until the tunnel was back (0.2 to 1.2 s), and each exit
+  reported a fresh verified egress 4.8 to 8.0 s after the deletion.
+- Lease lapse on NordVPN: the worker frozen with SIGSTOP. NetBird stopped 31.8 s
+  later, the exit removed the interfaces it owns ("the routing guards stay in
+  place") and stopped with exit 1; the unit restarted it and it reported a
+  verified egress 104.7 s after the freeze.
+
+**The native sidecar on Kubernetes**: k0s with Cilium (pod MTU 1280, a /32 on
+`eth0`), one pod: the exit as an init container with `restartPolicy: Always`
+and `molebridge health --guarded` as its startup probe, the official
+qBittorrent 5.2.4 image (libtorrent 1.2) as uid 1000 with no capabilities,
+and `port-sync`. PIA, `ca_ontario`, port forwarding on;
+`SIDECAR_LAN_CIDRS` the pod range only, `SIDECAR_HOST_RESOLVERS` the cluster's
+DNS service, the pod's resolvers PIA's (`dnsPolicy: None`). From inside the
+pod's namespace, as uid 1000 with no capabilities:
+
+- the exit's record: `ok`, routing, traffic protection, peer, handshake and
+  egress passing, a forwarded port;
+- an unbound request leaves with PIA's address, not the host's; one bound to
+  `eth0` gets nothing;
+- DNS to PIA's resolver through the tunnel answers; DNS to the cluster's DNS
+  service and directly to a cluster DNS pod is dropped; the pod range answers;
+- the policy rules are the native sidecar's (88, 89, 90, 93, 94, 96, 97, 98);
+- the application's clients (other pods, the cluster's gateway, a host-network
+  forwarder) reach it, and nothing restarted.
+
+**Failed: `port-sync` against qBittorrent 5.2.** qBittorrent 5.2 answers a good
+login with HTTP 204 and no body; rc.1 accepted only 200 `Ok.`, so it logged
+`qBittorrent answered the login with HTTP 204` every interval and never set
+the listening port. Fixed after rc.1 (204 is a good login, 401 a refused one).
+
+Not drilled live at rc.1: the native sidecar's own drift, tunnel-loss and
+lease-lapse drills (the namespace drills above cover them), a sandbox
+recreation, and Mullvad or NordVPN as native sidecars.
 
 ### Not tested at 0.9.0
 
-- Any native sidecar on a live host: the Kubernetes acceptance above is not
-  recorded yet.
+- The native sidecar under Docker or Podman Compose on a live host; its live
+  run so far is the Kubernetes one above.
 - Docker Engine and podman-compose. `compose.native-sidecar.yaml` has not been run
   on any engine; it has been through `docker compose config` (above).
 - Mullvad and NordVPN as native sidecars, live. PIA is the reason for the form.
 - A live run against PIA's port forwarding as a native sidecar, until the
   acceptance records it. PIA port forwarding has not been tested against PIA at
   any version.
-- `molebridge port-sync` against a running qBittorrent.
 - DNS on a live engine: which resolvers an application's namespace uses under
   Docker, and what a leak test shows on either platform until the acceptance
   records it. `SIDECAR_HOST_RESOLVERS`'s resolver override has unit tests
