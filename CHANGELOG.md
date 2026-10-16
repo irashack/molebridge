@@ -26,10 +26,17 @@ changes for the overlay kinds and the gluetun sidecar.
   the tunnel exists and left in place when the exit stops or restarts: a routing
   contract (rules 88 to 98 and the exit table's fallback, repaired and judged like
   the overlay's) and an nftables firewall, table `inet molebridge_sidecar`, which
-  stops what policy routing alone does not, a socket bound to an interface. The
-  firewall is read back every 2 seconds and replaced in one transaction when it
-  differs. A restart of the exit inside a kept namespace, as in a Kubernetes pod,
-  leaves the applications closed and the exit rebuilds the tunnel.
+  stops what policy routing alone does not, a socket bound to an interface. A
+  second table, `inet molebridge_sidecar_backstop`, repeats the output chain, so
+  deleting either table leaves the other enforcing it. The output chain admits
+  IPv6 on the host link only as ICMPv6 neighbour discovery and MLDv2 reports
+  (router solicitation, neighbour solicitation and advertisement, listener
+  report), not as blanket `fe80::/10` and `ff02::/16` accepts, so an application
+  cannot send multicast or link-local UDP out of the host interface unless
+  `SIDECAR_LAN_CIDRS` lists it. Both tables are read back every 2 seconds and
+  replaced in one transaction when either differs. A restart of the exit inside a
+  kept namespace, as in a Kubernetes pod, leaves the applications closed and the
+  exit rebuilds the tunnel.
 - New setting `SIDECAR_LAN_CIDRS`: the networks the applications may reach outside
   the tunnel (at most 16 prefixes, no default route). `HOST_IF` and `CONTROL_MARK`
   apply to this form too. Molebridge does not tunnel or configure DNS; a resolver

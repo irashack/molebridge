@@ -273,8 +273,9 @@ sidecar the firewall is the second of two layers.
   `ip molebridge_forward` holds the DNAT and masquerade rules for the forwarded
   port ([providers](providers.md#port-forwarding)). A native sidecar has
   neither this table nor the ingress guard.
-- **The native sidecar's firewall.** Table `inet molebridge_sidecar`, installed
-  and read back by the exit ([the native sidecar](#the-native-sidecar)).
+- **The native sidecar's firewall.** Tables `inet molebridge_sidecar` and
+  `inet molebridge_sidecar_backstop`, installed and read back by the exit
+  ([the native sidecar](#the-native-sidecar)).
 
 Each change is one batch on a socket with a deadline of its own (10 seconds
 when the caller gives none).
@@ -1354,17 +1355,29 @@ Rules 94 and 98 follow the overlay logic, so PIA's change of address is the
 same transaction. Installation puts 97 before 96, and both before the
 exceptions, including in a namespace that kept a previous run's rules.
 
-**The firewall.** Table `inet molebridge_sidecar`: an output chain with policy
-drop that admits loopback, the tunnel interface, the two marks, your
-`SIDECAR_LAN_CIDRS` prefixes and IPv6 link-local and multicast; an input chain
-that accepts replies on the tunnel and PIA's forwarded port and drops the rest
-of what arrives on the tunnel; and a forward chain with policy drop. Policy
-routing alone does not stop a socket bound to an interface: when the route
-lookup fails, the kernel assumes the destination is on-link and sends the packet
-out of the bound device. The firewall drops that packet. The exit installs it
-in one transaction, reads it back every 2 seconds (nftables announces nothing
-the worker subscribes to), and replaces it in one transaction when anything
-differs.
+**The firewall.** Two tables in family `inet`. `molebridge_sidecar` has an
+output chain with policy drop that admits loopback, the tunnel interface, the
+two marks, your `SIDECAR_LAN_CIDRS` prefixes and four ICMPv6 types (router
+solicitation, neighbour solicitation, neighbour advertisement and MLDv2 listener
+reports); an input chain that accepts replies on the tunnel and PIA's forwarded
+port and drops the rest of what arrives on the tunnel; and a forward chain with
+policy drop. It admits no IPv6 link-local or multicast destination as such:
+Linux routes `ff00::/8` through the local table, so that would let an
+application send UDP multicast, and UDP to a link-local address, out of the host
+interface. An application cannot send the four ICMPv6 types (a datagram ICMPv6
+socket sends echo requests only; a raw socket needs `CAP_NET_RAW`), so they pass
+only for the kernel. `molebridge_sidecar_backstop` repeats the output chain and
+has no other. A packet is sent only if every output base chain accepts it, so
+deleting either table leaves the other enforcing the output policy; two faults
+at once, such as `nft flush ruleset`, are outside the guarantee, as for the
+routing contract. Policy routing alone does not stop a socket bound to an
+interface: when the route lookup fails, the kernel assumes the destination is
+on-link and sends the packet out of the bound device. The firewall drops that
+packet. The exit installs both tables in one transaction, reads both back every
+2 seconds (nftables announces nothing the worker subscribes to), and replaces
+both in one transaction when anything differs in either. The read-back reason
+names the table. The rules as `nft list ruleset` prints them are in
+[the native sidecar](native-sidecar.md#the-firewall).
 
 **Order.** The worker installs the firewall, then the contract, then builds the
 tunnel; it logs `the sidecar firewall is installed` between the first two

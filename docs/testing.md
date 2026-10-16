@@ -29,7 +29,7 @@ the 0.8.0 record below is still the record for them.
 | What | How | Where and what |
 |---|---|---|
 | Unit tests and `go vet` | `go test ./...`, `go vet ./...` | Pass on the 0.9.0 branch, Go 1.27.2 |
-| Namespace drills | `go test -tags drill ./internal/...` | Passed in a privileged rootful Podman 5.8.6 container on Debian forky/sid, kernel 7.2.8 (amd64), including the drills new for the native sidecar, below |
+| Namespace drills | `go test -tags drill ./internal/...` | Passed in a privileged rootful Podman 5.8.6 container on Debian forky/sid, kernel 7.2.8 (amd64), including the drills new for the native sidecar, below. All 32 test packages, drills included, passed in one run at revision `6d00d31` of the 0.9.0 branch |
 
 The new drills, for the native sidecar:
 
@@ -39,11 +39,27 @@ The new drills, for the native sidecar:
   repaired within the 250 ms bound.
 - With the tunnel route absent, an unmarked send fails, and a LAN send and a
   control-marked send leave by the host interface.
-- The firewall installs, is replaced atomically with a new port, and a deleted
-  rule or a flipped policy is detected.
+- The firewall (two tables, `inet molebridge_sidecar` and
+  `inet molebridge_sidecar_backstop`) installs, is replaced atomically with a new
+  port, and a deleted rule or a flipped policy is detected.
 - At packet level: an unmarked socket bound to the host interface is dropped;
   LAN and control-marked sends pass; the tunnel passes; inbound on the tunnel to a
   port other than the forwarded one is dropped.
+- IPv6 on the host link, with the firewall's ICMPv6 rule (neighbour discovery
+  only; see [the firewall](native-sidecar.md#the-firewall)), on the same kernel
+  and container as the drills above:
+  - A capability-free UDP sender (every capability dropped, `no_new_privs`)
+    bound to the host interface and sending to `ff02::1`, and another sending to
+    `fe80::1`, are dropped: zero packets reach a counter on the outside. With
+    the same destination listed in `SIDECAR_LAN_CIDRS`, the same sender does
+    reach the outside.
+  - Neighbour discovery works without static entries: with the neighbour caches
+    flushed on both sides, a ping to a LAN-listed IPv6 address succeeds and the
+    neighbour entry is a discovered one, not `PERMANENT`.
+  - A capability-free sender bound to the host interface sends continuously
+    while the main table is deleted and repaired, and again while the backstop
+    table is: zero packets reach the outside in either case. The control, with
+    both tables deleted (two faults, outside the guarantee), does reach it.
 - The end-to-end drill (`internal/exit/drill_native_sidecar_test.go`), on the
   same Debian forky/sid, kernel 7.2.8, Podman 5.8.6 privileged container as the
   other drills: the real `molebridge` binary runs as a native sidecar in a
@@ -53,12 +69,14 @@ The new drills, for the native sidecar:
   - unbound and `eth0`-bound pings to a destination outside the LAN prefix
     never arrive outside, and the LAN gateway answers;
   - the tunnel's handshake leaves by the host path, through its fwmark;
-  - a deleted firewall is reinstalled and the reinstall is logged;
-  - after a killed worker the tunnel link is gone, the rules and the firewall
-    stay, the failure record marks the five required checks `unknown`, and
+  - a deleted firewall table is reinstalled and the reinstall is logged, and
+    the namespace has both tables (`inet molebridge_sidecar` and
+    `inet molebridge_sidecar_backstop`) again afterwards;
+  - after a killed worker the tunnel link is gone, the rules and both firewall
+    tables stay, the failure record marks the five required checks `unknown`, and
     nothing leaks;
-  - a second run in the same namespace ends with one firewall and one copy of
-    each rule;
+  - a second run in the same namespace ends with one copy of each firewall
+    table and of each rule;
   - a requested stop exits 0 and leaves the guards in place.
 
 The drill run did not use a live provider, a container engine's networking or a

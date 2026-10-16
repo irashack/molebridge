@@ -78,7 +78,7 @@ warning does not go away, see
 | Property | Checked by | How |
 |---|---|---|
 | The routing contract: its rules and the exit table's fallback, in both address families | the exit | Read back from the kernel on every change and on a full pass every `ROUTING_RECONCILE_INTERVAL` seconds, repaired when it differs. The `routing` check |
-| The firewall: table `inet molebridge_sidecar` is exactly what the exit installed | the exit | Read back every 2 seconds, replaced in one transaction when it differs. Part of the `traffic_protection` check, which also needs `routing` to pass |
+| The firewall: tables `inet molebridge_sidecar` and `inet molebridge_sidecar_backstop` are exactly what the exit installed | the exit | Both read back every 2 seconds, both replaced in one transaction when either differs. Part of the `traffic_protection` check, which also needs `routing` to pass |
 | The peer, the handshake and egress through the tunnel | the exit | The peer and handshake through WireGuard's netlink interface, against the provider's server list; egress through the provider's own check, as with a native overlay exit |
 | An application's traffic really stays in the tunnel, including during a reconnect | the contract and the firewall | The exit checks that they are in place; it sends no test traffic from the applications' side. The drills in [verification](verification.md#a-native-sidecar) do |
 | DNS | nothing | Not tunnelled and not checked; see [DNS](#dns) |
@@ -150,8 +150,9 @@ depends on that setting.
 
 ### The firewall
 
-The exit installs one table, `inet molebridge_sidecar`. This is what
-`nft list table inet molebridge_sidecar` prints for the defaults, with
+The exit installs two tables, both in family `inet`: `molebridge_sidecar`, and
+`molebridge_sidecar_backstop`, which holds a copy of the output chain and
+nothing else. This is what `nft list ruleset` prints for the defaults, with
 `SIDECAR_LAN_CIDRS=198.51.100.0/24,2001:db8::/32`, `EXIT_IF=pia` and a forwarded
 port of 43210 (the counters differ on a live exit; the input chain has no port
 rules when no port is forwarded):
@@ -166,8 +167,10 @@ table inet molebridge_sidecar {
 		meta mark 0x0001bd00 accept
 		ip daddr 198.51.100.0/24 accept
 		ip6 daddr 2001:db8::/32 accept
-		ip6 daddr fe80::/10 accept
-		ip6 daddr ff02::/16 accept
+		icmpv6 type nd-router-solicit accept
+		icmpv6 type nd-neighbor-solicit accept
+		icmpv6 type nd-neighbor-advert accept
+		icmpv6 type mld2-listener-report accept
 		counter packets 0 bytes 0 drop
 	}
 
@@ -183,21 +186,57 @@ table inet molebridge_sidecar {
 		type filter hook forward priority filter; policy drop;
 	}
 }
+table inet molebridge_sidecar_backstop {
+	chain output {
+		type filter hook output priority filter; policy drop;
+		oifname "lo" accept
+		oifname "pia" accept
+		meta mark 0x0000ca6d accept
+		meta mark 0x0001bd00 accept
+		ip daddr 198.51.100.0/24 accept
+		ip6 daddr 2001:db8::/32 accept
+		icmpv6 type nd-router-solicit accept
+		icmpv6 type nd-neighbor-solicit accept
+		icmpv6 type nd-neighbor-advert accept
+		icmpv6 type mld2-listener-report accept
+		counter packets 0 bytes 0 drop
+	}
+}
 ```
 
 The output chain admits loopback, the tunnel interface, the two marks, your
-LAN prefixes (IPv4 first, then IPv6, in the order you wrote them) and IPv6
-link-local and link-scope multicast for neighbour discovery. Everything else
-is counted and dropped. The input chain accepts replies on the tunnel and, when
-PIA forwards a port, new TCP and UDP connections to that port, and drops the
-rest of what arrives on the tunnel; traffic arriving on other interfaces is
+LAN prefixes (IPv4 first, then IPv6, in the order you wrote them) and four
+ICMPv6 types: router solicitation, neighbour solicitation, neighbour
+advertisement and MLDv2 listener reports, which IPv6 on the host link needs
+(neighbour discovery works without static entries). Everything else is counted
+and dropped. The input chain accepts replies on the tunnel and, when PIA
+forwards a port, new TCP and UDP connections to that port, and drops the rest
+of what arrives on the tunnel; traffic arriving on other interfaces is
 accepted. The forward chain drops everything.
 
-The exit installs the table in one transaction that deletes an earlier one and
-adds the new, so there is never a moment without it, and it reads the table
-back after every install. It compares chains, hooks, priorities, policies and
-rules in order, not counters. An extra rule, a comment, a changed policy or a
-missing chain is a difference.
+The exit does not admit IPv6 link-local (`fe80::/10`) or multicast (`ff00::/8`)
+destinations as such. Linux routes `ff00::/8` through the local table, so a
+blanket accept for them would let an unprivileged application send UDP
+multicast, and UDP to a link-local address, out of the host interface. The four
+ICMPv6 types are not open to an application: an ICMPv6 datagram socket sends
+echo requests only, and a raw socket needs `CAP_NET_RAW`. An application's
+multicast or link-local traffic leaves only if `SIDECAR_LAN_CIDRS` lists the
+destination; the drills in [testing](testing.md#090) check both outcomes.
+
+Why two tables: a packet is sent only if every output base chain accepts it,
+and the main table's output chain and the backstop's are separate. Delete either
+table and the other still enforces the output policy. Deleting the main table
+also removes the input and forward chains, which the backstop does not repeat,
+until the repair. Two faults at once, such as `nft flush ruleset`, are outside
+the guarantee, as they are for the routing contract.
+
+The exit installs both tables in one transaction that deletes earlier ones and
+adds the new, so there is never a moment without them, and it reads both back
+after every install and every 2 seconds. It compares chains, hooks, priorities,
+policies and rules in order, not counters. An extra rule, a comment, a changed
+policy or a missing chain or table is a difference in either table, and the
+reason names the table
+([troubleshooting](troubleshooting.md#a-native-sidecar)).
 
 Marks are matched exactly. Only a process with `CAP_NET_ADMIN` can set a socket
 mark, and the applications get no capabilities.
@@ -210,7 +249,7 @@ Linux 5.7) is not looked up the same way: when the lookup fails, the kernel
 assumes the destination is on-link and sends the packet out of the bound
 device (`ip_route_output_key_hash_rcu`). With the tunnel down and the fallback
 route in place, an application could bind to the host interface and reach the
-network outside the tunnel. The firewall's output policy drops that packet. The
+network outside the tunnel. The firewall's output policy drops that packet, in each of its two tables. The
 contract, for its part, routes ordinary traffic into the tunnel and turns it
 into an error when the tunnel route disappears; the firewall alone would not
 route anything. The namespace drills check both, in [testing](testing.md#090).
@@ -239,9 +278,9 @@ The stop sequence removes the tunnel link and nothing else
 ([the stop sequence](architecture.md#the-stop-sequence)). The rules, the
 fallback and the firewall stay, so the applications in the namespace have no
 route out except to your LAN prefixes and no tunnel to use. When the exit
-starts again in the same namespace it replaces the firewall in one transaction,
-repairs the rules, and builds the tunnel. This is what lets a Kubernetes pod
-keep its namespace across a container restart. Under Docker, restarting or
+starts again in the same namespace it replaces both firewall tables in one
+transaction, repairs the rules, and builds the tunnel. This is what lets a
+Kubernetes pod keep its namespace across a container restart. Under Docker, restarting or
 recreating the exit gives it a new namespace instead; see
 [recovery](#recovery).
 
@@ -270,8 +309,9 @@ Compose, the engine's network, which published ports and their replies use;
 in Kubernetes, the pod and Service ranges and anything that connects to the
 application. Each entry must be a network prefix written with its network
 address (`198.51.100.0/24`, not `198.51.100.5/24`). Spaces around an entry are
-dropped. There can be at most 16 entries, IPv4 and IPv6 together. The exit
-refuses:
+dropped. There can be at most 16 entries, IPv4 and IPv6 together. An
+application's IPv6 multicast and link-local traffic leaves only to a destination
+these prefixes cover ([the firewall](#the-firewall)). The exit refuses:
 
 | Message | Cause |
 |---|---|
@@ -558,8 +598,8 @@ Create the secrets from files you wrote as in [setup](setup.md#3-create-the-tunn
 never from values on a command line. The notes that go with it:
 
 - **A container restart keeps the pod's namespace**, and the exit is built for
-  that: it replaces the firewall in one transaction and repairs the rules, then
-  rebuilds the tunnel. While it is down the applications have no route out
+  that: it replaces both firewall tables in one transaction and repairs the
+  rules, then rebuilds the tunnel. While it is down the applications have no route out
   ([what stays when the exit stops](#what-stays-when-the-exit-stops)).
 - **`SIDECAR_LAN_CIDRS` must name the pod and Service ranges**, and anything
   that connects to the application: node addresses for a NodePort or host

@@ -229,7 +229,7 @@ is the rest.
 started`, and the container exits with status 1.** The exit installs its
 firewall first, and couldn't. The line before it says why: `nft: install the
 sidecar firewall: <cause>`, `nft: open netlink: <cause>`, `nft: install the sidecar
-firewall: readback: <what differs>` (the table was written and the read-back
+firewall: readback: <what differs>` (the tables were written and the read-back
 found something other than what was installed; `<what differs>` is one of the
 reasons below). The exit gives each of these 10 seconds. Likely causes are a
 kernel without `nf_tables` (or its `inet` family, or the `meta mark` and `ct state`
@@ -277,25 +277,28 @@ argument.
 
 **`molebridge-exit: the sidecar firewall was not as installed (<reason>);
 reinstalled`.** The exit reads the firewall back every 2 seconds and found it
-changed, and replaced it. Something in the namespace changed the table, usually a
+changed, and replaced it. Something in the namespace changed one of the two
+tables (`molebridge_sidecar` or `molebridge_sidecar_backstop`), usually a
 process with `NET_ADMIN`: your own tooling, or an application that was given the
-capability. Find it and take the capability away. The reasons are:
+capability. Find it and take the capability away. Both tables are replaced
+together, and the reason names the table, as `<table>: ` before the text below
+(the missing-table reason is the exception). The reasons are:
 
 | Reason | Meaning |
 |---|---|
-| `no table inet molebridge_sidecar` | The table is gone |
-| `table flags differ` | The table carries flags |
-| `extra chain <name>` | A chain other than `output`, `input` and `forward` |
-| `no chain <name>` | One of the three is missing |
-| `chain <name>: hook differs`, `priority differs`, `type differs`, `device differs` | The chain's definition differs |
-| `chain <name>: no policy`, `policy accept`, `policy drop`, `policy differs` | The policy is not the one the chain needs (`output` and `forward` drop, `input` accepts). The reason names what the chain has |
-| `chain <name>: rule <n> differs` | The n-th rule is not the one installed, or has a comment |
-| `chain <name>: <n> rules, want <m>` | A rule was added or deleted |
+| `no table inet molebridge_sidecar`, `no table inet molebridge_sidecar_backstop` | That table is gone |
+| `<table>: table flags differ` | The table carries flags |
+| `<table>: extra chain <name>` | A chain the table does not have: anything but `output`, `input` and `forward` in the main table, anything but `output` in the backstop |
+| `<table>: no chain <name>` | One of its chains is missing |
+| `<table>: chain <name>: hook differs`, `priority differs`, `type differs`, `device differs` | The chain's definition differs |
+| `<table>: chain <name>: no policy`, `policy accept`, `policy drop`, `policy differs` | The policy is not the one the chain needs (`output` and `forward` drop, `input` accepts). The reason names what the chain has |
+| `<table>: chain <name>: rule <n> differs` | The n-th rule is not the one installed, or has a comment |
+| `<table>: chain <name>: <n> rules, want <m>` | A rule was added or deleted |
 
 While it differs, `traffic_protection` fails with "Sidecar firewall protection
 is incomplete; see docs/operations.md#recovery.", and a switch waits with
 "Waiting for the tunnel's routing and firewall; request will retry
-automatically." Both clear when the next check finds the table right.
+automatically." Both clear when the next check finds both tables right.
 
 **`molebridge-exit: the sidecar firewall was not as installed (<reason>) and
 could not be replaced: <cause>`, or `molebridge-exit: the sidecar firewall cannot
@@ -315,7 +318,7 @@ firewall verify, as above. If it persists, read the exit's log for the lines
 above and for the repairer's.
 
 **"Sidecar firewall protection is incomplete; see docs/operations.md#recovery."**
-The firewall is not as installed, or cannot be read. The exit repairs it by itself
+The firewall (either table) is not as installed, or cannot be read. The exit repairs it by itself
 within seconds, so this normally clears on the next check; read the exit's log for
 `the sidecar firewall was not as installed`. If it persists, recreate the exit
 ([recovery](operations.md#recovery)).

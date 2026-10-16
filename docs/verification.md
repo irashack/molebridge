@@ -289,11 +289,14 @@ container:molebridge-native-sidecar-exit`.
    same with the IPv6 prefixes, and 94 and 98 only for an IPv6 tunnel address.
 2. `ip route show table 51821` shows `default dev pia` and `unreachable default
    metric 4096`; for IPv6 with PIA, only the fallback.
-3. `nft list table inet molebridge_sidecar` is the table in
-   [the native sidecar](native-sidecar.md#the-firewall): `output` and `forward`
-   with policy `drop`, `input` with policy `accept`, your prefixes in the output
-   chain, and with PIA's forwarded port two rules for it in `input`. Counters
-   differ.
+3. `nft list ruleset` shows both tables in
+   [the native sidecar](native-sidecar.md#the-firewall), `inet molebridge_sidecar`
+   and `inet molebridge_sidecar_backstop` (`nft list tables` lists them). In the
+   main table `output` and `forward` have policy `drop` and `input` has policy
+   `accept`; the backstop has an `output` chain alone, with policy `drop`. The
+   two output chains are the same: your prefixes, then the four `icmpv6 type`
+   rules, then the drop, and no `fe80::/10` or `ff02::/16` rule. With PIA's
+   forwarded port, `input` has two rules for it. Counters differ.
 4. `docker compose exec exit molebridge status` prints `state: ok (connected)`,
    with `routing=pass` and `traffic_protection=pass`.
 5. Provider egress, from the shell, as in the probe table above (`--interface
@@ -336,10 +339,11 @@ capture on the host interface for the probe's address, `tcpdump -ni eth0 'host
 | Lookup rule deleted | `ip rule del priority 96` | The probe fails on rule 97 until `molebridge-exit: added IPv4 rule 96` |
 | Terminal rule deleted | `ip rule del priority 97` | The probe keeps working through rule 96; then `molebridge-exit: added IPv4 rule 97` |
 | Inserted bypass | `ip rule add lookup main priority 50` | Removed by the repair: `molebridge-exit: removed IPv4 rule 50: from all lookup main`. Nothing is promised about traffic before that |
-| Firewall table deleted | `nft delete table inet molebridge_sidecar` | Within about 2 seconds `molebridge-exit: the sidecar firewall was not as installed (no table inet molebridge_sidecar); reinstalled`. Until then the second layer is gone: `--interface eth0` would get out, which is why the table is read back every 2 seconds |
-| Firewall policy flipped | `nft add chain inet molebridge_sidecar output '{ policy accept; }'` | `molebridge-exit: the sidecar firewall was not as installed (chain output: policy accept); reinstalled` |
-| Firewall rule deleted | `nft delete rule inet molebridge_sidecar output handle <handle>` (from `nft -a list table inet molebridge_sidecar`) | `molebridge-exit: the sidecar firewall was not as installed (chain output: rule <n> differs); reinstalled`, or `chain output: <n> rules, want <m>` when the last rule went |
-| Exit stopped | `docker compose stop exit` | The probe fails, and the table and the rules are still in the application's namespace (`nft list table inet molebridge_sidecar` in a shell joined to the application's container). Recover with `docker compose up -d --force-recreate` ([recovery](native-sidecar.md#recovery)) |
+| Firewall table deleted | `nft delete table inet molebridge_sidecar` | Within about 2 seconds `molebridge-exit: the sidecar firewall was not as installed (no table inet molebridge_sidecar); reinstalled`. The backstop keeps enforcing the output policy meanwhile, so `--interface eth0` still fails; the input and forward chains are gone until the reinstall |
+| Backstop table deleted | `nft delete table inet molebridge_sidecar_backstop` | `molebridge-exit: the sidecar firewall was not as installed (no table inet molebridge_sidecar_backstop); reinstalled` within about 2 seconds, and `--interface eth0` fails throughout. Do not delete both tables in one command: two faults at once are outside the guarantee |
+| Firewall policy flipped | `nft add chain inet molebridge_sidecar output '{ policy accept; }'` | `molebridge-exit: the sidecar firewall was not as installed (molebridge_sidecar: chain output: policy accept); reinstalled`. The backstop's chain still drops |
+| Firewall rule deleted | `nft delete rule inet molebridge_sidecar output handle <handle>` (from `nft -a list table inet molebridge_sidecar`) | `molebridge-exit: the sidecar firewall was not as installed (molebridge_sidecar: chain output: rule <n> differs); reinstalled`, or `molebridge_sidecar: chain output: <n> rules, want <m>` when the last rule went. The same drill on `molebridge_sidecar_backstop` names that table |
+| Exit stopped | `docker compose stop exit` | The probe fails, and the tables and the rules are still in the application's namespace (`nft list ruleset` in a shell joined to the application's container). Recover with `docker compose up -d --force-recreate` ([recovery](native-sidecar.md#recovery)) |
 
 A check that runs while the break stands reports `traffic_protection` failed (and
 `routing` too, for a rule or the fallback) with the message "Sidecar firewall
@@ -352,7 +356,8 @@ that the same cases come from are in [testing](testing.md#090).
 
 - `nft list table inet molebridge_sidecar` has a `tcp dport` and a `udp dport`
   rule for that port in `input`, and none for any other. `nft list tables` shows
-  no `ip molebridge_forward` and no `inet molebridge_guard`.
+  `inet molebridge_sidecar` and `inet molebridge_sidecar_backstop`, and no
+  `ip molebridge_forward` and no `inet molebridge_guard`.
 - Your application listens on that port. From outside, connect to the PIA egress
   address and the port over TCP and UDP; both reach it. A connection to another
   port on the tunnel address is dropped.
