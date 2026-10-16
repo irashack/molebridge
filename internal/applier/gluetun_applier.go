@@ -193,6 +193,11 @@ func (c *GluetunCatalog) Relays() *providers.Entries { return c.inner.Relays }
 // Snapshot implements Catalog.
 func (c *GluetunCatalog) Snapshot() map[string]any { return c.inner.Snapshot }
 
+// ReadThisProcess is whether the catalogue has been read from gluetun's file
+// since it was made; before that it is the snapshot an earlier process
+// published.
+func (c *GluetunCatalog) ReadThisProcess() bool { return c.haveSig }
+
 // ExitIPs implements Catalog: gluetun's list names no exit addresses.
 func (c *GluetunCatalog) ExitIPs(string) []string { return nil }
 
@@ -934,6 +939,13 @@ func (g *gluetunProvider) updateServers(ctx context.Context, a *Applier) {
 		return
 	}
 	if now < g.nextUpdate {
+		return
+	}
+	// The snapshot an earlier process published says nothing about the file
+	// gluetun has now: a new pod can start from gluetun's built-in list beside
+	// state kept from before, and judging that snapshot fresh would settle the
+	// refresh as not needed. Only a list read from gluetun's file decides.
+	if c, ok := a.catalog.(*GluetunCatalog); ok && !c.ReadThisProcess() {
 		return
 	}
 	relays := a.catalog.Relays()

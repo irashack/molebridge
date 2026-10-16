@@ -1172,7 +1172,9 @@ The exit therefore starts one refresh itself (`PUT /v1/updater/status`)
 once gluetun's VPN is running and its tunnel has had a handshake in the
 last 150 seconds (gluetun reports running while it still tries servers that
 don't answer), when the data is older than the period or than 7 days: at most three tries per exit start, each given 15 minutes and retried 5 minutes after a failure,
-reported as `server_list_update` in `result.json`. A failed answer of gluetun's
+reported as `server_list_update` in `result.json`. The data's age is judged on
+the list read from gluetun's file since the exit started, never on the
+catalogue an earlier run published, which can outlive gluetun's own list. A failed answer of gluetun's
 control server counts as a try. While a refresh is owed but hasn't started,
 `server_list_update` says what it waits for, and the exit logs each change of
 reason once (`applier: gluetun's server list is out of date; its update waits:

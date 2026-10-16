@@ -968,6 +968,27 @@ func TestFreshDataStartsNoUpdate(t *testing.T) {
 	}
 }
 
+func TestAFreshSnapshotFromAnEarlierProcessDoesNotSettleTheUpdate(t *testing.T) {
+	// Seen live on 0.9.1-rc.1: the exit's state survived, with a fresh
+	// catalogue, but the new pod's gluetun started from its built-in list.
+	f := newGluetunFixture(t, glOptions{})
+	writeFile(t, f.servers, serversJSON("ivpn", time.Now().Unix()-400*86400), 0o644)
+	f.a.catalog = f.provider.MakeCatalog(f.a) // the applier starts again
+	if f.gluetunCatalog().ReadThisProcess() || !f.a.catalog.Usable() {
+		t.Fatal("the new catalogue should hold only the earlier snapshot")
+	}
+	f.update()
+	if f.provider.updateState != "" || f.control.updates != 0 {
+		t.Fatalf("judged the earlier snapshot: state %q, %d updates", f.provider.updateState, f.control.updates)
+	}
+	f.a.nextCatalog = 0
+	mustTick(t, f.a)
+	f.update()
+	if f.control.updates != 1 || f.provider.updateState != "updating" {
+		t.Errorf("after gluetun's file was read: %d updates, state %q", f.control.updates, f.provider.updateState)
+	}
+}
+
 func TestNoUpdateBeforeTheTunnelRunsOrWithTheUpdaterOff(t *testing.T) {
 	f := staleFixture(t, glOptions{})
 	f.control.status = "starting"

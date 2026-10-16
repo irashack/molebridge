@@ -27,6 +27,19 @@ routing, the tunnel or the mutation owner changed), a live exit on any
 platform, and the new tool in a Kubernetes init container. The 0.9.0 and 0.8.0
 records below still hold for everything else.
 
+**v0.9.1-rc.1, live on Kubernetes (k0s with Cilium), 2026-10-16.** Molebridge's
+CI, the namespace drills included, passed on the candidate's commit. Every exit
+of one deployment ran the candidate: native Mullvad, PIA and NordVPN overlay
+exits, a gluetun overlay exit and a gluetun sidecar with NordVPN, and a PIA
+native sidecar beside qBittorrent. All reported `ok` after the upgrade. Both
+gluetun pods took their preflight from an init container running
+`gluetun-preflight`, and gluetun started through it. The fault the release was
+for was then reproduced on purpose: the gluetun sidecar's server list was moved
+aside, so its new pod started from gluetun's built-in list (data from
+2024-03-21) beside the exit's kept state. In 25 minutes the exit asked for no
+refresh and `server_list_update` stayed null: it had judged its own earlier,
+fresh catalogue. rc.2 fixes that.
+
 ## 0.9.0
 
 0.9.0 adds the [native sidecar](native-sidecar.md) (`EXIT_KIND=sidecar` with

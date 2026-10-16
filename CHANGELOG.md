@@ -10,10 +10,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 unit tests and `go vet` pass; nothing here has run on a live exit yet
 ([testing](docs/testing.md#091)).
 
-**gluetun's server-list refresh says why it waits.** With the gluetun backend
-the exit starts one refresh of gluetun's server list when the data is old. A
-first pod with gluetun's built-in 2024 NordVPN list never started it in
-14 minutes, with nothing in the log or the record to say why.
+**gluetun's server-list refresh is decided on gluetun's own list, and says why
+it waits.** With the gluetun backend the exit starts one refresh of gluetun's
+server list when the data is old. A first pod with gluetun's built-in 2024
+NordVPN list never started it in 14 minutes, with nothing in the log or the
+record to say why.
+- The cause: at start the exit judged the catalogue it had published in an
+  earlier run, before it read gluetun's file. Where the exit's state outlived
+  gluetun's (a new pod beside kept state, or a recreated gluetun volume), that
+  catalogue was fresh, so the refresh was settled as not needed for the life of
+  the process. The exit now decides only on a list read from gluetun's file
+  since it started. Reproduced live on v0.9.1-rc.1, which still had the fault.
 - `server_list_update` in `result.json` now also names what an owed refresh
   waits for: `waiting-for-tunnel` (no single peer with a handshake in the last
   150 seconds), `waiting-for-vpn` (gluetun's VPN status isn't `running`),
