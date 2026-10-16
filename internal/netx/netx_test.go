@@ -286,8 +286,8 @@ func TestResponseHeadersAreReturned(t *testing.T) {
 	}
 }
 
-// fakeResolver answers every A question with 127.0.0.1 and any other with no
-// answer, over UDP and TCP on the same port, and counts the questions each
+// fakeResolver answers every A question with 127.0.0.2, where nothing
+// listens, then 127.0.0.1, and any other with no answer, over UDP and TCP on the same port, and counts the questions each
 // transport was asked. With truncate, every UDP answer is truncated (TC set,
 // no answer), so the client must ask again over TCP.
 func fakeResolver(t *testing.T, truncate bool) (addr string, udp, tcp *atomic.Int32) {
@@ -321,8 +321,10 @@ func fakeResolver(t *testing.T, truncate bool) (addr string, udp, tcp *atomic.In
 			return out
 		}
 		if q[end-4] == 0 && q[end-3] == 1 {
-			out[7] = 1
-			out = append(out, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1)
+			out[7] = 2
+			for _, last := range []byte{2, 1} {
+				out = append(out, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, last)
+			}
 		}
 		return out
 	}
@@ -392,7 +394,8 @@ func fetchByName(t *testing.T, resolvers []string) (Response, error) {
 
 func TestResolversReplaceTheSystemsNameServers(t *testing.T) {
 	// Two that fail, then one that answers: each is asked in its own right,
-	// whatever /etc/resolv.conf says about servers and attempts.
+	// whatever /etc/resolv.conf says about servers and attempts. Its first
+	// address refuses the connection: Go's dialer goes on to the next.
 	resolver, udp, _ := fakeResolver(t, false)
 	resp, err := fetchByName(t, []string{refusingResolver(t), refusingResolver(t), resolver})
 	if err != nil || string(resp.Body) != "ok" {
