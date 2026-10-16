@@ -287,15 +287,45 @@ func TestResponseHeadersAreReturned(t *testing.T) {
 }
 
 // fakeResolver answers every A question with 127.0.0.1 and any other with no
-// answer, and counts the questions it was asked.
-func fakeResolver(t *testing.T) (addr string, asked *atomic.Int32) {
+// answer, over UDP and TCP on the same port, and counts the questions each
+// transport was asked. With truncate, every UDP answer is truncated (TC set,
+// no answer), so the client must ask again over TCP.
+func fakeResolver(t *testing.T, truncate bool) (addr string, udp, tcp *atomic.Int32) {
 	t.Helper()
-	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	conn, err := net.ListenPacket("udp4", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	asked = new(atomic.Int32)
+	udp, tcp = new(atomic.Int32), new(atomic.Int32)
+	answer := func(q []byte, truncated bool) []byte {
+		if len(q) < 12 {
+			return nil
+		}
+		end := 12
+		for end < len(q) && q[end] != 0 {
+			end += int(q[end]) + 1
+		}
+		end += 5 // the root label, the type and the class
+		if end > len(q) {
+			return nil
+		}
+		out := append([]byte{q[0], q[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, q[12:end]...)
+		if truncated {
+			out[2] |= 0x02
+			return out
+		}
+		if q[end-4] == 0 && q[end-3] == 1 {
+			out[7] = 1
+			out = append(out, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1)
+		}
+		return out
+	}
 	go func() {
 		buf := make([]byte, 512)
 		for {
@@ -303,46 +333,89 @@ func fakeResolver(t *testing.T) (addr string, asked *atomic.Int32) {
 			if err != nil {
 				return
 			}
-			q := buf[:n]
-			if n < 12 {
-				continue
+			udp.Add(1)
+			if a := answer(buf[:n], truncate); a != nil {
+				_, _ = conn.WriteTo(a, from)
 			}
-			asked.Add(1)
-			end := 12
-			for end < n && q[end] != 0 {
-				end += int(q[end]) + 1
-			}
-			end += 5 // the root label, the type and the class
-			if end > n {
-				continue
-			}
-			isA := q[end-4] == 0 && q[end-3] == 1
-			answer := append([]byte{q[0], q[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, q[12:end]...)
-			if isA {
-				answer[7] = 1
-				answer = append(answer, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1)
-			}
-			_, _ = conn.WriteTo(answer, from)
 		}
 	}()
-	return conn.LocalAddr().String(), asked
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				for {
+					var size [2]byte
+					if _, err := io.ReadFull(c, size[:]); err != nil {
+						return
+					}
+					q := make([]byte, int(size[0])<<8|int(size[1]))
+					if _, err := io.ReadFull(c, q); err != nil {
+						return
+					}
+					tcp.Add(1)
+					a := answer(q, false)
+					_, _ = c.Write(append([]byte{byte(len(a) >> 8), byte(len(a))}, a...))
+				}
+			}()
+		}
+	}()
+	return ln.Addr().String(), udp, tcp
+}
+
+// refusingResolver is an address nothing listens on: a lookup there fails at
+// once (the port is unreachable).
+func refusingResolver(t *testing.T) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := conn.LocalAddr().String()
+	conn.Close()
+	return addr
+}
+
+func fetchByName(t *testing.T, resolvers []string) (Response, error) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	t.Cleanup(server.Close)
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+	return Client{}.Fetch(context.Background(), Request{
+		URL: "http://molebridge-resolver.test:" + port + "/", AllowHTTP: true, Family: 4,
+		Resolvers: resolvers, Timeout: 30 * time.Second,
+	})
 }
 
 func TestResolversReplaceTheSystemsNameServers(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
-	defer server.Close()
-	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
-	dead, _ := net.ListenPacket("udp4", "127.0.0.1:0") // asked first, never answers
-	defer dead.Close()
-	resolver, asked := fakeResolver(t)
-	resp, err := Client{}.Fetch(context.Background(), Request{
-		URL: "http://molebridge-resolver.test:" + port + "/", AllowHTTP: true, Family: 4,
-		Resolvers: []string{dead.LocalAddr().String(), resolver}, Timeout: 20 * time.Second,
-	})
+	// Two that fail, then one that answers: each is asked in its own right,
+	// whatever /etc/resolv.conf says about servers and attempts.
+	resolver, udp, _ := fakeResolver(t, false)
+	resp, err := fetchByName(t, []string{refusingResolver(t), refusingResolver(t), resolver})
 	if err != nil || string(resp.Body) != "ok" {
 		t.Fatalf("Fetch: %v %q", err, resp.Body)
 	}
-	if asked.Load() == 0 {
+	if udp.Load() == 0 {
 		t.Error("the configured resolver was never asked")
+	}
+}
+
+func TestResolversKeepTheTCPRetryOnTheSameServer(t *testing.T) {
+	resolver, udp, tcp := fakeResolver(t, true)
+	resp, err := fetchByName(t, []string{resolver, refusingResolver(t)})
+	if err != nil || string(resp.Body) != "ok" {
+		t.Fatalf("Fetch: %v %q", err, resp.Body)
+	}
+	if udp.Load() == 0 || tcp.Load() == 0 {
+		t.Errorf("questions: %d over UDP, %d over TCP; want both on the truncating server", udp.Load(), tcp.Load())
+	}
+}
+
+func TestResolversThatAllFail(t *testing.T) {
+	if _, err := fetchByName(t, []string{refusingResolver(t)}); err == nil {
+		t.Fatal("a name no resolver answered was connected to")
 	}
 }

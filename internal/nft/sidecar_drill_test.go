@@ -366,3 +366,50 @@ func TestSidecarFirewallSingleTableDeletion(t *testing.T) {
 		})
 	}
 }
+
+// With DropLANDNS, an application's DNS to the LAN is dropped; the exit's
+// marked lookups and lookups into the tunnel still leave.
+func TestSidecarFirewallDropsLANDNS(t *testing.T) {
+	ns, peer := nstest.New(t, "sc-dns"), nstest.New(t, "sc-dnspeer")
+	ns.Veth("host0", peer, "host1")
+	for _, endpoint := range []struct {
+		ns        *nstest.NS
+		dev, addr string
+	}{{ns, "host0", "198.51.100.2/24"}, {peer, "host1", "198.51.100.1/24"}} {
+		endpoint.ns.IP("addr", "add", endpoint.addr, "dev", endpoint.dev)
+		endpoint.ns.IP("link", "set", endpoint.dev, "up")
+		endpoint.ns.Sysctl("net.ipv4.conf.all.rp_filter=0", "net.ipv4.conf."+endpoint.dev+".rp_filter=0")
+	}
+	ns.IP("link", "add", "tun0", "type", "dummy")
+	ns.IP("addr", "add", "203.0.113.2/24", "dev", "tun0")
+	ns.IP("link", "set", "tun0", "up")
+	f := sidecarDrillFirewall()
+	f.DropLANDNS = true
+	installSidecarDrill(t, ns, f)
+	plain := f
+	plain.DropLANDNS = false
+	verifySidecarDrill(t, ns, plain, false, "molebridge_sidecar")
+
+	dns := sidecarListen(t, peer, "0.0.0.0:53")
+	dot := sidecarListen(t, peer, "0.0.0.0:853")
+	other := sidecarListen(t, peer, "0.0.0.0:54")
+	for _, port := range []int{53, 853} {
+		if err := sidecarSend(ns, "", 0, [4]byte{198, 51, 100, 1}, port, "lookup"); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("an application's DNS to the LAN (port %d): %v, want EPERM", port, err)
+		}
+	}
+	sidecarReceive(t, dns, "", false)
+	sidecarReceive(t, dot, "", false)
+	if err := sidecarSend(ns, "", 0, [4]byte{198, 51, 100, 1}, 54, "not-dns"); err != nil {
+		t.Fatal(err)
+	}
+	sidecarReceive(t, other, "not-dns", true)
+	if err := sidecarSend(ns, "", f.ControlMark, [4]byte{198, 51, 100, 1}, 53, "exit-lookup"); err != nil {
+		t.Fatalf("the exit's marked lookup: %v", err)
+	}
+	sidecarReceive(t, dns, "exit-lookup", true)
+	if err := sidecarSend(ns, "tun0", 0, [4]byte{203, 0, 113, 1}, 53, "tunnel-lookup"); err != nil {
+		t.Fatalf("a lookup into the tunnel: %v", err)
+	}
+	verifySidecarDrill(t, ns, f, true, "")
+}

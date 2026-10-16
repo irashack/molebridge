@@ -214,6 +214,14 @@ forwards a port, new TCP and UDP connections to that port, and drops the rest
 of what arrives on the tunnel; traffic arriving on other interfaces is
 accepted. The forward chain drops everything.
 
+With `SIDECAR_HOST_RESOLVERS` set, both output chains also drop DNS to the LAN:
+four rules after the marks and before the LAN prefixes, `tcp dport 53`,
+`tcp dport 853`, `udp dport 53` and `udp dport 853`, each counted and dropped.
+They come after the tunnel and the marks, so lookups into the tunnel and the
+exit's own marked lookups still leave; an application's lookup to any resolver
+on the LAN, such as the cluster's DNS pods, does not ([DNS](#dns)). DNS over
+HTTPS to a LAN host is ordinary HTTPS to the firewall and is not stopped.
+
 The exit does not admit IPv6 link-local (`fe80::/10`) or multicast (`ff00::/8`)
 destinations as such. Linux routes `ff00::/8` through the local table, so a
 blanket accept for them would let an unprivileged application send UDP
@@ -386,7 +394,10 @@ To keep the applications' lookups inside the tunnel:
 3. Set `SIDECAR_HOST_RESOLVERS` to a resolver the host path reaches, such as
    the cluster's DNS service address (`kubectl -n kube-system get service
    kube-dns`). The exit's marked lookups reach it whatever `SIDECAR_LAN_CIDRS`
-   says; the applications can't.
+   says. Setting it also makes the firewall drop the applications' DNS
+   (ports 53 and 853) to the LAN prefixes ([the firewall](#the-firewall)), so
+   they can't query the cluster's DNS pods, which sit in the pod range,
+   either.
 
 Then run the DNS check in [verification](verification.md#a-native-sidecar).
 The exit's lookups through `SIDECAR_HOST_RESOLVERS` have unit tests; the
@@ -665,10 +676,10 @@ never from values on a command line. The notes that go with it:
 - **`SIDECAR_LAN_CIDRS` must name the pod range**, and anything that connects
   to the application: node addresses for a NodePort or host port, and where
   the kubelet's probes come from. Replies to a client outside these prefixes
-  go into the tunnel and are lost. The example leaves the Service range out
-  and points the pod's resolver into the tunnel, so the applications can't
-  reach the cluster's DNS and their lookups go through the tunnel
-  ([DNS](#dns)).
+  go into the tunnel and are lost. The example leaves the Service range out,
+  points the pod's resolver into the tunnel and sets
+  `SIDECAR_HOST_RESOLVERS`, which drops the applications' DNS to the pod
+  range: their lookups go through the tunnel or nowhere ([DNS](#dns)).
 - **The Kubernetes version.** The exit is an init container with
   `restartPolicy: Always`, which needs Kubernetes 1.29 or later. The kubelet
   starts the next container, here the application, when the exit's startup

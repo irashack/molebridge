@@ -646,7 +646,10 @@ func (k *KernelSystem) sidecarFirewall() nft.SidecarFirewall {
 	port := k.fwPort
 	k.fwMu.Unlock()
 	return nft.SidecarFirewall{ExitIf: c.ExitIf, TunnelMark: c.TunnelMark(), ControlMark: c.ControlMark,
-		LAN4: c.LANFor(rtnl.V4), LAN6: c.LANFor(rtnl.V6), ForwardedPort: port}
+		LAN4: c.LANFor(rtnl.V4), LAN6: c.LANFor(rtnl.V6), ForwardedPort: port,
+		// SIDECAR_HOST_RESOLVERS says the applications' resolvers are in the
+		// tunnel: no lookup of theirs may reach a resolver on the LAN.
+		DropLANDNS: len(c.HostResolvers) > 0}
 }
 
 // InstallSidecarFirewall replaces the native sidecar's firewall in one

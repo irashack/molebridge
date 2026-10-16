@@ -35,6 +35,10 @@ type SidecarFirewall struct {
 	LAN4          []netip.Prefix
 	LAN6          []netip.Prefix
 	ForwardedPort uint16 // 0 admits no new connections from the tunnel
+	// DropLANDNS drops DNS (TCP and UDP ports 53 and 853) to the LAN
+	// prefixes unless it carries a mark above: the applications' lookups go
+	// through the tunnel or nowhere.
+	DropLANDNS bool
 }
 
 func (f SidecarFirewall) validate() error {
@@ -139,6 +143,20 @@ func sidecarRules(f SidecarFirewall, tableName string) (*nftables.Table, []*nfta
 		binary.NativeEndian.PutUint32(b, mark)
 		add(out, &expr.Meta{Key: expr.MetaKeyMARK, Register: 1},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: b}, &expr.Verdict{Kind: expr.VerdictAccept})
+	}
+	// Before the LAN: what is left here is unmarked and leaves outside the
+	// tunnel, so DNS to the LAN is the applications' own.
+	if f.DropLANDNS {
+		for _, proto := range []byte{unix.IPPROTO_TCP, unix.IPPROTO_UDP} {
+			for _, port := range []uint16{53, 853} {
+				b := make([]byte, 2)
+				binary.BigEndian.PutUint16(b, port)
+				add(out, &expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{proto}},
+					&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseTransportHeader, Offset: 2, Len: 2},
+					&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: b}, &expr.Counter{}, &expr.Verdict{Kind: expr.VerdictDrop})
+			}
+		}
 	}
 	// One rule per prefix avoids anonymous interval set IDs and preserves the
 	// input order when comparing kernel answers. Validation caps this at 16.

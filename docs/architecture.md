@@ -1359,7 +1359,8 @@ exceptions, including in a namespace that kept a previous run's rules.
 output chain with policy drop that admits loopback, the tunnel interface, the
 two marks, your `SIDECAR_LAN_CIDRS` prefixes and four ICMPv6 types (router
 solicitation, neighbour solicitation, neighbour advertisement and MLDv2 listener
-reports); an input chain that accepts replies on the tunnel and PIA's forwarded
+reports), and with `SIDECAR_HOST_RESOLVERS` set drops DNS (TCP and UDP ports 53
+and 853) to those prefixes before admitting them; an input chain that accepts replies on the tunnel and PIA's forwarded
 port and drops the rest of what arrives on the tunnel; and a forward chain with
 policy drop. It admits no IPv6 link-local or multicast destination as such:
 Linux routes `ff00::/8` through the local table, so that would let an

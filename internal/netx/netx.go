@@ -31,9 +31,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -178,22 +178,13 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 		connectTimeout = DefaultConnectTimeout
 	}
 	dialer := &net.Dialer{Timeout: connectTimeout, Control: bindControl(req.BindInterface, req.SocketMark)}
-	if (req.MarkResolver && req.SocketMark != 0) || len(req.Resolvers) > 0 {
-		var mark uint32
-		if req.MarkResolver {
-			mark = req.SocketMark
-		}
-		lookup := &net.Dialer{Timeout: connectTimeout, Control: bindControl("", mark)}
-		dial := lookup.DialContext
-		if servers := req.Resolvers; len(servers) > 0 {
-			// Go asks its configured servers in turn, a dial for each try:
-			// the tries go to these servers in turn instead.
-			var next atomic.Uint32
-			dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
-				return lookup.DialContext(ctx, network, servers[int(next.Add(1)-1)%len(servers)])
-			}
-		}
-		dialer.Resolver = &net.Resolver{PreferGo: true, Dial: dial}
+	var mark uint32
+	if req.MarkResolver {
+		mark = req.SocketMark
+	}
+	lookup := &net.Dialer{Timeout: connectTimeout, Control: bindControl("", mark)}
+	if mark != 0 {
+		dialer.Resolver = &net.Resolver{PreferGo: true, Dial: lookup.DialContext}
 	}
 	network := "tcp"
 	switch req.Family {
@@ -208,6 +199,9 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 		DialContext: func(ctx context.Context, _, address string) (net.Conn, error) {
 			if req.ConnectAddr != "" {
 				address = req.ConnectAddr
+			}
+			if len(req.Resolvers) > 0 {
+				return dialResolved(ctx, dialer, lookup, req.Resolvers, network, address)
 			}
 			return dialer.DialContext(ctx, network, address)
 		},
@@ -258,4 +252,45 @@ func classify(ctx context.Context, err error) error {
 		return ErrTimeout
 	}
 	return ErrTransport
+}
+
+// dialResolved resolves the host with each of servers in turn, each through
+// a Go resolver pinned to that one server (its retries and its TCP fallback
+// included), and connects to the first that answers: to its addresses in
+// order. The name servers of /etc/resolv.conf are never asked.
+func dialResolved(ctx context.Context, dialer, lookup *net.Dialer, servers []string, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return dialer.DialContext(ctx, network, address)
+	}
+	family := map[string]string{"tcp4": "ip4", "tcp6": "ip6"}[network]
+	if family == "" {
+		family = "ip"
+	}
+	var addrs []netip.Addr
+	err = errors.New("netx: no resolver")
+	for _, server := range servers {
+		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return lookup.DialContext(ctx, network, server)
+		}}
+		if addrs, err = r.LookupNetIP(ctx, family, host); err == nil && len(addrs) > 0 {
+			break
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	for _, a := range addrs {
+		var conn net.Conn
+		if conn, err = dialer.DialContext(ctx, network, net.JoinHostPort(a.Unmap().String(), port)); err == nil {
+			return conn, nil
+		}
+	}
+	return nil, err
 }

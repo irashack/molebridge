@@ -46,7 +46,10 @@ changes for the overlay kinds and the gluetun sidecar.
   exit's own marked lookups in place of the namespace's, so the applications'
   resolver can be one inside the tunnel (the Kubernetes example points the pod
   at PIA's) while the provider's login, before the tunnel exists, still
-  resolves on the host path.
+  resolves on the host path. Each is asked in turn with its own retries. Set,
+  it also makes the firewall drop the applications' DNS (TCP and UDP ports 53
+  and 853) to `SIDECAR_LAN_CIDRS`, so their lookups go through the tunnel or
+  nowhere.
 - The exit's own requests that are not through the tunnel carry the control mark
   and resolve their names over marked sockets, so they take the host path.
 - Status: `kind: "sidecar"`, `backend: "native"`; required checks `routing`,
