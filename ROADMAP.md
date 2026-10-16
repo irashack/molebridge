@@ -14,7 +14,7 @@ says what it would take as far as we know today.
   had live passes with NordVPN on rootless Podman only, the latest an upgrade
   to 0.8.0; [testing](docs/testing.md) records the gaps that keep it
   experimental.
-- **A native sidecar** (0.9.0, experimental, not yet run live): Molebridge's own
+- **A native sidecar** (0.9.0, experimental, run live with PIA on Kubernetes): Molebridge's own
   tunnel for containers that share the exit's namespace, with a routing contract
   and an nftables firewall that keep their traffic in it, so an application can use
   PIA over WireGuard, plus `molebridge port-sync` for qBittorrent
@@ -39,6 +39,28 @@ says what it would take as far as we know today.
   panel, and an exit with `SERVER` set has not been run this way on a live host.
 
 ## Backlog
+
+### Found moving the gluetun forms to Kubernetes (2026-10-16)
+
+- **gluetun's server-list refresh can wait without saying why.** A first pod
+  with gluetun's built-in 2024 NordVPN list never started the one refresh the
+  exit owes it in 14 minutes, and `server_list_update` stayed null.
+  `updateServers` returns without a log line or a record on three paths (the
+  tunnel not answering yet, gluetun's API failing, gluetun's VPN not running),
+  and an API failure is retried every 5 minutes without counting toward the
+  three attempts. Report each waiting reason in `server_list_update` and the
+  log once per change, count API failures, and test each path; then find the
+  cause from the next occurrence.
+- **The gluetun forms on Kubernetes.** `routing/gluetun-preflight` is not in
+  the image (a role that copies it out would spare the source tree); gluetun's
+  servers directory must persist; a user-namespaced pod cannot mount
+  `/dev/net/tun`; and with IPv6 on in the pod, gluetun's WireGuard needs
+  `WIREGUARD_ALLOWED_IPS=0.0.0.0/0`. A Kubernetes note for the gluetun forms,
+  beside the native sidecar's example.
+- **`fix-blacklist` for a peer that moves runtime**: `--add IFACE` for the new
+  host interface and `--clear-external-ip-map` for a stale
+  `--external-ip-map`.
+
 
 ### Smaller memory with large server catalogs
 
