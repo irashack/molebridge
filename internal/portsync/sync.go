@@ -262,18 +262,24 @@ func (y *Syncer) login(ctx context.Context) *qbError {
 	if err != nil {
 		return err
 	}
-	switch {
-	case answer.Status == http.StatusForbidden:
+	// qBittorrent 5.2 answers a good login with 204 and no body, a bad one
+	// with 401; earlier releases answer 200 with "Ok." or "Fails.".
+	switch answer.Status {
+	case http.StatusForbidden:
 		return &qbError{kindLogin, "qBittorrent refused the login (HTTP 403); it may have banned this address after failed logins"}
-	case answer.Status != 200:
-		return &qbError{kindLogin, fmt.Sprintf("qBittorrent answered the login with HTTP %d", answer.Status)}
-	}
-	switch strings.TrimSpace(string(answer.Body)) {
-	case "Ok.":
-	case "Fails.":
+	case http.StatusUnauthorized:
 		return &qbError{kindCredentials, "qBittorrent refused the user name or password"}
+	case http.StatusNoContent:
+	case http.StatusOK:
+		switch strings.TrimSpace(string(answer.Body)) {
+		case "Ok.":
+		case "Fails.":
+			return &qbError{kindCredentials, "qBittorrent refused the user name or password"}
+		default:
+			return &qbError{kindLogin, "qBittorrent answered the login with an unexpected body"}
+		}
 	default:
-		return &qbError{kindLogin, "qBittorrent answered the login with an unexpected body"}
+		return &qbError{kindLogin, fmt.Sprintf("qBittorrent answered the login with HTTP %d", answer.Status)}
 	}
 	for _, c := range (&http.Response{Header: answer.Header}).Cookies() {
 		// SID, or QBT_SID_<port> in qBittorrent 5.

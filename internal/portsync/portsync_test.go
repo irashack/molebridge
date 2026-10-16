@@ -38,6 +38,7 @@ type fakeQB struct {
 	loginBody  string // when set, the login answer instead of the real check
 	loginCode  int
 	nologinSID bool // login answers Ok. without a cookie
+	v52        bool // qBittorrent 5.2's login: 204 and no body, or 401
 
 	logins    int
 	gets      int
@@ -73,12 +74,20 @@ func (q *fakeQB) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.PostForm.Get("username") != testUser || r.PostForm.Get("password") != testPassword {
+			if q.v52 {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			fmt.Fprint(w, "Fails.")
 			return
 		}
 		if !q.nologinSID {
 			q.sid = fmt.Sprintf("%s%d", testSID, q.logins)
 			http.SetCookie(w, &http.Cookie{Name: q.cookieName, Value: q.sid, Path: "/", HttpOnly: true})
+		}
+		if q.v52 {
+			w.WriteHeader(http.StatusNoContent)
+			return
 		}
 		fmt.Fprint(w, "Ok.")
 		return
@@ -667,5 +676,31 @@ func TestErrorsNeverCarryTheURLOrSecrets(t *testing.T) {
 	path := filepath.Join(dir, "secret-name-file")
 	if _, err := ReadCredential(path); err == nil || strings.Contains(err.Error(), "secret-name-file") {
 		t.Errorf("error %v", err)
+	}
+}
+
+// qBittorrent 5.2 (the official image's 5.2.4 among them) answers a good login
+// with 204, no body and a QBT_SID_<port> cookie, and a bad one with 401.
+func TestQBittorrent52Login(t *testing.T) {
+	q := newFakeQB(t, true, 6881)
+	q.v52, q.cookieName = true, "QBT_SID_8080"
+	e := newEnv(t, q, true)
+	e.sidecar("40000", time.Second)
+	e.step()
+	if q.logins != 1 || q.listenPort != 40000 {
+		t.Fatalf("logins=%d listen_port=%d; log %q", q.logins, q.listenPort, e.logged())
+	}
+
+	bad := newFakeQB(t, true, 6881)
+	bad.v52 = true
+	e = newEnv(t, bad, true)
+	os.WriteFile(e.sync.Settings.PasswordFile, []byte("wrong\n"), 0o600)
+	e.sidecar("40000", time.Second)
+	e.step()
+	if want := Prefix + "qBittorrent refused the user name or password\n"; e.logged() != want {
+		t.Errorf("log %q, want %q", e.logged(), want)
+	}
+	if bad.listenPort != 6881 {
+		t.Errorf("listen_port=%d after a refused login", bad.listenPort)
 	}
 }

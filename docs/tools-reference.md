@@ -464,9 +464,9 @@ most once a minute:
 | `qBittorrent refused the request (HTTP 403) after a new login` | The login worked and the request was refused anyway |
 | `the login credential files cannot be read (PORT_SYNC_USERNAME_FILE, PORT_SYNC_PASSWORD_FILE)` | A file changed or vanished after the start check |
 | `qBittorrent refused the login (HTTP 403); it may have banned this address after failed logins` | qBittorrent bans an address after repeated failed logins |
-| `qBittorrent answered the login with HTTP <n>` | Any other status |
-| `qBittorrent refused the user name or password` | qBittorrent answered `Fails.` |
-| `qBittorrent answered the login with an unexpected body` | Neither `Ok.` nor `Fails.` |
+| `qBittorrent answered the login with HTTP <n>` | Any status but 200, 204, 401 and 403 |
+| `qBittorrent refused the user name or password` | HTTP 401 (qBittorrent 5.2 and later), or 200 with `Fails.` |
+| `qBittorrent answered the login with an unexpected body` | HTTP 200 with neither `Ok.` nor `Fails.` (a 204, qBittorrent 5.2's answer to a good login, has no body) |
 | `qBittorrent accepted the login but sent no session cookie` | No `SID` (or, from qBittorrent 5, `QBT_SID_<port>`) cookie |
 | `qBittorrent answered the preferences request with HTTP <n>` | Not 200 |
 | `qBittorrent's preferences are not a JSON object`, `qBittorrent's preferences have no integer listen_port` | An answer in a shape the role does not accept (bounded to 256 KiB) |
