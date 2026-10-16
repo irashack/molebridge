@@ -709,8 +709,10 @@ old and was written in the same network namespace as the check runs in: the
 heartbeat records the namespace, because a pod's `/run` volume can outlive its
 network namespace when Kubernetes recreates the pod's sandbox, and the guards
 of the old namespace say nothing about the new one. It names the namespace by
-the kernel's namespace cookie, which is never reused within a boot. Kernels
-before 5.14 have no cookie, and there it falls back to the inode number of
+the kernel's namespace cookie, which is never reused within a boot. If the
+cookie can't be read for any other reason than an old kernel (a seccomp or
+LSM policy that denies it), no heartbeat is written and the check fails.
+Kernels before 5.14 have no cookie, and there it falls back to the inode number of
 `/proc/self/ns/net`, which the kernel can give a new namespace once the old
 one is gone: on such a kernel a sandbox recreated within those 15 seconds can
 pass the check before the worker has removed the old heartbeat. Use 5.14 or
