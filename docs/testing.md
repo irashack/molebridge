@@ -29,7 +29,7 @@ the 0.8.0 record below is still the record for them.
 | What | How | Where and what |
 |---|---|---|
 | Unit tests and `go vet` | `go test ./...`, `go vet ./...` | Pass on the 0.9.0 branch, Go 1.27.2 |
-| Namespace drills | `go test -tags drill ./internal/...` | Passed in a privileged rootful Podman 5.8.6 container on Debian forky/sid, kernel 7.2.8 (amd64), including the drills new for the native sidecar, below. All 32 test packages, drills included, passed in one run at revision `6d00d31` of the 0.9.0 branch |
+| Namespace drills | `go test -tags drill ./internal/...` | Passed in a privileged rootful Podman 5.8.6 container on Debian forky/sid, kernel 7.2.8 (amd64), including the drills new for the native sidecar, below. All 33 test packages, drills included, passed in one run at revision `fb381b2` of the 0.9.0 branch, and the two packages changed after it (`internal/netx`, `internal/exit`) again at `3e60c23` |
 
 The new drills, for the native sidecar:
 
