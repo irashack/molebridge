@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -85,6 +86,11 @@ type Request struct {
 	// sockets that carry SocketMark too, so the lookup takes the same path as
 	// the connection. Without it the system's lookup sockets are unmarked.
 	MarkResolver bool
+	// Resolvers, when set, are the name servers ("host:port") the lookup asks
+	// instead of /etc/resolv.conf's, with Go's own resolver (over sockets
+	// that carry SocketMark when MarkResolver is set). /etc/resolv.conf still
+	// gives the options and search list.
+	Resolvers []string
 
 	// RootCAs, when set, is the only authority the server's certificate is
 	// verified against (curl --cacert); otherwise the system roots are used.
@@ -172,9 +178,22 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 		connectTimeout = DefaultConnectTimeout
 	}
 	dialer := &net.Dialer{Timeout: connectTimeout, Control: bindControl(req.BindInterface, req.SocketMark)}
-	if req.MarkResolver && req.SocketMark != 0 {
-		lookup := &net.Dialer{Timeout: connectTimeout, Control: bindControl("", req.SocketMark)}
-		dialer.Resolver = &net.Resolver{PreferGo: true, Dial: lookup.DialContext}
+	if (req.MarkResolver && req.SocketMark != 0) || len(req.Resolvers) > 0 {
+		var mark uint32
+		if req.MarkResolver {
+			mark = req.SocketMark
+		}
+		lookup := &net.Dialer{Timeout: connectTimeout, Control: bindControl("", mark)}
+		dial := lookup.DialContext
+		if servers := req.Resolvers; len(servers) > 0 {
+			// Go asks its configured servers in turn, a dial for each try:
+			// the tries go to these servers in turn instead.
+			var next atomic.Uint32
+			dial = func(ctx context.Context, network, _ string) (net.Conn, error) {
+				return lookup.DialContext(ctx, network, servers[int(next.Add(1)-1)%len(servers)])
+			}
+		}
+		dialer.Resolver = &net.Resolver{PreferGo: true, Dial: dial}
 	}
 	network := "tcp"
 	switch req.Family {

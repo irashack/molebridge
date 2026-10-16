@@ -39,8 +39,14 @@ changes for the overlay kinds and the gluetun sidecar.
   exit rebuilds the tunnel.
 - New setting `SIDECAR_LAN_CIDRS`: the networks the applications may reach outside
   the tunnel (at most 16 prefixes, no default route). `HOST_IF` and `CONTROL_MARK`
-  apply to this form too. Molebridge does not tunnel or configure DNS; a resolver
-  inside `SIDECAR_LAN_CIDRS` answers outside the tunnel ([DNS](docs/native-sidecar.md#dns)).
+  apply to this form too. Molebridge does not configure the applications' DNS; a
+  resolver inside `SIDECAR_LAN_CIDRS` answers outside the tunnel, and one outside
+  it is reached through the tunnel ([DNS](docs/native-sidecar.md#dns)).
+- New setting `SIDECAR_HOST_RESOLVERS`: up to three resolver addresses for the
+  exit's own marked lookups in place of the namespace's, so the applications'
+  resolver can be one inside the tunnel (the Kubernetes example points the pod
+  at PIA's) while the provider's login, before the tunnel exists, still
+  resolves on the host path.
 - The exit's own requests that are not through the tunnel carry the control mark
   and resolve their names over marked sockets, so they take the host path.
 - Status: `kind: "sidecar"`, `backend: "native"`; required checks `routing`,

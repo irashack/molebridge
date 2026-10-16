@@ -301,13 +301,14 @@ them without starting anything.
 | `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker and Kubernetes name it `eth0`; rootless Podman with pasta copies the host's interface name. The deletion check judges the control-marked path against it and the watcher follows it; the firewall doesn't use it. Not `lo`, not `EXIT_IF` |
 | `CONTROL_MARK` | `0x1bd00` | The mark on the exit's own host-path sockets: lowercase hexadecimal with a leading `0x`, no leading zero, low byte zero. Must differ from `EXIT_TABLE` |
 | `SIDECAR_LAN_CIDRS` | empty | The networks your applications may reach outside the tunnel, below |
+| `SIDECAR_HOST_RESOLVERS` | empty | Up to three resolver addresses, comma-separated, for the exit's own lookups in place of the namespace's resolvers: set it when those are reachable only through the tunnel ([DNS](#dns)) |
 | `PIA_PORT_FORWARD` | `off` | `on` forwards one PIA port to the namespace itself; see [port forwarding](#port-forwarding) |
 
 `SIDECAR_LAN_CIDRS` is a comma-separated list of IPv4 and IPv6 prefixes. Put
 in it the networks the applications must reach without the tunnel: in
 Compose, the engine's network, which published ports and their replies use;
-in Kubernetes, the pod and Service ranges and anything that connects to the
-application. Each entry must be a network prefix written with its network
+in Kubernetes, the pod range and anything that connects to the application
+(the Service range too if the applications must reach a Service). Each entry must be a network prefix written with its network
 address (`198.51.100.0/24`, not `198.51.100.5/24`). Spaces around an entry are
 dropped. There can be at most 16 entries, IPv4 and IPv6 together. An
 application's IPv6 multicast and link-local traffic leaves only to a destination
@@ -321,6 +322,9 @@ these prefixes cover ([the firewall](#the-firewall)). The exit refuses:
 | `SIDECAR_LAN_CIDRS: <entry> is a default route` | A `/0` prefix |
 | `SIDECAR_LAN_CIDRS: <entry> must use the network address` | Host bits set |
 | `SIDECAR_LAN_CIDRS: <entry> is duplicated` | The same prefix twice |
+| `SIDECAR_HOST_RESOLVERS must have at most 3 entries` | More than 3 |
+| `SIDECAR_HOST_RESOLVERS: "<entry>" is not a resolver address` | Not a bare IP address (a port, a name, an empty entry, a zone), or an unspecified, multicast or IPv4-mapped address |
+| `SIDECAR_HOST_RESOLVERS: <entry> is duplicated` | The same address twice |
 
 Beyond that the exit checks nothing about breadth: a `/1` prefix is accepted
 and sends half the address space outside the tunnel. Anything in the namespace
@@ -351,26 +355,42 @@ native overlay exit ([configuration](configuration.md)).
 
 ## DNS
 
-Molebridge doesn't tunnel or configure DNS. The applications use the
-namespace's `/etc/resolv.conf`, which your engine writes, and what its
-resolvers are depends on the engine; the exit does not look at it. The routing
-decides the path of a lookup like any other packet:
+Molebridge doesn't configure the applications' DNS. They use the namespace's
+`/etc/resolv.conf`, which your engine writes, and the routing decides the path
+of a lookup like any other packet:
 
 - A resolver inside `SIDECAR_LAN_CIDRS` answers outside the tunnel. Your
   applications' lookups reach it, and whatever it forwards upstream leaves
-  from its own network, not through the tunnel. In Kubernetes the cluster's DNS
-  service is in the Service range you must list, so the names your application
-  looks up go to the cluster's resolver.
+  from its own network, not through the tunnel. In Kubernetes that is the
+  cluster's DNS service when you list the Service range.
 - A resolver outside `SIDECAR_LAN_CIDRS` is reached through the tunnel. If the
-  provider's network does not let it answer, lookups fail.
-- The exit's own lookups are marked and go to the host, whatever the
-  resolvers are ([above](#the-exits-own-traffic)).
+  provider's network does not let it answer, lookups fail, and while the
+  tunnel is down they fail too.
+- The exit's own lookups (the provider's login and server list, before the
+  tunnel exists) are marked and go to the host
+  ([above](#the-exits-own-traffic)). By default they ask the same resolvers
+  as the applications; `SIDECAR_HOST_RESOLVERS` names others.
 
-To keep lookups inside the tunnel, point the namespace at a resolver that the
-tunnel can reach and leave its network out of `SIDECAR_LAN_CIDRS`, with the
-engine's DNS settings: `dns:` on the exit service in Compose, `dnsPolicy` and
-`dnsConfig` in a pod. Run the DNS check in [verification](verification.md#a-native-sidecar)
-afterwards. None of this has been tested.
+To keep the applications' lookups inside the tunnel:
+
+1. Point the namespace at the provider's resolver inside the tunnel: PIA's is
+   `10.0.0.243` (and `10.0.0.242`), Mullvad's `10.64.0.1`. In a pod set
+   `dnsPolicy: None` and `dnsConfig.nameservers`; in Compose, `dns:` on the exit
+   service. On a user-defined network, Compose's default, the namespace asks
+   the engine's embedded resolver at `127.0.0.11`, which forwards to those
+   servers itself; that form is untested, so check where the lookups go with
+   the DNS check below.
+2. Leave that resolver, and any resolver you don't want the applications to
+   use, out of `SIDECAR_LAN_CIDRS`. In Kubernetes leave the Service range out
+   unless an application must reach a Service.
+3. Set `SIDECAR_HOST_RESOLVERS` to a resolver the host path reaches, such as
+   the cluster's DNS service address (`kubectl -n kube-system get service
+   kube-dns`). The exit's marked lookups reach it whatever `SIDECAR_LAN_CIDRS`
+   says; the applications can't.
+
+Then run the DNS check in [verification](verification.md#a-native-sidecar).
+The exit's lookups through `SIDECAR_HOST_RESOLVERS` have unit tests; the
+Kubernetes form is what the live acceptance runs ([testing](testing.md#090)).
 
 ## Port forwarding
 
@@ -556,6 +576,9 @@ kind: Pod
 metadata:
   name: downloader
 spec:
+  dnsPolicy: None                      # every lookup through the tunnel (DNS)
+  dnsConfig:
+    nameservers: ["10.0.0.243", "10.0.0.242"]   # PIA's resolvers, inside the tunnel
   initContainers:
     - name: exit
       image: ghcr.io/irashack/molebridge:<tag>@sha256:<digest>   # the verified reference
@@ -567,7 +590,8 @@ spec:
         - {name: PROVIDER, value: pia}
         - {name: EXIT_IF, value: pia}
         - {name: HOST_IF, value: eth0}
-        - {name: SIDECAR_LAN_CIDRS, value: "198.51.100.0/24,203.0.113.0/24"}  # pod and Service ranges
+        - {name: SIDECAR_LAN_CIDRS, value: "198.51.100.0/24"}       # the pod range
+        - {name: SIDECAR_HOST_RESOLVERS, value: "203.0.113.10"}    # the cluster's DNS service, for the exit only
         - {name: SERVER, value: "<a PIA region id>"}
         - {name: PIA_PORT_FORWARD, value: "on"}
         - {name: STATE_DIR, value: /state}
@@ -638,11 +662,13 @@ never from values on a command line. The notes that go with it:
   that: it replaces both firewall tables in one transaction and repairs the
   rules, then rebuilds the tunnel. While it is down the applications have no route out
   ([what stays when the exit stops](#what-stays-when-the-exit-stops)).
-- **`SIDECAR_LAN_CIDRS` must name the pod and Service ranges**, and anything
-  that connects to the application: node addresses for a NodePort or host
-  port, and where the kubelet's probes come from. Replies to a client outside
-  these prefixes go into the tunnel and are lost. Cluster DNS answers outside
-  the tunnel if its service is in these ranges ([DNS](#dns)).
+- **`SIDECAR_LAN_CIDRS` must name the pod range**, and anything that connects
+  to the application: node addresses for a NodePort or host port, and where
+  the kubelet's probes come from. Replies to a client outside these prefixes
+  go into the tunnel and are lost. The example leaves the Service range out
+  and points the pod's resolver into the tunnel, so the applications can't
+  reach the cluster's DNS and their lookups go through the tunnel
+  ([DNS](#dns)).
 - **The Kubernetes version.** The exit is an init container with
   `restartPolicy: Always`, which needs Kubernetes 1.29 or later. The kubelet
   starts the next container, here the application, when the exit's startup

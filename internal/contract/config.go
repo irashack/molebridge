@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,9 @@ type Config struct {
 	// LAN and LAN6 are the native sidecar's allowed host-path destinations,
 	// split by family in input order.
 	LAN, LAN6 []netip.Prefix
+	// HostResolvers are the native sidecar's resolvers for the exit's own
+	// marked lookups, in place of /etc/resolv.conf's; empty uses those.
+	HostResolvers []netip.Addr
 }
 
 // IsGluetun reports the gluetun backend.
@@ -422,7 +426,35 @@ func nativeSidecarConfig(env Getenv) (Config, error) {
 	if c.LAN, c.LAN6, err = parseSidecarLAN(env("SIDECAR_LAN_CIDRS")); err != nil {
 		return Config{}, err
 	}
+	if c.HostResolvers, err = parseHostResolvers(env("SIDECAR_HOST_RESOLVERS")); err != nil {
+		return Config{}, err
+	}
 	return c, nil
+}
+
+// parseHostResolvers reads SIDECAR_HOST_RESOLVERS: up to three resolver
+// addresses (port 53), comma-separated, as in resolv.conf.
+func parseHostResolvers(value string) ([]netip.Addr, error) {
+	if value == "" {
+		return nil, nil
+	}
+	entries := strings.Split(value, ",")
+	if len(entries) > 3 {
+		return nil, refuse("SIDECAR_HOST_RESOLVERS must have at most 3 entries")
+	}
+	var out []netip.Addr
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		a, err := netip.ParseAddr(entry)
+		if err != nil || a.Zone() != "" || a.Is4In6() || a.IsUnspecified() || a.IsMulticast() {
+			return nil, refuse("SIDECAR_HOST_RESOLVERS: %q is not a resolver address", entry)
+		}
+		if slices.Contains(out, a) {
+			return nil, refuse("SIDECAR_HOST_RESOLVERS: %s is duplicated", entry)
+		}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 func parseSidecarLAN(value string) (lan, lan6 []netip.Prefix, err error) {

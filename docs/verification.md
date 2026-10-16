@@ -321,8 +321,11 @@ provider's status endpoint from the table above.
    with the tunnel down, in the drills below, to see the difference.
 4. DNS: `cat /etc/resolv.conf` shows the resolvers the namespace uses. A resolver
    inside `SIDECAR_LAN_CIDRS` answers outside the tunnel ([DNS](native-sidecar.md#dns)).
-   Run a DNS leak test from the application and check that the resolvers it names
-   are ones you accept.
+   With the lookups kept in the tunnel, a lookup (`nslookup example.com`)
+   answers, the same lookup sent to the host's resolver
+   (`nslookup example.com <the address in SIDECAR_HOST_RESOLVERS>`) times out,
+   and both fail while the tunnel is down. Run a DNS leak test from the
+   application and check that the resolvers it names are ones you accept.
 5. `capsh --print` or `grep CapEff /proc/self/status` in the application shows
    no capability (`0000000000000000`).
 

@@ -72,6 +72,7 @@ again. The refusals, by setting:
 | `CONTROL_MARK must be lowercase hexadecimal like 0x1bd00`, `... , low byte zero` | gluetun backend and native sidecar |
 | `CONTROL_MARK and EXIT_TABLE must differ` | Native sidecar |
 | `SIDECAR_LAN_CIDRS must have at most 16 entries`, `SIDECAR_LAN_CIDRS: empty entry is not a network prefix`, `SIDECAR_LAN_CIDRS: <entry> is not a network prefix`, `SIDECAR_LAN_CIDRS: <entry> is a default route`, `SIDECAR_LAN_CIDRS: <entry> must use the network address`, `SIDECAR_LAN_CIDRS: <entry> is duplicated` | Native sidecar; see [a native sidecar](#a-native-sidecar) |
+| `SIDECAR_HOST_RESOLVERS must have at most 3 entries`, `SIDECAR_HOST_RESOLVERS: "<entry>" is not a resolver address`, `SIDECAR_HOST_RESOLVERS: <entry> is duplicated` | Native sidecar: bare IP addresses only, at most three ([DNS](native-sidecar.md#dns)) |
 | `ROUTING_RECONCILE_INTERVAL must be 2..60 seconds` | Whole seconds |
 | `GUARD_GRACE must be 5..30 seconds` | Whole seconds, canonical decimal; the lease's length |
 | `NetBird has no stored profile yet, so NB_EXTRA_IFACE_BLACKLIST must name the tunnel interface <if> (compose.yaml sets it to EXIT_IF); the new profile's interface blacklist is built from it` | A first enrollment with `NB_EXTRA_IFACE_BLACKLIST` removed or overridden to something that doesn't cover `EXIT_IF` |

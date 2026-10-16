@@ -696,7 +696,8 @@ rather than as a new peer.
 Molebridge configures no DNS. Devices keep the resolver they already use, and
 their traffic leaves through the provider. In a [native sidecar](native-sidecar.md#dns)
 the applications use the namespace's resolver: one inside `SIDECAR_LAN_CIDRS`
-answers outside the tunnel, and one outside it is reached through the tunnel.
+answers outside the tunnel, and one outside it is reached through the tunnel;
+`SIDECAR_HOST_RESOLVERS` gives the exit's own lookups a resolver of their own.
 
 With Mullvad, plain DNS (port 53) from a device appears not to reach that
 resolver. This is observed, not documented by Mullvad, from one device check

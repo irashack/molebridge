@@ -40,14 +40,16 @@ func TestNativeSidecarConfig(t *testing.T) {
 	}
 	c, err := ConfigFromEnv(sidecarEnv(map[string]string{
 		"EXIT_IF": "wg-1.2", "HOST_IF": "enp3s0", "CONTROL_MARK": "0x2000",
-		"SIDECAR_LAN_CIDRS": " 192.0.2.0/24, 2001:DB8:1::/64 ,198.51.100.5/32,2001:db8:2::1/128 ",
+		"SIDECAR_LAN_CIDRS":      " 192.0.2.0/24, 2001:DB8:1::/64 ,198.51.100.5/32,2001:db8:2::1/128 ",
+		"SIDECAR_HOST_RESOLVERS": "10.129.0.10, 2001:DB8::53",
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.ExitIf != "wg-1.2" || c.HostIf != "enp3s0" || c.ControlMark != 0x2000 ||
 		!reflect.DeepEqual(c.LANFor(rtnl.V4), []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.51.100.5/32")}) ||
-		!reflect.DeepEqual(c.LANFor(rtnl.V6), []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("2001:db8:2::1/128")}) {
+		!reflect.DeepEqual(c.LANFor(rtnl.V6), []netip.Prefix{netip.MustParsePrefix("2001:db8:1::/64"), netip.MustParsePrefix("2001:db8:2::1/128")}) ||
+		!reflect.DeepEqual(c.HostResolvers, []netip.Addr{netip.MustParseAddr("10.129.0.10"), netip.MustParseAddr("2001:db8::53")}) {
 		t.Fatalf("%+v", c)
 	}
 	var entries []string
@@ -94,6 +96,15 @@ func TestNativeSidecarRefusals(t *testing.T) {
 		{"SIDECAR_LAN_CIDRS", "192.0.2.0/24,", "SIDECAR_LAN_CIDRS: empty entry is not a network prefix"},
 		{"SIDECAR_LAN_CIDRS", " ", "SIDECAR_LAN_CIDRS: empty entry is not a network prefix"},
 		{"SIDECAR_LAN_CIDRS", strings.Repeat("192.0.2.0/24,", 16) + "2001:db8::/64", "SIDECAR_LAN_CIDRS must have at most 16 entries"},
+		{"SIDECAR_HOST_RESOLVERS", "10.129.0.10:53", `SIDECAR_HOST_RESOLVERS: "10.129.0.10:53" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "dns.example", `SIDECAR_HOST_RESOLVERS: "dns.example" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "0.0.0.0", `SIDECAR_HOST_RESOLVERS: "0.0.0.0" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "ff02::fb", `SIDECAR_HOST_RESOLVERS: "ff02::fb" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "fe80::1%eth0", `SIDECAR_HOST_RESOLVERS: "fe80::1%eth0" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "::ffff:10.0.0.1", `SIDECAR_HOST_RESOLVERS: "::ffff:10.0.0.1" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "10.0.0.1,", `SIDECAR_HOST_RESOLVERS: "" is not a resolver address`},
+		{"SIDECAR_HOST_RESOLVERS", "10.0.0.1, 10.0.0.1", "SIDECAR_HOST_RESOLVERS: 10.0.0.1 is duplicated"},
+		{"SIDECAR_HOST_RESOLVERS", "10.0.0.1,10.0.0.2,10.0.0.3,10.0.0.4", "SIDECAR_HOST_RESOLVERS must have at most 3 entries"},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			_, err := ConfigFromEnv(sidecarEnv(map[string]string{tc.name: tc.value}))

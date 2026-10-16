@@ -676,16 +676,26 @@ func (k *KernelSystem) SetForwardedPort(ctx context.Context, port int) error {
 }
 
 // Fetch sends one request. In a native sidecar every request not bound to the
-// tunnel carries the control mark, its name lookup included: rule 88 sends it
+// tunnel carries the control mark, its name lookup included (to
+// SIDECAR_HOST_RESOLVERS when set): rule 88 sends it
 // to the host and the firewall admits it there. Unmarked, it would go to the
 // exit table like the applications' traffic, and the provider's login and the
 // registration with a server's public address must not depend on the tunnel
 // they set up.
 func (k *KernelSystem) Fetch(ctx context.Context, req netx.Request) (netx.Response, error) {
-	if c := k.S.Routing; c.IsNativeSidecar() && req.BindInterface == "" && req.SocketMark == 0 {
+	return k.Client.Fetch(ctx, sidecarRequest(k.S.Routing, req))
+}
+
+func sidecarRequest(c contract.Config, req netx.Request) netx.Request {
+	if c.IsNativeSidecar() && req.BindInterface == "" && req.SocketMark == 0 {
 		req.SocketMark, req.MarkResolver = c.ControlMark, true
+		// SIDECAR_HOST_RESOLVERS: the namespace's own resolvers may be
+		// reachable only through the tunnel, for the applications' lookups.
+		for _, a := range c.HostResolvers {
+			req.Resolvers = append(req.Resolvers, netip.AddrPortFrom(a, 53).String())
+		}
 	}
-	return k.Client.Fetch(ctx, req)
+	return req
 }
 
 // RemoveForwardRules deletes the port-forwarding table.

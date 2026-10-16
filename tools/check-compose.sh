@@ -240,7 +240,7 @@ ok nsc "the exit passes every override the binary reads, with the binary's defau
   .services.exit.environment as $e |
   $e.ROUTING_RECONCILE_INTERVAL == "30" and $e.GUARD_GRACE == "30" and $e.EXIT_TABLE == "51821" and
   $e.HOST_IF == "eth0" and $e.GATUS_ENDPOINT == "molebridge" and $e.GATUS_URL == "" and $e.STATE_DIR == "/state" and
-  $e.PIA_PORT_FORWARD == "off" and $e.SERVER == "" and $e.SIDECAR_LAN_CIDRS == "198.51.100.0/24"'
+  $e.PIA_PORT_FORWARD == "off" and $e.SERVER == "" and $e.SIDECAR_LAN_CIDRS == "198.51.100.0/24" and $e.SIDECAR_HOST_RESOLVERS == ""'
 ok nsc "the exit has tmpfs on /run only, no sysctls (it forwards nothing), and stops within the grace period" '
   (.services.exit.tmpfs | map(split(":")[0])) == ["/run"] and
   ((.services.exit.sysctls // {}) == {}) and .services.exit.stop_grace_period == "15s"'
@@ -297,7 +297,7 @@ ok nsc "Switchyard: sidecar kind, no capabilities, a user, its own network, loop
   .healthcheck.test[0] == "CMD"'
 ok nsc "the tunnel, the PIA login and the exit's settings stay with the exit" '
   ([.services | to_entries[] | select(.key != "exit") | .value.volumes[]? | (.source // "") | select(test("tunnel|secrets/pia|wg_confs"))] == []) and
-  ([.services | to_entries[] | select(.value.environment.SERVER != null or .value.environment.SIDECAR_LAN_CIDRS != null or .value.environment.EXIT_IF != null) | .key] == ["exit"]) and
+  ([.services | to_entries[] | select(.value.environment.SERVER != null or .value.environment.SIDECAR_LAN_CIDRS != null or .value.environment.SIDECAR_HOST_RESOLVERS != null or .value.environment.EXIT_IF != null) | .key] == ["exit"]) and
   ([.services | to_entries[] | select(.value.environment.PORT_SYNC_URL != null) | .key] == ["port-sync"])'
 for provider in mullvad pia nordvpn; do
     resolve "nsc-$provider" compose.native-sidecar.yaml .env.native-sidecar.example "PROVIDER=$provider" "EXIT_IF=$provider"
@@ -307,12 +307,13 @@ for provider in mullvad pia nordvpn; do
 done
 resolve nsc-set compose.native-sidecar.yaml .env.native-sidecar.example COMPOSE_PROFILES=port-sync \
     PANEL_USER=0:0 PANEL_ALLOW_ROOT=1 PANEL_EXITS=a=pia/sidecar HOST_IF=ens3 EXIT_TABLE=51900 \
-    SIDECAR_LAN_CIDRS=198.51.100.0/24,2001:db8::/32 PIA_PORT_FORWARD=on PORT_SYNC_URL=http://127.0.0.1:8081
+    SIDECAR_LAN_CIDRS=198.51.100.0/24,2001:db8::/32 SIDECAR_HOST_RESOLVERS=203.0.113.10 PIA_PORT_FORWARD=on PORT_SYNC_URL=http://127.0.0.1:8081
 ok nsc-set "the settings reach the container that reads them" '
   .services.switchyard.user == "0:0" and .services.switchyard.environment.PANEL_ALLOW_ROOT == "1" and
   .services.switchyard.environment.PANEL_EXITS == "a=pia/sidecar" and .services["port-sync"].user == "0:0" and
   .services.exit.environment.HOST_IF == "ens3" and .services.exit.environment.EXIT_TABLE == "51900" and
   .services.exit.environment.SIDECAR_LAN_CIDRS == "198.51.100.0/24,2001:db8::/32" and
+  .services.exit.environment.SIDECAR_HOST_RESOLVERS == "203.0.113.10" and
   .services.exit.environment.PIA_PORT_FORWARD == "on" and .services["port-sync"].environment.PORT_SYNC_URL == "http://127.0.0.1:8081" and
   (.services | keys) == ["exit","port-sync","switchyard"]'
 pass "native sidecar form: the exit holds the tunnel and the PIA login, the applications and port-sync hold nothing"

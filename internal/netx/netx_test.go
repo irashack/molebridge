@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -282,5 +283,66 @@ func TestResponseHeadersAreReturned(t *testing.T) {
 	response, err := Client{}.Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true})
 	if err != nil || response.Header.Get("Set-Cookie") != "SID=abc; HttpOnly" {
 		t.Errorf("%v %+v", err, response)
+	}
+}
+
+// fakeResolver answers every A question with 127.0.0.1 and any other with no
+// answer, and counts the questions it was asked.
+func fakeResolver(t *testing.T) (addr string, asked *atomic.Int32) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	asked = new(atomic.Int32)
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := buf[:n]
+			if n < 12 {
+				continue
+			}
+			asked.Add(1)
+			end := 12
+			for end < n && q[end] != 0 {
+				end += int(q[end]) + 1
+			}
+			end += 5 // the root label, the type and the class
+			if end > n {
+				continue
+			}
+			isA := q[end-4] == 0 && q[end-3] == 1
+			answer := append([]byte{q[0], q[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, q[12:end]...)
+			if isA {
+				answer[7] = 1
+				answer = append(answer, 0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1)
+			}
+			_, _ = conn.WriteTo(answer, from)
+		}
+	}()
+	return conn.LocalAddr().String(), asked
+}
+
+func TestResolversReplaceTheSystemsNameServers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") }))
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+	dead, _ := net.ListenPacket("udp4", "127.0.0.1:0") // asked first, never answers
+	defer dead.Close()
+	resolver, asked := fakeResolver(t)
+	resp, err := Client{}.Fetch(context.Background(), Request{
+		URL: "http://molebridge-resolver.test:" + port + "/", AllowHTTP: true, Family: 4,
+		Resolvers: []string{dead.LocalAddr().String(), resolver}, Timeout: 20 * time.Second,
+	})
+	if err != nil || string(resp.Body) != "ok" {
+		t.Fatalf("Fetch: %v %q", err, resp.Body)
+	}
+	if asked.Load() == 0 {
+		t.Error("the configured resolver was never asked")
 	}
 }

@@ -69,6 +69,9 @@ services:
       # (docs/native-sidecar.md#dns). Everything else goes through the tunnel
       # or nowhere.
       SIDECAR_LAN_CIDRS: "${SIDECAR_LAN_CIDRS:-}"
+      # The exit's own lookups, when the namespace's resolvers are reachable
+      # only through the tunnel (docs/native-sidecar.md#dns).
+      SIDECAR_HOST_RESOLVERS: "${SIDECAR_HOST_RESOLVERS:-}"
       SERVER: "${SERVER:-}"
       # PIA only, off by default: the forwarded port reaches this namespace;
       # port-sync below tells qBittorrent which one it is.
