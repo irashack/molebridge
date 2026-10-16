@@ -39,7 +39,7 @@ that your other containers share, with no NetBird involved. The experimental
 [native sidecar](docs/native-sidecar.md), new in 0.9.0, gives those containers a
 tunnel that Molebridge builds itself, with PIA over WireGuard among the providers,
 and keeps their traffic in it with its own routing contract and firewall; it has
-not been run live yet ([testing](docs/testing.md#090)).
+run live once, with PIA on Kubernetes ([testing](docs/testing.md#090)).
 
 You choose the server (Mullvad, NordVPN, the gluetun providers) or region
 (PIA) in a small web panel called Switchyard. Every device using the exit

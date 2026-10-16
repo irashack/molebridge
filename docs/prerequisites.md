@@ -37,7 +37,7 @@ need no NetBird account: read the host, runtime and network parts, and skip
 | Docker Desktop | Untested |
 | arm64 Linux | The image is built and checked for arm64 in CI and the namespace drills passed on an arm64 VM; no live exit has run on arm64 |
 | Windows | Not supported |
-| A Kubernetes node, for the [native sidecar](native-sidecar.md#kubernetes) | Kubernetes 1.29 or later (sidecar containers); `wireguard` loadable on the node. Not yet run live ([testing](testing.md#090)) |
+| A Kubernetes node, for the [native sidecar](native-sidecar.md#kubernetes) | Kubernetes 1.29 or later (sidecar containers); `wireguard` loadable on the node. Run live on k0s with Cilium ([testing](testing.md#090)) |
 
 - **amd64 or arm64.** The image is a multi-architecture index; the Compose
   files pin it by digest.

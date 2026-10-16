@@ -16,7 +16,7 @@
 - [Recovery and verification](#recovery-and-verification)
 
 This page describes 0.9.0. Apart from the [native sidecar](#the-native-sidecar),
-which is new and has had no live pass, it is as at 0.8.0, where it had one live
+which is new and has had one live pass (PIA on Kubernetes), it is as at 0.8.0, where it had one live
 pass, on rootless Podman with Quadlet units; [testing](testing.md#090) says what
 the CI suites cover and what was not run. Where a statement comes from the 0.7.0 passes, it says so.
 

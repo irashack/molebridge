@@ -104,7 +104,7 @@ its drills.
 The candidate `ghcr.io/irashack/molebridge:v0.9.0-rc.1`, index digest
 `sha256:850c1ddde82155e164b24af89f691de859c1c0805126ec2b70fcac0dfea561ed`
 (commit `ab031d7`, signature verified with cosign against the release
-workflow), pulled from the registry on the homelab's Dryad (Debian, kernel
+workflow), pulled from the registry on the maintainer's home server (Debian, kernel
 7.2.8, amd64).
 
 **Upgrade from 0.8.** Every 0.8.0 project there moved to the candidate with no
@@ -162,9 +162,10 @@ recreation, and Mullvad or NordVPN as native sidecars.
 - Docker Engine and podman-compose. `compose.native-sidecar.yaml` has not been run
   on any engine; it has been through `docker compose config` (above).
 - Mullvad and NordVPN as native sidecars, live. PIA is the reason for the form.
-- A live run against PIA's port forwarding as a native sidecar, until the
-  acceptance records it. PIA port forwarding has not been tested against PIA at
-  any version.
+- `port-sync` setting the port live: rc.1's failed against qBittorrent 5.2
+  (above); PIA's port forwarding itself worked as a native sidecar (the record
+  held a forwarded port). The PIA overlay exit's port forwarding has not been
+  tested against PIA at any version.
 - DNS on a live engine: which resolvers an application's namespace uses under
   Docker, and what a leak test shows on either platform until the acceptance
   records it. `SIDECAR_HOST_RESOLVERS`'s resolver override has unit tests
