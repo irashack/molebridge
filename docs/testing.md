@@ -27,10 +27,9 @@ waits, and a control-server failure counts as a try), adds the
 `gluetun-preflight` tool and `fix-blacklist`'s `--add` and
 `--clear-external-ip-map`. Run so far: `go test ./...`, `go vet ./...` and
 `gofmt -l` pass on the 0.9.1 branch with Go 1.27.2, with a test for each
-waiting path and each new option. Not run: the namespace drills (nothing in
-routing, the tunnel or the mutation owner changed), a live exit on any
-platform, and the new tool in a Kubernetes init container. The 0.9.0 and 0.8.0
-records below still hold for everything else.
+waiting path and each new option; the candidates' live runs follow. Not run
+at 0.9.1: Docker Engine, podman-compose, and Mullvad or NordVPN as native
+sidecars. The 0.9.0 and 0.8.0 records below still hold for everything else.
 
 **v0.9.1-rc.1, live on Kubernetes (k0s with Cilium), 2026-10-16.** Molebridge's
 CI, the namespace drills included, passed on the candidate's commit. Every exit
@@ -45,7 +44,7 @@ aside, so its new pod started from gluetun's built-in list (data from
 refresh and `server_list_update` stayed null: it had judged its own earlier,
 fresh catalogue. rc.2 fixes that.
 
-**v0.9.1-rc.2, live on the same cluster, 2026-10-17.** The candidate
+**v0.9.1-rc.2, live on the same cluster, 2026-10-16.** The candidate
 `ghcr.io/irashack/molebridge:v0.9.1-rc.2`, index digest
 `sha256:43a4224a044885769c219b17f73d4996010eee888f99199bbbc98d06ba29f3f9`
 (commit `690f13a`), signature verified with cosign against the release
@@ -59,6 +58,38 @@ and the exit was `ok` on its selected server 3.5 minutes after the pod started.
 Molebridge's CI passed on main at this commit; on the tag its namespace drills
 failed once (no other step failed). The drift, tunnel-loss and lease-lapse
 drills were not run on rc.1 or rc.2, and nothing ran on rootless Podman.
+
+**v0.9.1-rc.3, the live acceptance, 2026-10-16.** The candidate
+`ghcr.io/irashack/molebridge:v0.9.1-rc.3`, index digest
+`sha256:873e6bb96c5b2721d84d56cb167507a0a5c9cdca56ce0f5b392f2e5f55e6a78a`
+(commit `df163f2`: rc.2's code, this record and acceptance policy 3), signature
+verified with cosign against the release workflow. CI, the namespace drills
+included, passed on the tag after one rerun of the failed job: across rc.2 and
+rc.3 three runs each failed one different drill while setting up its rig (`ip
+route add` refused with `Nexthop has invalid gateway` or `Gateway can not be a
+local address`), never in the code under test.
+
+- **Upgrade from 0.9.0.** Every project went from 0.9.0 to rc.1, rc.2 and rc.3
+  with no setting changed, and came back healthy each time: the native Mullvad,
+  PIA and NordVPN overlay exits, three more native exits, the gluetun overlay
+  exit, the PIA native sidecar beside qBittorrent and Switchyard on Kubernetes
+  (k0s with Cilium), and the gluetun sidecar with NordVPN on rootless Podman 5
+  as Quadlet units, upgraded there in place from rc.2.
+- **Both gluetun pods on Kubernetes** took their preflight from an init
+  container running `gluetun-preflight`.
+- **Drift** on the three native overlay exits: IPv4 rules 97, 95 and 1 and
+  IPv6 rule 97 deleted one at a time, and a foreign `lookup main` rule added at
+  96, each repaired within 0 to 20 ms (10 ms resolution, polling included).
+- **Tunnel loss** on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.14 to 0.99 s); a fresh verified egress
+  1.6 to 7.4 s after the deletion.
+- **Lease lapse** on NordVPN: the worker frozen with SIGSTOP; the exit logged
+  `stopping (lease lapsed)` 28.6 s later, NetBird stopped at 29.0 s, the exit
+  stopped with exit 1 and "the routing guards stay in place" at 34.8 s, the
+  container restarted in the same pod, and the exit reported `ok` 84 s after
+  the freeze.
+- **The gluetun sidecar on Podman**: peer, handshake and egress passing, and
+  the application's address NordVPN's, not the host's.
 
 ## 0.9.0
 

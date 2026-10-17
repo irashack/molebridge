@@ -4,11 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.9.1 — unreleased
+## 0.9.1 — 2026-10-16
 
 **Experimental.** Three fixes found moving the gluetun forms to Kubernetes. The
-unit tests and `go vet` pass; nothing here has run on a live exit yet
-([testing](docs/testing.md#091)).
+release candidate passed its live acceptance on Kubernetes and rootless
+Podman ([testing](docs/testing.md#091)).
 
 **gluetun's server-list refresh is decided on gluetun's own list, and says why
 it waits.** With the gluetun backend the exit starts one refresh of gluetun's
