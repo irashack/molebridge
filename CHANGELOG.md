@@ -4,6 +4,14 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- The stop now also waits, within the same one-second bound as the failure
+  record, for the last lease-file write (`revoked`), so `molebridge status`
+  never reads a lease the stopped exit still held. A fast stop could exit
+  before it landed.
+- The supervisor refuses a NetBird launch number beyond 32 bits.
+
 ## 0.9.1 — 2026-10-16
 
 **Experimental.** Three fixes found moving the gluetun forms to Kubernetes. The
