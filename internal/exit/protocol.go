@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -247,7 +248,9 @@ func decode(line []byte, from map[string]bool) (Msg, error) {
 	case TypeNetBird:
 		if err = fields(o, "type", "gen", "launch", "state", "log_offset", "at_boot_ns"); err == nil {
 			var launch int64
-			if launch, err = num(o, "launch"); err == nil {
+			if launch, err = num(o, "launch"); err == nil && launch > math.MaxInt32 {
+				err = violation("launch is out of range")
+			} else if err == nil {
 				m.Launch = int(launch)
 				if m.State, err = str(o, "state", 16); err == nil {
 					if m.State != NBLaunching && m.State != NBStarted && m.State != NBStopped && m.State != NBFailed {

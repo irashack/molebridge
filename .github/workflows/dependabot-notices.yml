@@ -1,0 +1,53 @@
+name: Dependabot notices
+
+# A Go module pull request from Dependabot changes vendor/, which leaves
+# THIRD_PARTY.md stale and fails CI's notices check. This regenerates it on
+# the pull request's branch. A push made with the workflow token starts no
+# workflow, so CI is dispatched on the branch afterwards; its check runs land
+# on the new head commit, which is what the main branch rules look at.
+
+on:
+  pull_request:
+    paths:
+      - go.mod
+      - go.sum
+      - vendor/**
+
+permissions: {}
+
+concurrency:
+  group: dependabot-notices-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  regenerate:
+    name: Regenerate THIRD_PARTY.md
+    # Dependabot's own branches in this repository only.
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - name: Check out the branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Regenerate, commit and dispatch CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          sh tools/gen-third-party.sh
+          if git diff --quiet -- THIRD_PARTY.md; then
+            echo "THIRD_PARTY.md is current."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'build(go): regenerate THIRD_PARTY.md' -- THIRD_PARTY.md
+          git push origin "HEAD:refs/heads/$BRANCH"
+          gh workflow run ci.yml --ref "$BRANCH"

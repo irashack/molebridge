@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Suspected vulnerability
+    url: https://github.com/irashack/molebridge/security/advisories/new
+    about: Report it privately (SECURITY.md), not as an issue.

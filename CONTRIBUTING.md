@@ -66,6 +66,10 @@ Python counterpart. Tests reuse `tools/fixtures/` and `panel/fixtures/` by relat
 
 ## Checks
 
+`main` takes a commit only after CI's four jobs (Checks, Go, Image and Release
+tooling) passed on it, so push a branch first and move `main` to the commit CI
+tested. Locally:
+
 ```sh
 gofmt -l $(git ls-files '*.go' ':(exclude)vendor')    # prints nothing
 go vet ./...

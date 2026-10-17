@@ -93,6 +93,9 @@ func TestDecodeRefusesMalformedMessages(t *testing.T) {
 	if _, err := DecodeFromSupervisor([]byte(`{"type":"netbird","gen":"` + goodGen + `","launch":1,"state":"weird","log_offset":0,"at_boot_ns":0}`)); !errors.Is(err, ErrProtocol) {
 		t.Error("unknown NetBird state")
 	}
+	if _, err := DecodeFromSupervisor([]byte(`{"type":"netbird","gen":"` + goodGen + `","launch":4294967296,"state":"started","log_offset":0,"at_boot_ns":0}`)); !errors.Is(err, ErrProtocol) {
+		t.Error("a launch number beyond 32 bits")
+	}
 }
 
 func TestLineReaderBoundsLines(t *testing.T) {

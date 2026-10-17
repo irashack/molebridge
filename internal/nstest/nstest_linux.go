@@ -33,7 +33,7 @@ func New(t *testing.T, label string) *NS {
 	// Unique across processes even if a pid is reused while a leaked namespace
 	// of an earlier test binary still has the name.
 	name := fmt.Sprintf("mb%d-%d-%s-%s", os.Getpid(), counter.Add(1), label, uniqueSuffix()[:4])
-	h, err := netns.NewNamed(name)
+	h, err := newNamed(name)
 	if err != nil {
 		t.Skipf("cannot create a network namespace (run the drills in a privileged container): %v", err)
 	}
@@ -50,6 +50,35 @@ func New(t *testing.T, label string) *NS {
 	})
 	ns.IP("link", "set", "lo", "up")
 	return ns
+}
+
+// newNamed is netns.NewNamed on one locked thread that goes back to its
+// namespace afterwards. NewNamed unshares the calling thread into the new
+// namespace and later bind-mounts the namespace of whatever thread it is then
+// running on. Unlocked, the goroutine could move between the two, binding the
+// name to another thread's namespace (the host's, or another rig's, which then
+// had two names: the drills' "File exists" and "invalid gateway" flakes), and
+// the thread it left behind served other goroutines from the new namespace.
+func newNamed(name string) (netns.NsHandle, error) {
+	runtime.LockOSThread()
+	orig, err := netns.Get()
+	if err != nil {
+		runtime.UnlockOSThread()
+		return netns.None(), err
+	}
+	defer orig.Close()
+	h, err := netns.NewNamed(name)
+	if serr := netns.Set(orig); serr != nil {
+		// The thread stays locked, so it ends with this goroutine instead
+		// of serving others from the wrong namespace.
+		if h.IsOpen() {
+			_ = h.Close()
+		}
+		_ = netns.DeleteNamed(name)
+		return netns.None(), fmt.Errorf("back to the original namespace: %w", serr)
+	}
+	runtime.UnlockOSThread()
+	return h, err
 }
 
 // Fd is a file descriptor of the namespace for rtnl.Options.NetNS. It stays

@@ -1,9 +1,13 @@
-# Base-image digests for the images Molebridge builds itself, and Go modules.
-# A pull request here is a prompt, not a release: rebuild, run
+# Base-image digests for the images Molebridge builds itself, Go modules, and
+# the GitHub Actions the workflows and the local composite actions pin by
+# commit. A pull request here is a prompt, not a release: rebuild, run
 # docs/verification.md, then merge (CONTRIBUTING.md). The NetBird client pin in
 # the root Dockerfile is a release URL and checksums, not an image, so
 # Dependabot cannot bump it; it is updated by hand with the checksums file of
 # the release (see the comment above NETBIRD_VERSION in the Dockerfile).
+#
+# Go module pull requests change vendor/, so THIRD_PARTY.md goes stale;
+# .github/workflows/dependabot-notices.yml regenerates it on the branch.
 version: 2
 updates:
   # The single image (golang and alpine digests).
@@ -13,9 +17,26 @@ updates:
       interval: weekly
     commit-message:
       prefix: "build(image)"
+  # One pull request a week for every module bump, so the notices are
+  # regenerated and the drills run once.
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: weekly
     commit-message:
       prefix: "build(go)"
+    groups:
+      go-modules:
+        patterns: ["*"]
+  # "/" covers .github/workflows; the composite actions are listed too.
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "build(ci)"
+    groups:
+      actions:
+        patterns: ["*"]
