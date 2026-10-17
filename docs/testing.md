@@ -15,6 +15,18 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.9.2
+
+The acceptance policy for 0.9.2 (`tools/acceptance-policy.json`, version 4)
+drills the upgrade from the release before it, `upgrade-from-0.9.1`; the
+platforms, providers, kinds and other drills are 0.9.1's.
+
+0.9.2 updates the Go modules that speak netlink (`mdlayher/netlink` to 1.9.0,
+`mdlayher/genetlink` to 1.4.0) and `golang.org/x/sys`, makes the stop wait for
+its last lease-file write, and bounds the NetBird launch number. Run so far:
+CI, the namespace drills included, on the merged commit and on the Dependabot
+branch. The candidates' live runs follow.
+
 ## 0.9.1
 
 The acceptance policy for 0.9.1 (`tools/acceptance-policy.json`, version 3)

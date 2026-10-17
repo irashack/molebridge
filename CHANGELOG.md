@@ -4,13 +4,26 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.9.2 — unreleased
 
+**Experimental.** Dependency updates and two small fixes. The release
+candidate's live acceptance follows ([testing](docs/testing.md#092)).
+
+**Go modules**: `golang.org/x/sys` 0.48.0 to 0.49.0, `github.com/mdlayher/netlink`
+from a 2025-01-13 pseudo-version to 1.9.0, and `github.com/mdlayher/genetlink`
+1.3.2 to 1.4.0. (The squashed commit's subject says netlink 1.11.2; it is 1.9.0.)
+
+**Fixes**:
 - The stop now also waits, within the same one-second bound as the failure
   record, for the last lease-file write (`revoked`), so `molebridge status`
   never reads a lease the stopped exit still held. A fast stop could exit
   before it landed.
 - The supervisor refuses a NetBird launch number beyond 32 bits.
+
+**Releases**: `v*` tags on GitHub can no longer be moved or deleted, and
+published releases are immutable, so a release's files and the tag a bundle
+names stay what was signed. The release acceptance policy (version 4) drills a
+patch release as an upgrade from 0.9.1.
 
 ## 0.9.1 — 2026-10-16
 
