@@ -605,9 +605,11 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 		if rest > time.Second {
 			rest = time.Second
 		}
+		landBy := time.Now().Add(rest)
 		if !s.pub.Wait(rest) {
 			s.logf("the status record could not be written in time (is the state volume stuck?)")
 		}
+		s.leaseOut.Wait(time.Until(landBy))
 	}
 	code := 1
 	if len(left) > 0 {

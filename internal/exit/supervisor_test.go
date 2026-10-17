@@ -24,7 +24,11 @@ service)
     echo "netbird service run" >> "$t"
     echo "log line from the fake daemon"
     : > "$t.live"
-    trap 'echo "netbird terminated" >> "$t"; exit 0' TERM
+    # A TERM sent to the group while the sleep below is being forked misses
+    # it (not yet in the group, or caught by the shell's handler the exec then
+    # forgets), and the trap runs after the fork: so the trap kills the sleep,
+    # with a signal nothing can catch, and nothing outlives the daemon.
+    trap 'echo "netbird terminated" >> "$t"; kill -KILL $! 2>/dev/null; exit 0' TERM
     if [ "$NB_FAKE_MODE" = die ]; then sleep 1; echo "netbird died" >> "$t"; exit 9; fi
     if [ "$NB_FAKE_MODE" = deaf ]; then trap '' TERM; fi
     sleep 600 &
@@ -504,8 +508,9 @@ func TestMessagesAfterTheExpiryStopTheExit(t *testing.T) {
 func TestAStalledSpawnNeverDelaysTheStop(t *testing.T) {
 	h := newHarness(t, "freeze", "ok")
 	stall, entered := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	t.Cleanup(func() { close(stall) })
+	var once, released sync.Once
+	release := func() { released.Do(func() { close(stall) }) }
+	t.Cleanup(release)
 	h.cfg.nbHook = func(stage string) {
 		if stage == "spawn status --check live" {
 			once.Do(func() { close(entered) })
@@ -532,6 +537,13 @@ func TestAStalledSpawnNeverDelaysTheStop(t *testing.T) {
 	}
 	if code := h.wait(done, 15*time.Second); code == 0 {
 		t.Error("exit status")
+	}
+	// The creation returns at last and its child is killed on attach. It is
+	// waited for here, while the reaper and the test's directory (the child
+	// writes the trace) still exist.
+	release()
+	if !h.sup.nb.waitGone(5 * time.Second) {
+		t.Error("the late child outlived the stop")
 	}
 }
 
