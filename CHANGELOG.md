@@ -42,6 +42,9 @@ namespace for a pod that mounts `/dev/net/tun`, and
 ([the exit](docs/gluetun-netbird-exit.md#kubernetes),
 [the sidecar](docs/gluetun-sidecar.md#kubernetes)).
 
+**Release acceptance**: the policy (version 3) drills a patch release as an
+upgrade from the release before it (`upgrade-from-0.9.0`) instead of from 0.8.
+
 **`fix-blacklist --add IFACE` and `--clear-external-ip-map`**, for an enrolled
 exit that moved to another runtime: the first adds another interface to the
 stored profile's blacklist, the second empties a stored `--external-ip-map`

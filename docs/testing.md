@@ -17,6 +17,11 @@ tested, not instructions; the current commands are in the other pages.
 
 ## 0.9.1
 
+The acceptance policy for 0.9.1 (`tools/acceptance-policy.json`, version 3)
+replaces the drill `upgrade-from-0.8` with `upgrade-from-0.9.0`: a patch
+release is drilled as an upgrade from the release before it. The platforms,
+providers and kinds are 0.9.0's.
+
 0.9.1 changes the gluetun backend's server-list refresh (it reports why it
 waits, and a control-server failure counts as a try), adds the
 `gluetun-preflight` tool and `fix-blacklist`'s `--add` and
