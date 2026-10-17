@@ -102,21 +102,21 @@ module's license text is reproduced as vendored.
 
 | Module | Version | License file |
 |---|---|---|
-| `github.com/google/go-cmp` | v0.6.0 | LICENSE |
+| `github.com/google/go-cmp` | v0.7.0 | LICENSE |
 | `github.com/google/nftables` | v0.3.0 | LICENSE |
-| `github.com/mdlayher/genetlink` | v1.3.2 | LICENSE.md |
-| `github.com/mdlayher/netlink` | v1.7.3-0.20250113171957-fbb4dce95f42 | LICENSE.md |
-| `github.com/mdlayher/socket` | v0.5.1 | LICENSE.md |
+| `github.com/mdlayher/genetlink` | v1.4.0 | LICENSE.md |
+| `github.com/mdlayher/netlink` | v1.9.0 | LICENSE.md |
+| `github.com/mdlayher/socket` | v0.6.0 | LICENSE.md |
 | `github.com/vishvananda/netlink` | v1.3.1 | LICENSE |
 | `github.com/vishvananda/netns` | v0.0.5 | LICENSE |
 | `golang.org/x/crypto` | v0.57.0 | LICENSE, PATENTS |
 | `golang.org/x/net` | v0.60.0 | LICENSE, PATENTS |
-| `golang.org/x/sync` | v0.10.0 | LICENSE, PATENTS |
-| `golang.org/x/sys` | v0.48.0 | LICENSE, PATENTS |
+| `golang.org/x/sync` | v0.20.0 | LICENSE, PATENTS |
+| `golang.org/x/sys` | v0.49.0 | LICENSE, PATENTS |
 | `golang.zx2c4.com/wireguard` | v0.0.0-20231211153847-12269c276173 | LICENSE |
 | `golang.zx2c4.com/wireguard/wgctrl` | v0.0.0-20241231184526-a9ab2273dd10 | LICENSE.md |
 
-### github.com/google/go-cmp v0.6.0
+### github.com/google/go-cmp v0.7.0
 
 Packages: github.com/google/go-cmp/cmp, github.com/google/go-cmp/cmp/internal/diff, github.com/google/go-cmp/cmp/internal/flags, github.com/google/go-cmp/cmp/internal/function, github.com/google/go-cmp/cmp/internal/value
 
@@ -363,7 +363,7 @@ Packages: github.com/google/nftables, github.com/google/nftables/alignedbuff, gi
    limitations under the License.
 ~~~~
 
-### github.com/mdlayher/genetlink v1.3.2
+### github.com/mdlayher/genetlink v1.4.0
 
 Packages: github.com/mdlayher/genetlink
 
@@ -381,7 +381,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
-### github.com/mdlayher/netlink v1.7.3-0.20250113171957-fbb4dce95f42
+### github.com/mdlayher/netlink v1.9.0
 
 Packages: github.com/mdlayher/netlink, github.com/mdlayher/netlink/nlenc, github.com/mdlayher/netlink/nltest
 
@@ -390,7 +390,7 @@ Packages: github.com/mdlayher/netlink, github.com/mdlayher/netlink/nlenc, github
 ~~~~text
 # MIT License
 
-Copyright (C) 2016-2022 Matt Layher
+Copyright (C) 2016-2026 Matt Layher
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -399,7 +399,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
-### github.com/mdlayher/socket v0.5.1
+### github.com/mdlayher/socket v0.6.0
 
 Packages: github.com/mdlayher/socket
 
@@ -945,7 +945,7 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 ~~~~
 
-### golang.org/x/sync v0.10.0
+### golang.org/x/sync v0.20.0
 
 Packages: golang.org/x/sync/errgroup
 
@@ -1008,7 +1008,7 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 ~~~~
 
-### golang.org/x/sys v0.48.0
+### golang.org/x/sys v0.49.0
 
 Packages: golang.org/x/sys/unix, golang.org/x/sys/windows
 
