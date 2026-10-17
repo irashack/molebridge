@@ -23,9 +23,39 @@ platforms, providers, kinds and other drills are 0.9.1's.
 
 0.9.2 updates the Go modules that speak netlink (`mdlayher/netlink` to 1.9.0,
 `mdlayher/genetlink` to 1.4.0) and `golang.org/x/sys`, makes the stop wait for
-its last lease-file write, and bounds the NetBird launch number. Run so far:
-CI, the namespace drills included, on the merged commit and on the Dependabot
-branch. The candidates' live runs follow.
+its last lease-file write, and bounds the NetBird launch number. Not run at
+0.9.2: Docker Engine, podman-compose, and Mullvad or NordVPN as native
+sidecars. The 0.9.1, 0.9.0 and 0.8.0 records below still hold for everything
+else.
+
+**v0.9.2-rc.1, the live acceptance, 2026-10-17.** The candidate
+`ghcr.io/irashack/molebridge:v0.9.2-rc.1`, index digest
+`sha256:f91787689be0600ce2de248b6c6f329872cd66d3dd8c1e090b38abb12b29d98b`
+(commit `cd60562`), signature verified with cosign against the release
+workflow at that commit. CI, the namespace drills included, passed on the tag
+at the first run, and on the Dependabot branch and `main` before it.
+
+- **Upgrade from 0.9.1.** Every project went from 0.9.1 to rc.1 with no
+  setting changed and came back `ok`: the native Mullvad, PIA and NordVPN
+  overlay exits, three more native exits, the gluetun overlay exit, the PIA
+  native sidecar beside qBittorrent, Switchyard and the gluetun sidecar on
+  Kubernetes (k0s with Cilium). The gluetun sidecar then moved, with its 0.9.1
+  state, to rootless Podman 5.8 as Quadlet units on rc.1.
+- **The gluetun overlay exit on Kubernetes** took its preflight from an init
+  container running `gluetun-preflight`.
+- **Drift** on the three native overlay exits: IPv4 rules 97, 95 and 1 and
+  IPv6 rule 97 deleted one at a time, and a foreign `lookup main` rule added at
+  96, each repaired within 0 to 20 ms (10 ms resolution, polling included).
+- **Tunnel loss** on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.32 to 1.93 s); a fresh verified egress
+  1.9 to 2.4 s after the deletion.
+- **Lease lapse** on NordVPN: the worker frozen with SIGSTOP; the exit logged
+  `stopping (lease lapsed)` about 31 s later, NetBird stopped at about 33 s,
+  the exit stopped with exit 1 and "the routing guards stay in place" at about
+  37 s, the container restarted in the same pod, and the exit reported `ok`
+  86 s after the freeze.
+- **The gluetun sidecar on Podman**: peer, handshake and egress passing, and
+  the application's address NordVPN's, not the host's.
 
 ## 0.9.1
 

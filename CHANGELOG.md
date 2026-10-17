@@ -4,10 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.9.2 — unreleased
+## 0.9.2 — 2026-10-17
 
 **Experimental.** Dependency updates and two small fixes. The release
-candidate's live acceptance follows ([testing](docs/testing.md#092)).
+candidate passed its live acceptance on Kubernetes and rootless Podman
+([testing](docs/testing.md#092)).
 
 **Go modules**: `golang.org/x/sys` 0.48.0 to 0.49.0, `github.com/mdlayher/netlink`
 from a 2025-01-13 pseudo-version to 1.9.0, and `github.com/mdlayher/genetlink`
