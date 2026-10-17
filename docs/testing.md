@@ -40,6 +40,21 @@ aside, so its new pod started from gluetun's built-in list (data from
 refresh and `server_list_update` stayed null: it had judged its own earlier,
 fresh catalogue. rc.2 fixes that.
 
+**v0.9.1-rc.2, live on the same cluster, 2026-10-17.** The candidate
+`ghcr.io/irashack/molebridge:v0.9.1-rc.2`, index digest
+`sha256:43a4224a044885769c219b17f73d4996010eee888f99199bbbc98d06ba29f3f9`
+(commit `690f13a`), signature verified with cosign against the release
+workflow, replaced rc.1 on every project with no setting changed; every exit
+and the panel reported `ok`. The fault's conditions were then set up exactly:
+the gluetun sidecar's exit first cached a list dated 2026-10-16, then gluetun's
+file was put back to its built-in list (2024-03-21) and the pod recreated. The
+exit asked gluetun for a refresh about 90 seconds after the pod started,
+reported `server_list_update: updating`, gluetun wrote data dated that minute,
+and the exit was `ok` on its selected server 3.5 minutes after the pod started.
+Molebridge's CI passed on main at this commit; on the tag its namespace drills
+failed once (no other step failed). The drift, tunnel-loss and lease-lapse
+drills were not run on rc.1 or rc.2, and nothing ran on rootless Podman.
+
 ## 0.9.0
 
 0.9.0 adds the [native sidecar](native-sidecar.md) (`EXIT_KIND=sidecar` with
