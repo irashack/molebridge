@@ -133,6 +133,25 @@ func TestWriteModesAndOutput(t *testing.T) {
 	}
 }
 
+func TestWriteWithoutSyncStillReplacesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "result.json")
+	for i := 0; i < 3; i++ {
+		if err := Write(path, validate.Members("n", i), Options{Public: true, NoSync: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != `{"n": 2}` {
+		t.Errorf("content %s", b)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o644 {
+		t.Errorf("mode %v", info.Mode())
+	}
+	if got := names(t, dir); len(got) != 1 {
+		t.Errorf("temporary files left behind: %v", got)
+	}
+}
+
 func nan() float64 { var z float64; return z / z }
 
 func TestWriteWithALimitRefusesBeforeTouchingTheOldFile(t *testing.T) {

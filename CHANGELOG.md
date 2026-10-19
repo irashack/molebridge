@@ -4,6 +4,17 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- **No fsync for `result.json`.** The status record is rewritten every 2 seconds
+  on a native exit (the `owner_record` lease) and after every inspection, and
+  nothing restores from it, so its writes skip the fsync before the atomic
+  rename (`jsonfile.Options.NoSync`). On btrfs each fsync was a log-tree commit:
+  one exit wrote about 1.8 MB a minute for a 1.3 KB file. A crash leaves the
+  previous record or the new one, never a torn file. Every other state file
+  (`attempt.json`, `relays.json`, `gluetun-selection.json`, the panel's) keeps
+  its fsync.
+
 ## 0.9.2 — 2026-10-17
 
 **Experimental.** Dependency updates and two small fixes. The release

@@ -69,6 +69,13 @@ type Options struct {
 	// MaxBytes, when positive, stops the encoder with ErrSizeLimit as soon as
 	// the output passes it. Zero means no bound.
 	MaxBytes int64
+	// NoSync skips the fsync before the rename. For a record its writer
+	// rewrites within seconds and that nothing restores from (result.json):
+	// the rename stays atomic, and after a crash the file is the previous
+	// version or the new one, never a torn one, but a few seconds may be lost.
+	// On a copy-on-write filesystem each fsync costs a log-tree commit; a
+	// 2-second rewrite with one wrote about 1.8 MB a minute on btrfs.
+	NoSync bool
 }
 
 type limitWriter struct {
@@ -90,7 +97,7 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 // (validate.EncodeJSON: the bytes Python's json.dump writes). The document is
 // encoded in small chunks into a temporary file in the same directory, so
 // memory stays bounded by the chunk size whatever the document's size; the
-// file is synced and renamed over path. On any error the temporary file is
+// file is synced (unless opts.NoSync) and renamed over path. On any error the temporary file is
 // removed and the old file stays in place. The directory is created if needed.
 func Write(path string, v any, opts Options) (err error) {
 	dir := filepath.Dir(path)
@@ -118,8 +125,10 @@ func Write(path string, v any, opts Options) (err error) {
 	if err = validate.EncodeJSON(&limitWriter{w: f, max: opts.MaxBytes}, v); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
-		return err
+	if !opts.NoSync {
+		if err = f.Sync(); err != nil {
+			return err
+		}
 	}
 	if err = f.Close(); err != nil {
 		return err

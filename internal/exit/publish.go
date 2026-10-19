@@ -37,7 +37,9 @@ type publisher struct {
 func newPublisher(s *Settings, lease *Lease, boot bootclock.Clock, wall func() time.Time, logf func(string, ...any)) *publisher {
 	return &publisher{s: s, lease: lease, boot: boot, wall: wall, logf: logf, out: newCoalescer(),
 		write: func(path string, v any) error {
-			return jsonfile.Write(path, v, jsonfile.Options{Public: true})
+			// No fsync: the record is rewritten every 2 seconds on a native exit
+			// and every inspection otherwise, and nothing restores from it.
+			return jsonfile.Write(path, v, jsonfile.Options{Public: true, NoSync: true})
 		}}
 }
 
