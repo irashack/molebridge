@@ -226,7 +226,7 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 	if response.ContentLength > limit {
 		return Response{}, ErrTooLarge
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	raw, err := readBody(response.Body, limit, response.ContentLength)
 	if err != nil {
 		return Response{}, classify(ctx, err)
 	}
@@ -237,6 +237,34 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 		return Response{}, ErrStatus
 	}
 	return Response{Status: response.StatusCode, Body: raw, Header: response.Header}, nil
+}
+
+// readBody reads body to its end, or to one byte past limit; the caller
+// refuses an answer that long. A body that announced its length (length
+// within limit) is read into a buffer of that size plus one byte, so the read
+// that finds the end needs no larger one: io.ReadAll grows its buffer as it
+// goes, allocating about twice the body. One without a length, or longer than
+// it announced, is read by io.ReadAll from where it stands.
+func readBody(body io.Reader, limit, length int64) ([]byte, error) {
+	body = io.LimitReader(body, limit+1)
+	if length < 0 || length > limit {
+		return io.ReadAll(body)
+	}
+	buf := make([]byte, 0, length+1)
+	for {
+		n, err := body.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
+		if len(buf) == cap(buf) {
+			rest, err := io.ReadAll(body)
+			return append(buf, rest...), err
+		}
+	}
 }
 
 func classify(ctx context.Context, err error) error {

@@ -60,11 +60,33 @@ func ReadBytes(path string, limit int64) ([]byte, bool) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
 		return nil, false
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	raw, err := readSized(io.LimitReader(f, limit+1), info.Size())
 	if err != nil || int64(len(raw)) > limit {
 		return nil, false
 	}
 	return raw, true
+}
+
+// readSized reads r to its end into a buffer of size plus one byte, so the
+// read that finds the end needs no larger one (io.ReadAll would allocate
+// about twice the file as its buffer grows); a file that grew since its size
+// was taken is read on by io.ReadAll.
+func readSized(r io.Reader, size int64) ([]byte, error) {
+	buf := make([]byte, 0, size+1)
+	for {
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
+		if len(buf) == cap(buf) {
+			rest, err := io.ReadAll(r)
+			return append(buf, rest...), err
+		}
+	}
 }
 
 // ReadObject is Read for a document that must be a JSON object.

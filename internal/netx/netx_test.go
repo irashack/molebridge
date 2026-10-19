@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -190,6 +191,45 @@ func TestTheBodyIsBounded(t *testing.T) {
 	response, err := Client{}.Fetch(context.Background(), Request{URL: sized.URL, AllowHTTP: true, MaxBytes: 100})
 	if err != nil || len(response.Body) != 100 {
 		t.Errorf("exactly the limit: %v %d", err, len(response.Body))
+	}
+}
+
+// readBody reads whatever the body holds, up to one byte past the limit,
+// whatever length it announced; the announced length only sizes the buffer.
+func TestReadBodyIgnoresAWrongLength(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 100)
+	for _, tc := range []struct {
+		size, limit, length int64
+		want                int
+	}{
+		{100, 100, 100, 100}, {100, 100, -1, 100}, {100, 100, 10, 100}, {100, 100, 0, 100},
+		{100, 1000, 1000, 100}, {100, 99, 99, 100}, {100, 50, 10, 51}, {100, 50, -1, 51},
+		{0, 100, 0, 0}, {0, 100, -1, 0},
+	} {
+		got, err := readBody(iotest.HalfReader(bytes.NewReader(body[:tc.size])), tc.limit, tc.length)
+		if err != nil || len(got) != tc.want {
+			t.Errorf("%+v: %d bytes, %v", tc, len(got), err)
+		}
+	}
+	failing := io.MultiReader(bytes.NewReader(body), iotest.ErrReader(io.ErrUnexpectedEOF))
+	if _, err := readBody(failing, 1000, 200); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("a failed read: %v", err)
+	}
+}
+
+// An announced length within the limit is read into one buffer of that size.
+func TestReadBodyAllocatesTheAnnouncedLengthOnce(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 1<<20)
+	allocated := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if got, err := readBody(bytes.NewReader(body), 2<<20, int64(len(body))); err != nil || len(got) != len(body) {
+				b.Fatal(len(got), err)
+			}
+		}
+	}).AllocedBytesPerOp()
+	if allocated > int64(len(body))+64*1024 {
+		t.Errorf("%d bytes allocated for a body of %d", allocated, len(body))
 	}
 }
 
