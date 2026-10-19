@@ -346,11 +346,13 @@ namespace's own, because rule 90 would send traffic for it to the host. The pane
 shows "Peer update failed; retrying automatically." and the exit tries again on its
 backoff ([retries](operations.md#retries)). Narrow `SIDECAR_LAN_CIDRS`.
 
-**`molebridge-exit: applier: port forwarding failed`, and `port_forward_error`
+**`molebridge-exit: applier: port forwarding failed: <reason>`, and `port_forward_error`
 "Port forwarding is unavailable; retrying."** PIA's forwarding calls failed, or the
 firewall couldn't be given the port. The exit takes the forwarded port out of the
-firewall, tries again after a minute and keeps the exit's connected state. Check
-that the selected region offers forwarding.
+firewall, tries again after a minute and keeps the exit's connected state. The
+reason names the step: `PIA refused port forwarding` usually means the selected
+region doesn't offer forwarding, and `the provider refused the login` means a
+wrong PIA username or password. The reason never includes the login or the token.
 
 **`PIA_PORT_FORWARD_TARGET is for the overlay kind; a sidecar's forwarded port
 reaches the namespace itself`.** The exit started with a target set. Unset

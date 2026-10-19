@@ -10,12 +10,15 @@ package mutator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/irashack/molebridge/internal/contract"
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/irashack/molebridge/internal/rtnl"
 )
@@ -654,5 +657,60 @@ func TestAChangeBySomebodyElseSendsTheOwnerBackToTheKernel(t *testing.T) {
 		if r.Priority == 70 {
 			t.Error("the stray somebody else added was not removed")
 		}
+	}
+}
+
+// A refusal that persists is logged once, not on every pass, and again once
+// RefusalRelog has passed.
+func TestARefusalThatPersistsIsLoggedOncePerRelog(t *testing.T) {
+	var mu sync.Mutex
+	var logged []string
+	var now atomic.Int64
+	now.Store(int64(time.Hour))
+	m, k, _ := healthyNamespace(t, func(o *Options) {
+		o.Clock = func() time.Duration { return time.Duration(now.Load()) }
+		o.Logf = func(format string, a ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, a...))
+		}
+	})
+	stray := rtnl.Rule{Family: rtnl.V4, Priority: 93, Action: rtnl.FRActUnreachable, IifName: "eth0"}
+	k.mu.Lock()
+	k.rules[rtnl.V4] = append(k.rules[rtnl.V4], stray)
+	k.mu.Unlock()
+	sortRules(k.rules[rtnl.V4])
+	refuse := func() {
+		t.Helper()
+		err := m.Do(context.Background(), "delete", func(tx *Tx) error {
+			k.unstable = true
+			defer func() { k.unstable = false }()
+			return tx.DelRule(stray)
+		})
+		if !errors.Is(err, ErrUnsafeDeletion) {
+			t.Fatalf("%v", err)
+		}
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, line := range logged {
+			if strings.Contains(line, "kept IPv4 rule 93") {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < 3; i++ {
+		refuse()
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("logged %d times in three passes: %q", n, logged)
+	}
+	now.Add(int64(RefusalRelog))
+	refuse()
+	if n := count(); n != 2 {
+		t.Fatalf("not logged again after RefusalRelog: %d: %q", n, logged)
 	}
 }

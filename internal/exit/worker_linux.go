@@ -719,7 +719,7 @@ func (w *worker) pipelineLoop() {
 	for {
 		if w.pipeOn.Load() && !w.blocked.Load() {
 			if err := w.pipe.Tick(w.ctx); err != nil && w.ctx.Err() == nil {
-				w.warnEvery("tick", 30*time.Second, "applier: control cycle failed")
+				w.warnEvery("tick", 30*time.Second, "applier: control cycle failed: %v", err)
 			}
 		}
 		if !sleepCtx(w.ctx, TickInterval) {

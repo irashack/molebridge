@@ -15,10 +15,12 @@
 - [Panel and access](#panel-and-access)
 - [Recovery and verification](#recovery-and-verification)
 
-This page describes 0.9.0. Apart from the [native sidecar](#the-native-sidecar),
-which is new and has had one live pass (PIA on Kubernetes), it is as at 0.8.0, where it had one live
-pass, on rootless Podman with Quadlet units; [testing](testing.md#090) says what
-the CI suites cover and what was not run. Where a statement comes from the 0.7.0 passes, it says so.
+This page describes 0.9.3. The live runs behind it are on Kubernetes and on
+rootless Podman with Quadlet units, the latest at 0.9.2
+([testing](testing.md#092)); the [native sidecar](#the-native-sidecar) has run
+live with PIA on Kubernetes only. [Testing](testing.md) says what the CI suites
+cover and what was not run. Where a statement comes from the 0.7.0 passes, it
+says so.
 
 ## Goal and boundary
 
@@ -660,8 +662,9 @@ judges the deletion against a model of the kernel that the kernel held still
 for, applies the deletion to the model as the kernel would, and asks
 `internal/policy` whether any protected class of traffic has gone from safe to
 escaping. If one has, or the kernel kept changing so it cannot tell, the rule
-stays, the pass is unverified, and the refusal is logged once
-(`molebridge-exit: kept IPv4 rule 98: ...`). A gluetun sidecar has no contract,
+stays, the pass is unverified, and the refusal is logged
+(`molebridge-exit: kept IPv4 rule 98: ...`): once, and again every 10 minutes
+while the same refusal recurs. A gluetun sidecar has no contract,
 so nothing is checked there; a native sidecar has its own classes, below.
 
 The model is one stable snapshot per operation, kept up to date with the

@@ -926,7 +926,9 @@ func (p *piaProvider) maintainForward(ctx context.Context, a *Applier) {
 		p.forwardError = "Port forwarding is unavailable; retrying."
 		_ = p.removeForwardRules(ctx, a)
 		p.nextForward = a.clock() + ForwardRetrySec
-		a.log("applier: port forwarding failed")
+		// The errors name a step or a file, never a credential or a token
+		// (netx's carry no URL).
+		a.log("applier: port forwarding failed: " + err.Error())
 	}
 }
 

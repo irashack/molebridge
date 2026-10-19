@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,9 @@ func TestNativeSidecarPIAForwarding(t *testing.T) {
 	}
 	if r := a.inspect(t); r.Get("forwarded_port") != nil || r.Get("port_forward_error") != "Port forwarding is unavailable; retrying." {
 		t.Errorf("forwarded port %v error %v", r.Get("forwarded_port"), r.Get("port_forward_error"))
+	}
+	if !slices.Contains(k.logs, "applier: port forwarding failed: PIA refused to bind the forwarded port") {
+		t.Errorf("the failure's log line names no cause: %q", k.logs)
 	}
 	noOverlayCalls(t, k)
 }

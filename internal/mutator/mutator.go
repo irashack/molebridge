@@ -100,6 +100,11 @@ type Mutator struct {
 	progress atomic.Int64 // boot-clock nanoseconds of the last completion
 	ready    atomic.Bool
 
+	// refusals is when each refused deletion was last logged (boot clock), so a
+	// refusal that persists across passes is logged once per RefusalRelog.
+	refusalMu sync.Mutex
+	refusals  map[string]time.Duration
+
 	closing  atomic.Bool
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -197,6 +202,31 @@ func (m *Mutator) Stats() Stats {
 }
 
 func (m *Mutator) step() { m.progress.Store(int64(m.o.Clock())) }
+
+// RefusalRelog is how long a refused deletion that keeps being refused goes
+// unlogged after its line.
+const RefusalRelog = 10 * time.Minute
+
+// logRefusal reports whether a refusal should be logged: the first time, and
+// again once RefusalRelog has passed since its last line.
+func (m *Mutator) logRefusal(msg string) bool {
+	now := m.o.Clock()
+	m.refusalMu.Lock()
+	defer m.refusalMu.Unlock()
+	if at, ok := m.refusals[msg]; ok && now-at < RefusalRelog {
+		return false
+	}
+	if m.refusals == nil {
+		m.refusals = map[string]time.Duration{}
+	}
+	for k, at := range m.refusals {
+		if now-at >= RefusalRelog {
+			delete(m.refusals, k)
+		}
+	}
+	m.refusals[msg] = now
+	return true
+}
 
 func (m *Mutator) run() {
 	defer close(m.done)

@@ -19,8 +19,6 @@ type Tx struct {
 	m    *Mutator
 	ctx  context.Context
 	name string
-	// refused remembers the deletions already refused, so each is logged once.
-	refused map[string]bool
 	// retiring are return-path addresses a transaction is moving away from: the
 	// expected state keeps their pair until the transaction settles, but the
 	// transaction's own steps may remove it once the address is no longer live
@@ -66,11 +64,7 @@ func (tx *Tx) approve(what string, remove func(policy.State) (policy.State, bool
 	}
 	refuse := func(reason string, cause error) error {
 		msg := fmt.Sprintf("kept %s: %s", what, reason)
-		if !tx.refused[msg] {
-			if tx.refused == nil {
-				tx.refused = map[string]bool{}
-			}
-			tx.refused[msg] = true
+		if tx.m.logRefusal(msg) {
 			tx.Logf("molebridge: %s", msg)
 		}
 		if cause != nil {
