@@ -26,14 +26,40 @@ func readBootID() string {
 // writeHeartbeat records, atomically, that an operational tick just passed:
 // "molebridge-heartbeat 1 <boot id> <boot-clock nanoseconds>".
 func writeHeartbeat(path string, now time.Duration) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	return replaceFile(path, []byte(fmt.Sprintf("molebridge-heartbeat 1 %s %d\n", readBootID(), int64(now))))
+}
+
+// replaceFile replaces path with data (mode 0644), creating its directory if
+// needed. The data goes to a new temporary file in the same directory, which
+// is renamed over path: a reader sees the old file or the new one, and
+// nothing at a fixed name beside path (a symbolic link left there, say) is
+// followed or written through. On an error the temporary file is removed.
+// It does not sync: the heartbeats live in memory (the run directory).
+func replaceFile(path string, data []byte) (err error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("molebridge-heartbeat 1 %s %d\n", readBootID(), int64(now))), 0o644); err != nil {
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(f.Name())
+		}
+	}()
+	if err = f.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // HeartbeatAge reads the heartbeat and returns its age on the boot clock. An
@@ -96,14 +122,7 @@ func writeGuarded(path string, now time.Duration) error {
 	if ns == "" {
 		return fmt.Errorf("the network namespace can't be named")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", readBootID(), ns, int64(now))), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return replaceFile(path, []byte(fmt.Sprintf("molebridge-guarded 1 %s %s %d\n", readBootID(), ns, int64(now))))
 }
 
 // Guarded is `molebridge health --guarded`: the guard heartbeat is from this

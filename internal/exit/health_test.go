@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,4 +56,88 @@ func TestHeartbeatFreshness(t *testing.T) {
 	if ok, _ := Healthy(path, clock); ok {
 		t.Fatal("garbage")
 	}
+}
+
+// The heartbeats are written through a temporary file of their own: a link
+// left at the old fixed name (path + ".tmp") is not followed, the file is
+// replaced whole with mode 0644, and no temporary file stays behind.
+func TestHeartbeatWritesFollowNoLinkAndLeaveNothingBehind(t *testing.T) {
+	writers := map[string]func(string, time.Duration) error{"heartbeat": writeHeartbeat, "guarded": writeGuarded}
+	for name, write := range writers {
+		t.Run(name, func(t *testing.T) {
+			if name == "guarded" && netNamespace() == "" {
+				t.Skip("the network namespace can't be named here")
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, "run", name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			victim := filepath.Join(dir, "victim")
+			if err := os.WriteFile(victim, []byte("untouched\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(victim, path+".tmp"); err != nil {
+				t.Fatal(err)
+			}
+			for i := 1; i <= 3; i++ {
+				if err := write(path, time.Duration(i)*time.Second); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if b, err := os.ReadFile(victim); err != nil || string(b) != "untouched\n" {
+				t.Fatalf("the link's target was written: %q %v", b, err)
+			}
+			fi, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o644 {
+				t.Errorf("mode %v", fi.Mode())
+			}
+			if b, err := os.ReadFile(path); err != nil || !strings.HasPrefix(string(b), "molebridge-") || !strings.HasSuffix(string(b), " 3000000000\n") {
+				t.Errorf("content %q %v", b, err)
+			}
+			if names := dirNames(t, filepath.Dir(path)); len(names) != 2 {
+				t.Errorf("the directory holds %v, want only %s and the link", names, name)
+			}
+		})
+	}
+}
+
+// A heartbeat that cannot be put in place leaves no temporary file behind
+// and the old heartbeat as it was.
+func TestAFailedHeartbeatWriteLeavesNothingBehind(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "heartbeat")
+	if err := writeHeartbeat(path, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// A non-empty directory where the file should be: the rename fails.
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeHeartbeat(blocked, 2*time.Second); err == nil {
+		t.Fatal("a heartbeat over a non-empty directory was written")
+	}
+	if names := dirNames(t, dir); len(names) != 2 {
+		t.Errorf("the directory holds %v", names)
+	}
+	if b, err := os.ReadFile(path); err != nil || !strings.HasSuffix(string(b), " 1000000000\n") {
+		t.Errorf("the old heartbeat changed: %q %v", b, err)
+	}
+}
+
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
