@@ -158,24 +158,32 @@ func (w *Watcher) Relevant(e rtnl.Event) bool {
 	return true
 }
 
-// Run reads notifications until ctx ends (it then returns nil) or the socket
-// fails (it returns the error, and the caller treats the exit as unwatched:
-// the supervisor's lease lapses because no more steps are reported).
+// Run reads notifications until ctx ends (it then closes the source and
+// returns nil) or the socket fails (it returns the error, and the caller treats
+// the exit as unwatched: the supervisor's lease lapses because no more steps
+// are reported).
 func (w *Watcher) Run(ctx context.Context) error {
-	stopped := make(chan struct{})
+	stopped, closed := make(chan struct{}), make(chan struct{})
 	defer close(stopped)
 	go func() {
 		select {
 		case <-ctx.Done():
 			// Unblock a pending receive.
 			_ = w.c.Source.Close()
+			close(closed)
 		case <-stopped:
 		}
 	}()
+	// cancelled waits for the close, so a cancellation seen between receives
+	// still closes the source: stopped is closed only after this returns.
+	cancelled := func() error {
+		<-closed
+		return nil
+	}
 	nextFull := w.c.Clock() + w.c.Interval
 	for {
 		if ctx.Err() != nil {
-			return nil
+			return cancelled()
 		}
 		wait := w.c.IdleStep
 		if left := nextFull - w.c.Clock(); left < wait {
@@ -207,7 +215,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 			// Idle: nothing to read within the step.
 		default:
 			if ctx.Err() != nil {
-				return nil
+				return cancelled()
 			}
 			return fmt.Errorf("watch: reading rtnetlink events: %w", err)
 		}

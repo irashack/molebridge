@@ -218,9 +218,9 @@ func TestReceiveDeadlineNeverExceedsTheNextFullPass(t *testing.T) {
 func TestASocketFailureEndsTheLoop(t *testing.T) {
 	s, c := newScript(), &counter{}
 	w := New(Config{Source: s, Mutator: c, IdleStep: 10 * time.Millisecond})
-	s.push(func() ([]rtnl.Event, error) { return nil, errors.New("netlink socket failed") })
-	err := w.Run(context.Background())
-	if err == nil || !errors.Is(err, err) {
+	failure := errors.New("netlink socket failed")
+	s.push(func() ([]rtnl.Event, error) { return nil, failure })
+	if err := w.Run(context.Background()); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	// Cancelling is not an error.
@@ -233,5 +233,23 @@ func TestASocketFailureEndsTheLoop(t *testing.T) {
 	}
 	if !s2.closed.Load() {
 		t.Error("the source was not closed to unblock the receive")
+	}
+}
+
+// A cancellation seen between receives closes the source too: with the
+// context already done, the cleanup could otherwise find both its cases ready
+// and skip the close.
+func TestACancelledRunAlwaysClosesTheSource(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 200; i++ {
+		s := newScript()
+		w := New(Config{Source: s, Mutator: &counter{}, IdleStep: 10 * time.Millisecond})
+		if err := w.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !s.closed.Load() {
+			t.Fatalf("run %d: the source was not closed", i)
+		}
 	}
 }
