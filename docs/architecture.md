@@ -1167,7 +1167,10 @@ switching](#requests-and-switching)); these parts differ.
 in `servers.json` (`STORAGE_FILEPATH`), which `compose.gluetun.yaml` puts in
 a volume of its own so the exit can mount only that directory,
 read-only. The file is untrusted. The exit reads it with the same limits
-as a download (32 MiB, no symlinks, duplicate keys refused), keeps only
+as a download (32 MiB, no symlinks, duplicate keys refused). The whole file
+gets those checks, but only its version and the configured provider's block
+are decoded into memory; the other providers' blocks are checked without
+being kept. It keeps only
 the configured provider's WireGuard servers with a valid key, hostname and
 IPv4 endpoint, and keeps the last good catalog when the file fails to
 parse, as it does while gluetun rewrites it in place. It checks the file

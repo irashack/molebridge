@@ -9,6 +9,9 @@
 //     nesting) into map[string]any, []any, string, bool, nil, float64 and
 //     int64 (an integer written without fraction or exponent is an int64, as
 //     in Python; one beyond int64 is a *big.Int).
+//   - CheckJSON and DecodeJSONMembers: the same checks and errors without
+//     building the parts of a document nobody reads (skip.go), for the large
+//     server lists.
 //   - EncodeJSON / MarshalJSON: the bytes json.dump(obj, allow_nan=False)
 //     writes (ensure_ascii, ", " and ": " separators, no trailing newline),
 //     with Obj for objects whose key order matters.
@@ -72,6 +75,9 @@ func DecodeJSON(raw []byte) (any, error) {
 type parser struct {
 	b []byte
 	i int
+	// keys are the skip mode's keys of the objects being checked, the
+	// innermost last (skip.go).
+	keys [][]byte
 }
 
 func (p *parser) space() {
@@ -301,13 +307,16 @@ func (p *parser) str() (any, error) {
 	return nil, ErrSyntax
 }
 
-func (p *parser) number() (any, error) {
+// scanNumber moves past a number and reports whether it has a fraction or an
+// exponent. Every check that does not need the value is made here, so the
+// skip mode makes it too; what it accepts, ParseFloat and SetString convert.
+func (p *parser) scanNumber() (bool, error) {
 	start := p.i
 	if p.b[p.i] == '-' {
 		p.i++
 	}
 	if p.i >= len(p.b) {
-		return nil, ErrSyntax
+		return false, ErrSyntax
 	}
 	switch c := p.b[p.i]; {
 	case c == '0':
@@ -318,11 +327,11 @@ func (p *parser) number() (any, error) {
 		}
 	case c == 'I': // -Infinity
 		if p.literal("Infinity") {
-			return nil, ErrNonFinite
+			return false, ErrNonFinite
 		}
-		return nil, ErrSyntax
+		return false, ErrSyntax
 	default:
-		return nil, ErrSyntax
+		return false, ErrSyntax
 	}
 	isFloat := false
 	if p.i+1 < len(p.b) && p.b[p.i] == '.' && p.b[p.i+1] >= '0' && p.b[p.i+1] <= '9' {
@@ -345,6 +354,22 @@ func (p *parser) number() (any, error) {
 			p.i = j
 		}
 	}
+	digits := p.i - start
+	if p.b[start] == '-' {
+		digits--
+	}
+	if !isFloat && digits > maxIntDigits {
+		return false, ErrIntegerSize
+	}
+	return isFloat, nil
+}
+
+func (p *parser) number() (any, error) {
+	start := p.i
+	isFloat, err := p.scanNumber()
+	if err != nil {
+		return nil, err
+	}
 	text := string(p.b[start:p.i])
 	if isFloat {
 		f, err := strconv.ParseFloat(text, 64)
@@ -356,13 +381,6 @@ func (p *parser) number() (any, error) {
 			return nil, ErrSyntax
 		}
 		return f, nil
-	}
-	digits := text
-	if digits[0] == '-' {
-		digits = digits[1:]
-	}
-	if len(digits) > maxIntDigits {
-		return nil, ErrIntegerSize
 	}
 	if n, err := strconv.ParseInt(text, 10, 64); err == nil {
 		return n, nil

@@ -378,10 +378,23 @@ func ParseGluetunCatalog(data any, provider string, now float64) (*Entries, int6
 // refusing incomplete writes and unsafe files. The error is fixed text for
 // anything wrong with the file itself, since JSON and OS errors can contain
 // untrusted data or paths.
+//
+// The file holds every provider gluetun knows (7.4 MB at v3.41.3), and only
+// the version and the selected provider's block are read further, so only
+// those are built; the other blocks get the same strict checks unbuilt.
 func ReadGluetunSnapshot(path, provider string, now float64) (*Entries, int64, error) {
-	data, ok := jsonfile.ReadOK(path, GluetunMaxCatalogBytes)
+	raw, ok := jsonfile.ReadBytes(path, GluetunMaxCatalogBytes)
 	if !ok {
 		return nil, 0, ErrGluetunRead
+	}
+	top, err := validate.DecodeJSONMembers(raw, validate.Plan{
+		Keep: func(key string) bool { return key == "version" || key == provider }})
+	if err != nil {
+		return nil, 0, ErrGluetunRead
+	}
+	var data any
+	if top != nil {
+		data = top
 	}
 	return ParseGluetunCatalog(data, provider, now)
 }

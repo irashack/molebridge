@@ -333,6 +333,34 @@ func TestBadGluetunJSONIsSanitized(t *testing.T) {
 			t.Errorf("%.20q: %v", raw, err)
 		}
 	}
+	// Only the version and the selected provider's block are built; another
+	// provider's block is checked as strictly, unbuilt, and a fault in it
+	// still refuses the whole file.
+	good := mustMarshal(gluetunStorage(t))
+	write := func(raw []byte) string {
+		path := filepath.Join(t.TempDir(), "servers.json")
+		if err := os.WriteFile(path, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	if _, err := ReadGluetunCatalog(write(append([]byte(`{"example-other":{"servers":[]},`), good[1:]...)), "mullvad", gluetunNow); err != nil {
+		t.Fatalf("the base document: %v", err)
+	}
+	for _, other := range []string{`{"servers":[{"a":1,"a":2}]}`, `{"servers":[NaN]}`, "{\"name\":\"\xff\"}",
+		strings.Repeat("[", 1000) + strings.Repeat("]", 1000), `{"servers":[1` + strings.Repeat("0", 4300) + `]}`,
+		`{"servers":[1,]}`} {
+		raw := append([]byte(`{"example-other":`+other+`,`), good[1:]...)
+		if _, err := ReadGluetunCatalog(write(raw), "mullvad", gluetunNow); err == nil || err.Error() != "cannot read gluetun catalogue" {
+			t.Errorf("%.30q in another block: %v", other, err)
+		}
+	}
+	for _, repeated := range []string{"mullvad", "ivpn", "\\u0069vpn"} {
+		raw := append([]byte(`{"`+repeated+`":{},`), good[1:]...)
+		if _, err := ReadGluetunCatalog(write(raw), "mullvad", gluetunNow); err == nil || err.Error() != "cannot read gluetun catalogue" {
+			t.Errorf("a repeated %s block: %v", repeated, err)
+		}
+	}
 	// The JSON null decodes, and is refused as a document, not as a read.
 	path := filepath.Join(t.TempDir(), "servers.json")
 	os.WriteFile(path, []byte("null"), 0o600)

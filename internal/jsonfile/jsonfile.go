@@ -4,8 +4,8 @@
 // relay catalogue in internal/providers uses it directly, because state
 // imports providers and the reverse would be a cycle.
 //
-// It offers Read, ReadObject, Write (atomic, 0600 or 0644, size-bounded) and
-// ErrSizeLimit.
+// It offers Read, ReadObject, ReadBytes, Write (atomic, 0600 or 0644,
+// size-bounded) and ErrSizeLimit.
 package jsonfile
 
 import (
@@ -35,6 +35,22 @@ func Read(path string, limit int64) any {
 // ReadOK is Read, with a second result that is false when the file could not
 // be read or decoded, and true for a document that is the JSON null.
 func ReadOK(path string, limit int64) (any, bool) {
+	raw, ok := ReadBytes(path, limit)
+	if !ok {
+		return nil, false
+	}
+	value, err := validate.DecodeJSON(raw)
+	if err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+// ReadBytes is the file at path, undecoded, under Read's rules: false when
+// the path is a symlink or not a regular file, the file is larger than limit
+// bytes or it cannot be read. A caller that decodes only part of a large
+// document (validate.DecodeJSONMembers) reads it with this.
+func ReadBytes(path string, limit int64) ([]byte, bool) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, false
@@ -48,11 +64,7 @@ func ReadOK(path string, limit int64) (any, bool) {
 	if err != nil || int64(len(raw)) > limit {
 		return nil, false
 	}
-	value, err := validate.DecodeJSON(raw)
-	if err != nil {
-		return nil, false
-	}
-	return value, true
+	return raw, true
 }
 
 // ReadObject is Read for a document that must be a JSON object.
