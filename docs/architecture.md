@@ -1913,6 +1913,14 @@ sends one, must name a host from the same list. The request's own `Host` and
 controls them.
 Security headers restrict scripts/styles/resources to same origin,
 and dashboard framing is opt-in. HTTP body size and socket time are bounded.
+The static files are read once at start. The stylesheet and the script go
+out gzipped (about 11 and 12 KB instead of 49 and 42 KB) to a browser that
+accepts gzip; the pages and the API answers, which carry the CSRF token and
+the status, are never compressed, so a compression side channel (BREACH)
+has nothing to measure. A request naming a file's current content hash
+(`?v=`, as the page's links do) gets `Cache-Control: public,
+max-age=31536000, immutable`; any other gets `public, max-age=86400`. Each
+file has an ETag, and a matching `If-None-Match` gets 304.
 Remote text is escaped in HTML and assigned as text in JavaScript.
 Panel logs use fixed route names and omit client addresses, origins, query
 strings, bodies and unknown paths.

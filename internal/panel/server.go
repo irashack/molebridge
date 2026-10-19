@@ -69,6 +69,7 @@ type Server struct {
 	files fs.FS
 
 	csrfSecret []byte
+	assets     map[string]*staticAsset
 	versions   map[string]string
 	manifest   []byte
 	secHeaders map[string]string
@@ -131,7 +132,7 @@ func NewServer(cfg *Config, opt Options) *Server {
 	if _, err := rand.Read(s.csrfSecret); err != nil {
 		panic(err)
 	}
-	s.versions = staticVersions(s.files)
+	s.assets, s.versions = loadStaticAssets(s.files)
 	s.manifest = s.buildManifest()
 	s.secHeaders = s.securityHeaders()
 	if cfg.Settings.Auth != nil {
@@ -591,8 +592,10 @@ func (s *Server) logEvent(text string) {
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request, rep reply) {
 	h := w.Header()
-	h.Set("Content-Type", rep.contentType)
-	h.Set("Content-Length", strconv.Itoa(len(rep.body)))
+	if rep.code != http.StatusNotModified {
+		h.Set("Content-Type", rep.contentType)
+		h.Set("Content-Length", strconv.Itoa(len(rep.body)))
+	}
 	for _, kv := range rep.headers {
 		h.Set(kv[0], kv[1])
 	}
@@ -813,7 +816,7 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 		body := s.RenderMessage("Signed out", "You have signed out of this panel.", &[2]string{s.loginURL("/"), "Sign in"}, false)
 		s.send(w, r, htmlReply(200, body))
 	case strings.HasPrefix(path, "/static/"):
-		s.handleStatic(w, r, strings.TrimPrefix(path, "/static/"))
+		s.handleStatic(w, r, strings.TrimPrefix(path, "/static/"), query)
 	default:
 		s.send(w, r, plain(404, "not found"))
 	}
@@ -859,19 +862,35 @@ func (s *Server) staticType(name string) string {
 	return ""
 }
 
-func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request, name string) {
-	contentType := s.staticType(name)
-	if contentType == "" {
+// handleStatic serves a file read at start. Text goes out gzipped to a
+// browser that accepts it; only these fixed files are ever compressed, never
+// a page or an API answer, which carry tokens (BREACH). A request naming the
+// file's current ?v= may cache it for a year.
+func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request, name string, query map[string][]string) {
+	asset := s.assets[name]
+	if asset == nil {
 		s.send(w, r, plain(404, "not found"))
 		return
 	}
-	body, err := fs.ReadFile(s.files, name)
-	if err != nil {
-		s.send(w, r, plain(404, "not found"))
+	body, etag := asset.body, `"`+asset.version+`"`
+	var encoding [][2]string
+	if asset.gz != nil && acceptsGzip(r.Header.Values("Accept-Encoding")) {
+		body, etag = asset.gz, `"`+asset.version+`-gzip"`
+		encoding = [][2]string{{"Content-Encoding", "gzip"}}
+	}
+	cache := staticMaxAge
+	if values := query["v"]; len(values) == 1 && values[0] == asset.version {
+		cache = staticImmutable
+	}
+	headers := append([][2]string{{"Cache-Control", cache}, {"ETag", etag}}, encoding...)
+	if asset.gz != nil {
+		headers = append(headers, [2]string{"Vary", "Accept-Encoding"})
+	}
+	if etagMatches(r.Header.Values("If-None-Match"), etag) {
+		s.send(w, r, reply{code: 304, headers: headers})
 		return
 	}
-	s.send(w, r, reply{code: 200, contentType: contentType, body: body,
-		headers: [][2]string{{"Cache-Control", "public, max-age=86400"}}})
+	s.send(w, r, reply{code: 200, contentType: asset.contentType, body: body, headers: headers})
 }
 
 // sendSignedOut: the full page sends a browser straight to sign-in, on the

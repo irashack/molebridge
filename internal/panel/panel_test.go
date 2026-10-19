@@ -7,10 +7,12 @@ package panel
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -591,6 +593,95 @@ func TestStaticFilesAreServedAsTheyAreOnDisk(t *testing.T) {
 		if got := h.get("/static/"+name, "", nil).Body; got != string(disk) {
 			t.Errorf("%s differs from panel/static/%s", name, name)
 		}
+	}
+}
+
+func TestStaticTextIsGzippedOnlyWhenAccepted(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	disk, err := readStatic("panel.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, accept := range []string{"gzip", "br, gzip;q=0.5", "*", "gzip, deflate"} {
+		a := h.get("/static/panel.js", "", map[string]string{"Accept-Encoding": accept})
+		if a.Status != 200 || a.Header.Get("Content-Encoding") != "gzip" || a.Header.Get("Vary") != "Accept-Encoding" ||
+			a.Header.Get("Content-Length") != strconv.Itoa(len(a.Body)) {
+			t.Fatalf("%q: %d %v", accept, a.Status, a.Header)
+		}
+		zr, err := gzip.NewReader(strings.NewReader(a.Body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		plainBody, err := io.ReadAll(zr)
+		if err != nil || !bytes.Equal(plainBody, disk) {
+			t.Fatalf("%q: the gzipped body is not panel.js (%v)", accept, err)
+		}
+	}
+	for _, accept := range []string{"identity", "gzip;q=0", "br", "*;q=0", "gzip;q=0, *"} {
+		a := h.get("/static/panel.js", "", map[string]string{"Accept-Encoding": accept})
+		if a.Status != 200 || a.Header.Get("Content-Encoding") != "" || a.Header.Get("Vary") != "Accept-Encoding" || a.Body != string(disk) {
+			t.Fatalf("%q: %d %v", accept, a.Status, a.Header)
+		}
+	}
+	// Fonts and images are compressed already.
+	for _, name := range []string{"JetBrainsMono-Regular.woff2", "icon-192.png"} {
+		a := h.get("/static/"+name, "", map[string]string{"Accept-Encoding": "gzip"})
+		if a.Header.Get("Content-Encoding") != "" || a.Header.Get("Vary") != "" {
+			t.Fatalf("%s: %v", name, a.Header)
+		}
+	}
+}
+
+// Pages and API answers carry CSRF tokens and status; they are never
+// compressed (BREACH).
+func TestPagesAndAPIAreNeverCompressed(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	for _, path := range []string{"/", "/embed", "/api/status", "/api/exits", "/manifest.webmanifest", "/readyz"} {
+		a := h.get(path, "", map[string]string{"Accept-Encoding": "gzip"})
+		if a.Header.Get("Content-Encoding") != "" {
+			t.Fatalf("%s: %v", path, a.Header)
+		}
+	}
+}
+
+func TestVersionedStaticURLsAreImmutable(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	page := h.get("/", "", nil).Body
+	m := regexp.MustCompile(`/static/panel\.css\?v=(\w+)`).FindStringSubmatch(page)
+	if m == nil {
+		t.Fatal("no versioned stylesheet in the page")
+	}
+	if a := h.get("/static/panel.css?v="+m[1], "", nil); a.Status != 200 || a.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("current version: %d %v", a.Status, a.Header)
+	}
+	for _, query := range []string{"", "?v=0123456789", "?v=" + m[1] + "&v=" + m[1], "?x=" + m[1]} {
+		if a := h.get("/static/panel.css"+query, "", nil); a.Status != 200 || a.Header.Get("Cache-Control") != "public, max-age=86400" {
+			t.Fatalf("%q: %d %v", query, a.Status, a.Header)
+		}
+	}
+}
+
+func TestStaticETagRevalidates(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	for _, accept := range []string{"gzip", "identity"} {
+		a := h.get("/static/panel.css", "", map[string]string{"Accept-Encoding": accept})
+		etag := a.Header.Get("ETag")
+		if !regexp.MustCompile(`^"[0-9a-f]{10}(-gzip)?"$`).MatchString(etag) {
+			t.Fatalf("%s: ETag %q", accept, etag)
+		}
+		for _, match := range []string{etag, "W/" + etag, `"other", ` + etag, "*"} {
+			b := h.get("/static/panel.css", "", map[string]string{"Accept-Encoding": accept, "If-None-Match": match})
+			if b.Status != 304 || b.Body != "" || b.Header.Get("ETag") != etag || b.Header.Get("Cache-Control") == "" {
+				t.Fatalf("%s, If-None-Match %q: %d %v", accept, match, b.Status, b.Header)
+			}
+		}
+		if b := h.get("/static/panel.css", "", map[string]string{"Accept-Encoding": accept, "If-None-Match": `"0000000000"`}); b.Status != 200 {
+			t.Fatalf("%s: other tag: %d", accept, b.Status)
+		}
+	}
+	gz := h.get("/static/panel.css", "", map[string]string{"Accept-Encoding": "gzip"}).Header.Get("ETag")
+	if b := h.get("/static/panel.css", "", map[string]string{"Accept-Encoding": "identity", "If-None-Match": gz}); b.Status != 200 {
+		t.Fatalf("the gzip tag matched the identity body: %d", b.Status)
 	}
 }
 

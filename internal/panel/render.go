@@ -1,10 +1,7 @@
 package panel
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"io/fs"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,23 +28,6 @@ var staticTypes = []struct{ name, contentType string }{
 	{"apple-touch-icon.png", "image/png"},
 	{"icon-192.png", "image/png"},
 	{"icon-512.png", "image/png"},
-}
-
-// staticVersions is the first ten hex digits of each served file's SHA-256,
-// the cache-busting ?v= of the page's links; "0" for a file that cannot be
-// read.
-func staticVersions(files fs.FS) map[string]string {
-	versions := map[string]string{}
-	for _, f := range staticTypes {
-		raw, err := fs.ReadFile(files, f.name)
-		if err != nil {
-			versions[f.name] = "0"
-			continue
-		}
-		sum := sha256.Sum256(raw)
-		versions[f.name] = hex.EncodeToString(sum[:])[:10]
-	}
-	return versions
 }
 
 // fill substitutes «name» markers in a template. A marker without a value
