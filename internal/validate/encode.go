@@ -1,7 +1,6 @@
 package validate
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -64,13 +63,15 @@ type ObjectMarshaler interface {
 // json.dump(allow_nan=False) refuses.
 var ErrNonFiniteFloat = errors.New("out of range float values are not JSON compliant")
 
-// MarshalJSON returns EncodeJSON's output.
+// MarshalJSON returns EncodeJSON's output. It encodes into one buffer that
+// starts small and grows, with no writer and no chunk: most callers marshal a
+// few hundred bytes, often (the supervisor's messages) every 2 seconds.
 func MarshalJSON(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := EncodeJSON(&buf, v); err != nil {
+	e := &encoder{buf: make([]byte, 0, 512)}
+	if err := e.value(reflect.ValueOf(v), 0); err != nil {
 		return nil, err
 	}
-	return buf.Bytes(), nil
+	return e.buf, nil
 }
 
 // EncodeJSON writes v the way Python's json.dump(v, allow_nan=False) does:
@@ -96,7 +97,8 @@ func EncodeJSON(w io.Writer, v any) error {
 // writer; the writer sees a failure within one chunk of its limit.
 const chunkSize = 32 * 1024
 
-// encoder buffers output and stops at the first write error.
+// encoder buffers output and stops at the first write error. Without a writer
+// (MarshalJSON) it keeps the whole output in buf.
 type encoder struct {
 	w       io.Writer
 	buf     []byte
@@ -105,6 +107,9 @@ type encoder struct {
 }
 
 func (e *encoder) flush() {
+	if e.w == nil {
+		return
+	}
 	if e.err == nil && len(e.buf) > 0 {
 		_, e.err = e.w.Write(e.buf)
 	}
