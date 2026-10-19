@@ -69,5 +69,13 @@
   },
   "egress_city": "City 0",
   "egress_country": "Exampleland",
+  "routing_activity": {
+    "events": 24,
+    "events_lost": 0,
+    "last_repair_at": null,
+    "periodic_passes": 8,
+    "relevant_events": 6,
+    "repairs": 0
+  },
   "server_list_update": null
 }

@@ -51,6 +51,9 @@ type pipelineEnv struct {
 	// now; nil where the exit carries none.
 	OwnerCheck func() validate.Obj
 	Log        func(string)
+	// RoutingActivity is the records' routing_activity member; nil where the
+	// exit has no routing contract.
+	RoutingActivity func() validate.Obj
 }
 
 // newPipeline builds the pipeline for the settings' provider.
@@ -73,7 +76,7 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 	a, err := applier.New(applier.Config{
 		StateDir: s.StateDir, PrivateDir: s.PrivateDir, Exit: exit, Provider: prov, System: e.System, Server: s.Server,
 		Publish:    func(r *applier.Record) error { return e.Publish(r) },
-		OwnerCheck: e.OwnerCheck, Log: e.Log,
+		OwnerCheck: e.OwnerCheck, Log: e.Log, RoutingActivity: e.RoutingActivity,
 		Gatus: applier.Gatus{URL: s.Env["GATUS_URL"], Token: s.Env["GATUS_TOKEN"], Endpoint: orDefault(s.Env["GATUS_ENDPOINT"], "molebridge")},
 	})
 	if err != nil {

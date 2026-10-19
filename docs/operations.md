@@ -49,12 +49,21 @@ provider than the panel is configured for.
   reasons: none
   egress tier: provider
   checks: app_attachment=n/a routing=pass netbird=pass owner_record=pass peer=pass handshake=pass egress=pass traffic_protection=pass
+  routing activity: repairs 0 (last none), kernel events 24 (relevant 6), event losses 0, periodic passes 8
   heartbeat: fresh (3 s old)
   lease: held, 27 s to expiry
   ```
 
   A failure adds a `message:` line, and an exit with `SERVER` set a
-  `configured server:` line. The `heartbeat:` line reads `fresh` up to 15
+  `configured server:` line. The `routing activity:` line is the record's
+  `routing_activity` member ([the status record](architecture.md#the-status-record)),
+  counted since the exit's worker last started and as of the record's last
+  inspection: how many repair passes changed the kernel and when the last
+  ran, how many kernel notifications arrived and how many of them asked for a
+  repair pass, how often notifications were lost, and how many periodic full
+  passes ran. Repairs that keep rising mean something keeps changing the
+  namespace's rules or routes. A gluetun sidecar, and an exit older than
+  0.9.3, print no such line. The `heartbeat:` line reads `fresh` up to 15
   seconds, then `stale`, or `none (<why>)` when there is no usable file. The
   `lease:` line reads `held, <n> s to expiry`, `lapsed`, `starting` or
   `revoked`, or `unknown (<why>)` when the supervisor hasn't written its file

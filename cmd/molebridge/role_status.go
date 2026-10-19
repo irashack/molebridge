@@ -73,6 +73,9 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 	if v.ConfiguredServer != "" {
 		fmt.Fprintf(stdout, "configured server: %s\n", v.ConfiguredServer)
 	}
+	if line := activityLine(result); line != "" {
+		fmt.Fprintf(stdout, "routing activity: %s\n", line)
+	}
 
 	if age, err := exit.HeartbeatAge(exit.HeartbeatPathOf(env), clock); err != nil {
 		fmt.Fprintf(stdout, "heartbeat: none (%s)\n", err)
@@ -87,6 +90,38 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 		return 0
 	}
 	return 1
+}
+
+// activityLine is the record's routing_activity member as one line, "" when
+// the record has none (an older exit, a gluetun sidecar) or it doesn't read
+// as the exit writes it. The counters are as of the record's checked_at.
+func activityLine(result any) string {
+	record, _ := result.(map[string]any)
+	activity, ok := record["routing_activity"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	count := func(key string) (int64, bool) {
+		n, ok := validate.IsInt(activity[key])
+		return n, ok && n >= 0
+	}
+	repairs, ok1 := count("repairs")
+	events, ok2 := count("events")
+	relevant, ok3 := count("relevant_events")
+	lost, ok4 := count("events_lost")
+	periodic, ok5 := count("periodic_passes")
+	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 {
+		return ""
+	}
+	last := "none"
+	if at, present := activity["last_repair_at"]; present && at != nil {
+		if _, valid := validate.ParseTime(at); !valid {
+			return ""
+		}
+		last = at.(string)
+	}
+	return fmt.Sprintf("repairs %d (last %s), kernel events %d (relevant %d), event losses %d, periodic passes %d",
+		repairs, last, events, relevant, lost, periodic)
 }
 
 // leaseLine reads the small file the supervisor keeps.

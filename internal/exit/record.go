@@ -90,6 +90,30 @@ func StartingRecord(s *Settings, now time.Time) map[string]any {
 	return toMap(rec)
 }
 
+// RoutingActivity is the routing_activity member of a record: what the
+// mutation owner and the kernel watcher counted since the worker started.
+// Only exits with a routing contract carry it. No reader judges it.
+type RoutingActivity struct {
+	// Repairs counts the repair passes that changed the kernel, and
+	// LastRepair is when the last one ran (zero before the first).
+	Repairs    uint64
+	LastRepair time.Time
+	// Events counts the kernel's notifications, Relevant those that asked for
+	// a repair pass, Lost the receive-buffer overruns (each one ran a full
+	// pass) and Periodic the full passes on ROUTING_RECONCILE_INTERVAL.
+	Events, Relevant, Lost, Periodic uint64
+}
+
+// JSONObject implements validate.ObjectMarshaler.
+func (r RoutingActivity) JSONObject() validate.Obj {
+	var last any
+	if !r.LastRepair.IsZero() {
+		last = validate.FormatTime(r.LastRepair)
+	}
+	return validate.Members("repairs", r.Repairs, "last_repair_at", last, "events", r.Events,
+		"relevant_events", r.Relevant, "events_lost", r.Lost, "periodic_passes", r.Periodic)
+}
+
 // toMap turns an ordered record into the decoded form the supervisor keeps.
 func toMap(o validate.Obj) map[string]any {
 	raw, err := validate.MarshalJSON(o)

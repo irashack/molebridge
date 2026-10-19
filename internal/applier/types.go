@@ -156,6 +156,11 @@ type Config struct {
 	// when nil.
 	Log   func(string)
 	Gatus Gatus
+	// RoutingActivity, when set, is the routing_activity member of every
+	// record: the mutation owner's and the kernel watcher's counters as they
+	// stand when the record is built. Nil leaves the member out (an exit with
+	// no routing contract, and tests).
+	RoutingActivity func() validate.Obj
 }
 
 // Selection is a target with its identity: a panel request's token,

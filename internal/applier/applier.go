@@ -71,6 +71,7 @@ type Applier struct {
 	publish    func(*Record) error
 	ownerCheck func() validate.Obj
 	logf       func(string)
+	activity   func() validate.Obj
 
 	clock   func() float64
 	wallNow func() time.Time
@@ -134,7 +135,7 @@ func New(cfg Config) (*Applier, error) {
 	}
 	a := &Applier{sys: cfg.System, hooks: cfg.Provider, spec: spec, exit: cfg.Exit, gatus: cfg.Gatus,
 		publish: cfg.Publish, ownerCheck: cfg.OwnerCheck, logf: cfg.Log, clock: cfg.Monotonic, wallNow: cfg.Wall, sleeper: cfg.Sleep,
-		readJSON: state.ReadJSON, exists: fileExists}
+		readJSON: state.ReadJSON, exists: fileExists, activity: cfg.RoutingActivity}
 	if a.exit.Kind == "" {
 		a.exit.Kind = "overlay"
 	}
@@ -523,6 +524,11 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 	}
 	for _, pair := range all {
 		members = members.Set(pair.Key, pair.Value)
+	}
+	if a.activity != nil {
+		// Counters only, for people and tools reading the record; no reader
+		// judges them (docs/architecture.md#the-status-record).
+		members = members.Set("routing_activity", a.activity())
 	}
 	record := &Record{members: members}
 	if a.publish != nil {

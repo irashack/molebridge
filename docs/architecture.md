@@ -1720,7 +1720,18 @@ otherwise `verified`, `applied-unverified`, `pending`, `rejected` or
 `mutation-failed`), the number of changes made for this target, the target,
 and the next automatic action (`recheck` or `reapply`) with its time.
 Provider fields come on top: PIA's `port_forward`, `forwarded_port` and
-`port_forward_error`, and gluetun's `server_list_update`. The 0.6 fields
+`port_forward_error`, and gluetun's `server_list_update`. Since 0.9.3 every
+exit with a routing contract (all but a gluetun sidecar) adds
+`routing_activity`, counters kept since its worker last started:
+`repairs` (repair passes that changed the kernel) with `last_repair_at`
+(null before the first), `events` (kernel notifications), `relevant_events`
+(those that asked for a repair pass), `events_lost` (receive-buffer
+overruns, each followed by a full pass) and `periodic_passes`. They are
+taken when the record is built, so they are as old as `checked_at`, and a
+failure record keeps the last ones. No reader judges them: the verdict
+ignores members it doesn't know, which is also what lets an older panel
+read this record, and the panel's `/api/status` passes them through with
+the rest of the record. `molebridge status` prints them. The 0.6 fields
 `routing_ok`, `netbird_native`, `unreachable_fallback`, `exit_confirmed`,
 `egress_tier`, `handshake_age_s` and `mullvad_exit_ip` are gone; the checks
 replace them.
@@ -1909,8 +1920,9 @@ switched again.
 - The Gatus push sends the verdict against the exit's own target, never
   `applying`, so a switch in progress isn't a failure sample.
 - `molebridge status`, run inside the exit container, prints the verdict
-  with its reason codes, the egress tier, each check's state, the heartbeat's
-  age and the lease state. It exits 0 only when the verdict is `ok`.
+  with its reason codes, the egress tier, each check's state, the record's
+  routing activity, the heartbeat's age and the lease state. It exits 0 only
+  when the verdict is `ok`.
 - The exit container's health check (`molebridge health`, Compose's
   `healthcheck`) is operational only and doesn't use the verdict; see
   [health](#health).

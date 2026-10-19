@@ -32,10 +32,19 @@ const (
 
 var expiresRE = regexp.MustCompile(`"expires_at": "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"`)
 
+// exampleActivity is the routing_activity member as the worker writes it
+// (exit.RoutingActivity, whose test checks these names against the
+// examples), with the values of an exit a few minutes old.
+func exampleActivity() validate.Obj {
+	return validate.Members("repairs", 0, "last_repair_at", nil, "events", 24, "relevant_events", 6,
+		"events_lost", 0, "periodic_passes", 8)
+}
+
 func exampleScenarios() map[string]func(t *testing.T) (*Applier, *Record) {
 	return map[string]func(t *testing.T) (*Applier, *Record){
 		"result-overlay-native.json": func(t *testing.T) (*Applier, *Record) {
 			a, _, _ := mullvadSetup(t)
+			a.activity = exampleActivity
 			a.ownerCheck = func() validate.Obj {
 				now := time.Now()
 				return validate.Members("state", "pass", "at", validate.FormatTime(now), "expires_at", validate.FormatTime(now.Add(30*time.Second)))
@@ -44,6 +53,7 @@ func exampleScenarios() map[string]func(t *testing.T) (*Applier, *Record) {
 		},
 		"result-overlay-gluetun.json": func(t *testing.T) (*Applier, *Record) {
 			f := newGluetunFixture(t, glOptions{provider: "mullvad"})
+			f.a.activity = exampleActivity
 			return f.a, f.a.switchTo(t, glRequest(hostB))
 		},
 		"result-sidecar-gluetun.json": func(t *testing.T) (*Applier, *Record) {
@@ -53,6 +63,7 @@ func exampleScenarios() map[string]func(t *testing.T) (*Applier, *Record) {
 		},
 		"result-sidecar-native.json": func(t *testing.T) (*Applier, *Record) {
 			a, _, _ := nativeSidecarSetup(t, "pia", true)
+			a.activity = exampleActivity
 			connectNativeSidecar(t, a)
 			return a, a.inspect(t)
 		},

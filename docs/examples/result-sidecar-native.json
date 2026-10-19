@@ -71,5 +71,13 @@
   "egress_country": null,
   "forwarded_port": 43210,
   "port_forward": true,
-  "port_forward_error": null
+  "port_forward_error": null,
+  "routing_activity": {
+    "events": 24,
+    "events_lost": 0,
+    "last_repair_at": null,
+    "periodic_passes": 8,
+    "relevant_events": 6,
+    "repairs": 0
+  }
 }

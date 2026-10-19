@@ -163,8 +163,43 @@ func TestStatusRoleWithNothingPublishedYet(t *testing.T) {
 	code := statusMain(nil, env, clock, time.Now, &stdout, &stderr)
 	out := stdout.String()
 	if code != 1 || !strings.Contains(out, "state: unknown (awaiting status)") || !strings.Contains(out, "reasons: no-status") ||
-		!strings.Contains(out, "heartbeat: none") || !strings.Contains(out, "lease: unknown (no lease file") {
+		!strings.Contains(out, "heartbeat: none") || !strings.Contains(out, "lease: unknown (no lease file") ||
+		strings.Contains(out, "routing activity") {
 		t.Fatalf("%d\n%s", code, out)
+	}
+}
+
+// The counters are printed only as the exit writes them: an older exit's
+// record has none, and anything malformed prints nothing.
+func TestStatusActivityLineReadsOnlyAWellFormedMember(t *testing.T) {
+	good := map[string]any{"repairs": int64(0), "last_repair_at": nil, "events": int64(3), "relevant_events": int64(1),
+		"events_lost": int64(0), "periodic_passes": int64(2)}
+	if got := activityLine(map[string]any{"routing_activity": good}); got != "repairs 0 (last none), kernel events 3 (relevant 1), event losses 0, periodic passes 2" {
+		t.Errorf("%q", got)
+	}
+	for name, bad := range map[string]map[string]any{
+		"negative": {"repairs": int64(-1)},
+		"text":     {"events": "3"},
+		"missing":  {"periodic_passes": nil},
+		"odd time": {"last_repair_at": "yesterday\n"},
+	} {
+		member := map[string]any{}
+		for k, v := range good {
+			member[k] = v
+		}
+		for k, v := range bad {
+			if v == nil {
+				delete(member, k)
+			} else {
+				member[k] = v
+			}
+		}
+		if got := activityLine(map[string]any{"routing_activity": member}); got != "" {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if activityLine(nil) != "" || activityLine(map[string]any{"routing_activity": "x"}) != "" {
+		t.Error("printed a line for no member")
 	}
 }
 
@@ -177,7 +212,8 @@ func TestStatusRoleReadsTheRecordAndTheLease(t *testing.T) {
 		`"checks": {"routing": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, "netbird": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, ` +
 		`"owner_record": {"state": "fail", "at": "2026-10-12T12:00:00Z"}, "peer": {"state": "unknown"}, "handshake": {"state": "unknown"}, ` +
 		`"egress": {"state": "unknown"}, "traffic_protection": {"state": "fail", "at": "2026-10-12T12:00:00Z", "from": "routing"}, "app_attachment": {"state": "n/a"}}, ` +
-		`"egress_ip": null, "egress_ips": {}, "egress_city": null, "egress_country": null}`
+		`"egress_ip": null, "egress_ips": {}, "egress_city": null, "egress_country": null, ` +
+		`"routing_activity": {"repairs": 2, "last_repair_at": "2026-10-12T11:58:00Z", "events": 40, "relevant_events": 12, "events_lost": 1, "periodic_passes": 30}}`
 	if err := os.WriteFile(filepath.Join(dir, "state", "applier", "result.json"), []byte(record), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +233,7 @@ func TestStatusRoleReadsTheRecordAndTheLease(t *testing.T) {
 		"reasons: routing-failed, netbird-failed, owner_record-failed, traffic_protection-failed",
 		"message: exit owner stopped responding",
 		"lease: held, 14 s to expiry",
+		"routing activity: repairs 2 (last 2026-10-12T11:58:00Z), kernel events 40 (relevant 12), event losses 1, periodic passes 30",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)

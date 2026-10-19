@@ -88,9 +88,11 @@ type worker struct {
 	launch    atomic.Int64
 	netbirdCh chan Msg
 
-	mut  *mutator.Mutator
-	sys  *KernelSystem
-	pipe Pipeline
+	mut *mutator.Mutator
+	// watcher is the kernel watcher, nil without a routing contract.
+	watcher *watch.Watcher
+	sys     *KernelSystem
+	pipe    Pipeline
 
 	monitors *gluetunMonitors
 	// drillStop is set by the drill-only hook (worker_hook_drill_linux.go).
@@ -370,6 +372,7 @@ func (w *worker) run() int {
 		}
 		wt := watch.New(watch.Config{Source: sub, Mutator: w.mut, Interval: s.Interval, Clock: w.clock,
 			Tables: spec.Interest().Tables, Links: links, Logf: w.libLogf})
+		w.watcher = wt
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
 		go func() {
 			if err := wt.Run(w.ctx); err != nil {
@@ -425,7 +428,8 @@ func (w *worker) run() int {
 		w.writeGuarded()
 	}
 
-	pipe, err := newPipeline(pipelineEnv{S: s, System: w.sys, Publish: w.publish, OwnerCheck: w.ownerCheckFor(), Log: func(l string) { w.logf("%s", l) }})
+	pipe, err := newPipeline(pipelineEnv{S: s, System: w.sys, Publish: w.publish, OwnerCheck: w.ownerCheckFor(),
+		Log: func(l string) { w.logf("%s", l) }, RoutingActivity: w.routingActivityFor()})
 	if err != nil {
 		w.logf("applier: invalid configuration or unavailable state")
 		w.logf("%v", err)
@@ -485,6 +489,25 @@ func (w *worker) ownerCheckFor() func() validate.Obj {
 		return w.ownerCheck
 	}
 	return nil
+}
+
+// routingActivityFor is the records' routing_activity member, nil for an exit
+// without a routing contract (a gluetun sidecar), whose owner and watcher
+// have nothing to count.
+func (w *worker) routingActivityFor() func() validate.Obj {
+	if w.watcher == nil {
+		return nil
+	}
+	return func() validate.Obj {
+		m, e := w.mut.Stats(), w.watcher.Stats()
+		r := RoutingActivity{Repairs: m.Repairs, Events: e.Events, Relevant: e.Relevant, Lost: e.Overruns, Periodic: e.Periodic}
+		if m.HasLast {
+			// The boot clock's second, placed on the wall clock now.
+			ago := w.clock() - time.Duration(m.LastRepair)*time.Second
+			r.LastRepair = time.Now().Add(-ago)
+		}
+		return r.JSONObject()
+	}
 }
 
 // publish hands a record to the supervisor.

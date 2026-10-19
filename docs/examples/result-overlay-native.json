@@ -73,5 +73,13 @@
     "6": "2001:db8:3::10"
   },
   "egress_city": "Example City",
-  "egress_country": "Example"
+  "egress_country": "Example",
+  "routing_activity": {
+    "events": 24,
+    "events_lost": 0,
+    "last_repair_at": null,
+    "periodic_passes": 8,
+    "relevant_events": 6,
+    "repairs": 0
+  }
 }
