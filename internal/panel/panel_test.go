@@ -15,6 +15,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -203,6 +205,24 @@ func TestCachedCatalogueFollowsTheFileAndSwitchReadsItFresh(t *testing.T) {
 	if a.Status != 400 || readDesired(ex) != nil {
 		t.Fatalf("status %d, desired %v", a.Status, readDesired(ex))
 	}
+}
+
+func TestAFailedRequestWriteIsLogged(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	_, nonce, token := h.indexTokens()
+	// A directory where the request file goes: the rename over it fails.
+	if err := os.MkdirAll(filepath.Join(h.srv.Single.DesiredPath, "occupied"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.log.Reset()
+	a := h.post("/select", [][2]string{{"server", "se-sto-wg-001"}, {"csrf_token", token}}, "csrf_nonce="+nonce, "")
+	if a.Status != 500 || a.Body != "internal error" {
+		t.Fatalf("status %d %q", a.Status, a.Body)
+	}
+	log := h.log.String()
+	mustContain(t, log, "Z switch failed: cannot write the request file: rename ")
+	mustContain(t, log, h.srv.Single.DesiredPath+": ")
+	mustNotContain(t, log, token)
 }
 
 func TestMalformedOriginIsRejectedWithoutLoggingInput(t *testing.T) {

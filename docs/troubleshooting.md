@@ -656,9 +656,18 @@ own access line ending `421`.
 
 **`403 origin is not a published panel host` or `invalid or missing csrf token` when
 switching.** The browser's `Origin` must be a listed host, and the CSRF cookie must
-reach the panel. The first case logs `rejected POST: origin is not a published panel
-host`, at most once a minute like the line above. Check that the proxy passes cookies and doesn't strip `Origin`, and
-that you opened the panel by the name listed in `PANEL_PUBLIC_HOSTS`.
+reach the panel. Check that the proxy passes cookies and doesn't strip `Origin`, and
+that you opened the panel by the name listed in `PANEL_PUBLIC_HOSTS`. The first case
+logs `rejected POST: origin is not a published panel host`, at most once a minute like
+the line above.
+
+**`500 internal error` when switching.** The panel couldn't write its request,
+`desired.json` in the exit's panel directory (`$STATE_DIR/panel`, or
+`$STATE_DIR/<id>/panel` with several exits). Its log has `switch failed: cannot write
+the request file: <reason>`, where `<reason>` is the file operation, the path and the
+system's error, such as `permission denied` or `read-only file system`. That directory
+must be mounted writable, and `PANEL_USER` must be the uid and gid that own it
+([the `.env` settings](configuration.md#env)).
 
 **"No fresh trusted relay catalogue; selections are unavailable."** The panel can't
 read a catalog less than 24 hours old. Either the exit hasn't fetched one yet (give

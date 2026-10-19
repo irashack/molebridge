@@ -1127,14 +1127,29 @@ func (s *Server) processSelect(server string, haveServer bool, allowlist *provid
 		return 400, "unknown or unlisted server"
 	}
 	request := validate.Members("server", server, "requested_at", validate.FormatTime(s.now()), "request_id", randomHex(16))
-	if err := os.MkdirAll(filepath.Dir(desiredPath), 0o777); err == nil {
+	err := os.MkdirAll(filepath.Dir(desiredPath), 0o777)
+	if err == nil {
 		err = state.WriteJSONAtomic(desiredPath, request, false, 0)
-		if err != nil {
-			return 500, "internal error"
-		}
-		return 303, "ok"
 	}
-	return 500, "internal error"
+	if err != nil {
+		s.logEvent("switch failed: cannot write the request file: " + fileErrorText(err))
+		return 500, "internal error"
+	}
+	return 303, "ok"
+}
+
+// fileErrorText is a file operation's error as the log may show it: the
+// operation, the path and the system's reason. Anything else is a fixed text.
+func fileErrorText(err error) string {
+	var pathErr *fs.PathError
+	var linkErr *os.LinkError
+	switch {
+	case errors.As(err, &pathErr):
+		return pathErr.Error()
+	case errors.As(err, &linkErr):
+		return linkErr.Error()
+	}
+	return "the request could not be encoded"
 }
 
 func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
