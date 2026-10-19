@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -444,6 +445,57 @@ func NewIssuerClient() *http.Client {
 	}
 }
 
+// The causes an unreachable issuer is logged with. The set is fixed: no part
+// of the error (an address, a name, a certificate field) reaches the log.
+const (
+	causeDNS         = "DNS lookup failed"
+	causeCertificate = "TLS certificate not trusted"
+	causeTLS         = "TLS handshake failed"
+	causeTimeout     = "timed out"
+	causeRefused     = "connection refused"
+	causeReset       = "connection closed by the issuer"
+	causeNoRoute     = "no route to the issuer"
+	causeOther       = "request failed"
+)
+
+// unreachableCause names why a request to the issuer failed, from causeDNS
+// to causeOther.
+func unreachableCause(err error) string {
+	var dnsErr *net.DNSError
+	var verifyErr *tls.CertificateVerificationError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var invalidCert x509.CertificateInvalidError
+	var recordErr tls.RecordHeaderError
+	var alert tls.AlertError
+	var timeout interface{ Timeout() bool }
+	switch {
+	case errors.As(err, &dnsErr):
+		return causeDNS
+	case errors.As(err, &verifyErr), errors.As(err, &unknownAuthority), errors.As(err, &hostnameErr),
+		errors.As(err, &invalidCert):
+		return causeCertificate
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded),
+		errors.As(err, &timeout) && timeout.Timeout():
+		return causeTimeout
+	case errors.As(err, &recordErr), errors.As(err, &alert),
+		// net/http's own text for a plain-HTTP answer to a TLS hello.
+		strings.Contains(err.Error(), "server gave HTTP response to HTTPS client"):
+		return causeTLS
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return causeRefused
+	case errors.Is(err, syscall.ECONNRESET), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return causeReset
+	case errors.Is(err, syscall.ENETUNREACH), errors.Is(err, syscall.EHOSTUNREACH):
+		return causeNoRoute
+	}
+	return causeOther
+}
+
+func unreachable(what string, err error) *AuthError {
+	return authErr("%s: the issuer could not be reached (%s)", what, unreachableCause(err))
+}
+
 // httpJSON GETs (or, with form, POSTs) a JSON object from the issuer. It
 // returns an AuthError with a fixed message naming what; nothing from the
 // response reaches the message.
@@ -459,7 +511,7 @@ func httpJSON(client *http.Client, target string, form []pystr.Pair, headers map
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
-		return nil, authErr("%s: the issuer could not be reached", what)
+		return nil, unreachable(what, err)
 	}
 	req.Header.Set("Accept", "application/json")
 	// Some issuer fronts (Cloudflare among them) refuse a generic client's
@@ -473,7 +525,7 @@ func httpJSON(client *http.Client, target string, form []pystr.Pair, headers map
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, authErr("%s: the issuer could not be reached", what)
+		return nil, unreachable(what, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -481,7 +533,7 @@ func httpJSON(client *http.Client, target string, form []pystr.Pair, headers map
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes+1))
 	if err != nil {
-		return nil, authErr("%s: the issuer could not be reached", what)
+		return nil, unreachable(what, err)
 	}
 	if len(raw) > MaxResponseBytes {
 		return nil, authErr("%s: the issuer response is too large", what)

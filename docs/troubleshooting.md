@@ -759,10 +759,24 @@ is the setting):
 **"Sign-in unavailable".** The page says "The identity provider could not be reached.
 Try again in a minute." The panel couldn't read the provider's discovery document. The
 log has a line `sign-in unavailable: <reason>`, such as `discovery: the issuer could not
-be reached`, `discovery: the issuer answered HTTP <code>`, or `discovery: the issuer in
-the discovery document does not match PANEL_OIDC_ISSUER`. Check that the panel container
-can open an HTTPS connection to the issuer and trusts its certificate, and that
-`PANEL_OIDC_ISSUER` is written exactly as the discovery document's `issuer`.
+be reached (<cause>)`, `discovery: the issuer answered HTTP <code>`, or `discovery: the
+issuer in the discovery document does not match PANEL_OIDC_ISSUER`. The `<cause>` is one
+of:
+
+- `DNS lookup failed`: the panel container can't resolve the issuer's name.
+- `connection refused` or `no route to the issuer`: nothing answers at that address
+  from the panel container, or a firewall turns it away.
+- `timed out`: no answer within 10 seconds.
+- `TLS certificate not trusted`: the certificate isn't valid for the name, or isn't
+  signed by an authority the panel image trusts.
+- `TLS handshake failed`: the TLS connection failed for another reason, such as plain
+  HTTP on that port.
+- `connection closed by the issuer`, or `request failed` for anything else.
+
+After a failure the panel waits 30 seconds before asking again, and meanwhile logs
+`discovery: the issuer could not be reached recently; retrying shortly`. Check that the
+panel container can open an HTTPS connection to the issuer and trusts its certificate,
+and that `PANEL_OIDC_ISSUER` is written exactly as the discovery document's `issuer`.
 
 **"Sign-in failed".** The page says "The sign-in could not be completed. Start it again
 from the panel." The log has `sign-in failed: <reason>`. Common ones:
@@ -774,9 +788,9 @@ from the panel." The log has `sign-in failed: <reason>`. Common ones:
   again from `PANEL_PUBLIC_URL`.
 - `callback: the sign-in state does not match`. The return belongs to a different sign-in
   than the one this browser started last, for example from a second tab. Start again.
-- `token: the issuer could not be reached`. The provider answered discovery but not the
-  token request, so this shows as "Sign-in failed", not "Sign-in unavailable". Check the
-  panel container's route to the issuer.
+- `token: the issuer could not be reached (<cause>)`, with a cause from the list above.
+  The provider answered discovery but not the token request, so this shows as "Sign-in
+  failed", not "Sign-in unavailable". Check the panel container's route to the issuer.
 - `token: the issuer answered HTTP <code>`. The provider refused the code. Check that the
   redirect URL registered there is `PANEL_PUBLIC_URL` plus `/auth/callback`, exactly, and
   that the client is a public client (or that `PANEL_OIDC_CLIENT_SECRET_FILE` holds its

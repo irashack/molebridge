@@ -4,9 +4,15 @@ package oidc
 // (the Authenticator parts) and UserAgentTests.
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,9 +21,12 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/irashack/molebridge/internal/panel/oidc/oidctest"
+	"github.com/irashack/molebridge/internal/panel/pystr"
 )
 
 const notStarted = "callback: this browser did not start a sign-in, or it expired"
@@ -446,8 +455,65 @@ func TestUnreachableIssuer(t *testing.T) {
 	config := cfg(t, envFor(deadURL, nil))
 	auth := NewAuthenticator(config, testExitIDs, f.clock.Now, nil)
 	_, _, err := auth.Begin("/")
-	if err == nil || err.Error() != "discovery: the issuer could not be reached" {
+	if err == nil || err.Error() != "discovery: the issuer could not be reached (connection refused)" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUntrustedIssuerCertificate(t *testing.T) {
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0)
+	ts.StartTLS()
+	defer ts.Close()
+	_, err := httpJSON(NewIssuerClient(), ts.URL+"/.well-known/openid-configuration", nil, nil, "discovery")
+	if err == nil || err.Error() != "discovery: the issuer could not be reached (TLS certificate not trusted)" {
+		t.Fatalf("err = %v", err)
+	}
+	// Plain HTTP where TLS was expected.
+	plainServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer plainServer.Close()
+	_, err = httpJSON(NewIssuerClient(), "https"+strings.TrimPrefix(plainServer.URL, "http"), nil, nil, "token")
+	if err == nil || err.Error() != "token: the issuer could not be reached (TLS handshake failed)" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSlowIssuerTimesOut(t *testing.T) {
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer ts.Close()
+	defer close(release)
+	client := &http.Client{Timeout: 50 * time.Millisecond}
+	_, err := httpJSON(client, ts.URL+"/token", []pystr.Pair{{Key: "code", Value: "x"}}, nil, "token")
+	if err == nil || err.Error() != "token: the issuer could not be reached (timed out)" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestUnreachableCauses(t *testing.T) {
+	wrap := func(err error) error {
+		return &url.Error{Op: "Get", URL: "https://issuer.example.test/x", Err: &net.OpError{Op: "dial", Net: "tcp", Err: err}}
+	}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{wrap(&net.DNSError{Err: "no such host", Name: "issuer.example.test", IsNotFound: true}), "DNS lookup failed"},
+		{wrap(&net.DNSError{Err: "i/o timeout", Name: "issuer.example.test", IsTimeout: true}), "DNS lookup failed"},
+		{wrap(x509.UnknownAuthorityError{}), "TLS certificate not trusted"},
+		{wrap(x509.HostnameError{Host: "issuer.example.test", Certificate: &x509.Certificate{}}), "TLS certificate not trusted"},
+		{wrap(tls.AlertError(40)), "TLS handshake failed"},
+		{wrap(os.NewSyscallError("connect", syscall.ECONNREFUSED)), "connection refused"},
+		{wrap(os.NewSyscallError("read", syscall.ECONNRESET)), "connection closed by the issuer"},
+		{wrap(io.ErrUnexpectedEOF), "connection closed by the issuer"},
+		{wrap(os.NewSyscallError("connect", syscall.ENETUNREACH)), "no route to the issuer"},
+		{wrap(os.NewSyscallError("connect", syscall.EHOSTUNREACH)), "no route to the issuer"},
+		{wrap(context.DeadlineExceeded), "timed out"},
+		{wrap(errors.New("something else, naming issuer.example.test")), "request failed"},
+	} {
+		if got := unreachableCause(tc.err); got != tc.want {
+			t.Errorf("%v: %q, want %q", tc.err, got, tc.want)
+		}
 	}
 }
 
