@@ -594,7 +594,13 @@ the present state, and requests made while a pass is pending are one request.
 A full pass also runs every `ROUTING_RECONCILE_INTERVAL` seconds (30 by
 default, 2 to 60), and at once when the kernel reports that notifications were
 lost (`ENOBUFS`), which logs
-`molebridge-exit: netlink events were lost; running a full pass`.
+`molebridge-exit: netlink events were lost; running a full pass`. Under a
+flood every receive can report a loss, so that line comes at most once a
+minute: losses in between still run their full pass each, and are counted
+into the next line, `molebridge-exit: netlink events were lost; running a
+full pass (<n> times since the last line)`, or, once they stop,
+`molebridge-exit: netlink events were lost again since the last line (<n>
+times); each ran a full pass`.
 The full pass is the fallback for a change the kernel doesn't announce, not
 the repair itself. Reading the kernel uses a decoder of the exit's own for
 rules (`internal/rtnl`), because the common library's rule listing drops the

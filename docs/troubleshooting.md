@@ -492,7 +492,9 @@ gluetun `IPv4 host` (the host table differs) or `IPv4 nodefault` (no IPv4 defaul
 route through the host interface). NetBird starts again once the contract
 verifies. Look for lines in the log from the repairer, such as `molebridge-exit:
 added IPv4 rule 97`, `molebridge-exit: removed IPv4 rule 50: <rule>` and
-`molebridge-exit: netlink events were lost; running a full pass`. Something else in the namespace is changing rules or routes faster than
+`molebridge-exit: netlink events were lost; running a full pass` (at most once a minute,
+with a count of the losses since the last such line; see
+[drift and repair](architecture.md#drift-and-repair)). Something else in the namespace is changing rules or routes faster than
 the exit can repair them, or the kernel refuses a change. `ip rule` and `ip route show table
 51821` in a [diagnostic shell](verification.md#inside-the-namespace) show what is
 there.

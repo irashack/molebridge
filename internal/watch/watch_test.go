@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -142,6 +143,75 @@ func TestOverrunRunsAFullPassAtOnce(t *testing.T) {
 	}
 	if err := stop(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A flood of overruns logs one line at once, then a count once a minute, not
+// a line per overrun; every overrun still asks for a full pass.
+func TestOverrunLinesAreAtMostOneAMinuteWithACount(t *testing.T) {
+	var now atomic.Int64
+	now.Store(int64(time.Hour))
+	s, c := newScript(), &counter{}
+	var mu sync.Mutex
+	var lines []string
+	w := New(Config{Source: s, Mutator: c, Interval: 24 * time.Hour, IdleStep: 20 * time.Millisecond,
+		Clock: func() time.Duration { return time.Duration(now.Load()) },
+		Logf: func(format string, a ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, a...))
+		}})
+	logged := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), lines...)
+	}
+	for i := 0; i < 5; i++ {
+		s.push(func() ([]rtnl.Event, error) { return nil, rtnl.ErrOverrun })
+	}
+	stop := run(t, w)
+	waitFor(t, "five passes", func() bool { return len(c.get()) == 5 })
+	if got := logged(); len(got) != 1 || got[0] != "molebridge: netlink events were lost; running a full pass" {
+		t.Fatalf("%q", got)
+	}
+	now.Add(int64(OverrunRelog))
+	waitFor(t, "the count", func() bool { return len(logged()) == 2 })
+	if got := logged()[1]; got != "molebridge: netlink events were lost again since the last line (4 times); each ran a full pass" {
+		t.Fatalf("%q", got)
+	}
+	// Within the minute after a line, an overrun waits for the next one.
+	s.push(func() ([]rtnl.Event, error) { return nil, rtnl.ErrOverrun })
+	waitFor(t, "another pass", func() bool { return len(c.get()) == 6 })
+	time.Sleep(50 * time.Millisecond)
+	if got := logged(); len(got) != 2 {
+		t.Fatalf("logged within the minute: %q", got)
+	}
+	now.Add(int64(OverrunRelog))
+	waitFor(t, "the third line", func() bool { return len(logged()) == 3 })
+	if got := logged()[2]; got != "molebridge: netlink events were lost again since the last line (1 time); each ran a full pass" {
+		t.Fatalf("%q", got)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if w.Stats().Overruns != 6 {
+		t.Fatalf("%+v", w.Stats())
+	}
+}
+
+// The first overrun is due at once, and the next only OverrunRelog after a
+// line.
+func TestOverrunLogPacing(t *testing.T) {
+	var o overrunLog
+	if !o.due(0) {
+		t.Fatal("the first overrun is not due")
+	}
+	o.logged(time.Hour)
+	if o.due(time.Hour + OverrunRelog - 1) {
+		t.Fatal("due within the minute")
+	}
+	if !o.due(time.Hour + OverrunRelog) {
+		t.Fatal("not due after a minute")
 	}
 }
 

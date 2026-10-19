@@ -181,6 +181,7 @@ func (w *Watcher) Run(ctx context.Context) error {
 		return nil
 	}
 	nextFull := w.c.Clock() + w.c.Interval
+	var lost overrunLog
 	for {
 		if ctx.Err() != nil {
 			return cancelled()
@@ -209,7 +210,15 @@ func (w *Watcher) Run(ctx context.Context) error {
 		case errors.Is(err, rtnl.ErrOverrun):
 			// Events were lost: whatever they were, look at everything now.
 			w.overruns.Add(1)
-			w.c.Logf("molebridge: netlink events were lost; running a full pass")
+			lost.unlogged++
+			if lost.due(w.c.Clock()) {
+				if lost.unlogged == 1 {
+					w.c.Logf("molebridge: netlink events were lost; running a full pass")
+				} else {
+					w.c.Logf("molebridge: netlink events were lost; running a full pass (%s since the last line)", times(lost.unlogged))
+				}
+				lost.logged(w.c.Clock())
+			}
 			w.c.Mutator.Reconcile("events lost")
 		case errors.Is(err, os.ErrDeadlineExceeded) || rtnl.Timeout(err):
 			// Idle: nothing to read within the step.
@@ -224,6 +233,37 @@ func (w *Watcher) Run(ctx context.Context) error {
 			w.c.Mutator.Reconcile("periodic")
 			nextFull = now + w.c.Interval
 		}
+		if now := w.c.Clock(); lost.unlogged > 0 && lost.due(now) {
+			// Overruns that came after the last line, and then stopped.
+			w.c.Logf("molebridge: netlink events were lost again since the last line (%s); each ran a full pass", times(lost.unlogged))
+			lost.logged(now)
+		}
 		w.step()
 	}
+}
+
+// OverrunRelog is the least time between two lines about lost events: under
+// a flood the kernel can report an overrun on every receive, and each one
+// already runs a full pass. Overruns in between are counted into the next
+// line.
+const OverrunRelog = time.Minute
+
+// overrunLog paces the lines about lost events (OverrunRelog).
+type overrunLog struct {
+	unlogged int
+	last     time.Duration
+	ever     bool
+}
+
+func (o *overrunLog) due(now time.Duration) bool { return !o.ever || now-o.last >= OverrunRelog }
+
+func (o *overrunLog) logged(now time.Duration) {
+	o.unlogged, o.last, o.ever = 0, now, true
+}
+
+func times(n int) string {
+	if n == 1 {
+		return "1 time"
+	}
+	return fmt.Sprintf("%d times", n)
 }
