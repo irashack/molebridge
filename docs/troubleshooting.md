@@ -958,6 +958,20 @@ server list doesn't name. See [egress tiers](architecture.md#egress-tiers).
 selection is saved and will be applied once the exit has a current catalog. If this
 persists, the provider's API is unreachable from the exit.
 
+**"Relay refresh failed; retaining the last good catalogue."** The exit couldn't download
+or validate the provider's server list. The panel shows this message and the time of the
+failed attempt from `state/applier/relay-error.json` (its `message` and `checked_at`; the
+file holds an empty object after a refresh succeeds). Switching keeps using the last good
+catalog until it is 24 hours old. The exit tries again after one minute and doubles the wait
+after each further failure, up to an hour; while the last catalog is less than 24 hours old,
+it never waits past the moment the catalog turns 24 hours old. The exit's log has one line for each new
+cause, `molebridge-exit: applier: relay catalogue refresh failed: <reason>`, where the reason
+names a step or a file, such as `netx: request timed out` or `duplicate JSON field`, never
+the list's content. When a refresh succeeds again it logs `molebridge-exit: applier: relay
+catalogue refreshed again`. With the gluetun backend the message is "gluetun's server list is
+missing or invalid; retaining the last good catalogue." and the exit reads gluetun's file
+again every minute, without this backoff or these log lines.
+
 **"Routing protection is incomplete; see docs/operations.md#recovery."** A routing rule or
 fallback route is missing, the lease isn't live, or the local-delivery rule was replaced. The
 exit repairs rules itself within milliseconds, so this normally clears on the next check. If

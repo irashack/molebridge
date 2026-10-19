@@ -148,6 +148,10 @@ type RelayCatalog struct {
 	Relays   *Entries
 	// Now is the clock; time.Now when nil.
 	Now func() time.Time
+	// Failure is why the last Refresh failed, nil after a success. It is
+	// for the log: its text names a step or a file (netx's errors carry no
+	// URL, the parsers' none of the input), never what was downloaded.
+	Failure error
 }
 
 // NewRelayCatalog reads the snapshot in directory, if there is a valid one.
@@ -225,6 +229,7 @@ func (c *RelayCatalog) Refresh(fetch func() ([]byte, error)) (bool, error) {
 	if err == nil {
 		err = c.Publish(entries, nil)
 	}
+	c.Failure = err
 	if err != nil {
 		return false, c.RecordFailure(RefreshFailedMessage)
 	}

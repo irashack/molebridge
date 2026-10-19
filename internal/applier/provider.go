@@ -23,6 +23,9 @@ type Catalog interface {
 	// and publishes the catalogue. It returns true on success; on a failure
 	// the last good catalogue stays and the error record says so.
 	Refresh(ctx context.Context, fetch func() ([]byte, error)) (bool, error)
+	// RefreshFailure is why the last Refresh failed, nil after a success or
+	// before the first, for the log; its text never holds what was read.
+	RefreshFailure() error
 	// ExitIPs are the exit addresses the catalogue lists for a server, for the
 	// tunnel tier's comparison; none for every native catalogue.
 	ExitIPs(server string) []string

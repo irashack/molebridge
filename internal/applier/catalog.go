@@ -27,6 +27,7 @@ func (c *nativeCatalog) Usable() bool                   { return c.inner.Usable(
 func (c *nativeCatalog) Relays() *providers.Entries     { return c.inner.Relays }
 func (c *nativeCatalog) Snapshot() map[string]any       { return c.inner.Snapshot }
 func (c *nativeCatalog) ExitIPs(server string) []string { return c.exitIPs[server] }
+func (c *nativeCatalog) RefreshFailure() error          { return c.inner.Failure }
 
 func (c *nativeCatalog) Refresh(_ context.Context, fetch func() ([]byte, error)) (bool, error) {
 	return c.inner.Refresh(fetch)

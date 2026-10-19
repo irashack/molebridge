@@ -611,7 +611,7 @@ has been run live this way ([testing](testing.md)).
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 exit snapshots are mode 0644 so the non-root panel can read them; requests
 are mode 0600. The panel cannot write the applier directory. Catalog refresh
-is every six hours (one-minute retry on failure), maximum catalog age is 24
+is every six hours (after a failure, retries from one minute doubling to an hour), maximum catalog age is 24
 hours, and maximum status age is 150 seconds. A server list download may take
 20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. With the
 gluetun backend nothing is downloaded: the exit reads gluetun's server

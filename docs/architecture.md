@@ -1463,7 +1463,10 @@ entry: 10 MiB and 20 seconds, except NordVPN's 32 MiB and 60 seconds.
 
 It atomically writes `state/applier/relays.json`. Failed or empty refreshes
 keep the last good catalog and publish a sanitized error in
-`relay-error.json`; retries happen every minute. A catalog older than 24
+`relay-error.json`, and the exit logs each new cause once. The first retry is
+a minute later, and the wait doubles after each further failure up to an
+hour, but while the catalog is fresh never past the moment it turns 24 hours
+old ([troubleshooting](troubleshooting.md#switching)). A catalog older than 24
 hours cannot authorize a new switch or a healthy result. It does not remove a
 working tunnel merely because the API is unavailable.
 

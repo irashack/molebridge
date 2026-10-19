@@ -31,6 +31,12 @@ const (
 	EgressRetryBudgetSec = 30
 	// RefreshSec is how often a settled selection is re-checked.
 	RefreshSec = 60
+	// A failed catalogue refresh is retried after CatalogRetrySec, and each
+	// further failure doubles the wait up to CatalogRetryMaxSec; a success
+	// starts over. While the catalogue is fresh, a retry is never put off past
+	// the moment it would stop being fresh (providers.CatalogMaxAge).
+	CatalogRetrySec    = 60
+	CatalogRetryMaxSec = 60 * 60
 	// PollSec is how often the exit worker calls Tick.
 	PollSec = 5
 	// FreshRequestSec: a panel request this recent is the operator asking now:

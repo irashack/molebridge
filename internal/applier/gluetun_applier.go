@@ -163,6 +163,20 @@ type GluetunCatalog struct {
 	haveReadAt bool
 	// reads counts the times the file was read and parsed (tests).
 	reads int
+	// failed: the last Refresh could not use the file.
+	failed bool
+}
+
+// errGluetunCatalog is RefreshFailure's answer; like the error record, it
+// says nothing of the file's content.
+var errGluetunCatalog = errors.New("gluetun's server list is missing or invalid")
+
+// RefreshFailure implements Catalog.
+func (c *GluetunCatalog) RefreshFailure() error {
+	if c.failed {
+		return errGluetunCatalog
+	}
+	return nil
 }
 
 type fileSignature struct {
@@ -209,7 +223,8 @@ func unixSeconds(t time.Time) float64 { return float64(t.UnixNano()) / 1e9 }
 // old. fetch is ignored: nothing is downloaded. The returned error is only
 // about writing the error record.
 func (c *GluetunCatalog) Refresh(_ context.Context, _ func() ([]byte, error)) (bool, error) {
-	if c.read() {
+	c.failed = !c.read()
+	if !c.failed {
 		return true, nil
 	}
 	// Never log the file's content, paths or exception bodies.

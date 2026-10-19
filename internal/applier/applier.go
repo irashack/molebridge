@@ -97,6 +97,11 @@ type Applier struct {
 	target         *Selection
 	nextCatalog    float64
 	nextHealth     float64
+	// catalogRetry is the wait after the last failed catalogue refresh, 0
+	// after a success; catalogFailure is the failure last logged, "" after a
+	// success.
+	catalogRetry   float64
+	catalogFailure string
 	// measurement is the last inspection's findings.
 	measurement *Finding
 	// unidentifiedSince is since when a live peer the catalogue can't name has
@@ -1070,12 +1075,41 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 	if err != nil {
 		return wrapIO(err)
 	}
-	interval := 60.0
 	if refreshed {
-		interval = providers.RefreshIntervalS
+		if a.catalogFailure != "" {
+			a.log("applier: relay catalogue refreshed again")
+		}
+		a.catalogRetry, a.catalogFailure = 0, ""
+		a.nextCatalog = a.clock() + providers.RefreshIntervalS
+		return nil
 	}
-	a.nextCatalog = a.clock() + interval
+	cause := "unknown error"
+	if failure := a.catalog.RefreshFailure(); failure != nil {
+		cause = failure.Error()
+	}
+	if cause != a.catalogFailure {
+		a.log("applier: relay catalogue refresh failed: " + cause)
+		a.catalogFailure = cause
+	}
+	a.catalogRetry = math.Min(math.Max(2*a.catalogRetry, CatalogRetrySec), CatalogRetryMaxSec)
+	a.nextCatalog = a.clock() + a.catalogRetryWait()
 	return nil
+}
+
+// catalogRetryWait is the wait before the next refresh after a failure: the
+// backoff, but while the catalogue is fresh no later than when it stops
+// being fresh, so a list that can be downloaded again is not missed for up to
+// an hour at that moment. Once it is stale the backoff alone applies.
+func (a *Applier) catalogRetryWait() float64 {
+	wait := a.catalogRetry
+	if !a.catalog.Usable() {
+		return wait
+	}
+	age, ok := validate.AgeSeconds(a.catalog.Snapshot()["fetched_at"], a.wall())
+	if left := providers.CatalogMaxAge - age; ok && left < wait {
+		wait = math.Max(left, CatalogRetrySec)
+	}
+	return wait
 }
 
 // resume: at start, an attempt interrupted mid-mutation is inspected first,
