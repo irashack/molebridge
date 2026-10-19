@@ -3,7 +3,12 @@
 Messages are quoted as the panel, `result.json` or the container logs print
 them. Read the exit's log with `docker compose logs exit` (`podman logs
 molebridge-exit` on Podman); its own lines start `molebridge-exit: `, NetBird's
-output starts `netbird: `. The exit never waits for the log: when the log
+output starts `netbird: `. The exit's lines carry no time of their own,
+because the container engine records one for each line: add `-t` to see it
+(`docker compose logs -t exit`, `podman logs -t molebridge-exit`; on Kubernetes
+`kubectl logs --timestamps`). Use it whenever the order or spacing of events
+matters, such as how long a switch took or how often a line repeats. The exit
+never waits for the log: when the log
 driver stops reading, it drops lines rather than stall, and once the driver
 reads again it says how many with `molebridge-exit: log: <n> lines were
 dropped while the log sink was slow`. For a check of a running exit, use
