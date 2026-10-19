@@ -34,3 +34,29 @@ func TestEncodeAndQuote(t *testing.T) {
 		t.Fatalf("Quote = %q", got)
 	}
 }
+
+func TestReprMatchesPython(t *testing.T) {
+	// Each want is what Python 3's repr() prints for the same text.
+	for _, tc := range []struct{ in, want string }{
+		{"", `''`},
+		{"abc", `'abc'`},
+		{"a b", `'a b'`},
+		// Double quotes when the text holds a single quote and no double one.
+		{"it's", `"it's"`},
+		{`say "hi"`, `'say "hi"'`},
+		{`both ' and "`, `'both \' and "'`},
+		{`back\slash`, `'back\\slash'`},
+		{`"it's" \`, `'"it\'s" \\'`},
+		{"a\nb\rc\td", `'a\nb\rc\td'`},
+		{"\x00\x1b\x7f", `'\x00\x1b\x7f'`},
+		{"\u0080\u00a0\u00ad", `'\x80\xa0\xad'`},
+		{"é ü ß", `'é ü ß'`},
+		{"\u200b\u2028\u0378", `'\u200b\u2028\u0378'`},
+		{"\U000e0001", `'\U000e0001'`},
+		{"\U0001f600", "'\U0001f600'"},
+	} {
+		if got := Repr(tc.in); got != tc.want {
+			t.Errorf("Repr(%q) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+}
