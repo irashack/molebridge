@@ -25,8 +25,8 @@
 // malformed one, or one that has passed, fails the check.
 //
 // The package offers Assess (with ExitConfig, Target and Verdict), StatusView,
-// LegacyProjection, RequiredChecks, FixedChecks, BackendOf, and the schema's
-// constants.
+// LegacyProjection, RequiredChecks, FixedChecks, BackendOf, OrderRecord (the
+// member order the supervisor writes), and the schema's constants.
 package verdict
 
 import (

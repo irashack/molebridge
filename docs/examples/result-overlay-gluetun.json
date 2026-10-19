@@ -1,0 +1,73 @@
+{
+  "schema": 2,
+  "kind": "overlay",
+  "backend": "gluetun",
+  "provider": "gluetun-mullvad",
+  "status": "ok",
+  "message": "Healthy.",
+  "checked_at": "2026-10-10T18:00:00Z",
+  "server": "two.example.test",
+  "requested_server": "two.example.test",
+  "configured_server": null,
+  "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selection": {
+    "source": "panel",
+    "outcome": "verified",
+    "attempt": 1,
+    "target": "two.example.test",
+    "next_action": null,
+    "next_action_at": null
+  },
+  "checks": {
+    "routing": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "fallback": true
+    },
+    "netbird": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z"
+    },
+    "peer": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "two.example.test"
+    },
+    "handshake": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "two.example.test",
+      "age_s": 1
+    },
+    "egress": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "two.example.test",
+      "tier": "provider",
+      "expected_families": [
+        "4"
+      ],
+      "families": {
+        "4": "pass"
+      }
+    },
+    "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "from": "routing"
+    },
+    "owner_record": {
+      "state": "n/a"
+    },
+    "app_attachment": {
+      "state": "n/a"
+    }
+  },
+  "egress_ip": "203.0.113.50",
+  "egress_ips": {
+    "4": "203.0.113.50"
+  },
+  "egress_city": "City 0",
+  "egress_country": "Exampleland",
+  "server_list_update": null
+}

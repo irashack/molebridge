@@ -8,6 +8,7 @@ import (
 	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/validate"
+	"github.com/irashack/molebridge/internal/verdict"
 )
 
 // publisher writes result.json. The supervisor alone does (D7).
@@ -61,7 +62,7 @@ func (p *publisher) render(rec map[string]any) validate.Obj {
 	if p.s.Native() {
 		rec = WithOwnerCheck(rec, p.ownerCheck())
 	}
-	return OrderRecord(rec, p.s.Kind(), p.s.BackendName())
+	return verdict.OrderRecord(rec, p.s.Kind(), p.s.BackendName())
 }
 
 // writeOut renders and writes one record. It runs on the writer goroutine, and

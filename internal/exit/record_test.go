@@ -87,7 +87,7 @@ func assess(t *testing.T, s *Settings, rec map[string]any, target verdict.Target
 		t.Fatal(err)
 	}
 	// Through the file format: the reader sees encoded JSON.
-	raw, err := validate.MarshalJSON(OrderRecord(rec, s.Kind(), s.BackendName()))
+	raw, err := validate.MarshalJSON(verdict.OrderRecord(rec, s.Kind(), s.BackendName()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestOwnerCheckAndOrdering(t *testing.T) {
 		t.Errorf("%v", c)
 	}
 	s := settingsFor("overlay", "wireguard", "mullvad")
-	raw, _ := validate.MarshalJSON(OrderRecord(okRecord(s, now), "overlay", "native"))
+	raw, _ := validate.MarshalJSON(verdict.OrderRecord(okRecord(s, now), "overlay", "native"))
 	text := string(raw)
 	if !strings.HasPrefix(text, `{"schema": 2, "kind": "overlay", "backend": "native", "provider": "mullvad", "status": "ok"`) {
 		t.Errorf("record order: %.120s", text)

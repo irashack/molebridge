@@ -1,0 +1,77 @@
+{
+  "schema": 2,
+  "kind": "overlay",
+  "backend": "native",
+  "provider": "mullvad",
+  "status": "ok",
+  "message": "Healthy.",
+  "checked_at": "2026-10-10T18:00:00Z",
+  "server": "se-sto-wg-001",
+  "requested_server": "se-sto-wg-001",
+  "configured_server": null,
+  "request_id": "00000000000000000000000000000000",
+  "selection": {
+    "source": "panel",
+    "outcome": "verified",
+    "attempt": 1,
+    "target": "se-sto-wg-001",
+    "next_action": null,
+    "next_action_at": null
+  },
+  "checks": {
+    "routing": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "fallback": true
+    },
+    "netbird": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z"
+    },
+    "owner_record": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "expires_at": "2026-10-10T18:00:30Z"
+    },
+    "peer": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "se-sto-wg-001"
+    },
+    "handshake": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "se-sto-wg-001",
+      "age_s": 1
+    },
+    "egress": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+        "4",
+        "6"
+      ],
+      "families": {
+        "4": "pass",
+        "6": "pass"
+      }
+    },
+    "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-10T18:00:00Z",
+      "from": "routing"
+    },
+    "app_attachment": {
+      "state": "n/a"
+    }
+  },
+  "egress_ip": "203.0.113.10",
+  "egress_ips": {
+    "4": "203.0.113.10",
+    "6": "2001:db8:3::10"
+  },
+  "egress_city": "Example City",
+  "egress_country": "Example"
+}

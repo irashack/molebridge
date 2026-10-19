@@ -1545,7 +1545,9 @@ sequenceDiagram
 
 ### The admission pipeline
 
-The attempt's state, in `state/applier/attempt.json` (`internal/attempt`):
+The attempt's state, in `state/applier/attempt.json` (`internal/attempt`;
+in `PRIVATE_STATE_DIR` when that is set, [state
+files](configuration.md#keeping-the-published-files-in-memory)):
 
 | State | Meaning |
 |---|---|
@@ -1671,6 +1673,25 @@ looks like this (`at` values shortened):
   "egress_city": "Gothenburg", "egress_country": "Sweden"
 }
 ```
+
+#### Example records
+
+`docs/examples` has a healthy record for each exit kind, as the exit writes
+it, with fixed timestamps and documentation addresses:
+
+| Kind | Backend | Example |
+|---|---|---|
+| Overlay | native (Mullvad) | [result-overlay-native.json](examples/result-overlay-native.json) |
+| Overlay | gluetun (Mullvad) | [result-overlay-gluetun.json](examples/result-overlay-gluetun.json) |
+| Sidecar | gluetun (NordVPN) | [result-sidecar-gluetun.json](examples/result-sidecar-gluetun.json) |
+| Sidecar | native (PIA, port forwarding on) | [result-sidecar-native.json](examples/result-sidecar-native.json) |
+
+The applier's test fakes produce them. A test regenerates and compares them
+(`internal/applier/examples_test.go`), and checks that the verdict judges
+each one connected. None was copied from a live exit, so the values are the
+fakes' values: `age_s` is 1, and on a live exit `expires_at` is up to
+`GUARD_GRACE` seconds after `at`. Write checks against the members and their
+states, not these values.
 
 `status` is the exit's own summary (`unknown`, `applying`, `ok` or
 `failed`) and `message` its wording. `selection` says why the server is what
