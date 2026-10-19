@@ -67,9 +67,9 @@ Python counterpart. Tests reuse `tools/fixtures/` and `panel/fixtures/` by relat
 
 ## Checks
 
-`main` takes a commit only after CI's four jobs (Checks, Go, Image and Release
-tooling) passed on it, so push a branch first and move `main` to the commit CI
-tested. Locally:
+`main` takes a commit only after CI's five jobs (Checks, Go, Race detector,
+Image and Release tooling) passed on it, so push a branch first and move `main`
+to the commit CI tested. Locally:
 
 ```sh
 gofmt -l $(git ls-files '*.go' ':(exclude)vendor')    # prints nothing
@@ -77,6 +77,7 @@ go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 go test -count=1 ./...
+go test -race -short -count=1 ./...
 node --test panel/js-tests/*.test.js
 
 sh -n routing/gluetun-preflight && shellcheck -x -S warning routing/gluetun-preflight
@@ -92,6 +93,11 @@ COMPOSE_PROFILES=example,port-sync docker compose --env-file .env.native-sidecar
 sh tools/check-compose.sh
 sh tools/check-doc-links.sh
 ```
+
+With `-short` or `-race`, the property tests of `internal/policy` and
+`internal/mutator` draw a tenth of their random cases; under the race detector
+the full draw takes most of `go test`'s 10-minute timeout. The plain
+`go test ./...` draws them all.
 
 The panel script tests need Node 18 or later and nothing from npm. They run
 `go test -run TestWritePayloads ./internal/panel` for the panel's own answers, so they need

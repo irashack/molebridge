@@ -118,6 +118,27 @@ jobs:
           sh tools/test-gen-third-party.sh
           sh tools/gen-third-party.sh --check
 
+  race:
+    name: Race detector
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain the Dockerfile builds with (golang:1.27.2-alpine).
+          go-version: "1.27.2"
+          cache: false
+      - name: Unit tests under the race detector
+        # -short, and the race build itself, draw a tenth of the property
+        # tests' random cases (internal/policy, internal/mutator); the Go job
+        # runs them all. About 3 minutes on 4 cores.
+        run: go test -race -short -count=1 ./...
+
   image:
     name: Image (amd64 and arm64)
     runs-on: ubuntu-24.04
