@@ -25,11 +25,29 @@ platforms, providers, kinds and other drills are 0.9.2's.
 fsyncing `result.json`, encodes small JSON messages without a 32 KiB buffer,
 adds the cause to two log lines and logs a persisting refusal of the mutation
 owner once per 10 minutes, and fixes a race in the rtnetlink watcher's
-cancellation. Run so far: `gofmt -l`, `go vet ./...`, staticcheck v0.8.2,
+cancellation. Run for rc.1: `gofmt -l`, `go vet ./...`, staticcheck v0.8.2,
 `go test ./...`, the panel's script tests and `tools/check-doc-links.sh` on
 the release branch with Go 1.27.0, where Docker wasn't available to run the
-namespace drills; CI runs them. The candidates' live runs follow. Not run at
-0.9.3: `PRIVATE_STATE_DIR` with `state/applier` on a tmpfs, on any host.
+namespace drills; CI runs them.
+
+rc.2 adds the rest of a review of 0.9.2: NordVPN's server list read one
+server at a time and gluetun's file building only the selected provider, a
+backoff for failed catalog refreshes, the routing counters in `result.json`,
+more causes and less repetition in both logs, the worker's log on a bounded
+queue, Switchyard's cached catalog, gzipped static files and paused polling,
+and the race detector in CI. Run for rc.2: `gofmt -l`, `go vet ./...` with
+and without `-tags drill`, `go test ./...`, `go test -race -short ./...`,
+the panel's script tests and `tools/check-doc-links.sh` with Go 1.27.0,
+and the new catalog readers' fuzz tests against the full parser. The
+namespace drills did not run there (its kernel has no IPv6 and no
+WireGuard); CI runs them. The memory figures in the [changelog](../CHANGELOG.md#093--unreleased)
+come from Go benchmarks on a synthetic NordVPN list and gluetun's
+`servers.json` at v3.41.3, not from a running exit.
+
+The candidates' live runs follow. Not run at 0.9.3: `PRIVATE_STATE_DIR`
+with `state/applier` on a tmpfs, on any host; an exit's memory measured
+again; Switchyard's gzipped and cached static files and its paused polling
+in a real browser or behind a reverse proxy.
 
 ## 0.9.2
 

@@ -6,10 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## 0.9.3 — unreleased
 
-**Experimental.** Less disk and memory churn on a running exit, a new setting
-that lets `state/applier` live in memory, example status records, and
-clearer log lines. The release candidate's live acceptance follows
-([testing](docs/testing.md#093)).
+**Experimental.** Less disk and memory churn on a running exit, smaller
+server catalogs in memory, a new setting that lets `state/applier` live in
+memory, example status records, routing counters in the status record, and
+log lines that say what happened and why. The release candidate's live
+acceptance follows ([testing](docs/testing.md#093)).
 
 **New**:
 - **`PRIVATE_STATE_DIR`.** A new optional exit setting. It moves the files
@@ -24,6 +25,17 @@ clearer log lines. The release candidate's live acceptance follows
   and a native sidecar (PIA with a forwarded port). A test generates them
   from the applier and checks that the verdict judges each one connected
   ([the status record](docs/architecture.md#example-records)).
+- **Routing counters.** `result.json` has a new member, `routing_activity`:
+  the repair passes that changed the kernel (and when the last one ran), the
+  kernel notifications and how many asked for a repair, the notifications
+  lost to receive-buffer overruns, and the periodic passes, since the worker
+  started. `molebridge status` prints them as a `routing activity:` line.
+  The verdict ignores members it doesn't know, so older panels read the
+  record as before ([the status record](docs/architecture.md#the-status-record)).
+- **A switch shows in the exit's log.** One line for each change of the
+  attempt's state: `applier: switch to "<server>" admitted (...); applying`,
+  then `applier: "<server>" is verified`, or that it waits, was rejected or
+  failed, with the reason. Passes that change nothing log nothing.
 
 **Changes**:
 - **No fsync for `result.json`.** The status record is rewritten every 2 seconds
@@ -45,17 +57,80 @@ clearer log lines. The release candidate's live acceptance follows
   login or a token. A deletion the mutation owner refuses (`kept IPv4 rule
   98: ...`) is logged once and then at most every 10 minutes while it
   recurs; it was logged on every pass.
+- **Smaller server catalogs in memory.** The NordVPN server list is read one
+  server at a time and joined to its group, service, location and technology
+  tables after the document ends, in whatever order the document has them:
+  a 7.6 MiB list with 6,500 servers peaked at 11.5 MiB of heap in a
+  benchmark, against 54 MiB. gluetun's `servers.json` is checked in full but
+  builds only the selected provider's block (a Mullvad exit: 16.4 MiB
+  allocated, against 42.9). The checks are unchanged: bounded size, strict
+  UTF-8, duplicate keys refused, the same errors in the same order, and fuzz
+  tests hold the new readers to the old ones. A download that announces its
+  length is read into one buffer, and the exit returns the memory to the
+  system after every catalog parse, not only after a download. Live memory
+  has not been measured again ([roadmap](ROADMAP.md)).
+- **A failing catalog refresh backs off, and is logged.** It was retried every
+  60 seconds forever, downloading the whole list each time. Now the retries
+  come after 1 minute, then 2, 4 and so on up to an hour, and never later
+  than the moment the catalog turns 24 hours old; with no catalog that young
+  (none yet, or a stale one) the wait stops at 5 minutes. The log has one
+  line per new cause, `applier: relay catalogue refresh failed: <reason>`,
+  and `applier: relay catalogue refreshed again` on recovery. gluetun's
+  file check stays every minute
+  ([troubleshooting](docs/troubleshooting.md#switching)).
+- **More causes in the exit's log.**
+  - PIA's retried steps (the tunnel repair, the ingress guard, removing a
+    forwarded port's rules) log their first failure and each new cause,
+    repeat it every 10 minutes while it lasts, and log the recovery. They
+    were silent.
+  - A failed Gatus push names its cause, such as `the Gatus server answered
+    HTTP 401`; a redirect now counts as a failed push. An `http://`
+    `GATUS_URL` to a host that isn't loopback gets one warning at start,
+    because the token would cross the network unencrypted.
+  - `netlink events were lost; running a full pass` is logged at most once a
+    minute, with a count of the losses since the last line.
+  - The worker writes its log through the same bounded, non-blocking queue
+    as the supervisor, so a log driver that stops reading can't stall a
+    supervised loop until the lease lapses. When the queue is full lines are
+    dropped and counted (`log: <n> lines were dropped while the log sink was
+    slow`).
+- **Switchyard does less work per page.** The page and `/api/latency` use the
+  catalog the panel already holds, read again only when `relays.json`
+  changes; a switch still reads the file fresh. With a 6,500-server
+  NordVPN catalog a page took 58 ms and 44 MB in a benchmark, against
+  145 ms and 76.5 MB. Static files are served gzipped when the browser
+  accepts it, with ETags, and as immutable under their content hash. Pages
+  and API answers are never compressed, which keeps the CSRF token out of
+  reach of compression attacks. The page stops polling while it is hidden.
+- **Switchyard's log.** Every line starts with a UTC timestamp, and access
+  lines end with the status code (`2026-01-02T15:04:05Z GET /api/status
+  200`); the format was Apache-style in local time. `GET /healthz` is no
+  longer logged. The wrong-Host and cross-site POST lines appear at most once
+  a minute with a count. A request file the panel can't write is logged
+  (`switch failed: cannot write the request file: <reason>`), and an
+  unreachable OIDC issuer's line names one of a fixed set of causes, such as
+  a DNS failure or an untrusted certificate. Anything that parses the
+  panel's log needs updating.
 
 **Fixes**:
 - The rtnetlink watcher could miss closing its socket when its context was
   cancelled between two receives. The exit closes the subscription itself, so
   nothing leaked in production; a test flaked on it.
+- The heartbeat and guard files were written through a fixed `.tmp` name,
+  which followed a symbolic link left at that name. Each write now uses a
+  temporary file of its own.
 
 **Internal**: `verdict.OrderRecord` (the member order the supervisor writes)
 moved from `internal/exit`. The README, ROADMAP and the architecture preamble
 describe 0.9 instead of 0.8.0 and 0.9.0, and the role lists name `port-sync`
 and `gluetun-preflight`. The release acceptance policy (version 5) drills a
-patch release as an upgrade from 0.9.2.
+patch release as an upgrade from 0.9.2. CI has a fifth job, the unit tests
+under the race detector with `-short`, which draws a tenth of the property
+tests' cases. Four tests that slept for a fixed time wait for a signal or a
+count instead. Eight unused functions are gone, `validate.Fresh` takes its
+arguments in `validate.Recent`'s order, `privfile` and `pystr.Repr` have
+tests, and the drill image's Go is pinned by digest and watched by
+Dependabot.
 
 ## 0.9.2 — 2026-10-17
 
