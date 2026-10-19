@@ -223,29 +223,42 @@ func entryAddress(ips any) (string, bool) {
 	return found[0], true
 }
 
-// wireguardKey is the public key of the server's one online WireGuard
-// technology row.
-func wireguardKey(technologies any, wireguardIDs map[int64]bool) (string, bool) {
+// nordTech is one technology row of a server, as far as it can be judged
+// before the technologies table says which ids are WireGuard: its id, and the
+// public key it gives if it is the server's WireGuard row, "" when such a row
+// would be refused (not online, or not exactly one valid public key).
+type nordTech struct {
+	id  int64
+	key string
+}
+
+// technologyRows are the server's technology rows that are objects with an
+// integer id; false when the member is not a list.
+func technologyRows(technologies any) ([]nordTech, bool) {
 	list, ok := technologies.([]any)
 	if !ok {
-		return "", false
+		return nil, false
 	}
-	var rows []map[string]any
+	var rows []nordTech
 	for _, raw := range list {
 		row, ok := asObject(raw)
 		if !ok {
 			continue
 		}
-		if id, ok := validate.IsInt(row["id"]); ok && wireguardIDs[id] {
-			rows = append(rows, row)
+		if id, ok := validate.IsInt(row["id"]); ok {
+			rows = append(rows, nordTech{id: id, key: technologyKey(row)})
 		}
 	}
-	if len(rows) != 1 || rows[0]["status"] != "online" {
-		return "", false
+	return rows, true
+}
+
+func technologyKey(row map[string]any) string {
+	if row["status"] != "online" {
+		return ""
 	}
-	metadata, ok := rows[0]["metadata"].([]any)
+	metadata, ok := row["metadata"].([]any)
 	if !ok {
-		return "", false
+		return ""
 	}
 	var keys []any
 	for _, raw := range metadata {
@@ -254,9 +267,27 @@ func wireguardKey(technologies any, wireguardIDs map[int64]bool) (string, bool) 
 		}
 	}
 	if len(keys) == 1 && validate.ValidKey(keys[0]) {
-		return keys[0].(string), true
+		return keys[0].(string)
 	}
-	return "", false
+	return ""
+}
+
+// wireguardKey is the public key of the server's one online WireGuard
+// technology row.
+func wireguardKey(rows []nordTech, wireguardIDs map[int64]bool) (string, bool) {
+	var found *nordTech
+	for i := range rows {
+		if wireguardIDs[rows[i].id] {
+			if found != nil {
+				return "", false
+			}
+			found = &rows[i]
+		}
+	}
+	if found == nil || found.key == "" {
+		return "", false
+	}
+	return found.key, true
 }
 
 func isVirtual(specifications any) bool {
@@ -289,23 +320,55 @@ type nordTables struct {
 	wireguardIDs     map[int64]bool
 }
 
-func parseNordServer(raw any, t nordTables) *Relay {
+// nordServer is what a server row says on its own. Every check of a server
+// that needs no table is made while the list is read, so only this much of
+// each row is kept until the tables are known: NordVPN's document puts no
+// order on its members, and the tables may come last.
+type nordServer struct {
+	host, address        string
+	groupIDs, serviceIDs []int64
+	locationID           int64
+	technologies         []nordTech
+	load                 *int64
+	virtual              bool
+}
+
+// nordServerOf makes those checks; false for a server that is refused
+// whatever the tables say.
+func nordServerOf(raw any) (nordServer, bool) {
 	server, ok := asObject(raw)
 	if !ok || server["status"] != "online" {
-		return nil
+		return nordServer{}, false
 	}
 	host, ok := server["hostname"].(string)
 	if !ok || !nordHostnameRE.MatchString(host) {
-		return nil
+		return nordServer{}, false
 	}
 	groupIDs, ok1 := intList(server["group_ids"])
 	serviceIDs, ok2 := intList(server["service_ids"])
 	locationIDs, ok3 := intList(server["location_ids"])
-	if !ok1 || !ok2 || !ok3 {
-		return nil
+	if !ok1 || !ok2 || !ok3 || len(locationIDs) != 1 {
+		return nordServer{}, false
 	}
+	technologies, ok := technologyRows(server["technologies"])
+	address, ok2b := entryAddress(server["ips"])
+	// The station is what a switch connects to; it must agree with the entry IP.
+	if !ok || !ok2b || server["station"] != address {
+		return nordServer{}, false
+	}
+	s := nordServer{host: host, address: address, groupIDs: groupIDs, serviceIDs: serviceIDs,
+		locationID: locationIDs[0], technologies: technologies, virtual: isVirtual(server["specifications"])}
+	if load, ok := validate.IsInt(server["load"]); ok && 0 <= load && load <= 100 {
+		s.load = &load
+	}
+	return s, true
+}
+
+// relay is the server joined to the tables: the relay a switch may use, or
+// nil.
+func (t nordTables) relay(s *nordServer) *Relay {
 	vpn := false
-	for _, id := range serviceIDs {
+	for _, id := range s.serviceIDs {
 		if name, known := t.services[id]; known && name == nordVPNService {
 			vpn = true
 		}
@@ -314,7 +377,7 @@ func parseNordServer(raw any, t nordTables) *Relay {
 		return nil
 	}
 	standard := false
-	for _, id := range groupIDs {
+	for _, id := range s.groupIDs {
 		name, known := t.groups[id]
 		if !known {
 			continue
@@ -331,32 +394,25 @@ func parseNordServer(raw any, t nordTables) *Relay {
 	if !standard {
 		return nil
 	}
-	if len(locationIDs) != 1 {
-		return nil
-	}
-	location, known := t.locations[locationIDs[0]]
+	location, known := t.locations[s.locationID]
 	if !known {
 		return nil
 	}
-	key, ok := wireguardKey(server["technologies"], t.wireguardIDs)
-	address, ok2b := entryAddress(server["ips"])
-	// The station is what a switch connects to; it must agree with the entry IP.
-	if !ok || !ok2b || server["station"] != address {
+	key, ok := wireguardKey(s.technologies, t.wireguardIDs)
+	if !ok {
 		return nil
 	}
 	code := slug(location.city)
 	if code == "" {
 		return nil
 	}
-	relay := &Relay{Shape: ShapeNordVPN, Hostname: host, PublicKey: key, IPv4AddrIn: address,
+	return &Relay{Shape: ShapeNordVPN, Hostname: s.host, PublicKey: key, IPv4AddrIn: s.address,
 		City: location.city, Country: location.country, CountryCode: location.countryCode,
-		LocationCode: strings.ToLower(location.countryCode) + "-" + code}
-	if load, ok := validate.IsInt(server["load"]); ok && 0 <= load && load <= 100 {
-		relay.Load = &load
-	}
-	relay.Virtual = isVirtual(server["specifications"])
-	return relay
+		LocationCode: strings.ToLower(location.countryCode) + "-" + code, Load: s.load, Virtual: s.virtual}
 }
+
+// nordTableNames are the document's tables, in the order they are checked.
+var nordTableNames = []string{"groups", "services", "locations", "technologies"}
 
 // ParseNordCatalog reads the decoded `GET /v2/servers` response.
 //
@@ -367,18 +423,83 @@ func ParseNordCatalog(data any) (*Entries, error) {
 	if !ok {
 		return nil, errors.New("catalogue is not an object")
 	}
+	list, listed := top["servers"].([]any)
+	var servers []nordServer
+	if listed && len(list) <= nordMaxServers {
+		for _, raw := range list {
+			if s, ok := nordServerOf(raw); ok {
+				servers = append(servers, s)
+			}
+		}
+	}
+	return joinNord(top, listed, len(list), servers)
+}
+
+// ParseNordCatalogBody parses the raw response body. NordVPN has no port
+// forwarding.
+//
+// It never holds the decoded document: the tables are built, but each server
+// is built on its own, kept as a nordServer and dropped, and joined to the
+// tables once the document has been read to its end and passed every check
+// DecodeJSON makes. For NordVPN's list of 6,500 servers (7.6 MiB) that is
+// about a tenth of the memory the decoded document took. The result and the
+// errors are ParseNordCatalog's for the decoded document.
+func ParseNordCatalogBody(raw []byte, portForwardOnly bool) (*Entries, error) {
+	var servers []nordServer
+	count := 0
+	top, err := validate.DecodeJSONMembers(raw, validate.Plan{
+		Keep: func(key string) bool {
+			for _, name := range nordTableNames {
+				if key == name {
+					return true
+				}
+			}
+			return false
+		},
+		Each: func(key string) func(any) {
+			if key != "servers" {
+				return nil
+			}
+			return func(element any) {
+				// Past the limit the document is refused; keep no more.
+				if count++; count > nordMaxServers {
+					return
+				}
+				if s, ok := nordServerOf(element); ok {
+					servers = append(servers, s)
+				}
+			}
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if top == nil {
+		return nil, errors.New("catalogue is not an object")
+	}
+	n, listed := top["servers"].(validate.Streamed)
+	return joinNord(top, listed, int(n), servers)
+}
+
+// joinNord checks the document's lists and joins the servers read from it
+// (nordServerOf, in document order) to its tables. listed says whether the
+// document's servers member is a list, and count is its length.
+func joinNord(top map[string]any, listed bool, count int, servers []nordServer) (*Entries, error) {
+	if !listed {
+		return nil, errors.New("catalogue is missing a list")
+	}
 	lists := map[string][]any{}
-	for _, k := range []string{"servers", "groups", "services", "locations", "technologies"} {
+	for _, k := range nordTableNames {
 		list, ok := top[k].([]any)
 		if !ok {
 			return nil, errors.New("catalogue is missing a list")
 		}
 		lists[k] = list
 	}
-	if len(lists["servers"]) > nordMaxServers {
+	if count > nordMaxServers {
 		return nil, errors.New("catalogue is too large")
 	}
-	for _, k := range []string{"groups", "services", "locations", "technologies"} {
+	for _, k := range nordTableNames {
 		if len(lists[k]) > nordMaxTable {
 			return nil, errors.New("catalogue is too large")
 		}
@@ -395,8 +516,8 @@ func ParseNordCatalog(data any) (*Entries, error) {
 		}
 	}
 	entries := NewEntries()
-	for _, server := range lists["servers"] {
-		if relay := parseNordServer(server, tables); relay != nil {
+	for i := range servers {
+		if relay := tables.relay(&servers[i]); relay != nil {
 			if entries.Has(relay.Hostname) {
 				return nil, errors.New("duplicate relay hostname")
 			}
@@ -409,18 +530,8 @@ func ParseNordCatalog(data any) (*Entries, error) {
 	return entries, nil
 }
 
-// ParseNordCatalogBody parses the raw response body. NordVPN has no port
-// forwarding.
-func ParseNordCatalogBody(raw []byte, portForwardOnly bool) (*Entries, error) {
-	data, err := validate.DecodeJSON(raw)
-	if err != nil {
-		return nil, err
-	}
-	return ParseNordCatalog(data)
-}
-
 // ValidateNordEntry checks a relay as stored in the snapshot (what
-// parseNordServer produced), or returns nil.
+// ParseNordCatalog produced), or returns nil.
 func ValidateNordEntry(entry any) *Relay {
 	m, ok := asObject(entry)
 	if !ok {

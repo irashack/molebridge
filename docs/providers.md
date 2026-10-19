@@ -160,8 +160,14 @@ only the peer. The exit holds no NordVPN credential. What differs:
   handshake is a fresh one.
 - **Server list.** NordVPN's `api.nordvpn.com/v2/servers`, filtered to
   WireGuard servers, is about 8 MB. The exit allows it up to 32 MiB and 60
-  seconds, and needs more memory to parse it: the Compose files give the exit
-  container 512 MiB, which is sized for it. The validated `relays.json` it keeps
+  seconds. It never decodes the whole list at once: it checks the whole
+  document as strictly as any other, keeps a few fields of each server as it
+  reads it, and joins them to the list's tables of groups, services, locations
+  and technologies after the end, wherever in the document those come. On a
+  synthetic list of 6,500 servers (7.6 MiB) the heap peaked about 12 MiB above
+  the downloaded bytes, against 54 MiB when the list was decoded whole; that was
+  measured in a Go test, and a live exit's memory has not been measured
+  since. The Compose files give the exit container 512 MiB. The validated `relays.json` it keeps
   is much smaller, about 1.5 MB for some 5,300 servers, and may grow to
   16 MiB; a refresh that would exceed that keeps the last good catalog. Only online standard servers with the
   VPN service, a WireGuard key and one location are listed; dedicated-IP,
