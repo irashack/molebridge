@@ -71,56 +71,104 @@ func anyStrings(list []string) []any {
 	return out
 }
 
+// memberWriter receives an entry's members in order (Relay.members): the
+// object JSONObject builds, or the bound SnapshotTooLarge counts without
+// building it.
+type memberWriter interface {
+	text(key, value string)
+	flag(key string, value bool)
+	number(key string, value int64)
+	texts(key string, values []string)
+	servers(key string, values []Server)
+}
+
+// objectWriter builds the object.
+type objectWriter struct{ o validate.Obj }
+
+func (w *objectWriter) add(key string, value any) {
+	w.o = append(w.o, validate.Pair{Key: key, Value: value})
+}
+func (w *objectWriter) text(key, value string)            { w.add(key, value) }
+func (w *objectWriter) flag(key string, value bool)       { w.add(key, value) }
+func (w *objectWriter) number(key string, value int64)    { w.add(key, value) }
+func (w *objectWriter) texts(key string, values []string) { w.add(key, anyStrings(values)) }
+func (w *objectWriter) servers(key string, values []Server) {
+	list := make([]any, len(values))
+	for i, s := range values {
+		list[i] = s
+	}
+	w.add(key, list)
+}
+
 // JSONObject implements validate.ObjectMarshaler: the entry as it is stored in
 // relays.json, members in the order Python wrote them.
 func (r *Relay) JSONObject() validate.Obj {
+	w := &objectWriter{o: make(validate.Obj, 0, 12)}
+	r.members(w)
+	return w.o
+}
+
+// members writes the entry's members, in the order JSONObject has them.
+func (r *Relay) members(w memberWriter) {
 	switch r.Shape {
 	case ShapePIA:
-		servers := make([]any, len(r.Servers))
-		for i, s := range r.Servers {
-			servers[i] = s
-		}
-		return validate.Members("hostname", r.Hostname, "city", r.City, "country", r.Country,
-			"location_code", r.LocationCode, "ipv4_addr_in", r.IPv4AddrIn,
-			"port_forward", r.PortForward, "geo", r.Geo, "servers", servers)
+		w.text("hostname", r.Hostname)
+		w.text("city", r.City)
+		w.text("country", r.Country)
+		w.text("location_code", r.LocationCode)
+		w.text("ipv4_addr_in", r.IPv4AddrIn)
+		w.flag("port_forward", r.PortForward)
+		w.flag("geo", r.Geo)
+		w.servers("servers", r.Servers)
+		return
 	case ShapeNordVPN:
-		o := validate.Members("hostname", r.Hostname, "public_key", r.PublicKey, "ipv4_addr_in", r.IPv4AddrIn,
-			"city", r.City, "country", r.Country, "country_code", r.CountryCode, "location_code", r.LocationCode)
+		w.text("hostname", r.Hostname)
+		w.text("public_key", r.PublicKey)
+		w.text("ipv4_addr_in", r.IPv4AddrIn)
+		w.text("city", r.City)
+		w.text("country", r.Country)
+		w.text("country_code", r.CountryCode)
+		w.text("location_code", r.LocationCode)
 		if r.Load != nil {
-			o = append(o, validate.Pair{Key: "load", Value: *r.Load})
+			w.number("load", *r.Load)
 		}
-		return append(o, validate.Pair{Key: "virtual", Value: r.Virtual})
+		w.flag("virtual", r.Virtual)
+		return
 	case ShapeGluetun:
-		o := validate.Members("hostname", r.Hostname, "public_key", r.PublicKey, "ipv4_addr_in", r.IPv4AddrIn)
+		w.text("hostname", r.Hostname)
+		w.text("public_key", r.PublicKey)
+		w.text("ipv4_addr_in", r.IPv4AddrIn)
 		if r.IPv4Addrs != nil {
-			o = append(o, validate.Pair{Key: "ipv4_addrs", Value: anyStrings(r.IPv4Addrs)})
+			w.texts("ipv4_addrs", r.IPv4Addrs)
 		}
-		v6 := r.IPv6Addrs
-		if v6 == nil {
-			v6 = []string{}
-		}
-		o = append(o, validate.Pair{Key: "ipv6_addrs", Value: anyStrings(v6)},
-			validate.Pair{Key: "city", Value: r.City}, validate.Pair{Key: "country", Value: r.Country})
+		w.texts("ipv6_addrs", r.IPv6Addrs) // nil is []
+		w.text("city", r.City)
+		w.text("country", r.Country)
 		if r.Region != nil {
-			o = append(o, validate.Pair{Key: "region", Value: *r.Region})
+			w.text("region", *r.Region)
 		}
 		if r.Categories != nil {
-			o = append(o, validate.Pair{Key: "categories", Value: anyStrings(r.Categories)})
+			w.texts("categories", r.Categories)
 		}
-		return append(o, validate.Pair{Key: "id", Value: r.ID}, validate.Pair{Key: "selection_filter", Value: r.SelectionFilter})
+		w.text("id", r.ID)
+		w.text("selection_filter", r.SelectionFilter)
+		return
 	}
-	o := validate.Members("hostname", r.Hostname, "public_key", r.PublicKey, "ipv4_addr_in", r.IPv4AddrIn,
-		"city", r.City, "country", r.Country, "location_code", r.LocationCode)
+	w.text("hostname", r.Hostname)
+	w.text("public_key", r.PublicKey)
+	w.text("ipv4_addr_in", r.IPv4AddrIn)
+	w.text("city", r.City)
+	w.text("country", r.Country)
+	w.text("location_code", r.LocationCode)
 	if r.Owned != nil {
-		o = append(o, validate.Pair{Key: "owned", Value: *r.Owned})
+		w.flag("owned", *r.Owned)
 	}
 	if r.Stboot != nil {
-		o = append(o, validate.Pair{Key: "stboot", Value: *r.Stboot})
+		w.flag("stboot", *r.Stboot)
 	}
 	if r.HostingProvider != "" {
-		o = append(o, validate.Pair{Key: "provider", Value: r.HostingProvider})
+		w.text("provider", r.HostingProvider)
 	}
-	return o
 }
 
 // Flag reads one of the boolean attributes the panel filters and badges on

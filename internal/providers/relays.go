@@ -58,26 +58,42 @@ func ReadSnapshot(path, provider string) map[string]any {
 // SnapshotTooLarge reports whether the entries alone provably serialise past
 // limit: every key and text value costs at least its length plus quotes and
 // punctuation. It stops counting as soon as the bound passes the limit.
+//
+// It walks each entry's members (Relay.members) without building them, so
+// Publish builds each entry's object once, while encoding it.
 func SnapshotTooLarge(entries *Entries, limit int64) bool {
-	var total int64
+	var bound boundWriter
 	big := false
 	entries.Each(func(name string, entry *Relay) bool {
-		total += int64(validate.RuneCount(name)) + 4
-		for _, pair := range entry.JSONObject() {
-			total += int64(validate.RuneCount(pair.Key)) + 4
-			if s, ok := pair.Value.(string); ok {
-				total += int64(validate.RuneCount(s))
-			} else {
-				total++
-			}
-		}
-		if total > limit {
+		bound.total += int64(validate.RuneCount(name)) + 4
+		entry.members(&bound)
+		if bound.total > limit {
 			big = true
 			return false
 		}
 		return true
 	})
 	return big
+}
+
+// boundWriter counts SnapshotTooLarge's bound: a member's key and its
+// punctuation, plus a text value's characters or one for any other value.
+type boundWriter struct{ total int64 }
+
+func (b *boundWriter) key(key string) { b.total += int64(validate.RuneCount(key)) + 4 }
+func (b *boundWriter) text(key, value string) {
+	b.key(key)
+	b.total += int64(validate.RuneCount(value))
+}
+func (b *boundWriter) flag(key string, _ bool) { b.key(key); b.total++ }
+func (b *boundWriter) number(key string, _ int64) {
+	b.key(key)
+	b.total++
+}
+func (b *boundWriter) texts(key string, _ []string) { b.key(key); b.total++ }
+func (b *boundWriter) servers(key string, _ []Server) {
+	b.key(key)
+	b.total++
 }
 
 // ValidateEntry is the provider's snapshot-entry validation. An unknown
