@@ -10,13 +10,19 @@
 # .github/workflows/dependabot-notices.yml regenerates it on the branch.
 version: 2
 updates:
-  # The single image (golang and alpine digests).
+  # The image (golang and alpine digests) and the namespace drills' image
+  # (the same golang digest), in one pull request so the two stay in step.
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /
+      - /internal/nstest
     schedule:
       interval: weekly
     commit-message:
       prefix: "build(image)"
+    groups:
+      images:
+        patterns: ["*"]
   # One pull request a week for every module bump, so the notices are
   # regenerated and the drills run once.
   - package-ecosystem: gomod
