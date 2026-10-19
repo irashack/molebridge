@@ -62,7 +62,7 @@ func TestTimestampNonStrings(t *testing.T) {
 		if _, ok := ParseTime(v); ok {
 			t.Errorf("ParseTime(%#v)", v)
 		}
-		if Recent(v, 150, now) || Fresh(v, now, 150) {
+		if Recent(v, 150, now) || Fresh(v, 150, now) {
 			t.Errorf("Recent/Fresh(%#v)", v)
 		}
 	}
@@ -82,7 +82,7 @@ func TestFormatTimeAndRecent(t *testing.T) {
 		if got := Recent(tc.value, 150, now); got != tc.recent {
 			t.Errorf("Recent(%q) = %v", tc.value, got)
 		}
-		if got := Fresh(tc.value, now, 150); got != tc.recent {
+		if got := Fresh(tc.value, 150, now); got != tc.recent {
 			t.Errorf("Fresh(%q) = %v", tc.value, got)
 		}
 	}

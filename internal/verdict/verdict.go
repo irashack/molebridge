@@ -274,7 +274,7 @@ func (v Verdict) JSONObject() validate.Obj { return v.AsJSON() }
 
 // -- the verdict --------------------------------------------------------------
 
-func fresh(value any, now time.Time) bool { return validate.Fresh(value, now, EvidenceMaxAge) }
+func fresh(value any, now time.Time) bool { return validate.Fresh(value, EvidenceMaxAge, now) }
 
 func object(v any) (map[string]any, bool) {
 	m, ok := v.(map[string]any)

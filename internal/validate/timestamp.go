@@ -110,15 +110,19 @@ func AgeSeconds(value any, now time.Time) (float64, bool) {
 }
 
 // Recent reports whether value is a timestamp no newer than now and at most
-// maxAge seconds old.
+// maxAge seconds old. It reads value leniently, as AgeSeconds does (one-digit
+// fields, any case), and a zero now means time.Now(). Fresh takes the same
+// arguments in the same order and is the strict reading.
 func Recent(value any, maxAge float64, now time.Time) bool {
 	age, ok := AgeSeconds(value, now)
 	return ok && 0 <= age && age <= maxAge
 }
 
-// Fresh is the verdict's reading: a strictly formed timestamp, not in the
-// future, at most maxAge seconds old.
-func Fresh(value any, now time.Time, maxAge float64) bool {
+// Fresh is the verdict's reading: a strictly formed timestamp (ParseTime),
+// not in the future, at most maxAge seconds old. Unlike Recent it refuses any
+// other spelling of the time, and now is used as given: a zero now is the
+// year 1, not time.Now().
+func Fresh(value any, maxAge float64, now time.Time) bool {
 	when, ok := ParseTime(value)
 	if !ok {
 		return false
