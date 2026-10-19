@@ -52,63 +52,66 @@ open through the exit drop when it switches.
   <img src="docs/assets/switchyard.png" alt="Switchyard with four exits as tabs: Mullvad, PIA, NordVPN, and Surfshark through gluetun; the Mullvad exit is selected" width="900">
 </p>
 
-## What 0.8.0 is
+## What Molebridge is
 
-0.8.0 is a rewrite of 0.7 for adoption: you pull one signed image and run it.
+Since 0.8.0 you pull one signed image and run it.
 
 - **One image, one binary.** `ghcr.io/irashack/molebridge` (amd64 and arm64)
   holds one Go binary, `molebridge`, and the pinned NetBird client. The first
   argument picks the role: `exit`, `panel`, `health`, `status`,
   `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
-  `gluetun-post-rules` and `fix-blacklist`. GitHub Actions builds and signs
+  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist` and `port-sync`.
+  GitHub Actions builds and signs
   the image with cosign, with build provenance and SBOMs, and promotes a
   release only after a maintainer's live-acceptance run attested that the
   exact image passed ([verification of a release](docs/setup.md#1-download-and-verify)).
 - **NetBird runs inside the exit container.** A native exit is two containers
   (`exit` and `switchyard`) where 0.7 had four. `molebridge exit` is PID 1 and
   supervises the worker and NetBird ([how it works](#how-it-works)).
-- **Nothing to build, no Python on the host.** The Python applier and panel and
-  the routing shell scripts are gone. The setup tools run from the same image
-  as throwaway containers. Only `routing/gluetun-preflight` remains, a shell
-  wrapper that runs inside gluetun's container.
+- **Nothing to build, no Python on the host.** The setup tools run from the
+  same image as throwaway containers. Only `routing/gluetun-preflight`
+  remains a shell script, and it runs inside gluetun's container (the image
+  carries it as the `gluetun-preflight` role).
 - **Repair follows the kernel.** The exit repairs a changed routing rule,
   route, link or address when the kernel reports it, and runs a full pass
-  every 30 seconds as the fallback. 0.7 compared everything every 2 seconds.
-  On the one host tested, an idle exit used 0.15 to 0.5 % of one core where
-  0.7.0 used about 7.9 %, and a deleted rule was back in 8 to 23 ms
-  ([resources and drills](docs/testing.md#080)).
+  every 30 seconds as the fallback. Live, a deleted rule was back within 0 to
+  20 ms ([testing](docs/testing.md#092)).
+- **A native sidecar** (0.9.0): Molebridge's own tunnel for containers that
+  share the exit's namespace, for providers gluetun can't drive over
+  WireGuard with Molebridge, PIA first, with `port-sync` to hand PIA's
+  forwarded port to qBittorrent ([native sidecar](docs/native-sidecar.md)).
 
-The routing contract, the status record, the state files and the panel's
-wording are unchanged, so a 0.7.0 panel reads a 0.8.0 exit. Removed: `doctor`
-and `recover`, `compose.pia.yaml` and `compose.nordvpn.yaml` (one
-`compose.yaml` now takes `PROVIDER`), and 0.7's standalone gluetun form. The
-state files and the NetBird identity carry over from 0.7, the Compose files
-don't: follow [the upgrade steps](docs/operations.md#upgrading-from-07x). The
-full list is in the [changelog](CHANGELOG.md#080--2026-10-13).
+The routing contract, the status record (schema 2) and the state files keep
+the names and fields they had in 0.7.0 ([state files](docs/configuration.md#state-files)).
+Upgrading from 0.7 needs new
+Compose files: follow [the upgrade steps](docs/operations.md#upgrading-from-07x).
+What changed in each release is in the [changelog](CHANGELOG.md).
 
 ## Status: experimental
 
-**Molebridge 0.8.0 is experimental software with one maintainer, not a 1.0.**
-[Testing](docs/testing.md#080) is the record, and the only place the results
-are written out in full; in short:
+**Molebridge is experimental software with one maintainer, not a 1.0.**
+[Testing](docs/testing.md) is the record, and the only place the results are
+written out in full; in short:
 
-- **Tested live at 0.8.0:** one Debian host (amd64) running rootless Podman
-  5.8 with Quadlet units, against a self-hosted NetBird server. Native
-  Mullvad, PIA and NordVPN exits, a gluetun exit and a gluetun sidecar (both
-  with NordVPN) were upgraded from 0.7.0 and came up with their peers and
-  selections. The released image passed rule-drift and tunnel-loss drills on
-  the native exits, run from inside the exit's namespace with no client device
-  held on it.
+- **Tested live at 0.9.2** ([record](docs/testing.md#092)): one Debian host
+  (amd64) against a self-hosted NetBird server. On Kubernetes (k0s with
+  Cilium): native Mullvad, PIA and NordVPN overlay exits, a gluetun overlay
+  exit, a PIA native sidecar beside qBittorrent with a forwarded port, and a
+  gluetun sidecar with NordVPN, which then moved to rootless Podman 5.8 with
+  Quadlet units. Each was upgraded from 0.9.1 and came back `ok`, and the native overlay exits
+  passed the rule-drift, tunnel-loss and lease-lapse drills, run from inside
+  the exit's namespace with no client device held on it.
 - **Run in CI:** unit, fuzz and namespace-drill suites and the release checks
-  on amd64; the image checks on amd64 and arm64. The namespace drills also
-  passed once on an arm64 Linux VM.
-- **Not tested at 0.8.0:** Docker Engine and NetBird Cloud; running the
-  shipped Compose files on any engine (CI only validates them with
-  `docker compose config`; the live exits ran from Quadlet units this
-  repository doesn't ship); installing from the signed bundle on a clean host;
-  phones; a reboot; the panel's sign-in against a real identity provider; PIA
-  port forwarding; gluetun with providers other than NordVPN. The full list is
-  [in testing](docs/testing.md#not-tested-at-080).
+  on amd64; the image checks on amd64 and arm64.
+- **Not tested:** Docker Engine, podman-compose and NetBird Cloud; running the
+  shipped Compose files on any engine (CI validates them with
+  `docker compose config`; the live exits ran from Quadlet units and
+  Kubernetes manifests this repository doesn't ship); installing from the
+  signed bundle on a clean host; phones; a reboot; the panel's sign-in against
+  a real identity provider; PIA port forwarding on an overlay exit; Mullvad
+  and NordVPN as native sidecars; gluetun with providers other than NordVPN.
+  The lists are in testing, [at 0.9.0](docs/testing.md#not-tested-at-090) and
+  [at 0.8.0](docs/testing.md#not-tested-at-080).
 
 Verify the release on your own host with the [checks](docs/verification.md)
 before you rely on it, and keep a way into the host that doesn't depend on the

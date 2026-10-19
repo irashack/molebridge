@@ -23,7 +23,8 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 
 - `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
   `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
-  `gluetun-auth`, `gluetun-post-rules`, `fix-blacklist`); each has a `role_*.go` file.
+  `gluetun-auth`, `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`,
+  `port-sync`); each has a `role_*.go` file.
 - `internal/exit/`: the exit container's process: the supervisor, the worker, the
   lease, the NetBird child, status publication and the stop sequence.
 - `internal/contract/`: the routing contract: expected rules and routes, the diff and

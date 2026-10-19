@@ -11,15 +11,16 @@ says what it would take as far as we know today.
   on a backoff ([the admission pipeline](docs/architecture.md#the-admission-pipeline)).
 - **A sidecar mode** (0.7.0, experimental): Switchyard for an ordinary
   gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
-  had live passes with NordVPN on rootless Podman only, the latest an upgrade
-  to 0.8.0; [testing](docs/testing.md) records the gaps that keep it
-  experimental.
+  had live passes with NordVPN only, on rootless Podman and on Kubernetes, the
+  latest the upgrade to 0.9.2 ([testing](docs/testing.md#092));
+  [testing](docs/testing.md) records the gaps that keep it experimental.
 - **A native sidecar** (0.9.0, experimental, run live with PIA on Kubernetes): Molebridge's own
   tunnel for containers that share the exit's namespace, with a routing contract
   and an nftables firewall that keep their traffic in it, so an application can use
   PIA over WireGuard, plus `molebridge port-sync` for qBittorrent
   ([the native sidecar](docs/native-sidecar.md)). Its live acceptance on
-  Kubernetes is still to be recorded ([testing](docs/testing.md#090)).
+  Kubernetes is recorded from 0.9.0 on ([testing](docs/testing.md#090)); it
+  hasn't run under Docker or Podman Compose.
 - **The gluetun forms on Kubernetes** (0.9.1, documented, not packaged): the
   preflight from the image, and what a pod needs
   ([the gluetun exit](docs/gluetun-netbird-exit.md#kubernetes)); the server-list
