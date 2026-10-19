@@ -285,6 +285,38 @@ func TestRequestLogLine(t *testing.T) {
 	}
 }
 
+func TestRejectionLinesAreLoggedOnceAMinute(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	h.log.Reset()
+	const line = "rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback"
+	count := func() int { return strings.Count(h.log.String(), line) }
+	for i := 0; i < 5; i++ {
+		if a := h.get("/api/status", "", map[string]string{"Host": "scanner.example.test"}); a.Status != 421 {
+			t.Fatalf("status %d", a.Status)
+		}
+	}
+	if got := count(); got != 1 || strings.Count(h.log.String(), " 421\n") != 5 {
+		t.Fatalf("log = %q", h.log.String())
+	}
+	// The origin line has its own budget.
+	h.do("POST", "/select", nil, map[string]string{"Origin": "https://other.example.test", "Content-Length": "0"})
+	mustContain(t, h.log.String(), "rejected POST: origin is not a published panel host\n")
+	h.clock.Advance(59)
+	h.get("/api/status", "", map[string]string{"Host": "scanner.example.test"})
+	if count() != 1 {
+		t.Fatalf("logged again within the minute: %q", h.log.String())
+	}
+	h.clock.Advance(2)
+	h.get("/api/status", "", map[string]string{"Host": "scanner.example.test"})
+	mustContain(t, h.log.String(), line+" (5 more not logged since the last such line)\n")
+	h.clock.Advance(61)
+	h.get("/api/status", "", map[string]string{"Host": "scanner.example.test"})
+	lines := strings.Split(strings.TrimSpace(h.log.String()), "\n")
+	if last := lines[len(lines)-2]; !strings.HasSuffix(last, "Z "+line) {
+		t.Fatalf("after a quiet minute: %q", last)
+	}
+}
+
 func TestPostOversizedBodyIsRejected(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	_, nonce, token := h.indexTokens()

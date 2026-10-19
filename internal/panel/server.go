@@ -80,6 +80,9 @@ type Server struct {
 
 	relayMu    sync.Mutex
 	relayCache map[string]relayCacheEntry
+
+	limitMu sync.Mutex
+	limited map[string]*limitedLine
 }
 
 // relayCacheEntry is one exit's validated catalogue and the snapshot's other
@@ -109,6 +112,7 @@ func NewServer(cfg *Config, opt Options) *Server {
 		Settings: cfg.Settings, Exits: cfg.Exits, Single: cfg.Single,
 		Log: opt.Log, now: opt.Now, mono: opt.Mono, dial: opt.Dial, files: opt.Files,
 		latency: newLatencyState(), selectLocks: map[string]*sync.Mutex{}, relayCache: map[string]relayCacheEntry{},
+		limited: map[string]*limitedLine{},
 	}
 	if s.Log == nil {
 		s.Log = os.Stderr
@@ -581,6 +585,39 @@ func (s *Server) logRequest(r *http.Request, code int) {
 	s.logEvent(fmt.Sprintf("%s %s %d", method, route, code))
 }
 
+// rejectRelog is how often a rejection that anyone on the network can cause
+// (a scanner sending a wrong Host, a cross-site POST) is logged at most.
+const rejectRelog = time.Minute
+
+type limitedLine struct {
+	last       time.Time
+	suppressed int
+}
+
+// logLimited is logEvent for text at most once per rejectRelog. A line
+// that follows suppressed ones says how many.
+func (s *Server) logLimited(text string) {
+	now := s.now()
+	s.limitMu.Lock()
+	entry := s.limited[text]
+	if entry == nil {
+		entry = &limitedLine{}
+		s.limited[text] = entry
+	}
+	if !entry.last.IsZero() && now.Sub(entry.last) < rejectRelog && !now.Before(entry.last) {
+		entry.suppressed++
+		s.limitMu.Unlock()
+		return
+	}
+	suppressed := entry.suppressed
+	entry.last, entry.suppressed = now, 0
+	s.limitMu.Unlock()
+	if suppressed > 0 {
+		text = fmt.Sprintf("%s (%d more not logged since the last such line)", text, suppressed)
+	}
+	s.logEvent(text)
+}
+
 // logEvent writes one line, after a UTC timestamp to the second. Every line
 // the running panel writes comes through here.
 func (s *Server) logEvent(text string) {
@@ -641,7 +678,7 @@ func (s *Server) misdirected(w http.ResponseWriter, r *http.Request) bool {
 	if s.Settings.HostAllowed(r.Host) {
 		return false
 	}
-	s.logEvent("rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback")
+	s.logLimited("rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback")
 	s.send(w, r, plain(421, "unknown host; publish the panel under PANEL_PUBLIC_HOSTS"))
 	return true
 }
@@ -1058,7 +1095,7 @@ func (s *Server) readForm(w http.ResponseWriter, r *http.Request) (map[string]st
 		return nil, false
 	}
 	if !s.Settings.OriginAllowed(r.Header.Get("Origin")) {
-		s.logEvent("rejected POST: origin is not a published panel host")
+		s.logLimited("rejected POST: origin is not a published panel host")
 		s.send(w, r, plain(403, "origin is not a published panel host"))
 		return nil, false
 	}

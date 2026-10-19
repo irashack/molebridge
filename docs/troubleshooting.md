@@ -649,11 +649,15 @@ refused:
 `Host` isn't loopback or listed in `PANEL_PUBLIC_HOSTS`; the panel's log has
 `rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback`. Add the public hostname. If
 your proxy rewrites `Host` when it connects upstream (to `host.docker.internal:8095`,
-for example), add that name and port too.
+for example), add that name and port too. Scanners send wrong names too, so the
+line is written at most once a minute, and when it skipped some, the next one
+it writes ends `(<n> more not logged since the last such line)`. Each request still has its
+own access line ending `421`.
 
 **`403 origin is not a published panel host` or `invalid or missing csrf token` when
 switching.** The browser's `Origin` must be a listed host, and the CSRF cookie must
-reach the panel. Check that the proxy passes cookies and doesn't strip `Origin`, and
+reach the panel. The first case logs `rejected POST: origin is not a published panel
+host`, at most once a minute like the line above. Check that the proxy passes cookies and doesn't strip `Origin`, and
 that you opened the panel by the name listed in `PANEL_PUBLIC_HOSTS`.
 
 **"No fresh trusted relay catalogue; selections are unavailable."** The panel can't
