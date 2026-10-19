@@ -1561,6 +1561,12 @@ files](configuration.md#keeping-the-published-files-in-memory)):
 | `unverified` | The target is live, but a check fails: the handshake, the egress check or its service |
 | `failed` | The change itself failed, or verification timed out with another server live |
 
+When an attempt with a target moves to `attempting`, `pending`, `rejected`,
+`unverified` or `failed`, or to `idle` verified, or its message changes, the
+exit logs one line ([troubleshooting](troubleshooting.md#switching) lists
+them). A pass that writes the attempt without such a change logs nothing,
+and a restart logs nothing until the attempt next changes.
+
 What happens next, in precedence order on each pass:
 
 1. **A new target**: a new `SERVER`, a new panel request (every selection,

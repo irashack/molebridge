@@ -110,6 +110,8 @@ type Applier struct {
 	// failures are the steps retried on every pass that are failing now, with
 	// their last logged line (stepFailed).
 	failures map[string]stepFailure
+	// traced is the attempt as its last log line saw it (traceAttempt).
+	traced string
 }
 
 // New builds the applier for a provider's settings.
@@ -164,6 +166,8 @@ func New(cfg Config) (*Applier, error) {
 		a.bootID = attempt.ReadBootID(attempt.BootIDFile)
 	}
 	a.attempt = attempt.Load(a.attemptPath, a.bootID, a.clock())
+	// A restart logs the attempt's next change, not the state it resumes in.
+	a.traced = traceKey(a.attempt)
 	return a, nil
 }
 
@@ -556,6 +560,7 @@ func (a *Applier) saveAttempt() error {
 	if err := a.attempt.Save(a.attemptPath); err != nil {
 		return wrapIO(err)
 	}
+	a.traceAttempt()
 	return nil
 }
 

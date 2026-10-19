@@ -822,6 +822,20 @@ browser. Choose **Sign in**, which opens in a new tab, then reload the dashboard
 
 ## Switching
 
+The exit's log follows each switch with one line per change of its state, with the
+server in quotes:
+
+- `applier: switch to "<server>" admitted (<source>, change <n>); applying`
+- `applier: "<server>" is verified`
+- `applier: "<server>" is applied but not verified; checked again every 60 seconds`
+- `applier: switch to "<server>" waits: <message>`
+- `applier: switch to "<server>" rejected: <message>`
+- `applier: switch to "<server>" failed: <message> (next try in <n> s)`
+
+`<source>` is what asked for the switch, as in
+[requests and switching](architecture.md#requests-and-switching), and `<message>` is the
+panel's message, explained below. A check that changes nothing logs nothing.
+
 **"Tunnel handshake is missing or stale; check the account and connectivity."** The
 provider isn't answering the tunnel. Possible causes:
 

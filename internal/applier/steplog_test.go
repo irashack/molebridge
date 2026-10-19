@@ -70,3 +70,32 @@ func TestPIATunnelRepairFailureIsLoggedPerCause(t *testing.T) {
 		t.Fatalf("recovery logged %d times: %q", n, k.logs)
 	}
 }
+
+// A switch logs one line per state change of its attempt: admitted, then
+// verified; a later check that changes nothing logs nothing, and a rejected
+// request says why, once.
+func TestASwitchLogsEachStateChangeOnce(t *testing.T) {
+	a, k, _ := mullvadSetup(t)
+	desire(t, a, requestAt(testHost, nil))
+	mustTick(t, a)
+	admitted := `applier: switch to "` + testHost + `" admitted (panel, change 1); applying`
+	verified := `applier: "` + testHost + `" is verified`
+	if k.countLogged(admitted) != 1 || k.countLogged(verified) != 1 {
+		t.Fatalf("%q", k.logs)
+	}
+	lines := len(k.logs)
+	for i := 0; i < 3; i++ {
+		k.now += RefreshSec + 1
+		mustTick(t, a)
+	}
+	if len(k.logs) != lines {
+		t.Fatalf("checks that changed nothing logged %q", k.logs[lines:])
+	}
+	desire(t, a, requestAt(otherHost, map[string]any{"request_id": strings.Repeat("2", 32)}))
+	mustTick(t, a)
+	k.now += RefreshSec + 1
+	mustTick(t, a)
+	if n := k.countLogged(`applier: switch to "` + otherHost + `" rejected: ` + Unlisted); n != 1 {
+		t.Fatalf("rejection logged %d times: %q", n, k.logs)
+	}
+}
