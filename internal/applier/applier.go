@@ -107,6 +107,9 @@ type Applier struct {
 	switchDeadline *float64
 	retryDeadline  *float64
 	started        bool
+	// failures are the steps retried on every pass that are failing now, with
+	// their last logged line (stepFailed).
+	failures map[string]stepFailure
 }
 
 // New builds the applier for a provider's settings.

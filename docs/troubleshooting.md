@@ -891,6 +891,19 @@ seconds while the selected region is live makes the exit register the same regio
 on the same backoff, and log `molebridge-exit: applier: the registration lapsed;
 registering the same server again`; an egress-check failure alone doesn't.
 
+**`molebridge-exit: applier: repairing the tunnel's address and return-path rules failed:
+<reason>`, `applier: installing the ingress guard failed: <reason>`, `applier: clearing a
+forwarded port left by an earlier run failed: <reason>` or `applier: removing the forwarded
+port from the firewall failed: <reason>`.** PIA only. The exit retries the first three on
+every pass (every 5 seconds) until they succeed, and the last with the next forwarding
+attempt or switch. It logs the first failure, each change of reason, and the same reason
+again every 10 minutes while it lasts. A repaired tunnel logs
+`applier: the tunnel's address and return-path rules are consistent again`, and the guard
+and the cleanup log `applier: the ingress guard is installed` and `applier: the forwarded
+port left by an earlier run is cleared`. Port forwarding doesn't start until the ingress
+guard and the cleanup have succeeded. The reason names the kernel step that failed. If it
+persists, recreate the exit ([recovery](operations.md#recovery)).
+
 **"No PIA region is registered yet; choose one in the panel."** It's a fresh PIA install.
 Pick a region.
 

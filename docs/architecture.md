@@ -1631,7 +1631,11 @@ rather than select: PIA's repair of an interrupted switch
 ([providers](providers.md#how-pia-differs)), which runs on every pass before
 the gates so a damaged exit can pass them; PIA's ingress guard; PIA's port
 forwarding, which runs only while the verdict is `ok`; and gluetun's
-server-list refresh.
+server-list refresh. PIA's repair, its ingress guard and the cleanup of a
+forwarded port left by an earlier run are retried on every pass until they
+succeed. A failure of one of them, or of taking the forwarded port out of
+the firewall, is logged when it starts or its reason changes, and again
+every 10 minutes while it lasts.
 
 A failed check does not necessarily mean traffic is blocked: a working
 approved tunnel can carry traffic while the verification endpoint is

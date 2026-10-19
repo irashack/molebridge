@@ -619,7 +619,12 @@ func (p *piaProvider) ApplyRelay(ctx context.Context, a *Applier, relay *provide
 		}
 	}
 	p.forward, p.nextForward = nil, 0
-	_ = p.removeForwardRules(ctx, a) // a failure here is not the switch's
+	// A failure here is not the switch's, but it is logged.
+	if err := p.removeForwardRules(ctx, a); err != nil {
+		a.stepFailed(ctx, "pia-forward-remove", "applier: removing the forwarded port from the firewall failed", err)
+	} else {
+		a.stepSucceeded("pia-forward-remove", "")
+	}
 	existing, err := a.tunnelAddresses(ctx, false)
 	if err != nil {
 		return err
@@ -733,25 +738,42 @@ func (p *piaProvider) ReleaseSignature(a *Applier, why string) (string, bool) {
 // BeforeTick keeps the tunnel's address and rules consistent, installs the
 // ingress guard and clears a leftover forwarding table on an overlay, or
 // clears the native sidecar firewall's forwarded port. Each is retried every
-// tick until it succeeds.
+// tick until it succeeds. A failure is logged when it starts or its cause
+// changes, and at most every FailureRelog while it persists (stepFailed).
 func (p *piaProvider) BeforeTick(ctx context.Context, a *Applier) {
-	_ = p.reconcileTunnel(ctx, a)
+	p.repairTunnel(ctx, a)
 	if a.nativeSidecar() {
 		// The exit installs the sidecar firewall before starting the applier.
 		p.guardInstalled = true
 	} else if !p.guardInstalled {
-		if err := a.sys.InstallIngressGuard(ctx); err == nil {
+		if err := a.sys.InstallIngressGuard(ctx); err != nil {
+			a.stepFailed(ctx, "pia-guard", "applier: installing the ingress guard failed", err)
+		} else {
 			p.guardInstalled = true
+			a.stepSucceeded("pia-guard", "applier: the ingress guard is installed")
 		}
 	}
 	if !p.forwardReconciled {
 		// A namespace that outlived the applier can still admit the port from
 		// an earlier run, perhaps one with forwarding on. Retried every tick
 		// until it succeeds.
-		if err := p.removeForwardRules(ctx, a); err == nil {
+		if err := p.removeForwardRules(ctx, a); err != nil {
+			a.stepFailed(ctx, "pia-leftover-port", "applier: clearing a forwarded port left by an earlier run failed", err)
+		} else {
 			p.forwardReconciled = true
+			a.stepSucceeded("pia-leftover-port", "applier: the forwarded port left by an earlier run is cleared")
 		}
 	}
+}
+
+// repairTunnel is reconcileTunnel with its failure logged: retried every
+// pass and before every switch, it must not fail in silence.
+func (p *piaProvider) repairTunnel(ctx context.Context, a *Applier) {
+	if err := p.reconcileTunnel(ctx, a); err != nil {
+		a.stepFailed(ctx, "pia-tunnel", "applier: repairing the tunnel's address and return-path rules failed", err)
+		return
+	}
+	a.stepSucceeded("pia-tunnel", "applier: the tunnel's address and return-path rules are consistent again")
 }
 
 // AfterTick maintains the forwarded port.
@@ -769,7 +791,7 @@ func (p *piaProvider) AfterTick(ctx context.Context, a *Applier, _ *Record) {
 }
 
 // BeforeGate repairs first: it is what lets a damaged exit pass the gates.
-func (p *piaProvider) BeforeGate(ctx context.Context, a *Applier) { _ = p.reconcileTunnel(ctx, a) }
+func (p *piaProvider) BeforeGate(ctx context.Context, a *Applier) { p.repairTunnel(ctx, a) }
 
 // reconcileTunnel keeps the tunnel's address and its rules 94 and 98
 // consistent, every pass (tick) and before every switch: the routing contract
@@ -924,7 +946,11 @@ func (p *piaProvider) maintainForward(ctx context.Context, a *Applier) {
 	if err != nil {
 		p.forward = nil
 		p.forwardError = "Port forwarding is unavailable; retrying."
-		_ = p.removeForwardRules(ctx, a)
+		if err := p.removeForwardRules(ctx, a); err != nil {
+			a.stepFailed(ctx, "pia-forward-remove", "applier: removing the forwarded port from the firewall failed", err)
+		} else {
+			a.stepSucceeded("pia-forward-remove", "")
+		}
 		p.nextForward = a.clock() + ForwardRetrySec
 		// The errors name a step or a file, never a credential or a token
 		// (netx's carry no URL).
