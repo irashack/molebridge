@@ -114,6 +114,16 @@ func TestSettingsRefusals(t *testing.T) {
 		}, "does not exclude the tunnel interface mullvad"},
 		{"state directory missing", func(f *fixture) { os.RemoveAll(filepath.Join(f.env["STATE_DIR"], "applier")) },
 			"molebridge-exit: the state directory "},
+		{"private state relative", func(f *fixture) { f.env["PRIVATE_STATE_DIR"] = "state/exit" },
+			"molebridge-exit: PRIVATE_STATE_DIR must be an absolute path"},
+		{"private state unclean", func(f *fixture) { f.env["PRIVATE_STATE_DIR"] = "/state/exit/" },
+			"molebridge-exit: PRIVATE_STATE_DIR must be an absolute path"},
+		{"private state in the panel's directory", func(f *fixture) { f.env["PRIVATE_STATE_DIR"] = filepath.Join(f.env["STATE_DIR"], "panel", "exit") },
+			"molebridge-exit: PRIVATE_STATE_DIR must not be under "},
+		{"private state in the published directory", func(f *fixture) { f.env["PRIVATE_STATE_DIR"] = filepath.Join(f.env["STATE_DIR"], "applier", "exit") },
+			"molebridge-exit: PRIVATE_STATE_DIR must not be under "},
+		{"private state missing", func(f *fixture) { f.env["PRIVATE_STATE_DIR"] = filepath.Join(f.env["STATE_DIR"], "exit") },
+			"molebridge-exit: the state directory "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -242,6 +252,24 @@ func TestWriteChecksCreateAndProbeTheStateDirectory(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(f.env["STATE_DIR"], "applier"))
 	if len(entries) != 0 {
 		t.Errorf("the probe file was left: %v", entries)
+	}
+}
+
+func TestPrivateStateDirectory(t *testing.T) {
+	f := newFixture(t)
+	f.env["PRIVATE_STATE_DIR"] = filepath.Join(f.env["STATE_DIR"], "applier")
+	if s, err := f.load(); err != nil || s.PrivateDir != "" {
+		t.Fatalf("the applier directory itself: %q %v", s.PrivateDir, err)
+	}
+	private := filepath.Join(t.TempDir(), "exit")
+	f.env["PRIVATE_STATE_DIR"] = private
+	f.opts.WriteChecks = true
+	s, err := f.load()
+	if err != nil || s.PrivateDir != private {
+		t.Fatalf("%v %v", s, err)
+	}
+	if fi, err := os.Stat(private); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("private directory %v %v", fi, err)
 	}
 }
 

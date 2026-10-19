@@ -125,9 +125,12 @@ changed in `.env`:
 | `STATE_DIR` | `/state` | Where the exit and the panel find `applier/` and `panel/`. The exit refuses to start unless `<STATE_DIR>/applier` is a directory it can write. |
 | `MOLEBRIDGE_KIND` | `overlay` or `sidecar`, on the `gluetun` service of the two gluetun files | Read by `routing/gluetun-preflight`, which refuses to start gluetun without a matching post-rules file (`overlay`) or with one (`sidecar`). |
 
-Three more have defaults the Compose files leave alone: `TUNNEL_CONF_DIR`
+Four more have defaults the Compose files leave alone: `TUNNEL_CONF_DIR`
 (`/config/wg_confs`), `MOLEBRIDGE_RUN_DIR` (`/run`, where the supervisor keeps
-its heartbeat and lease files) and `PIA_SECRETS_DIR` (`/run/secrets/pia`).
+its heartbeat and lease files), `PIA_SECRETS_DIR` (`/run/secrets/pia`) and
+`PRIVATE_STATE_DIR` (unset: the files only the exit reads stay in
+`<STATE_DIR>/applier`; see [keeping the published files in
+memory](#keeping-the-published-files-in-memory)).
 `MOLEBRIDGE_PANEL_LISTEN` replaces the panel's listen address, `0.0.0.0:8080`,
 for its tests; Compose never sets it. `MOLEBRIDGE_GENERATION`,
 `MOLEBRIDGE_RTNL_NOTIFY_LOCKED` and `MOLEBRIDGE_DRILL_CPUPROFILE` are
@@ -504,7 +507,12 @@ reach NetBird.
 Under `state/`, written with temp-file-and-rename. None hold secrets. These
 names, paths, fields and timestamp formats are the same as in 0.7.0: a 0.7.0
 Switchyard reads a 0.8.0 exit, and a bridge that reads `result.json` keeps
-working.
+working. With `PRIVATE_STATE_DIR` set, the three files only the exit reads
+(`attempt.json`, `gluetun-selection.json` and `tunnel.json`) are in that
+directory instead of `applier/`
+([below](#keeping-the-published-files-in-memory)). For a healthy
+`result.json` of each exit kind, see [the example
+records](architecture.md#example-records).
 
 | File | Writer | Reader | Contents |
 |---|---|---|---|
@@ -540,6 +548,65 @@ installs both per registration); `compose.yaml` sets
 `net.ipv4.icmp_errors_use_inbound_ifaddr` on the `exit` service for the
 same reason, and the exit warns when it is not `1`. See
 [architecture](architecture.md#routing-contract).
+
+### Keeping the published files in memory
+
+`state/applier` holds two kinds of file:
+
+- **Published**: `result.json`, `relays.json` and `relay-error.json`, which
+  the panel and other readers read. The exit rebuilds them. It publishes a
+  status record when it starts and again after each inspection, and it
+  downloads the server list at start (with gluetun, reads gluetun's file).
+- **Private**: `attempt.json`, `gluetun-selection.json` (gluetun backend)
+  and `tunnel.json` (PIA). Only the exit reads them, and they carry its
+  state across a restart ([retries](operations.md#retries),
+  [backups](operations.md#backups)).
+
+A native exit rewrites `result.json` every 2 seconds. To keep those writes
+off your disk, move the private files out and put `state/applier` in
+memory:
+
+1. Stop the exit.
+2. Set `PRIVATE_STATE_DIR` on the exit to an absolute path on persistent
+   storage, and mount a directory there, for example in a
+   `compose.override.yaml`:
+
+   ```yaml
+   services:
+     exit:
+       environment:
+         PRIVATE_STATE_DIR: /state/exit
+       volumes:
+         - ./state/exit:/state/exit
+   ```
+
+3. Move whichever of the three private files exist from `state/applier/`
+   to the new directory (`state/exit/` above).
+4. Mount a tmpfs on `state/applier` on the host, with the owner and mode the
+   directory has now (`stat -c '%u:%g %a' state/applier`), mounted before
+   the containers start (an `/etc/fstab` line), and at least 40 MiB: the
+   largest server list is 16 MiB and is written beside the old one before
+   the rename. Every container that reads the exit's files keeps its
+   existing mount of `state/applier`. On Kubernetes, an `emptyDir` with
+   `medium: Memory` works only when every reader is in the exit's pod.
+5. Start the exit.
+
+The exit refuses to start when `PRIVATE_STATE_DIR` is not an absolute path
+without `.` or `..` elements or a trailing slash, when it is under
+`<STATE_DIR>/panel` or `<STATE_DIR>/applier`, or when the directory can't be written. It creates a
+missing directory with mode 0700. Setting it to `<STATE_DIR>/applier` is the
+same as leaving it unset. An older release doesn't read the setting. If you
+roll back, move the files back first, or the exit starts idle
+([retries](operations.md#retries)) and, with gluetun, without its last
+verified server.
+
+With `state/applier` in memory, a host restart loses only what the exit
+rebuilds. Until its first server-list download succeeds (it retries every
+minute), the exit has no server list, so its peer check fails with the
+reason `catalogue-stale` (the panel shows `no fresh server list`).
+
+This was tested with the unit tests at the commit that added it. No exit
+has been run live this way ([testing](testing.md)).
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
 exit snapshots are mode 0644 so the non-root panel can read them; requests

@@ -45,6 +45,23 @@ says what it would take as far as we know today.
 
 ## Backlog
 
+### Publishing the lease apart from the status record
+
+On a native exit the supervisor rewrites the whole `result.json` every 2
+seconds to change one check, `owner_record` (its `at` and `expires_at`). That
+write no longer fsyncs, but it is still a full-file rewrite for a single
+value. Publishing the lease in its own small file would make
+`result.json` change only once per inspection, about every 60 seconds. What it
+would take: a reader contract first. Every reader judges `owner_record` from
+`result.json` today (the panel, `molebridge status`, `port-sync`, and readers
+outside this repository such as Switchyard and health bridges, some in other
+pods). So the new file needs a schema, a path every reader can mount, and a
+rule for how the verdict combines the two files when one is stale or missing.
+Readers that know only `result.json` must still never see a lapsed lease as
+live. A schema 2 reader that doesn't know the new file would see a check that
+stopped moving, so the change probably needs a schema 3, or `result.json` would
+have to keep carrying the check for old readers, which saves nothing.
+
 ### Smaller memory with large server catalogs
 
 A Mullvad or PIA exit idles at 67–78 MB, but a NordVPN exit uses about

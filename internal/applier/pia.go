@@ -191,8 +191,8 @@ func NewPIA(cfg PIAConfig) Provider {
 	return &piaProvider{BaseProvider: BaseProvider{Name: "pia"}, cfg: cfg}
 }
 
-// tunnelPath is state/applier/tunnel.json.
-func tunnelPath(a *Applier) string { return filepath.Join(a.directory, "tunnel.json") }
+// tunnelPath is tunnel.json in the exit's private directory.
+func tunnelPath(a *Applier) string { return filepath.Join(a.privateDir, "tunnel.json") }
 
 // MakeCatalog: with port forwarding on, only forwarding regions are selectable.
 func (p *piaProvider) MakeCatalog(a *Applier) Catalog {

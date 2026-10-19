@@ -79,6 +79,7 @@ type Applier struct {
 	configuredServer string
 	configuredAt     string
 	directory        string
+	privateDir       string
 	resultPath       string
 	attemptPath      string
 	desiredPath      string
@@ -148,7 +149,11 @@ func New(cfg Config) (*Applier, error) {
 	a.configuredAt = validate.FormatTime(a.wall())
 	a.directory = filepath.Join(cfg.StateDir, "applier")
 	a.resultPath = filepath.Join(a.directory, "result.json")
-	a.attemptPath = filepath.Join(a.directory, "attempt.json")
+	a.privateDir = cfg.PrivateDir
+	if a.privateDir == "" {
+		a.privateDir = a.directory
+	}
+	a.attemptPath = filepath.Join(a.privateDir, "attempt.json")
 	a.desiredPath = filepath.Join(cfg.StateDir, "panel", "desired.json")
 	a.catalog = a.hooks.MakeCatalog(a)
 	a.bootID = cfg.BootID

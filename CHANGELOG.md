@@ -14,6 +14,21 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   previous record or the new one, never a torn file. Every other state file
   (`attempt.json`, `relays.json`, `gluetun-selection.json`, the panel's) keeps
   its fsync.
+- **`PRIVATE_STATE_DIR`.** A new optional exit setting. It moves the files
+  only the exit reads (`attempt.json`, `gluetun-selection.json` and PIA's
+  `tunnel.json`) out of `state/applier`. That directory then holds only
+  files the exit rebuilds (`result.json`, `relays.json`,
+  `relay-error.json`), so you can put it on a tmpfs. Unset, nothing moves,
+  and readers of `state/applier` don't change
+  ([configuration](docs/configuration.md#keeping-the-published-files-in-memory)).
+  Tested with unit tests only.
+- **Example status records.** `docs/examples` has a healthy `result.json`
+  for each exit kind: a native overlay, a gluetun overlay, a gluetun sidecar
+  and a native sidecar (PIA with a forwarded port). A test generates them
+  from the applier and checks that the verdict judges each one connected
+  ([the status record](docs/architecture.md#example-records)).
+  `verdict.OrderRecord` (the member order the supervisor writes) moved from
+  `internal/exit` so the test can use it.
 
 ## 0.9.2 — 2026-10-17
 

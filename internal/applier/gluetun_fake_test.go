@@ -569,7 +569,8 @@ type glOptions struct {
 	sidecar  bool
 	noWrite  bool
 	server   string
-	period   int // seconds; the default 24 h when 0, off when negative
+	private  string // Config.PrivateDir
+	period   int    // seconds; the default 24 h when 0, off when negative
 	kernel   *glKernel
 	setup    func(*glKernel, *fakeGluetun)
 }
@@ -607,7 +608,7 @@ func newGluetunFixture(t testing.TB, o glOptions) *glFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{StateDir: dir, Exit: k.exit, Provider: provider, System: k, Server: o.server, BootID: testBoot,
+	cfg := Config{StateDir: dir, PrivateDir: o.private, Exit: k.exit, Provider: provider, System: k, Server: o.server, BootID: testBoot,
 		Monotonic: k.clock, Sleep: k.sleep, Log: func(s string) { k.logs = append(k.logs, s) }}
 	a, err := New(cfg)
 	if err != nil {

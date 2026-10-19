@@ -121,7 +121,11 @@ type Config struct {
 	// StateDir is the state directory; the applier's files live in
 	// StateDir/applier and the panel's request in StateDir/panel/desired.json.
 	StateDir string
-	Exit     Exit
+	// PrivateDir holds the files only the exit reads (attempt.json,
+	// gluetun-selection.json, PIA's tunnel.json); empty means StateDir/applier.
+	// What stays in StateDir/applier is published and rebuilt by the exit.
+	PrivateDir string
+	Exit       Exit
 	// Provider is the hooks for the provider the exit serves.
 	Provider Provider
 	System   System

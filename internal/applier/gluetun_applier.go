@@ -22,7 +22,8 @@ package applier
 //     through the tunnel where the provider has one, the tunnel checks
 //     otherwise.
 //   - The selection Molebridge last put, the last one live after a PUT and the
-//     last one verified are kept in state/applier/gluetun-selection.json.
+//     last one verified are kept in gluetun-selection.json in the exit's
+//     private directory (state/applier unless PRIVATE_STATE_DIR is set).
 //     gluetun starts from its environment (GLUETUN_SERVER_*), not from what was
 //     put at runtime. Without SERVER or an accepted panel request, the last
 //     verified server is the target (restore), and the admission pipeline puts
@@ -418,9 +419,9 @@ func (g *gluetunProvider) kernel(a *Applier) (GluetunKernel, bool) {
 func (*gluetunProvider) SwitchTimeout() float64 { return GluetunSwitchTimeoutSec }
 
 // MakeCatalog implements Provider: gluetun's own list. It also loads the
-// selection state, which lives beside the catalogue.
+// selection state, which lives in the exit's private directory.
 func (g *gluetunProvider) MakeCatalog(a *Applier) Catalog {
-	g.selectionPath = filepath.Join(a.directory, "gluetun-selection.json")
+	g.selectionPath = filepath.Join(a.privateDir, "gluetun-selection.json")
 	g.selection = g.loadSelection(a)
 	catalog, err := NewGluetunCatalog(a.directory, g.Name, g.settings.ServersFile, a.wall)
 	if err != nil {

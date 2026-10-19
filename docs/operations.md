@@ -155,6 +155,8 @@ rm state/applier/attempt.json
 docker compose start exit
 ```
 
+With `PRIVATE_STATE_DIR` set, the record is in that directory instead
+([state files](configuration.md#keeping-the-published-files-in-memory)).
 `state/applier/attempt.json` holds the exit's current attempt: the
 target and why, its state, the backoff step, when to act next, and the last
 refused panel request. It is written before every change, so a restart
@@ -681,7 +683,9 @@ The state worth keeping is small:
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
 
 `state/applier/` rebuilds itself, including `attempt.json` ([retries](#retries)),
-except one file with the gluetun backend:
+except one file with the gluetun backend (with `PRIVATE_STATE_DIR` set, back up
+that directory instead;
+[state files](configuration.md#keeping-the-published-files-in-memory)):
 `gluetun-selection.json` remembers the last server the exit put, the
 last one live after a change and the last one it verified, which it puts
 back after gluetun restarts when the panel's request is absent or was

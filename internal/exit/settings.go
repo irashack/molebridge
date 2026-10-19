@@ -69,6 +69,9 @@ type Settings struct {
 	// StateDir is STATE_DIR; ConfDir the tunnel config directory; RunDir the
 	// tmpfs for the supervisor's runtime files.
 	StateDir, ConfDir, RunDir string
+	// PrivateDir is PRIVATE_STATE_DIR: where the files only the exit reads
+	// live. Empty means <STATE_DIR>/applier.
+	PrivateDir string
 	// Server is the SERVER setting.
 	Server string
 	// Conf is the native backend's validated tunnel config.
@@ -250,6 +253,19 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	s.ConfDir = orDefault(get("TUNNEL_CONF_DIR"), DefaultConfDir)
 	s.RunDir = orDefault(get("MOLEBRIDGE_RUN_DIR"), DefaultRunDir)
 	s.Server = get("SERVER")
+	if dir := get("PRIVATE_STATE_DIR"); dir != "" {
+		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
+			return nil, refuse("PRIVATE_STATE_DIR must be an absolute path without . or .. elements or a trailing slash")
+		}
+		if dir == filepath.Join(s.StateDir, "panel") || strings.HasPrefix(dir, filepath.Join(s.StateDir, "panel")+"/") {
+			return nil, refuse("PRIVATE_STATE_DIR must not be under %s, the panel's directory", filepath.Join(s.StateDir, "panel"))
+		}
+		if applierDir := filepath.Join(s.StateDir, "applier"); strings.HasPrefix(dir, applierDir+"/") {
+			return nil, refuse("PRIVATE_STATE_DIR must not be under %s, where the exit publishes", applierDir)
+		} else if dir != applierDir {
+			s.PrivateDir = dir
+		}
+	}
 
 	if s.NativeTunnel() {
 		pv := tunnelconf.Provider(provider)
@@ -322,8 +338,13 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 			s.WatchLog = nb.WatchLog
 		}
 	}
-	if err := checkStateDir(s.StateDir, o.WriteChecks); err != nil {
+	if err := checkStateDir(filepath.Join(s.StateDir, "applier"), 0o755, o.WriteChecks); err != nil {
 		return nil, err
+	}
+	if s.PrivateDir != "" {
+		if err := checkStateDir(s.PrivateDir, 0o700, o.WriteChecks); err != nil {
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -404,12 +425,12 @@ func withDefaults(env map[string]string, defaults map[string]string) map[string]
 	return out
 }
 
-// checkStateDir verifies the state directory the exit publishes into:
-// <STATE_DIR>/applier must exist as a directory the process can write. With
-// create, a missing directory is made and a file is created and removed as a
-// probe; without it, access(2) alone answers and nothing changes.
-func checkStateDir(stateDir string, create bool) error {
-	dir := filepath.Join(stateDir, "applier")
+// checkStateDir verifies a state directory the exit writes into
+// (<STATE_DIR>/applier, and PRIVATE_STATE_DIR when set): it must exist as a
+// directory the process can write. With create, a missing directory is made
+// with mode and a file is created and removed as a probe; without it,
+// access(2) alone answers and nothing changes.
+func checkStateDir(dir string, mode os.FileMode, create bool) error {
 	hint := " (on Docker the container needs DAC_OVERRIDE; see docs/setup.md)"
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -419,7 +440,7 @@ func checkStateDir(stateDir string, create bool) error {
 		if !create {
 			return refuse("the state directory %s is missing; mount the state volume (docs/setup.md)", dir)
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, mode); err != nil {
 			return refuse("the state directory %s is missing and can't be created%s", dir, hint)
 		}
 	} else if !fi.IsDir() {
