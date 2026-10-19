@@ -93,6 +93,18 @@ func extraFault(rng *rand.Rand, k *fakeKernel, spec contract.Spec) string {
 	return "nothing"
 }
 
+// draws scales a property test's number of random cases: the full count in
+// the default run, a tenth with -short or under the race detector, which
+// runs these tests about ten times slower and would otherwise come close to
+// go test's 10-minute timeout. The seeds are fixed, so the shorter run
+// checks the first cases of the full one.
+func draws(full int) int {
+	if testing.Short() || raceEnabled {
+		return full / 10
+	}
+	return full
+}
+
 func TestNoFailureSequenceEverOpensAProtectedClass(t *testing.T) {
 	for _, guard := range []bool{true, false} {
 		t.Run(fmt.Sprintf("guard=%v", guard), func(t *testing.T) { failureSequences(t, guard) })
@@ -102,7 +114,7 @@ func TestNoFailureSequenceEverOpensAProtectedClass(t *testing.T) {
 func failureSequences(t *testing.T, guard bool) {
 	rng := rand.New(rand.NewSource(20261013))
 	var cases, refused, withFailures int
-	for i := 0; i < 1500; i++ {
+	for i := 0; i < draws(1500); i++ {
 		k := newFakeKernel()
 		spec := nativeSpec()
 		k.installNative(spec, true)

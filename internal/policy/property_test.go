@@ -313,10 +313,22 @@ func randomState(rng *rand.Rand, t *testing.T) State {
 	return s
 }
 
+// draws scales a property test's number of random cases: the full count in
+// the default run, a tenth with -short or under the race detector, which
+// runs these tests about ten times slower and would otherwise come close to
+// go test's 10-minute timeout. The seeds are fixed, so the shorter run
+// checks the first cases of the full one.
+func draws(full int) int {
+	if testing.Short() || raceEnabled {
+		return full / 10
+	}
+	return full
+}
+
 func TestTheModelContainsWhatTheOracleDoes(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261014))
 	checked := 0
-	for i := 0; i < 600; i++ {
+	for i := 0; i < draws(600); i++ {
 		s := randomState(rng, t)
 		pts, _ := allPoints(s)
 		for k := 0; k < 40; k++ {
@@ -364,7 +376,7 @@ func TestAnEscapeOfAnyConcretePacketIsAViolationOfSomePoint(t *testing.T) {
 		return out
 	}
 	found, escapes := 0, 0
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < draws(1000); i++ {
 		s := randomState(rng, t)
 		violations := len(s.Violations()) > 0
 		prot := map[rtnl.Family]map[netip.Addr]bool{4: s.protectedAddrs(4), 6: s.protectedAddrs(6)}
@@ -405,7 +417,7 @@ func TestAnEscapeOfAnyConcretePacketIsAViolationOfSomePoint(t *testing.T) {
 func TestAnApprovedDeletionOpensNothingTheOracleCanFind(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261016))
 	approved := 0
-	for i := 0; i < 600; i++ {
+	for i := 0; i < draws(600); i++ {
 		s := randomState(rng, t)
 		f := families[rng.Intn(2)]
 		rs := s.Rules[f]

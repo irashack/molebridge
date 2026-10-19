@@ -122,12 +122,13 @@ func TestRandomFaultsAreRepairedWithoutOpeningTheNamespace(t *testing.T) {
 
 func randomFaults(t *testing.T, guard bool) {
 	rng := rand.New(rand.NewSource(20261012))
+	n := draws(1500)
 	var withFault, repaired, leakedAtStart int
 	defer func() {
-		t.Logf("%d cases, %d with a repairable fault, %d starting open", 1500, repaired, leakedAtStart)
+		t.Logf("%d cases, %d with a repairable fault, %d starting open", n, repaired, leakedAtStart)
 		_ = withFault
 	}()
-	for i := 0; i < 1500; i++ {
+	for i := 0; i < n; i++ {
 		k := newFakeKernel()
 		spec := nativeSpec()
 		k.installNative(spec, true)
