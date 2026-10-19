@@ -3,9 +3,11 @@ package applier
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/validate"
@@ -98,5 +100,49 @@ func TestARetryIsNotPutOffPastTheCatalogueAge(t *testing.T) {
 	}
 	if !strings.HasPrefix(k.logs[0], "applier: relay catalogue refresh failed: ") || len(k.logs) != 1 {
 		t.Errorf("logs %q", k.logs)
+	}
+}
+
+// The catalogue's signature is cached, and follows the catalogue: a name
+// added in place or a new catalogue changes it, the same names do not.
+func TestCatalogueSignatureFollowsTheCatalogue(t *testing.T) {
+	a, _, _ := mullvadSetup(t)
+	first := a.releaseSignature("catalogue")
+	if first == "" || a.releaseSignature("catalogue") != first {
+		t.Fatalf("signature %q", first)
+	}
+	addRelay(a, "se-got-wg-001", testKey)
+	second := a.releaseSignature("catalogue")
+	if second == first || second == "" {
+		t.Fatalf("a new name: %q", second)
+	}
+	// The same names in a new catalogue sign the same.
+	copied := snapshot(a).Relays.Filter(func(string, *providers.Relay) bool { return true })
+	snapshot(a).Relays = copied
+	if got := a.releaseSignature("catalogue"); got != second {
+		t.Fatalf("same names: %q, want %q", got, second)
+	}
+	snapshot(a).Relays = copied.Filter(func(name string, _ *providers.Relay) bool { return name == testHost })
+	if got := a.releaseSignature("catalogue"); got != first {
+		t.Fatalf("back to one name: %q, want %q", got, first)
+	}
+	staleCatalogue(a)
+	if got := a.releaseSignature("catalogue"); got != "" {
+		t.Fatalf("stale: %q", got)
+	}
+}
+
+// The cache does not keep a replaced catalogue alive.
+func TestCatalogueSignatureHoldsNoOldCatalogue(t *testing.T) {
+	a, _, _ := mullvadSetup(t)
+	old := weak.Make(snapshot(a).Relays)
+	if a.releaseSignature("catalogue") == "" {
+		t.Fatal("no signature")
+	}
+	snapshot(a).Relays = snapshot(a).Relays.Filter(func(string, *providers.Relay) bool { return true })
+	runtime.GC()
+	runtime.GC()
+	if old.Value() != nil {
+		t.Error("the replaced catalogue is still reachable")
 	}
 }

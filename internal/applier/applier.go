@@ -50,6 +50,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"weak"
 
 	"github.com/irashack/molebridge/internal/attempt"
 	"github.com/irashack/molebridge/internal/jsonfile"
@@ -102,6 +103,14 @@ type Applier struct {
 	// success.
 	catalogRetry   float64
 	catalogFailure string
+	// signature caches catalogSignature for one catalogue. The pointer is
+	// weak so the cache never keeps a replaced catalogue alive, and a weak
+	// pointer never equals one made from a later object at the same address.
+	signature struct {
+		relays weak.Pointer[providers.Entries]
+		count  int
+		hash   string
+	}
 	// measurement is the last inspection's findings.
 	measurement *Finding
 	// unidentifiedSince is since when a live peer the catalogue can't name has
@@ -266,14 +275,24 @@ func (a *Applier) DefaultFetchCatalog(ctx context.Context) ([]byte, error) {
 }
 
 // catalogSignature is what a rejection for an unlisted server waits to
-// change: the catalogue's names, nil while it is unusable.
-func (a *Applier) catalogSignature() []string {
+// change: a hash of the catalogue's names, "" while it is unusable. It is
+// computed once per catalogue: a rejected request is judged again on every
+// pass, and the names of 6,500 servers take about a millisecond and 300 kB
+// to sort and hash. Entries only ever gains names, so the same Entries with
+// the same length has the same names.
+func (a *Applier) catalogSignature() string {
 	if !a.catalog.Usable() {
-		return nil
+		return ""
 	}
-	names := a.catalog.Relays().Names()
-	sort.Strings(names)
-	return names
+	relays := a.catalog.Relays()
+	key := weak.Make(relays)
+	if key != a.signature.relays || relays.Len() != a.signature.count || a.signature.hash == "" {
+		names := relays.Names()
+		sort.Strings(names)
+		sum := sha256.Sum256([]byte(strings.Join(names, "\n")))
+		a.signature.relays, a.signature.count, a.signature.hash = key, relays.Len(), hex.EncodeToString(sum[:])
+	}
+	return a.signature.hash
 }
 
 // tunnelAddresses are the global tunnel addresses by family, read from the
@@ -1005,12 +1024,7 @@ func (a *Applier) releaseSignature(why string) string {
 		return signature
 	}
 	if why == "catalogue" {
-		names := a.catalogSignature()
-		if names == nil {
-			return ""
-		}
-		sum := sha256.Sum256([]byte(strings.Join(names, "\n")))
-		return hex.EncodeToString(sum[:])
+		return a.catalogSignature()
 	}
 	return why
 }
