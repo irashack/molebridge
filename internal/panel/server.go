@@ -81,10 +81,12 @@ type Server struct {
 	relayCache map[string]relayCacheEntry
 }
 
+// relayCacheEntry is one exit's validated catalogue and the snapshot's other
+// members, with the file they were read from.
 type relayCacheEntry struct {
-	mtimeNs int64
-	size    int64
-	relays  *providers.Entries
+	info   os.FileInfo
+	meta   map[string]any // nil when there was no snapshot
+	relays *providers.Entries
 }
 
 // Options are the parts of a Server a test replaces.
@@ -388,28 +390,46 @@ func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 		"view", legacyView(status.Verdict))
 }
 
-// cachedRelays is the exit's catalogue, re-read only when the snapshot file
-// changes. For display only (the exit tabs); switching always re-reads it.
-func (s *Server) cachedRelays(ex Exit) *providers.Entries {
+// cachedSnapshot is the exit's catalogue and the snapshot's other members
+// (fetched_at, provider, and gluetun's source and data_timestamp; nil when
+// there is no snapshot), read and validated again only when the file is
+// replaced or changes. For display and latency only (the page, the exit
+// tabs, /api/latency); a switch always re-reads the file (loadAllowlist).
+func (s *Server) cachedSnapshot(ex Exit) (map[string]any, *providers.Entries) {
 	info, err := os.Stat(ex.RelaysPath)
 	if err != nil {
-		return providers.NewEntries()
+		return nil, providers.NewEntries()
 	}
 	s.relayMu.Lock()
 	cached, ok := s.relayCache[ex.RelaysPath]
 	s.relayMu.Unlock()
-	if ok && cached.mtimeNs == info.ModTime().UnixNano() && cached.size == info.Size() {
-		return cached.relays
+	// The exit replaces the file by rename, so a new snapshot is a new file
+	// even when its size and modification time (kept to the kernel's tick)
+	// match the old one's.
+	if ok && os.SameFile(cached.info, info) && cached.info.ModTime().Equal(info.ModTime()) && cached.info.Size() == info.Size() {
+		return cached.meta, cached.relays
 	}
-	relays := s.loadRelays(ex)
+	snapshot := providers.ReadSnapshot(ex.RelaysPath, ex.Provider)
+	var meta map[string]any
+	if snapshot != nil {
+		meta = make(map[string]any, len(snapshot))
+		for k, v := range snapshot {
+			if k != "relays" {
+				meta[k] = v
+			}
+		}
+	}
+	relays := providers.SnapshotRelays(snapshot, ex.Provider)
 	s.relayMu.Lock()
-	s.relayCache[ex.RelaysPath] = relayCacheEntry{info.ModTime().UnixNano(), info.Size(), relays}
+	s.relayCache[ex.RelaysPath] = relayCacheEntry{info, meta, relays}
 	s.relayMu.Unlock()
-	return relays
+	return meta, relays
 }
 
-func (s *Server) loadRelays(ex Exit) *providers.Entries {
-	return providers.SnapshotRelays(providers.ReadSnapshot(ex.RelaysPath, ex.Provider), ex.Provider)
+// cachedRelays is cachedSnapshot's catalogue.
+func (s *Server) cachedRelays(ex Exit) *providers.Entries {
+	_, relays := s.cachedSnapshot(ex)
+	return relays
 }
 
 // loadAllowlist is the set of names a switch may request: the fresh
@@ -423,11 +443,11 @@ func (s *Server) loadAllowlist(ex Exit) *providers.Entries {
 }
 
 // fetchError is the page's relay refresh error: the applier's message, or a
-// fixed one when there is no fresh catalogue.
-func (s *Server) fetchError(ex Exit) (message, at string) {
+// fixed one when there is no fresh catalogue. meta is the snapshot without
+// its relays (cachedSnapshot), nil when there is none.
+func (s *Server) fetchError(ex Exit, meta map[string]any) (message, at string) {
 	data, _ := state.ReadObject(ex.RelayErrorPath, 4096)
-	snapshot := providers.ReadSnapshot(ex.RelaysPath, ex.Provider)
-	if snapshot == nil || !state.Recent(snapshot["fetched_at"], state.CatalogMaxAge, s.now()) {
+	if meta == nil || !state.Recent(meta["fetched_at"], state.CatalogMaxAge, s.now()) {
 		return "No fresh trusted relay catalogue; selections are unavailable.", ""
 	}
 	if data == nil {
@@ -810,7 +830,7 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request, query map
 	var body validate.Obj
 	func() {
 		defer s.latency.release(ex.ID)
-		relays := s.loadRelays(ex)
+		relays := s.cachedRelays(ex)
 		fresh := first(query, "fresh") == "1"
 		measured := s.measureLatency(relays, latencyTargets(query, relays), fresh, ex.ID)
 		latency := make(validate.Obj, 0, len(measured))
@@ -948,10 +968,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 		nonce = newCSRFNonce()
 	}
 	token := s.csrfToken(nonce, s.csrfBinding(session))
-	fetchError, fetchErrorAt := s.fetchError(ex)
+	// One reading of the catalogue for the page, its error line and the tabs.
+	meta, relays := s.cachedSnapshot(ex)
+	fetchError, fetchErrorAt := s.fetchError(ex, meta)
 	// One verdict on this exit for the page and its own tab.
 	status := s.readStatus(ex)
-	snapshot := providers.ReadSnapshot(ex.RelaysPath, ex.Provider)
 	var summaries []ExitSummary
 	for _, e := range s.visibleExits(session) {
 		if e.ID == ex.ID {
@@ -965,7 +986,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 		user = &session.Name
 	}
 	body := s.renderIndex(IndexPage{
-		Exit: ex, Status: status, Relays: providers.SnapshotRelays(snapshot, ex.Provider), RelaysData: snapshot,
+		Exit: ex, Status: status, Relays: relays, RelaysData: meta,
 		FetchError: fetchError, FetchErrAt: fetchErrorAt, CSRFToken: token, Embed: embed, Exits: summaries, User: user,
 		// A home dashboard is the operator's; people granted a single exit are
 		// not sent there.

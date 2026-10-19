@@ -148,7 +148,9 @@ hours, and keeps the last good copy if a download fails. With the gluetun
 backend it reads gluetun's own list instead; Diagnostics shows the date of
 gluetun's data, stale after 30 days. A list older than 24
 hours can't authorize a switch. The panel only reads the exit's copy; it
-can't change it.
+can't change it. The page, the tabs and the latency checks keep the copy in
+memory until the exit replaces the file; a switch reads the file itself
+every time.
 
 ## Looks
 

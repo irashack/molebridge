@@ -174,6 +174,35 @@ func TestPostUnlistedServerIsRejected(t *testing.T) {
 	}
 }
 
+// The page and the latency probes use the cached catalogue, which a new
+// snapshot replaces even when it has the same size and modification time;
+// a switch always reads the file itself.
+func TestCachedCatalogueFollowsTheFileAndSwitchReadsItFresh(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	ex := h.srv.Single
+	_, nonce, token := h.indexTokens()
+	mustContain(t, h.get("/", "", nil).Body, "se-sto-wg-001")
+	mustWrite(t, ex.RelaysPath, catalogue(relayEntry("se-sto-wg-002", map[string]any{"city": "Stockholm"})))
+	page := h.get("/", "", nil).Body
+	mustContain(t, page, "se-sto-wg-002")
+	mustNotContain(t, page, "se-sto-wg-001")
+	if _, relays := h.srv.cachedSnapshot(ex); !relays.Has("se-sto-wg-002") || relays.Has("se-sto-wg-001") {
+		t.Fatalf("cache kept the old catalogue")
+	}
+	// Plant the old catalogue as the current file's cache entry: a switch
+	// must not trust it.
+	h.srv.relayMu.Lock()
+	entry := h.srv.relayCache[ex.RelaysPath]
+	entry.relays = providers.SnapshotRelays(catalogue(relayEntry("se-sto-wg-001", nil)), "mullvad")
+	h.srv.relayCache[ex.RelaysPath] = entry
+	h.srv.relayMu.Unlock()
+	mustContain(t, h.get("/", "", nil).Body, "se-sto-wg-001")
+	a := h.post("/select", [][2]string{{"server", "se-sto-wg-001"}, {"csrf_token", token}}, "csrf_nonce="+nonce, "")
+	if a.Status != 400 || readDesired(ex) != nil {
+		t.Fatalf("status %d, desired %v", a.Status, readDesired(ex))
+	}
+}
+
 func TestMalformedOriginIsRejectedWithoutLoggingInput(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	for _, origin := range []string{"http://[", "https://private.example.test"} {
