@@ -268,11 +268,20 @@ func TestRequestLogLine(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	h.log.Reset()
 	h.get("/api/status", "", nil)
+	h.get("/healthz", "", nil)
 	h.do("DELETE", "/", nil, nil)
+	h.get("/api/status", "", map[string]string{"Host": "other.example.test"})
 	lines := strings.Split(strings.TrimSpace(h.log.String()), "\n")
-	pattern := regexp.MustCompile(`^\d{2}/[A-Z][a-z]{2}/\d{4} \d{2}:\d{2}:\d{2} (GET /api/status|\(other method\) /)$`)
-	if len(lines) != 2 || !pattern.MatchString(lines[0]) || !pattern.MatchString(lines[1]) {
+	want := []string{"GET /api/status 200", "(other method) / 501",
+		"rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback", "GET /api/status 421"}
+	stamp := regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z `)
+	if len(lines) != len(want) {
 		t.Fatalf("log = %q", lines)
+	}
+	for i, line := range lines {
+		if !stamp.MatchString(line) || line[len("2006-01-02T15:04:05Z "):] != want[i] {
+			t.Fatalf("line %d = %q, want <time> %s", i, line, want[i])
+		}
 	}
 }
 

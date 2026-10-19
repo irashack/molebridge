@@ -1923,7 +1923,13 @@ max-age=31536000, immutable`; any other gets `public, max-age=86400`. Each
 file has an ETag, and a matching `If-None-Match` gets 304.
 Remote text is escaped in HTML and assigned as text in JavaScript.
 Panel logs use fixed route names and omit client addresses, origins, query
-strings, bodies and unknown paths.
+strings, bodies and unknown paths. Every line the running panel writes
+starts with a UTC timestamp to the second. A request's line is the method,
+the route and the status, such as `2026-01-02T15:04:05Z GET /api/status 200`
+(an unknown path is `(unknown route)`, a method other than GET, POST and
+HEAD `(other method)`); `GET /healthz`, which the Compose health check polls
+every 30 seconds, is not logged. Lines written before the panel listens,
+such as a refused setting, start `molebridge panel: ` instead.
 
 One panel can serve several exits on the same host (`PANEL_EXITS`; see
 [Switchyard](switchyard.md)). Each exit is a pair of state directories under

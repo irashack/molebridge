@@ -604,6 +604,13 @@ in it.
 
 ## The panel
 
+Read the panel's log with `docker compose logs switchyard` (on Podman,
+`podman logs` with its container name, `molebridge-switchyard` for
+`compose.yaml`). Once it is serving, each line starts with a
+UTC timestamp, which the quotes below leave out, and each request has a line
+such as `2026-01-02T15:04:05Z GET /api/status 200`
+([the format](architecture.md#panel-and-access)).
+
 **The panel stops at start with `molebridge panel: refusing to start: <reason>`.**
 Its self-check ([configuration](configuration.md#the-panels-isolation-check)) found
 that it isn't isolated. The reasons are fixed lines:

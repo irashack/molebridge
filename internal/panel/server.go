@@ -559,9 +559,10 @@ var knownRoutes = map[string]bool{
 	"/auth/callback": true, "/logout": true, "/signed-out": true,
 }
 
-// logRequest writes one fixed-route line: no addresses or user-controlled
-// text.
-func (s *Server) logRequest(r *http.Request) {
+// logRequest writes one access line: method, fixed route and status, with no
+// addresses or user-controlled text. GET /healthz, which the container's
+// health check polls, is left out.
+func (s *Server) logRequest(r *http.Request, code int) {
 	path, _, _ := strings.Cut(r.RequestURI, "?")
 	route := "(unknown route)"
 	if knownRoutes[path] {
@@ -574,20 +575,19 @@ func (s *Server) logRequest(r *http.Request) {
 	case http.MethodGet, http.MethodPost, http.MethodHead:
 		method = r.Method
 	}
-	t := s.now().Local()
-	s.writeLog(fmt.Sprintf("%02d/%s/%04d %02d:%02d:%02d %s %s\n", t.Day(), t.Month().String()[:3], t.Year(),
-		t.Hour(), t.Minute(), t.Second(), method, route))
+	if method == http.MethodGet && route == "/healthz" {
+		return
+	}
+	s.logEvent(fmt.Sprintf("%s %s %d", method, route, code))
 }
 
-func (s *Server) writeLog(line string) {
+// logEvent writes one line, after a UTC timestamp to the second. Every line
+// the running panel writes comes through here.
+func (s *Server) logEvent(text string) {
+	line := s.now().UTC().Format("2006-01-02T15:04:05Z") + " " + text + "\n"
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	io.WriteString(s.Log, line)
-}
-
-// logEvent is log_event: a timestamped line.
-func (s *Server) logEvent(text string) {
-	s.writeLog(s.now().UTC().Format("2006-01-02T15:04:05Z") + " " + text + "\n")
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request, rep reply) {
@@ -608,7 +608,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, rep reply) {
 	}
 	w.WriteHeader(rep.code)
 	w.Write(rep.body)
-	s.logRequest(r)
+	s.logRequest(r, rep.code)
 }
 
 // -- request helpers -----------------------------------------------------------------
@@ -641,7 +641,7 @@ func (s *Server) misdirected(w http.ResponseWriter, r *http.Request) bool {
 	if s.Settings.HostAllowed(r.Host) {
 		return false
 	}
-	s.writeLog("rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback\n")
+	s.logEvent("rejected request: host is not in PANEL_PUBLIC_HOSTS or loopback")
 	s.send(w, r, plain(421, "unknown host; publish the panel under PANEL_PUBLIC_HOSTS"))
 	return true
 }
@@ -713,7 +713,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 		w.WriteHeader(501)
 		io.WriteString(w, body)
-		s.logRequest(r)
+		s.logRequest(r, 501)
 	}
 }
 
@@ -1058,7 +1058,7 @@ func (s *Server) readForm(w http.ResponseWriter, r *http.Request) (map[string]st
 		return nil, false
 	}
 	if !s.Settings.OriginAllowed(r.Header.Get("Origin")) {
-		s.writeLog("rejected POST: origin is not a published panel host\n")
+		s.logEvent("rejected POST: origin is not a published panel host")
 		s.send(w, r, plain(403, "origin is not a published panel host"))
 		return nil, false
 	}
