@@ -168,6 +168,7 @@ func New(cfg Config) (*Applier, error) {
 	a.attempt = attempt.Load(a.attemptPath, a.bootID, a.clock())
 	// A restart logs the attempt's next change, not the state it resumes in.
 	a.traced = traceKey(a.attempt)
+	a.warnPlainGatus()
 	return a, nil
 }
 
@@ -1590,13 +1591,42 @@ func (a *Applier) pushGatus(ctx context.Context, result *Record) {
 		}
 	}
 	query := "success=" + strconv.FormatBool(success) + "&error=" + url.QueryEscape(message)
-	_, err := a.sys.Fetch(ctx, netx.Request{
+	response, err := a.sys.Fetch(ctx, netx.Request{
 		URL:    strings.TrimRight(base, "/") + "/api/v1/endpoints/" + strings.ReplaceAll(url.QueryEscape(endpoint), "+", "%20") + "/external?" + query,
 		Method: "POST", Header: map[string]string{"Authorization": "Bearer " + token},
-		Timeout: 10 * time.Second, AllowHTTP: true})
-	if err != nil {
-		a.log("applier: monitoring push failed")
+		Timeout: 10 * time.Second, AllowHTTP: true, AnyStatus: true, MaxBytes: 4096})
+	if err == nil && (response.Status < 200 || response.Status > 299) {
+		// The status alone: the answer's body is never logged.
+		err = fmt.Errorf("the Gatus server answered HTTP %d", response.Status)
 	}
+	if err != nil {
+		// netx's errors carry no URL, header or body, so neither the token
+		// nor the address is in the line.
+		a.stepFailed(ctx, "gatus", "applier: monitoring push failed", err)
+		return
+	}
+	a.stepSucceeded("gatus", "applier: monitoring push works again")
+}
+
+// warnPlainGatus logs once, at start, when the Gatus push would send its
+// bearer token unencrypted to a host other than this one's loopback.
+func (a *Applier) warnPlainGatus() {
+	if a.gatus.Token == "" || !strings.HasPrefix(a.gatus.URL, "http://") {
+		return
+	}
+	parsed, err := url.Parse(a.gatus.URL)
+	if err != nil {
+		return
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return
+	}
+	if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
+		return
+	}
+	a.log("applier: warning: GATUS_URL is plain http:// to a host other than loopback; " +
+		"the Gatus token crosses the network unencrypted (use https://)")
 }
 
 // Healthy is the container health check, operational only (D5): a fresh

@@ -554,8 +554,74 @@ func TestAGatusPushFailureIsLoggedNotFatal(t *testing.T) {
 	if r := mustTick(t, a); status(r) != "ok" {
 		t.Fatalf("%s", status(r))
 	}
-	if !k.logged("applier: monitoring push failed") {
-		t.Error("not logged")
+	if !k.logged("applier: monitoring push failed: injected failure") {
+		t.Errorf("not logged with its cause: %q", k.logs)
+	}
+	// Every push fails the same way: one line, not one per push.
+	for i := 0; i < 3; i++ {
+		k.now += RefreshSec + 1
+		mustTick(t, a)
+	}
+	if n := k.countLogged("applier: monitoring push failed"); n != 1 {
+		t.Errorf("logged %d times: %q", n, k.logs)
+	}
+	k.hooks = nil
+	k.now += RefreshSec + 1
+	mustTick(t, a)
+	if !k.logged("applier: monitoring push works again") {
+		t.Errorf("recovery not logged: %q", k.logs)
+	}
+}
+
+func TestAGatusErrorStatusIsAFailureNamedByItsCode(t *testing.T) {
+	a, k, _ := pipelineSetup(t)
+	withGatus(a)
+	k.hooks = append(k.hooks, func(r netx.Request) error {
+		if strings.Contains(r.URL, "/external?") && !r.AnyStatus {
+			t.Errorf("the push fails on a status without reading it: %+v", r)
+		}
+		return nil
+	})
+	k.gatusStatus = 401
+	desire(t, a, requestAt(testHost, nil))
+	mustTick(t, a)
+	if !k.logged("applier: monitoring push failed: the Gatus server answered HTTP 401") {
+		t.Errorf("%q", k.logs)
+	}
+	for _, line := range k.logs {
+		if strings.Contains(line, "token") && !strings.Contains(line, "Gatus token") {
+			t.Errorf("a line mentions the token: %q", line)
+		}
+	}
+}
+
+func TestAPlainHTTPGatusToAnotherHostIsWarnedOnceAtStart(t *testing.T) {
+	const warning = "applier: warning: GATUS_URL is plain http:// to a host other than loopback"
+	for url, warned := range map[string]bool{
+		"http://gatus.example.test:8080": true,
+		"http://192.0.2.10":              true,
+		"http://127.0.0.1:8080":          false,
+		"http://[::1]:8080":              false,
+		"http://localhost:8080":          false,
+		"https://gatus.example.test":     false,
+	} {
+		k := newKernel(t)
+		dir := t.TempDir()
+		writeSnapshot(t, dir, "", map[string]any{testHost: mullvadEntry(testHost, testKey)})
+		_, err := New(Config{StateDir: dir, Exit: k.exit, Provider: NewMullvad(), System: k, BootID: testBoot,
+			Monotonic: k.clock, Sleep: k.sleep, Log: func(s string) { k.logs = append(k.logs, s) },
+			Gatus: Gatus{URL: url, Token: "secret-token"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := k.countLogged(warning); got != map[bool]int{true: 1, false: 0}[warned] {
+			t.Errorf("%s: warned %d times: %q", url, got, k.logs)
+		}
+		for _, line := range k.logs {
+			if strings.Contains(line, "secret-token") || strings.Contains(line, "example.test") {
+				t.Errorf("%s: the line names the token or the host: %q", url, line)
+			}
+		}
 	}
 }
 

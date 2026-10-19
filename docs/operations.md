@@ -101,11 +101,21 @@ labels the panel shows for them.
 
 To push health to [Gatus](https://gatus.io), set `GATUS_URL` and
 `GATUS_ENDPOINT`, and put `GATUS_TOKEN=…` in `secrets/applier.env` (mode 0600).
-Use HTTPS unless the connection is local and trusted. With no URL or no token,
+Use HTTPS unless the connection is local and trusted: the token is sent as a
+bearer header on every push, so over `http://` it crosses the network
+unencrypted. With an `http://` URL whose host isn't `localhost` or a loopback
+address, the exit logs once at start `molebridge-exit: applier: warning:
+GATUS_URL is plain http:// to a host other than loopback; the Gatus token
+crosses the network unencrypted (use https://)`. With no URL or no token,
 or a URL that doesn't start with `http://` or `https://`, nothing is pushed.
 In Gatus, treat a missing push as a failure: a stopped exit can't report that
 it's down. A failed push is logged as `molebridge-exit: applier: monitoring
-push failed`.
+push failed: <reason>`, where the reason is the kind of failure (for example
+`netx: request timed out`) or `the Gatus server answered HTTP <code>`; a 401
+means a wrong `GATUS_TOKEN`. The line comes once, again when the reason
+changes and every 10 minutes while it lasts, and
+`molebridge-exit: applier: monitoring push works again` follows once the
+pushes succeed. Neither line includes the URL or the token.
 
 The exit pushes the [verdict](architecture.md#the-verdict) against its
 own target, so it agrees with the panel and `/readyz`; anything but `ok` is

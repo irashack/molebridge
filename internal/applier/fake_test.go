@@ -118,6 +118,8 @@ type kernel struct {
 	insights []any // each insights call takes the next answer; the last repeats
 	logs     []string
 	pushed   []string
+	// gatusStatus is the push's answer; 0 answers 200.
+	gatusStatus int
 }
 
 func newKernel(t testing.TB) *kernel {
@@ -362,6 +364,9 @@ func (k *kernel) Fetch(_ context.Context, req netx.Request) (netx.Response, erro
 	}
 	if _, query, ok := strings.Cut(req.URL, "/external?"); ok {
 		k.pushed = append(k.pushed, query)
+		if k.gatusStatus != 0 {
+			return netx.Response{Status: k.gatusStatus}, nil
+		}
 		return netx.Response{Status: 200}, nil
 	}
 	return k.handler(req)
