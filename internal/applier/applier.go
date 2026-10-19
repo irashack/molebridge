@@ -162,6 +162,12 @@ func New(cfg Config) (*Applier, error) {
 	a.attemptPath = filepath.Join(a.privateDir, "attempt.json")
 	a.desiredPath = filepath.Join(cfg.StateDir, "panel", "desired.json")
 	a.catalog = a.hooks.MakeCatalog(a)
+	// Making the catalogue read the last snapshot, up to 16 MiB of JSON
+	// decoded whole; when there was one, return that garbage now, as after
+	// every refresh.
+	if a.catalog.Relays().Len() > 0 || len(a.catalog.Snapshot()) > 0 {
+		debug.FreeOSMemory()
+	}
 	a.bootID = cfg.BootID
 	if a.bootID == "" {
 		a.bootID = attempt.ReadBootID(attempt.BootIDFile)

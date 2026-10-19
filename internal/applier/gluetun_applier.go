@@ -53,6 +53,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -227,6 +228,9 @@ func (c *GluetunCatalog) read() bool {
 		return true
 	}
 	c.reads++
+	// As after a native refresh (DefaultMaintainCatalog): the read's garbage
+	// goes back to the kernel now, whether or not the file was usable.
+	defer debug.FreeOSMemory()
 	relays, timestamp, err := providers.ReadGluetunSnapshot(c.source, c.gluetunProvider, now)
 	if err != nil {
 		return false
