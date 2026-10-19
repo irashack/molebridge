@@ -67,18 +67,32 @@ have to keep carrying the check for old readers, which saves nothing.
 
 A Mullvad or PIA exit idles at 67–78 MB, but a NordVPN exit uses about
 190 MB and a gluetun exit about 120 MB ([resources](docs/testing.md#resources-at-080-on-rootless-podman)),
-against a target of 70 MB. The likely cause, not yet profiled, is the
-server catalog: the whole provider file is decoded into memory before it is
-filtered, and Go keeps much of that heap afterwards. What it would take:
-profile first, idle and during a refresh; then decode the file as a stream
-and keep only the fields that picking and showing a server need. NordVPN's
-list joins servers to separate tables of groups, services, locations and
-technologies, so streaming can't assume the order of the document. The
-strict checks must stay: bounded size, strict UTF-8, duplicate keys refused,
-and the last good catalog kept when a refresh fails. Possibly also set a soft
-memory limit in the image, and measure how much of each exit is NetBird's
-share, which Molebridge cannot shrink. Done means NordVPN and gluetun exits under
-the target, measured the same way, with server choice and refresh unchanged.
+against a target of 70 MB. The likely cause was the server catalog: the whole
+provider file was decoded into memory before it was filtered, and Go kept much
+of that heap afterwards.
+
+0.9.3 changes the parsing, measured in Go tests and benchmarks, not on a live
+exit. The strict checks stay (bounded size, strict UTF-8, duplicate keys
+refused, the last good catalog kept when a refresh fails), but the parts
+nobody reads are checked without being built. The NordVPN list is read one
+server at a time and joined to its tables of groups, services, locations
+and technologies after the end of the document, in whatever order its members
+come: on a synthetic list of 6,500 servers (7.6 MiB) the parse's heap peak fell
+from 54 to 12 MiB. From gluetun's `servers.json` (7.4 MB) only the configured
+provider's block is built: with Mullvad selected, a read allocates 8 MiB instead
+of 43 and peaks at 8 MiB instead of 30. A download that announces its length, and the gluetun file,
+are read into one buffer instead of about twice their size. The exit returns
+the freed memory to the system after every catalog parse, including the
+startup read of `relays.json` and each read of gluetun's file, where before it
+did so only after a download. Failed refreshes now back off from one minute to
+an hour instead of downloading the list again every minute. No soft memory
+limit is set.
+
+What remains: measure a NordVPN and a gluetun exit again, idle and during a
+refresh, the same way as before, and how much of each is NetBird's share,
+which Molebridge cannot shrink. Their live memory has not been measured since
+these changes. Done means NordVPN and gluetun exits under the target, with server
+choice and refresh unchanged.
 
 ### One exit for several providers
 
