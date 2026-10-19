@@ -964,7 +964,8 @@ failed attempt from `state/applier/relay-error.json` (its `message` and `checked
 file holds an empty object after a refresh succeeds). Switching keeps using the last good
 catalog until it is 24 hours old. The exit tries again after one minute and doubles the wait
 after each further failure, up to an hour; while the last catalog is less than 24 hours old,
-it never waits past the moment the catalog turns 24 hours old. The exit's log has one line for each new
+it never waits past the moment the catalog turns 24 hours old, and once there is no such
+catalog (none yet, or a stale one) it waits at most five minutes. The exit's log has one line for each new
 cause, `molebridge-exit: applier: relay catalogue refresh failed: <reason>`, where the reason
 names a step or a file, such as `netx: request timed out` or `duplicate JSON field`, never
 the list's content. When a refresh succeeds again it logs `molebridge-exit: applier: relay

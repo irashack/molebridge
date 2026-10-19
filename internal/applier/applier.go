@@ -1113,11 +1113,12 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 // catalogRetryWait is the wait before the next refresh after a failure: the
 // backoff, but while the catalogue is fresh no later than when it stops
 // being fresh, so a list that can be downloaded again is not missed for up to
-// an hour at that moment. Once it is stale the backoff alone applies.
+// an hour at that moment. With no usable catalogue (none yet, or a stale one)
+// nothing can be switched, so the wait is at most CatalogRetryUnusableMaxSec.
 func (a *Applier) catalogRetryWait() float64 {
 	wait := a.catalogRetry
 	if !a.catalog.Usable() {
-		return wait
+		return math.Min(wait, CatalogRetryUnusableMaxSec)
 	}
 	age, ok := validate.AgeSeconds(a.catalog.Snapshot()["fetched_at"], a.wall())
 	if left := providers.CatalogMaxAge - age; ok && left < wait {

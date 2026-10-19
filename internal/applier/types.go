@@ -34,9 +34,12 @@ const (
 	// A failed catalogue refresh is retried after CatalogRetrySec, and each
 	// further failure doubles the wait up to CatalogRetryMaxSec; a success
 	// starts over. While the catalogue is fresh, a retry is never put off past
-	// the moment it would stop being fresh (providers.CatalogMaxAge).
-	CatalogRetrySec    = 60
-	CatalogRetryMaxSec = 60 * 60
+	// the moment it would stop being fresh (providers.CatalogMaxAge); while
+	// there is no usable catalogue, and so no switching, the wait is at most
+	// CatalogRetryUnusableMaxSec.
+	CatalogRetrySec            = 60
+	CatalogRetryMaxSec         = 60 * 60
+	CatalogRetryUnusableMaxSec = 5 * 60
 	// PollSec is how often the exit worker calls Tick.
 	PollSec = 5
 	// FreshRequestSec: a panel request this recent is the operator asking now:

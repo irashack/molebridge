@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -94,9 +95,18 @@ func TestARetryIsNotPutOffPastTheCatalogueAge(t *testing.T) {
 	if wait := due(t, a, k); wait != CatalogRetrySec {
 		t.Errorf("ten seconds before: %v", wait)
 	}
+	// A stale catalogue authorizes no switch: the backoff stops at five minutes.
 	staleCatalogue(a)
-	if wait := due(t, a, k); wait != CatalogRetryMaxSec {
+	if wait := due(t, a, k); wait != CatalogRetryUnusableMaxSec {
 		t.Errorf("stale: %v", wait)
+	}
+	a.catalogRetry = 0
+	var waits []float64
+	for range 5 {
+		waits = append(waits, due(t, a, k))
+	}
+	if want := []float64{60, 120, 240, 300, 300}; !slices.Equal(waits, want) {
+		t.Errorf("stale waits %v, want %v", waits, want)
 	}
 	if !strings.HasPrefix(k.logs[0], "applier: relay catalogue refresh failed: ") || len(k.logs) != 1 {
 		t.Errorf("logs %q", k.logs)
