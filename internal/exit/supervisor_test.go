@@ -149,6 +149,21 @@ func (h *harness) wait(done <-chan int, d time.Duration) int {
 	}
 }
 
+// waitPublications waits until at least n records were published, or d has
+// passed, and returns how many there were.
+func (h *harness) waitPublications(n int, d time.Duration) int {
+	deadline := time.Now().Add(d)
+	for {
+		h.mu.Lock()
+		got := len(h.written)
+		h.mu.Unlock()
+		if got >= n || !time.Now().Before(deadline) {
+			return got
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (h *harness) lastRecord() map[string]any {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -349,15 +364,16 @@ func TestNetBirdStartupFailureStopsTheExit(t *testing.T) {
 
 func TestPublicationRules(t *testing.T) {
 	h := newHarness(t, "good", "ok")
+	// The harness's 1-second grace is for the freeze tests. Here a lapse
+	// under load (1 to 2 runs in 200 with -count=200) would end the run
+	// early and fail the test for a reason it does not test.
+	h.s.Grace = 10 * time.Second
 	done := h.run()
 	if !h.waitTrace("netbird up", 10*time.Second) {
 		t.Fatal("not up")
 	}
-	time.Sleep(600 * time.Millisecond)
-	h.mu.Lock()
-	n := len(h.written)
-	h.mu.Unlock()
-	if n < 4 {
+	// Publications keep coming while the exit runs: wait for four of them.
+	if n := h.waitPublications(4, 10*time.Second); n < 4 {
 		t.Fatalf("only %d publications", n)
 	}
 	rec := h.lastRecord()

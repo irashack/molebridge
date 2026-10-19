@@ -28,6 +28,32 @@ func sh(script string) Spec {
 	return Spec{Path: "/bin/sh", Args: []string{"sh", "-c", script}, Env: []string{"PATH=/usr/bin:/bin"}}
 }
 
+// startReady starts script with its standard output on a pipe and returns once
+// the script has written a line there (or fails the test after 5 seconds).
+func startReady(t *testing.T, script string) *Process {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	spec := sh(script)
+	spec.Stdout = w
+	p, err := testReaper.Start(spec)
+	w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Read(make([]byte, 16)); err != nil {
+		p.KillGroup()
+		t.Fatalf("the child never said it was ready: %v", err)
+	}
+	return p
+}
+
 func TestSecondReaperIsRefused(t *testing.T) {
 	if r, err := NewReaper(); err == nil {
 		r.Close()
@@ -98,12 +124,9 @@ func TestAChildThatExitsAtOnceIsStillRouted(t *testing.T) {
 }
 
 func TestTermThenKillDeadlines(t *testing.T) {
-	// Ignores TERM, as a wedged child would.
-	p, err := testReaper.Start(sh(`trap "" TERM; while :; do sleep 1; done`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(200 * time.Millisecond) // let the trap be installed
+	// Ignores TERM, as a wedged child would. It says when the trap is in
+	// place, so TERM never lands before it.
+	p := startReady(t, `trap "" TERM; echo ready; while :; do sleep 1; done`)
 	start := time.Now()
 	if !p.Stop(600*time.Millisecond, 3*time.Second) {
 		t.Fatal("the group survived KILL")

@@ -54,6 +54,22 @@ func (s *script) Next(deadline time.Time) ([]rtnl.Event, error) {
 
 func (s *script) Close() error { s.closed.Store(true); return nil }
 
+// receives counts the watcher's calls to Next so far.
+func (s *script) receives() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.deadlines)
+}
+
+// laps waits until the watcher has gone round its loop at least n more times:
+// each lap ends with the periodic check, before the next receive. A test that
+// asserts something did not happen waits on this instead of a fixed sleep.
+func (s *script) laps(t *testing.T, n int) {
+	t.Helper()
+	want := s.receives() + n + 1
+	waitFor(t, "the watcher's next steps", func() bool { return s.receives() >= want })
+}
+
 type counter struct {
 	mu      sync.Mutex
 	reasons []string
@@ -116,7 +132,7 @@ func TestIrrelevantEventsAreIgnored(t *testing.T) {
 	})
 	stop := run(t, w)
 	waitFor(t, "the events", func() bool { return w.Stats().Events == 3 })
-	time.Sleep(30 * time.Millisecond)
+	s.laps(t, 3)
 	if len(c.get()) != 0 {
 		t.Fatalf("passes %v", c.get())
 	}
@@ -221,7 +237,7 @@ func TestAFullPassEveryIntervalWhenNothingHappens(t *testing.T) {
 	w := New(Config{Source: s, Mutator: c, Interval: 30 * time.Second, IdleStep: 10 * time.Millisecond,
 		Clock: func() time.Duration { return time.Duration(now.Load()) }})
 	stop := run(t, w)
-	time.Sleep(40 * time.Millisecond)
+	s.laps(t, 3)
 	if len(c.get()) != 0 {
 		t.Fatalf("a pass before the interval: %v", c.get())
 	}
@@ -231,7 +247,7 @@ func TestAFullPassEveryIntervalWhenNothingHappens(t *testing.T) {
 		t.Fatal(c.get())
 	}
 	// The next one is an interval later, not at once.
-	time.Sleep(40 * time.Millisecond)
+	s.laps(t, 3)
 	if len(c.get()) != 1 {
 		t.Fatalf("%v", c.get())
 	}

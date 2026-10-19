@@ -777,13 +777,20 @@ func TestReconcileRequestsCoalesce(t *testing.T) {
 	}
 	before := k.dumps
 	close(gate)
-	// Wait for the pass to run and the owner to go idle.
-	deadline := time.Now().Add(2 * time.Second)
-	for m.LastPass().Reason == "" && time.Now().Before(deadline) {
+	// Wait for the pass to run, then for the owner to take one more
+	// operation: every request was made before the gate opened, so a second
+	// pass, if there were one, would have been woken by then.
+	deadline := time.Now().Add(10 * time.Second)
+	for m.LastPass().Reason != "event" && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if passes := k.dumps - before; passes > 3 {
+	if err := m.Do(context.Background(), "after", func(tx *Tx) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	k.mu.Lock()
+	passes := k.dumps - before
+	k.mu.Unlock()
+	if passes > 3 {
 		t.Fatalf("1000 requests became %d dumps", passes)
 	}
 	if m.LastPass().Reason != "event" {
