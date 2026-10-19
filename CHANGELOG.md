@@ -4,8 +4,28 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.9.3 — unreleased
 
+**Experimental.** Less disk and memory churn on a running exit, a new setting
+that lets `state/applier` live in memory, example status records, and
+clearer log lines. The release candidate's live acceptance follows
+([testing](docs/testing.md#093)).
+
+**New**:
+- **`PRIVATE_STATE_DIR`.** A new optional exit setting. It moves the files
+  only the exit reads (`attempt.json`, `gluetun-selection.json` and PIA's
+  `tunnel.json`) out of `state/applier`. That directory then holds only
+  files the exit rebuilds (`result.json`, `relays.json`,
+  `relay-error.json`), so you can put it on a tmpfs. Unset, nothing moves,
+  and readers of `state/applier` don't change
+  ([configuration](docs/configuration.md#keeping-the-published-files-in-memory)).
+- **Example status records.** `docs/examples` has a healthy `result.json`
+  for each exit kind: a native overlay, a gluetun overlay, a gluetun sidecar
+  and a native sidecar (PIA with a forwarded port). A test generates them
+  from the applier and checks that the verdict judges each one connected
+  ([the status record](docs/architecture.md#example-records)).
+
+**Changes**:
 - **No fsync for `result.json`.** The status record is rewritten every 2 seconds
   on a native exit (the `owner_record` lease) and after every inspection, and
   nothing restores from it, so its writes skip the fsync before the atomic
@@ -14,21 +34,28 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   previous record or the new one, never a torn file. Every other state file
   (`attempt.json`, `relays.json`, `gluetun-selection.json`, the panel's) keeps
   its fsync.
-- **`PRIVATE_STATE_DIR`.** A new optional exit setting. It moves the files
-  only the exit reads (`attempt.json`, `gluetun-selection.json` and PIA's
-  `tunnel.json`) out of `state/applier`. That directory then holds only
-  files the exit rebuilds (`result.json`, `relays.json`,
-  `relay-error.json`), so you can put it on a tmpfs. Unset, nothing moves,
-  and readers of `state/applier` don't change
-  ([configuration](docs/configuration.md#keeping-the-published-files-in-memory)).
-  Tested with unit tests only.
-- **Example status records.** `docs/examples` has a healthy `result.json`
-  for each exit kind: a native overlay, a gluetun overlay, a gluetun sidecar
-  and a native sidecar (PIA with a forwarded port). A test generates them
-  from the applier and checks that the verdict judges each one connected
-  ([the status record](docs/architecture.md#example-records)).
-  `verdict.OrderRecord` (the member order the supervisor writes) moved from
-  `internal/exit` so the test can use it.
+- **Smaller JSON encoding.** `validate.MarshalJSON` no longer sets up a
+  32 KiB buffer for every call. It runs on every supervisor message (every
+  2 seconds) and for every relay when gluetun's catalog is read; a small
+  message took about a tenth of the time and a sixtieth of the memory in a
+  benchmark. Writing to a file still streams in 32 KiB chunks.
+- **Log lines name their cause.** `applier: control cycle failed` and
+  `applier: port forwarding failed` now end with the error (`port forwarding
+  failed: PIA refused port forwarding`, for example); neither ever carries a
+  login or a token. A deletion the mutation owner refuses (`kept IPv4 rule
+  98: ...`) is logged once and then at most every 10 minutes while it
+  recurs; it was logged on every pass.
+
+**Fixes**:
+- The rtnetlink watcher could miss closing its socket when its context was
+  cancelled between two receives. The exit closes the subscription itself, so
+  nothing leaked in production; a test flaked on it.
+
+**Internal**: `verdict.OrderRecord` (the member order the supervisor writes)
+moved from `internal/exit`. The README, ROADMAP and the architecture preamble
+describe 0.9 instead of 0.8.0 and 0.9.0, and the role lists name `port-sync`
+and `gluetun-preflight`. The release acceptance policy (version 5) drills a
+patch release as an upgrade from 0.9.2.
 
 ## 0.9.2 — 2026-10-17
 

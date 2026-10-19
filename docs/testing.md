@@ -15,6 +15,22 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.9.3
+
+The acceptance policy for 0.9.3 (`tools/acceptance-policy.json`, version 5)
+drills the upgrade from the release before it, `upgrade-from-0.9.2`; the
+platforms, providers, kinds and other drills are 0.9.2's.
+
+0.9.3 adds `PRIVATE_STATE_DIR` and the example status records, stops
+fsyncing `result.json`, encodes small JSON messages without a 32 KiB buffer,
+adds the cause to two log lines and logs a persisting refusal of the mutation
+owner once per 10 minutes, and fixes a race in the rtnetlink watcher's
+cancellation. Run so far: `gofmt -l`, `go vet ./...`, staticcheck v0.8.2,
+`go test ./...`, the panel's script tests and `tools/check-doc-links.sh` on
+the release branch with Go 1.27.0, where Docker wasn't available to run the
+namespace drills; CI runs them. The candidates' live runs follow. Not run at
+0.9.3: `PRIVATE_STATE_DIR` with `state/applier` on a tmpfs, on any host.
+
 ## 0.9.2
 
 The acceptance policy for 0.9.2 (`tools/acceptance-policy.json`, version 4)
