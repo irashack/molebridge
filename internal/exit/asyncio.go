@@ -13,6 +13,8 @@ import (
 // state volume or a blocked stderr would otherwise leave NetBird running past
 // its lease. Everything that does I/O for the supervisor goes through the two
 // types below, each on goroutines of its own with a bound on what it holds.
+// The worker writes its log through a boundedLog too, so a blocked stderr
+// can't stall its supervised loops into a lapsed lease either.
 
 // boundedLog is an io.Writer that never blocks. Lines go through a bounded
 // queue to the real sink on a goroutine of their own; when the queue is full

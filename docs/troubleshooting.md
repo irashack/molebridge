@@ -3,7 +3,10 @@
 Messages are quoted as the panel, `result.json` or the container logs print
 them. Read the exit's log with `docker compose logs exit` (`podman logs
 molebridge-exit` on Podman); its own lines start `molebridge-exit: `, NetBird's
-output starts `netbird: `. For a check of a running exit, use
+output starts `netbird: `. The exit never waits for the log: when the log
+driver stops reading, it drops lines rather than stall, and once the driver
+reads again it says how many with `molebridge-exit: log: <n> lines were
+dropped while the log sink was slow`. For a check of a running exit, use
 `docker compose exec exit molebridge status`. If the exit refuses to start, run
 `docker compose run --rm --no-deps exit check-config`, which validates what the
 exit validates at start and changes nothing.

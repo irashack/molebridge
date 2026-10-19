@@ -62,7 +62,7 @@ type worker struct {
 	s     *Settings
 	gen   string
 	clock bootclock.Clock
-	out   io.Writer // standard error
+	out   io.Writer // standard error, through a boundedLog
 	send  *workerSender
 
 	ctx    context.Context
@@ -120,13 +120,24 @@ func RunWorker(environ []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	w := &worker{s: s, gen: gen, clock: bootclock.System(), out: stderr, warned: map[string]time.Time{},
+	// The worker's lines go through the same bounded queue as the
+	// supervisor's (boundedLog): a log driver that stops reading must not
+	// stall a supervised loop, the mutation owner or the watcher among them,
+	// until the lease lapses. While the queue is full a line is dropped and
+	// counted, and the count is logged once the sink moves again.
+	log := newBoundedLog(stderr, 512)
+	w := &worker{s: s, gen: gen, clock: bootclock.System(), out: log, warned: map[string]time.Time{},
 		netbirdCh: make(chan Msg, 64)}
 	w.send = &workerSender{w: os.NewFile(3, "to-supervisor"), gen: gen}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	defer w.cancel()
 	go w.readSupervisor(os.NewFile(4, "from-supervisor"))
-	return w.run()
+	code := w.run()
+	// The last lines, a failure's reason among them, get a moment to land; a
+	// stuck sink costs this and nothing more, well inside the 6 seconds the
+	// supervisor's stop sequence gives the worker.
+	log.Flush(300 * time.Millisecond)
+	return code
 }
 
 // libLogf is the log sink of the routing libraries, whose lines already begin
@@ -145,6 +156,8 @@ func (w *worker) fatal(msg string) {
 	})
 }
 
+// logf writes one line. In the running worker w.out is a boundedLog, so this
+// never waits on the log sink.
 func (w *worker) logf(format string, a ...any) {
 	w.logMu.Lock()
 	defer w.logMu.Unlock()
