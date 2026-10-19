@@ -148,8 +148,6 @@ func (y *Syncer) failure(kind, message string) {
 // qbError is a failed exchange with qBittorrent: its kind and message.
 type qbError struct{ kind, message string }
 
-func (e *qbError) Error() string { return e.message }
-
 func (y *Syncer) syncQBittorrent(ctx context.Context, port int) {
 	if err := y.apply(ctx, port); err != nil {
 		y.failure(err.kind, err.message)

@@ -113,13 +113,6 @@ func (l *Lease) NewGeneration() (string, error) {
 	return l.gen, nil
 }
 
-// Gen is the current generation, empty before the first launch.
-func (l *Lease) Gen() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.gen
-}
-
 // Revoke ends the lease: nothing is accepted again until the next generation.
 func (l *Lease) Revoke() {
 	l.mu.Lock()

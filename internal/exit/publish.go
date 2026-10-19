@@ -1,7 +1,6 @@
 package exit
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -132,5 +131,3 @@ func (p *publisher) Close() {
 
 // Wait waits up to d for the queued write to finish.
 func (p *publisher) Wait(d time.Duration) bool { return p.out.Wait(d) }
-
-func (p *publisher) String() string { return fmt.Sprintf("publisher(%s)", p.s.PathResult()) }

@@ -118,12 +118,6 @@ func IsFloat(v any) (float64, bool) {
 	return 0, false
 }
 
-// IsBool is `type(v) is bool`.
-func IsBool(v any) (value, ok bool) {
-	value, ok = v.(bool)
-	return
-}
-
 // IsNumber is isinstance(v, (int, float)) without bool.
 func IsNumber(v any) (float64, bool) {
 	if n, ok := IsInt(v); ok {

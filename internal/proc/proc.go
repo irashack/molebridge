@@ -273,20 +273,6 @@ func ExitCode(ws syscall.WaitStatus) int {
 	return ws.ExitStatus()
 }
 
-// Signal sends a signal to the leader alone. A reaped leader is not signaled
-// (its pid may be someone else's by now).
-func (p *Process) Signal(sig syscall.Signal) error {
-	select {
-	case <-p.done:
-		return nil
-	default:
-	}
-	if err := syscall.Kill(p.Pid, sig); err != nil && err != syscall.ESRCH {
-		return err
-	}
-	return nil
-}
-
 // SignalGroup sends a signal to every process of the group. A group seen
 // empty is not signaled again: its id could be reused.
 func (p *Process) SignalGroup(sig syscall.Signal) error {

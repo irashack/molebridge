@@ -167,9 +167,6 @@ func (s *Supervisor) push(e event) {
 	}
 }
 
-// Lease exposes the lease (for tests).
-func (s *Supervisor) Lease() *Lease { return s.lease }
-
 // Run is the supervisor: it starts the worker, holds the lease, starts NetBird
 // when told and runs the stop sequence. It returns the process's exit status.
 func (s *Supervisor) Run() int {

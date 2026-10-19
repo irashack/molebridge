@@ -42,7 +42,7 @@ type FixRequest struct {
 	ClearExternalIPMap bool
 }
 
-// FixResult says what FixBlacklist or FixProfile did.
+// FixResult says what FixBlacklistWith or FixProfile did.
 type FixResult struct {
 	// Path is the profile it examined.
 	Path string
@@ -112,7 +112,7 @@ func daemonVisible(p Paths, o FixOptions) (string, bool) {
 	return "", false
 }
 
-// FixBlacklist is the operator's repair tool (D25): it adds the tunnel
+// FixBlacklistWith is the operator's repair tool (D25): it adds the tunnel
 // interface to the IFaceBlackList of the stored profile the daemon will load,
 // and changes nothing else.
 //
@@ -134,18 +134,15 @@ func daemonVisible(p Paths, o FixOptions) (string, bool) {
 // like the original before any content is written, fsynced, renamed over the
 // original, with the directory fsynced. Extended attributes, ACLs and
 // security labels are not copied.
-func FixBlacklist(p Paths, tunnelIF string) (FixResult, error) {
-	return FixBlacklistWith(p, tunnelIF, FixOptions{})
-}
-
-// FixBlacklistWith is FixBlacklist with injected system calls.
+//
+// o injects system calls; a field left nil is the real call.
 func FixBlacklistWith(p Paths, tunnelIF string, o FixOptions) (FixResult, error) {
 	return FixProfileWith(p, tunnelIF, FixRequest{}, o)
 }
 
-// FixProfile is FixBlacklist that also adds the interfaces in r.Add and, with
+// FixProfile is FixBlacklistWith that also adds the interfaces in r.Add and, with
 // r.ClearExternalIPMap, empties NATExternalIPs: the edits a peer moved to
-// another runtime needs. It refuses as FixBlacklist does, and also when an
+// another runtime needs. It refuses as FixBlacklistWith does, and also when an
 // interface name in r.Add is invalid or NATExternalIPs is not a list of
 // strings (both checked only with r.ClearExternalIPMap); NATExternalIPs that is
 // absent, null or empty is left alone.

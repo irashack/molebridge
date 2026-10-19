@@ -3,10 +3,8 @@ package contract
 import (
 	"fmt"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // OwnerExpiry is how long a native exit's owner record counts, in seconds of
@@ -204,19 +202,4 @@ func OwnerValid(rec OwnerRecord, ok bool, boot string, now uint64, netns string,
 		return false
 	}
 	return true
-}
-
-// NetNSIdentity returns "<device>:<inode>" of the network namespace object at
-// path (the /proc/self/ns/net link is followed): two processes in the same
-// namespace read the same value whatever their mount or user namespace.
-func NetNSIdentity(path string) (string, error) {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return "", err
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return "", fmt.Errorf("cannot read the namespace identity of %s", path)
-	}
-	return fmt.Sprintf("%d:%d", uint64(st.Dev), uint64(st.Ino)), nil
 }
