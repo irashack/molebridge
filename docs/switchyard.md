@@ -55,9 +55,11 @@ The page has three parts:
 
   Beside the state, "checked 20 s ago" says how old the exit's last check
   is, counting up live; status is polled every 30 seconds, and every 2 while
-  switching. Once the exit is connected, **Copy** next to the egress address
-  copies it (or selects it where the browser allows no clipboard, as in some
-  dashboard frames).
+  switching. A page that isn't visible (a background tab, a minimized
+  window, a home-screen app put away) polls nothing, and catches up as soon
+  as it is shown again. Once the exit is connected, **Copy** next to the
+  egress address copies it (or selects it where the browser allows no
+  clipboard, as in some dashboard frames).
 
   A connected exit whose egress was verified only by Molebridge's own tunnel
   checks, because its provider has no check of its own, also shows "tunnel
@@ -316,8 +318,9 @@ plain `docker compose up -d` starts it again.
 
 With several exits, every page and API call names its exit. `/` redirects to
 `/?exit=<id>` for the exit this browser last opened, and `/api/exits` returns
-every exit's state for the tabs. `/readyz` returns 200 only when all exits are
-connected; `/readyz?exit=<id>` checks one. The full list is in
+every exit's state for the tabs, which a visible page asks for every 15
+seconds. `/readyz` returns 200 only when all exits are connected;
+`/readyz?exit=<id>` checks one. The full list is in
 [configuration](configuration.md#panel-endpoints).
 
 Without sign-in, anyone who can reach this panel can switch every exit it

@@ -72,9 +72,39 @@
     };
   }
 
+  // A polling loop that rests while the page is hidden. run() answers the
+  // delay before the next run, or 0 to stop (the page is reloading). A run
+  // that finds the page hidden schedules nothing; resume(), on becoming
+  // visible, runs at once and starts the loop again. At most one timer is
+  // pending, so a resume during a run doesn't double the loop.
+  function makePoller(run, timers, isHidden) {
+    let timer = 0;
+    let stopped = false;
+    function schedule(delay) {
+      timers.clear(timer);
+      timer = 0;
+      if (delay && !stopped) timer = timers.set(tick, delay);
+    }
+    async function tick() {
+      timer = 0;
+      if (stopped || isHidden()) return;
+      const delay = await run();
+      if (!delay) stopped = true;
+      schedule(delay);
+    }
+    return {
+      start: schedule,
+      resume() {
+        if (isHidden()) return;
+        schedule(0);
+        tick();
+      },
+    };
+  }
+
   // Under Node (panel/js-tests), only the helpers above load.
   if (typeof module === 'object' && module?.exports) {
-    module.exports = { describe, checkText };
+    module.exports = { describe, checkText, makePoller };
     return;
   }
 
@@ -777,6 +807,7 @@
   paintChecked();
 
   setInterval(() => {
+    if (document.visibilityState === 'hidden') return;
     if (page.dataset.state === 'applying') paintProgress();
     paintChecked();
   }, 1000);
@@ -997,23 +1028,20 @@
     }
   }
 
-  if (tabs.size) {
-    setInterval(pollExits, 15000);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') pollExits();
-    });
-  }
-
-  async function pollLoop() {
-    const delay = await pollStatus();
-    if (delay) setTimeout(pollLoop, delay);
-  }
-  setTimeout(pollLoop, page.dataset.state === 'applying' ? 2000 : 30000);
-
-  // A home-screen app resumes without reloading and has no pull-to-refresh:
-  // catch up on status as soon as it is visible again.
+  // Nothing is polled while the page is hidden (a background tab, a
+  // dashboard on another screen, a home-screen app put away). On becoming
+  // visible it catches up at once: a home-screen app resumes without
+  // reloading and has no pull-to-refresh.
+  const timers = { set: (fn, ms) => setTimeout(fn, ms), clear: (id) => clearTimeout(id) };
+  const hidden = () => document.visibilityState === 'hidden';
+  const statusPoller = makePoller(pollStatus, timers, hidden);
+  statusPoller.start(page.dataset.state === 'applying' ? 2000 : 30000);
+  const exitsPoller = tabs.size ? makePoller(async () => { await pollExits(); return 15000; }, timers, hidden) : null;
+  exitsPoller?.start(15000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') pollStatus();
+    if (document.visibilityState !== 'visible') return;
+    statusPoller.resume();
+    exitsPoller?.resume();
   });
 
   if (page.dataset.state === 'applying') paintNotes('applying', '');
