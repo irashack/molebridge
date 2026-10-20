@@ -36,8 +36,8 @@ sign in, do. Set these from the release notes, which also list the source
 commit and the image digests:
 
 ```sh
-TAG=v0.9.2            # the release tag
-RC=v0.9.2-rc.1        # the candidate tag the release notes name: the build ran under it
+TAG=v0.9.3            # the release tag
+RC=v0.9.3-rc.2        # the candidate tag the release notes name: the build ran under it
 COMMIT=<source commit from the release notes>
 DIGEST=sha256:<index digest from the release notes>
 REPO=irashack/molebridge
