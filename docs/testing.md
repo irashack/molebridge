@@ -40,14 +40,53 @@ and without `-tags drill`, `go test ./...`, `go test -race -short ./...`,
 the panel's script tests and `tools/check-doc-links.sh` with Go 1.27.0,
 and the new catalog readers' fuzz tests against the full parser. The
 namespace drills did not run there (its kernel has no IPv6 and no
-WireGuard); CI runs them. The memory figures in the [changelog](../CHANGELOG.md#093--unreleased)
+WireGuard); CI runs them. The memory figures in the [changelog](../CHANGELOG.md#093--2026-10-20)
 come from Go benchmarks on a synthetic NordVPN list and gluetun's
 `servers.json` at v3.41.3, not from a running exit.
 
-The candidates' live runs follow. Not run at 0.9.3: `PRIVATE_STATE_DIR`
-with `state/applier` on a tmpfs, on any host; an exit's memory measured
-again; Switchyard's gzipped and cached static files and its paused polling
-in a real browser or behind a reverse proxy.
+The candidate's live run follows. Not run at 0.9.3: `PRIVATE_STATE_DIR`
+with `state/applier` on a tmpfs, on any host; Switchyard's gzipped and cached
+static files and its paused polling in a real browser or behind a reverse
+proxy; Docker Engine, podman-compose, and Mullvad or NordVPN as native
+sidecars. The 0.9.2, 0.9.1, 0.9.0 and 0.8.0 records below still hold for
+everything else.
+
+**v0.9.3-rc.2, the live acceptance, 2026-10-20.** The candidate
+`ghcr.io/irashack/molebridge:v0.9.3-rc.2`, index digest
+`sha256:2fcbaf807e03858d09eafdb3ad57f1c4022769ea7970a408e7ea8f647c4a30e9`
+(commit `3eaa32d`), signature verified with cosign v3.1.3 against the release
+workflow at that tag and commit. CI, the namespace drills and the race
+detector included, passed on the tag at the first run, and on `main` before
+it. rc.1 ran on no live exit.
+
+- **Upgrade from 0.9.2.** Every project went from 0.9.2 to rc.2 with no
+  setting changed and came back `ok`: the native Mullvad, PIA and NordVPN
+  overlay exits, three more native exits, the gluetun overlay exit, the PIA
+  native sidecar beside qBittorrent and Switchyard on Kubernetes (k0s with
+  Cilium). The gluetun sidecar left the cluster with its state for rootless
+  Podman 5.8 as Quadlet units, came back `ok` there on 0.9.2, and was then
+  upgraded in place to rc.2, `ok` again 1 s after its restart.
+- **The gluetun overlay exit on Kubernetes** took its preflight from an init
+  container running `gluetun-preflight`, and gluetun started through it.
+- **Drift** on the three native overlay exits: IPv4 rules 97, 95 and 1 and
+  IPv6 rule 97 deleted one at a time, each repaired within 0 to 10 ms, and a
+  foreign `lookup main` rule added at 96, removed within 20 to 30 ms (10 ms
+  resolution, polling included).
+- **Tunnel loss** on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.27 to 1.92 s); a fresh verified egress
+  0.8 to 6.9 s after the deletion.
+- **Lease lapse** on NordVPN: the worker frozen with SIGSTOP; the exit logged
+  `stopping (lease lapsed)` about 31 s later, NetBird stopped at about 33 s,
+  the exit stopped with exit 1 and "the routing guards stay in place" at about
+  37 s, the container restarted in the same pod, and the exit reported `ok`
+  72 s after the freeze.
+- **The gluetun sidecar on Podman**: peer, handshake and egress passing, and
+  the application's address NordVPN's, not the host's.
+- **Writes and memory.** With `result.json` no longer fsynced, the exits'
+  writes on the host's btrfs volume fell from about 2.2 GB a day each on 0.9.2
+  to none measurable in 20 minutes on rc.2. One reading of the working sets
+  on rc.2, not a comparison: 39 to 53 MiB for each overlay exit's `exit`
+  container, 17 MiB for the native sidecar's, 6 MiB for the panel.
 
 ## 0.9.2
 

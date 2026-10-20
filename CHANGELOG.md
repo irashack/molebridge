@@ -4,13 +4,14 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.9.3 — unreleased
+## 0.9.3 — 2026-10-20
 
 **Experimental.** Less disk and memory churn on a running exit, smaller
 server catalogs in memory, a new setting that lets `state/applier` live in
 memory, example status records, routing counters in the status record, and
-log lines that say what happened and why. The release candidate's live
-acceptance follows ([testing](docs/testing.md#093)).
+log lines that say what happened and why. The release candidate passed its
+live acceptance on Kubernetes and rootless Podman
+([testing](docs/testing.md#093)).
 
 **New**:
 - **`PRIVATE_STATE_DIR`.** A new optional exit setting. It moves the files
