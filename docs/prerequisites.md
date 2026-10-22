@@ -209,11 +209,12 @@ and a native exit upgraded from 0.7.0 and drilled on rootless Podman at 0.8.0.
 
 - **An active account** with NordVPN's VPN service.
 - **A WireGuard config file** for any server, downloaded from your Nord
-  Account ([setup](setup.md#3-create-the-tunnel-config) shows where). `prepare-config --nordvpn` keeps only its private
-  key, which is the same on every server. If your account offers no
-  download, an access token (NordVPN, then Advanced settings, then "Get
-  access token") lets `nordvpn-key` fetch the same key once, at setup; the
-  exit never stores the token.
+  Account ([setup](setup.md#3-create-the-tunnel-config) shows where).
+  `prepare-config --nordvpn` keeps only its private key, which is the same
+  on every server. If your account offers no download, an access token
+  (NordVPN, then Advanced settings, then "Get access token") lets
+  `nordvpn-key` fetch the same key once, at setup; the exit never stores the
+  token.
 - **Memory for the server list.** On the 0.8.0 live host a NordVPN exit
   idled at 189 MB, 136 MB of it anonymous memory. Parsing a list at the
   32 MiB limit took about 300 MB in a local test. The Compose files' 512 MiB
