@@ -20,6 +20,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   --nordvpn (docs/setup.md)`
   ([setup](docs/setup.md#3-create-the-tunnel-config)).
 
+**Go toolchain**: 1.27.2 to 1.27.3 for the image, the drill image and CI.
+1.27.3 adds crypto/x509's denylist of distrusted intermediate certificates
+(GO-2026-6809), which `govulncheck` reports as reachable through every
+HTTPS client in the binary.
+
 Tested: unit tests only, with a fixture shaped like two real downloads (a
 key that matched across both, the `/16` address, a DNS line and a peer named
 by hostname). No exit has run on a config made this way yet.
