@@ -102,8 +102,8 @@ grep -q "docker run $ref gluetun-auth" "$x/routing/gluetun-preflight" || fail "p
 grep -q ':0.8\|<tag>\|2222\|3333\|4444' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
 pass "image references rewritten in every form"
 
-# Metadata: owner 0, one mtime, normalized modes.
-listing=$($tar -tvzf "$archive" --numeric-owner)
+# Metadata: owner 0, one mtime (listed in UTC, whatever the local zone), normalized modes.
+listing=$(TZ=UTC $tar -tvzf "$archive" --numeric-owner)
 echo "$listing" | grep -qv ' 0/0 ' && fail "owner not 0/0"
 echo "$listing" | grep -q '2000-01-01 00:00' || fail "mtime not fixed"
 echo "$listing" | awk '{print $4, $5}' | grep -qv '^2000-01-01 00:00$' && fail "an mtime differs"
