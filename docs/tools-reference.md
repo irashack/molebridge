@@ -120,8 +120,9 @@ The same with `podman run --rm` and no `--user`. The output name must be
 - Prints `wrote OUTPUT (mode 0600); delete DOWNLOADED now`. The names are the
   in-container paths. Delete the original file on the host.
 
-**NordVPN.** Takes the WireGuard config downloaded from your Nord Account's
-manual setup, for any server, and writes the same config `nordvpn-key` does.
+**NordVPN.** Takes the WireGuard config downloaded from your Nord Account for
+any server ([setup](setup.md#3-create-the-tunnel-config) shows where) and
+writes the same config `nordvpn-key` does.
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" \

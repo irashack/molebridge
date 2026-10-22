@@ -209,10 +209,11 @@ Replace `p1234567` with your username, and type the password at the prompt,
 so it stays out of your shell history. `--pia` writes `tunnel/wg_confs/pia.conf`,
 which holds only the private key, and refuses to overwrite an existing one.
 
-**NordVPN** (experimental). In your Nord Account, open NordVPN's manual
-setup, pick any server, choose WireGuard and download its configuration file.
-Every server's file carries the same account key, so which one you pick
-doesn't matter. Convert it, replacing `<your-file>` with the downloaded
+**NordVPN** (experimental). In your Nord Account, choose NordVPN in the left
+panel, then "Set up NordVPN manually" under Manual setup. On the "Server
+recommendation" tab, pick a country and a server, choose "Get setup
+configuration" and save the WireGuard file. Every server's file carries the
+same account key, so which one you pick doesn't matter. Convert it, replacing `<your-file>` with the downloaded
 file's name:
 
 ```sh

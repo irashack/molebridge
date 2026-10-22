@@ -208,8 +208,8 @@ client-held fail-closed drills at 0.7.0 ([testing](testing.md#070-on-rootless-po
 and a native exit upgraded from 0.7.0 and drilled on rootless Podman at 0.8.0.
 
 - **An active account** with NordVPN's VPN service.
-- **A WireGuard config file** downloaded from your Nord Account's manual
-  setup, for any server. `prepare-config --nordvpn` keeps only its private
+- **A WireGuard config file** for any server, downloaded from your Nord
+  Account ([setup](setup.md#3-create-the-tunnel-config) shows where). `prepare-config --nordvpn` keeps only its private
   key, which is the same on every server. If your account offers no
   download, an access token (NordVPN, then Advanced settings, then "Get
   access token") lets `nordvpn-key` fetch the same key once, at setup; the
