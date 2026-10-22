@@ -15,6 +15,95 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.9.4
+
+The acceptance policy for 0.9.4 (`tools/acceptance-policy.json`, version 6)
+drills the upgrade from the release before it, `upgrade-from-0.9.3`; the
+platforms, providers, kinds and other drills are 0.9.3's.
+
+0.9.4 adds `prepare-config --nordvpn`, which turns a WireGuard config
+downloaded from the Nord Account into the NordVPN tunnel config, moves the
+image, the drill image and CI to Go 1.27.3, and makes the bundle test
+independent of the local time zone.
+
+**The checks, at `4932552`.** Run in an arm64 Linux VM with Go 1.27.3:
+`gofmt -l`, `go vet ./...` with and without `-tags drill`, staticcheck
+v0.8.2 with and without `-tags drill`, govulncheck v1.9.0, `go test
+./...`, `go test -race -short ./...`, the panel's script tests, `sh -n` and
+shellcheck on the shell scripts, `tools/test-gluetun-preflight.sh`, every
+`docker compose config` in [CONTRIBUTING](../CONTRIBUTING.md#checks)
+(Compose v2.40.3), `tools/check-compose.sh`, the release tooling's tests,
+`tools/gen-third-party.sh --check`, `tools/check-reproducible.sh` and
+`tools/check-doc-links.sh`. On Go 1.27.0 and on 1.27.2, which CI used,
+govulncheck failed on GO-2026-6809 (published 2026-10-21), so 1.27.3 is
+part of the release; the bundle test failed there only because `tar -tv`
+printed the fixed mtime in US Central time. The namespace drills ran under
+rootless Podman in the same VM and every case failed at its setup: `ip
+netns exec` cannot remount sysfs in a rootless user namespace. CI ran them,
+with its four other jobs, and all five passed on `4932552`.
+
+**A real download, on the NordVPN overlay exit.** On 2026-10-22, on the
+homelab's Kubernetes host (k0s with Cilium, amd64), with a binary built
+there from `4932552`. The download, made on Windows, arrived with LF line
+endings and no final newline; a copy with CRLF line endings was made from
+it. `prepare-config --nordvpn` turned both into the same 356-byte config
+(mode 0600). Its key was the one `nordvpn-key` had fetched with an access
+token for the running exit, and its settings matched that exit's tunnel
+config line for line; only `prepare-config`'s two comment lines differ. So
+the account key in a download is the token's key, and no token was needed
+to compare the two tools. Plain `prepare-config` refused the download
+(`this is a NordVPN config; use prepare-config --nordvpn`) and wrote
+nothing. `check-config`, with the exit's settings and its stored NetBird
+profile, printed `configuration accepted (...: an IPv4 address)` and `NetBird
+gate: configuration accepted`. The download and both configs were then
+deleted.
+
+The exit itself ran the 0.9.3 image, whose tunnel config path 0.9.4 leaves
+unchanged; the candidate's run follows. It was recreated, then switched from
+its server to another (verified 6 s after the request) and back. Without a
+client device:
+
+- The namespace checks 1 to 8 in [verification](verification.md#inside-the-namespace)
+  passed: the rules and table 51821 as listed, IPv6 with only the fallback,
+  `protected: true` from the chosen city through the tunnel, IPv6 through it
+  refused, unbound traffic on the host's public address, the ICMP return path
+  through the tunnel, NetBird on kernel WireGuard with `table ip netbird`, and
+  `state: ok (connected)`. The panel could not write `state/applier` and held
+  no capabilities; a malformed request was rejected as an invalid
+  desired-state file, and an unlisted server name as "not in a fresh trusted
+  relay catalogue", both with no change to the peer.
+- The fail-closed drills, each with the worker frozen while the break stood:
+  the IPv4 tunnel route, rules 95 (both families), 97 and 94, and the
+  fallback deleted, a `lookup main` rule inserted at 50 and the wrong action
+  at 97, all repaired 4 to 25 ms after the worker continued. With the tunnel
+  route gone, a probe bound to the tunnel failed; with rule 94 gone, `ip
+  route get` from the tunnel address answered unreachable. An nftables
+  counter on every other outgoing interface counted no packet to the probe's
+  address for the whole run. Unfrozen, deleting IPv4 rules 97, 95 and 1 and
+  IPv6 rule 97, and adding a `lookup main` rule at 96, were repaired within
+  20 to 30 ms (10 ms polling).
+- Tunnel loss: the interface was back 0.29 s after its deletion, without a
+  peer, and traffic passed again after 34 s, when the applier reapplied the
+  server. That wait is `ReapplyGuardSec`: no automatic reapply within 90 s of
+  the last mutation, which was the switch a minute earlier.
+- The egress status drill: with the exit's HTTPS through the tunnel dropped,
+  the record turned `failed`, "Tunnel inspection or egress check failed.",
+  `applied-unverified` with `recheck`, within 75 s, the server unchanged and
+  traffic still passing; it was `ok` again at the next check after the drop
+  was removed.
+- Lease lapse: with the worker frozen, `stopping (lease lapsed)` came 30.3 s
+  later, the interfaces were removed with the routing guards left in place,
+  and the container stopped with exit 1 at 36.5 s, restarted in the same pod
+  and was `ok` 46 s after the freeze.
+- NetBird killed: ``NetBird stopped unexpectedly: `netbird service run`
+  exited with status 137``, the stop sequence in 0.41 s, exit 1, and `ok`
+  again 81 s later (most of it the kubelet's restart backoff).
+
+Recreating the exit also showed a host problem, outside Molebridge: the
+CNI DHCP daemon that gives the overlay exits their LAN address had been
+stopped by a package removal, so the new pod could not start until it was
+restarted.
+
 ## 0.9.3
 
 The acceptance policy for 0.9.3 (`tools/acceptance-policy.json`, version 5)

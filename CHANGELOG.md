@@ -4,7 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.9.4 — unreleased
+
+**Experimental.** NordVPN setup from the WireGuard config file your Nord
+Account offers, with no access token, and Go 1.27.3. The release
+candidate's live acceptance follows ([testing](docs/testing.md#094)).
 
 **New**:
 - **NordVPN from a downloaded config.** Your Nord Account now offers a
@@ -25,9 +29,22 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 (GO-2026-6809), which `govulncheck` reports as reachable through every
 HTTPS client in the binary.
 
-Tested: unit tests only, with a fixture shaped like two real downloads (a
-key that matched across both, the `/16` address, a DNS line and a peer named
-by hostname). No exit has run on a config made this way yet.
+**Internal**: `tools/test-make-bundle.sh` reads the archive's listing in UTC,
+so it passes in any local time zone. The release acceptance policy
+(version 6) drills a patch release as an upgrade from 0.9.3.
+
+Tested: unit tests, with a fixture shaped like two real downloads, and one
+real Nord Account download on the homelab's NordVPN overlay exit
+(Kubernetes, k0s). The download as it arrived (LF line endings, no final
+newline) and a CRLF copy of it gave identical configs. Their key was the
+one `nordvpn-key` had fetched with an access token, and their settings
+matched the config the exit was running line for line; only
+`prepare-config`'s two comment lines differ. `check-config` accepted the
+result with the exit's settings. The recreated exit, on the 0.9.3 image
+(the tunnel config is read the same way in 0.9.4), then switched servers
+and passed the namespace checks and fail-closed drills in
+[verification](docs/verification.md)
+([testing](docs/testing.md#094)).
 
 ## 0.9.3 — 2026-10-20
 
