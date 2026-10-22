@@ -2,8 +2,8 @@
 //
 // It is a port of the awk validator in routing/molebridge-exit (conf_validator
 // and validate_conf) and of what tools/prepare-tunnel-config.py's wg-quick
-// did with the file. Only what tools/prepare-tunnel-config.py (Mullvad, and
-// PIA with --pia) and tools/nordvpn-key.py (NordVPN) write is accepted; see
+// did with the file. Only what prepare-config (Mullvad, PIA with --pia and
+// NordVPN with --nordvpn) and nordvpn-key (NordVPN) write is accepted; see
 // docs/configuration.md "The tunnel config". Anything else is refused before
 // any network change, with one fixed message that names a line number and a
 // field from the grammar's own list and carries none of the file's text.
@@ -474,7 +474,7 @@ func Hint(p Provider) string {
 	case PIA:
 		return "regenerate it with prepare-config --pia (docs/setup.md)"
 	case NordVPN:
-		return "regenerate it with nordvpn-key (docs/setup.md)"
+		return "regenerate it with prepare-config --nordvpn (docs/setup.md)"
 	}
 	return ""
 }

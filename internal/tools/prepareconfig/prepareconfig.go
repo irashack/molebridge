@@ -1,7 +1,7 @@
 // Package prepareconfig is the prepare-config role: tools/prepare-tunnel-config.py
-// as a container tool. It turns a WireGuard config downloaded from Mullvad into
-// Molebridge's tunnel config, or creates a new PIA tunnel config with a fresh
-// key. It prints no key material.
+// as a container tool. It turns a WireGuard config downloaded from Mullvad or
+// NordVPN into Molebridge's tunnel config, or creates a new PIA tunnel config
+// with a fresh key. It prints no key material.
 package prepareconfig
 
 import (
@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/irashack/molebridge/internal/panel/pystr"
+	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/tools/privfile"
 )
 
@@ -37,25 +38,34 @@ func refuse(format string, a ...any) error { return ConfigError(fmt.Sprintf(form
 
 // Help is the usage text; it documents the mounts.
 const Help = `Usage: molebridge prepare-config DOWNLOADED.conf OUTPUT
+       molebridge prepare-config --nordvpn DOWNLOADED.conf OUTPUT
        molebridge prepare-config --pia OUTPUT
 
-Turns a WireGuard config downloaded from Mullvad into Molebridge's tunnel
-config, or (--pia) creates a new PIA tunnel config. Both paths are inside the
-container, so mount them. OUTPUT is written mode 0600 and atomically. With
---pia a new private key is generated and the config has no address or peer
-(the applier registers the key with PIA and sets both per region); an
-existing OUTPUT is never overwritten. The downloaded server becomes the
-starting peer; the panel changes it later. Only the private key, tunnel
-addresses and first peer are kept. The DNS line is dropped on purpose, and
-routing is handed to the exit through "Table = off" plus a default route in
-the exit table (EXIT_TABLE, default 51821, passed with -e if changed).
-Prints no key material. Delete the downloaded file once this succeeds.
+Turns a WireGuard config downloaded from Mullvad (or, with --nordvpn, from
+NordVPN) into Molebridge's tunnel config, or (--pia) creates a new PIA tunnel
+config. The paths are inside the container, so mount them. OUTPUT is written
+mode 0600 and atomically. With --pia a new private key is generated and the
+config has no address or peer (the applier registers the key with PIA and
+sets both per region); an existing OUTPUT is never overwritten. From a
+Mullvad file the downloaded server becomes the starting peer; the panel
+changes it later. Only the private key, tunnel addresses and first peer are
+kept. From a NordVPN file only the private key is kept: the config has
+NordLynx's tunnel address (10.5.0.2/32) and no peer, and the applier sets the
+peer when you pick a server, so any NordVPN server's file will do. The DNS
+line is dropped on purpose, and routing is handed to the exit through
+"Table = off" plus a default route in the exit table (EXIT_TABLE, default
+51821, passed with -e if changed). Prints no key material. Delete the
+downloaded file once this succeeds.
 
 Run it as yourself so the output is not owned by root:
 
   docker run --rm --user "$(id -u):$(id -g)" \
     -v "$PWD/tunnel/wg_confs:/out" -v "$HOME/Downloads/mullvad.conf:/in.conf:ro" \
     ghcr.io/irashack/molebridge:<tag> prepare-config /in.conf /out/mullvad.conf
+
+  docker run --rm --user "$(id -u):$(id -g)" \
+    -v "$PWD/tunnel/wg_confs:/out" -v "$HOME/Downloads/nordvpn.conf:/in.conf:ro" \
+    ghcr.io/irashack/molebridge:<tag> prepare-config --nordvpn /in.conf /out/nordvpn.conf
 
   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/tunnel/wg_confs:/out" \
     ghcr.io/irashack/molebridge:<tag> prepare-config --pia /out/pia.conf
@@ -264,6 +274,11 @@ func BuildTunnelConf(text, table string) (string, error) {
 	if n4 == 0 {
 		return "", refuse("Interface Address has no IPv4 tunnel address")
 	}
+	for _, a := range parsed {
+		if a.addr == nordHost {
+			return "", refuse("this is a NordVPN config; use prepare-config --nordvpn")
+		}
+	}
 	// What the exit accepts (docs/configuration.md#the-tunnel-config): one
 	// host address per family.
 	if n4 > 1 || n6 > 1 {
@@ -319,6 +334,61 @@ func BuildTunnelConf(text, table string) (string, error) {
 		"Endpoint = " + host + ":" + port,
 		"AllowedIPs = " + allowed,
 		"PersistentKeepalive = 25",
+		"",
+	}, "\n"), nil
+}
+
+// nordHost is NordLynx's tunnel address. NordVPN's downloaded configs write it
+// as 10.5.0.2/16; the exit uses it as a host address.
+var nordHost = netip.MustParsePrefix(providers.NordAddress).Addr()
+
+// BuildNordVPNTunnelConf turns a WireGuard config downloaded from NordVPN into
+// the same tunnel config nordvpn-key writes. The account's key is the same in
+// every server's file, so only the key is kept; the peer is dropped because
+// the applier sets it when a server is chosen.
+func BuildNordVPNTunnelConf(text, table string) (string, error) {
+	ifc, _ := parseWireguardConf(text)
+	privateKey, err := requireKey(ifc["PrivateKey"], "Interface PrivateKey")
+	if err != nil {
+		return "", err
+	}
+	// Exactly NordLynx's address, at any prefix length. An IPv6 address is
+	// refused: NordLynx carries no IPv6 (docs/providers.md#how-nordvpn-differs).
+	var parts []string
+	for _, part := range strings.Split(ifc["Address"], ",") {
+		if part = pystr.Strip(part); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) != 1 {
+		return "", refuse("Interface Address must be NordLynx's 10.5.0.2 and nothing else")
+	}
+	if a, ok := parseInterface(parts[0]); !ok || a.addr != nordHost {
+		return "", refuse("Interface Address must be NordLynx's 10.5.0.2 and nothing else")
+	}
+	return BuildNordConf(privateKey, table, "prepare-config --nordvpn")
+}
+
+// BuildNordConf is the NordVPN tunnel config both prepare-config --nordvpn and
+// nordvpn-key write; tool names the generator in the header comment.
+func BuildNordConf(privateKey, table, tool string) (string, error) {
+	if _, err := requireKey(privateKey, "PrivateKey"); err != nil {
+		return "", err
+	}
+	if err := CheckTable(table); err != nil {
+		return "", err
+	}
+	// IPv4 only: NordLynx carries no IPv6, so IPv6 stays on the unreachable fallback.
+	return strings.Join([]string{
+		"# Generated by molebridge " + tool + ". Keep mode 0600; never commit.",
+		"# No peer: the applier sets it when a server is chosen.",
+		"[Interface]",
+		"PrivateKey = " + privateKey,
+		"Address = " + providers.NordAddress,
+		"MTU = 1420",
+		"Table = off",
+		"PostUp = ip route replace default dev %i table " + table,
+		"PreDown = ip route del default dev %i table " + table,
 		"",
 	}, "\n"), nil
 }
@@ -430,6 +500,10 @@ func Main(args []string, o Options) int {
 		fmt.Fprintf(o.Stdout, "wrote %s (mode 0600)\n", output)
 		return 0
 	}
+	build := BuildTunnelConf
+	if len(args) > 0 && args[0] == "--nordvpn" {
+		build, args = BuildNordVPNTunnelConf, args[1:]
+	}
 	if len(args) != 2 {
 		return usage(o)
 	}
@@ -437,7 +511,7 @@ func Main(args []string, o Options) int {
 	text, err := readInput(source)
 	if err == nil {
 		var content string
-		if content, err = BuildTunnelConf(text, o.table()); err == nil {
+		if content, err = build(text, o.table()); err == nil {
 			err = privfile.Write(output, []byte(content), 0o600)
 		}
 	}
@@ -450,6 +524,7 @@ func Main(args []string, o Options) int {
 
 func usage(o Options) int {
 	fmt.Fprintln(o.Stderr, "usage: molebridge prepare-config DOWNLOADED.conf OUTPUT")
+	fmt.Fprintln(o.Stderr, "       molebridge prepare-config --nordvpn DOWNLOADED.conf OUTPUT")
 	fmt.Fprintln(o.Stderr, "       molebridge prepare-config --pia OUTPUT")
 	return 2
 }

@@ -68,7 +68,7 @@ must be edited or the values passed with `-e`.
 
 | Tool | Writes | Environment | Section |
 |---|---|---|---|
-| `prepare-config` | `<out>/mullvad.conf` or `<out>/pia.conf` (0600) | `EXIT_TABLE` | [below](#prepare-config) |
+| `prepare-config` | `<out>/mullvad.conf`, `<out>/nordvpn.conf` or `<out>/pia.conf` (0600) | `EXIT_TABLE` | [below](#prepare-config) |
 | `nordvpn-key` | `<out>/nordvpn.conf` (0600) | `EXIT_TABLE` | [below](#nordvpn-key) |
 | `gluetun-auth` | `<dir>/auth.toml`, `<dir>/api_key` (0600) | none | [below](#gluetun-auth) |
 | `gluetun-post-rules` | `<dir>/post-rules.txt` (0644) | routing settings | [below](#gluetun-post-rules) |
@@ -78,11 +78,13 @@ must be edited or the values passed with `-e`.
 
 ## prepare-config
 
-Turns a WireGuard config downloaded from Mullvad into Molebridge's tunnel
-config, or creates a new PIA tunnel config with a fresh private key.
+Turns a WireGuard config downloaded from Mullvad or NordVPN into
+Molebridge's tunnel config, or creates a new PIA tunnel config with a fresh
+private key.
 
 ```
 molebridge prepare-config DOWNLOADED.conf OUTPUT
+molebridge prepare-config --nordvpn DOWNLOADED.conf OUTPUT
 molebridge prepare-config --pia OUTPUT
 ```
 
@@ -118,6 +120,28 @@ The same with `podman run --rm` and no `--user`. The output name must be
 - Prints `wrote OUTPUT (mode 0600); delete DOWNLOADED now`. The names are the
   in-container paths. Delete the original file on the host.
 
+**NordVPN.** Takes the WireGuard config downloaded from your Nord Account's
+manual setup, for any server, and writes the same config `nordvpn-key` does.
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  -v "$HOME/Downloads/nordvpn.conf:/in.conf:ro" \
+  ghcr.io/irashack/molebridge:<tag> prepare-config --nordvpn /in.conf /out/nordvpn.conf
+```
+
+- Input: as for Mullvad, read the same way. Only the private key is kept: it
+  is the account's one NordLynx key, the same in every server's file. The
+  `DNS` line and the `[Peer]` (which names the server by hostname) are
+  dropped.
+- Output: as for Mullvad, but with the address `10.5.0.2/32` and no peer; the
+  exit sets the peer when you pick a server. Only the header comment differs
+  from what `nordvpn-key` writes.
+- Requirements, each a refusal: a canonical 32-byte base64 `PrivateKey`; an
+  `Address` that is `10.5.0.2` at any prefix length (the download has `/16`)
+  and nothing else, so no IPv6; `EXIT_TABLE` from 256 to 2147483647.
+- Prints `wrote OUTPUT (mode 0600); delete DOWNLOADED now`.
+
 **PIA.** Creates a new config with a new private key and no address or peer;
 the exit registers the key with PIA and sets both for each region.
 
@@ -142,6 +166,8 @@ Messages (standard error, exit status 1; each starts `error: `):
 | `Interface Address has no IPv4 tunnel address` | no IPv4 address |
 | `Interface Address has more than one address in a family` | two IPv4 or two IPv6 addresses |
 | `Interface Address must be host addresses (/32 and /128)` | a subnet prefix |
+| `this is a NordVPN config; use prepare-config --nordvpn` | a NordVPN download without `--nordvpn` |
+| `Interface Address must be NordLynx's 10.5.0.2 and nothing else` | `--nordvpn` with another address, an IPv6 one, or none |
 | `Peer Endpoint must be an IPv4 address and port` | hostname, IPv6 or no port |
 | `Peer Endpoint port must be 1..65535` | port out of range |
 | `EXIT_TABLE must be an unreserved table number (256..2147483647)` | bad `EXIT_TABLE` |
@@ -151,14 +177,18 @@ Messages (standard error, exit status 1; each starts `error: `):
 | `open <path>: <reason>` | the input cannot be opened, or a file or directory for the output cannot be created (`mkdir <path>: <reason>` for the latter) |
 | `the tunnel config could not be written` | any other failure writing the output |
 
-Usage errors (`usage: molebridge prepare-config DOWNLOADED.conf OUTPUT` and
+Usage errors (`usage: molebridge prepare-config DOWNLOADED.conf OUTPUT`,
+`       molebridge prepare-config --nordvpn DOWNLOADED.conf OUTPUT` and
 `       molebridge prepare-config --pia OUTPUT`) exit `2`.
 
 ## nordvpn-key
 
 Fetches your NordLynx private key with a NordVPN access token and writes
 Molebridge's tunnel config for NordVPN. Create the token in your Nord Account
-under NordVPN, Advanced settings, Get access token.
+under NordVPN, Advanced settings, Get access token. A config downloaded from
+your Nord Account gives the same result without a token, through
+[`prepare-config --nordvpn`](#prepare-config); use this tool when your account
+offers no download.
 
 ```
 molebridge nordvpn-key TOKEN_FILE OUTPUT

@@ -110,7 +110,7 @@ you want direct NetBird connections from a rootless or bridged setup (see
 | Mullvad, through the tunnel: HTTPS to `ipv4.am.i.mullvad.net` and `ipv6.am.i.mullvad.net` | Egress checks |
 | PIA: HTTPS to `serverlist.piaservers.net` and `www.privateinternetaccess.com`; TCP 1337 to PIA servers; the UDP port each server assigns | Server list, login, key registration, tunnel |
 | PIA, through the tunnel: HTTPS to `www.privateinternetaccess.com`; TCP 19999 to the server (port forwarding only) | Egress check, port forwarding |
-| NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list, latency probes. The `nordvpn-key` tool makes its one request to `api.nordvpn.com` from the throwaway container at setup |
+| NordVPN: UDP 51820 to servers; HTTPS to `api.nordvpn.com`; TCP 443 to servers | Tunnel, server list, latency probes. If you use `nordvpn-key` instead of a downloaded config, it makes its one request to `api.nordvpn.com` from the throwaway container at setup |
 | NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
 | Native sidecar: the rows for its provider above. The exit's provider downloads, login and registration leave over the host's connection; the applications reach only `SIDECAR_LAN_CIDRS` outside the tunnel | As the provider's rows; a resolver inside `SIDECAR_LAN_CIDRS` is reached outside the tunnel ([DNS](native-sidecar.md#dns)) |
 | gluetun backend: what gluetun needs for its provider, including its server list updater and DNS, which go through the tunnel | Tunnel, server list |
@@ -208,10 +208,12 @@ client-held fail-closed drills at 0.7.0 ([testing](testing.md#070-on-rootless-po
 and a native exit upgraded from 0.7.0 and drilled on rootless Podman at 0.8.0.
 
 - **An active account** with NordVPN's VPN service.
-- **An access token**, from your Nord Account: NordVPN, then Advanced
-  settings, then "Get access token". `nordvpn-key` uses it once, at
-  setup, to fetch the account's NordLynx private key; the exit never stores
-  it. The private key is the same on every server.
+- **A WireGuard config file** downloaded from your Nord Account's manual
+  setup, for any server. `prepare-config --nordvpn` keeps only its private
+  key, which is the same on every server. If your account offers no
+  download, an access token (NordVPN, then Advanced settings, then "Get
+  access token") lets `nordvpn-key` fetch the same key once, at setup; the
+  exit never stores the token.
 - **Memory for the server list.** On the 0.8.0 live host a NordVPN exit
   idled at 189 MB, 136 MB of it anonymous memory. Parsing a list at the
   32 MiB limit took about 300 MB in a local test. The Compose files' 512 MiB

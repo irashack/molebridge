@@ -235,8 +235,8 @@ Details: [architecture](docs/architecture.md).
 - **A VPN account:**
   - Mullvad, which uses one free device slot;
   - or PIA, which needs your username and password on the host;
-  - or NordVPN (experimental), whose access token is needed
-    only once, at setup;
+  - or NordVPN (experimental), whose downloaded WireGuard config is
+    needed only once, at setup;
   - or, through the experimental gluetun backend, an account with one of
     gluetun's providers that Molebridge can select servers for: FastestVPN,
     IVPN, Mullvad, NordVPN, Surfshark or Windscribe.

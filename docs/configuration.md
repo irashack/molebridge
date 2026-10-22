@@ -408,7 +408,8 @@ the provider's key from `secrets/gluetun/wireguard_private_key`.
 
 Before anything changes, the exit checks the file against what Molebridge's
 own tools write: `prepare-config` for Mullvad, the same with `--pia` for PIA,
-and `nordvpn-key` for NordVPN ([tools](tools-reference.md)). Anything else is
+and the same with `--nordvpn`, or `nordvpn-key`, for NordVPN
+([tools](tools-reference.md)). Anything else is
 refused, including fields `wg-quick` itself would accept; the exit does not
 run `wg-quick`, or any other program, to bring the tunnel up. The file must
 be a regular file, not a symlink, readable by the container, at most 4 KiB,
@@ -456,7 +457,7 @@ missing`, `[Peer] is not supported for this provider` or `Address on line <n>
 is not supported for PIA`. The field names come from the table above, never
 from the file: no message quotes the config, which holds the private key. The
 end names the tool for your `PROVIDER` (`prepare-config --pia` for PIA,
-`nordvpn-key` for NordVPN).
+`prepare-config --nordvpn` for NordVPN).
 
 To change the exit table of an existing exit while keeping its key, set
 `EXIT_TABLE` in `.env` and edit only these two lines in its tunnel config
@@ -493,9 +494,9 @@ contents anywhere.
 | `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `gluetun-auth` | With the gluetun backend |
 | `secrets/gluetun/api_key` | The same API key, for the exit. It is full gluetun administration | With the gluetun backend |
 
-The NordVPN access token is not one of these: it is needed only while
-`nordvpn-key` runs. If you saved it to a file for that, delete it
-afterwards. `secrets/netbird.env` and `secrets/applier.env` reach the exit
+Neither NordVPN's downloaded config nor its access token is one of these:
+each is needed only while `prepare-config --nordvpn` or `nordvpn-key` runs.
+Delete the download afterwards, and the token file if you saved one. `secrets/netbird.env` and `secrets/applier.env` reach the exit
 through `env_file`, so their permissions are a host check
 ([operations](operations.md#host-checks)). The supervisor hands `NB_SETUP_KEY`
 only to the NetBird processes, not to its worker, and hands NetBird only

@@ -8,7 +8,7 @@ import (
 
 func init() {
 	register("prepare-config",
-		"turn a Mullvad WireGuard download into the tunnel config, or (--pia) create a PIA one",
+		"turn a Mullvad or (--nordvpn) NordVPN WireGuard download into the tunnel config, or (--pia) create a PIA one",
 		func(args []string) int {
 			return prepareconfig.Main(args, prepareconfig.Defaults(toolsEnv(), os.Stdout, os.Stderr))
 		})

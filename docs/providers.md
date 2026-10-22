@@ -136,14 +136,16 @@ private key and the tunnel address `10.5.0.2/32` are valid on every server,
 the address is in the tunnel config from the start, and a switch changes
 only the peer. The exit holds no NordVPN credential. What differs:
 
-- **The key comes from an access token.** NordVPN has no config download.
-  The `nordvpn-key` tool asks NordVPN's API for the account's NordLynx
-  private key once, at setup, with an access token you create in your Nord
-  Account (NordVPN, then Advanced settings, then "Get access token"). It
-  writes the tunnel config and nothing else; the token is needed only for
-  that, so delete it, or revoke it in your Nord Account, afterwards. The
-  [setup](setup.md#3-create-the-tunnel-config) step shows how. Expect
-  NordVPN to count the exit as one of the account's devices (not verified).
+- **The key comes from any server's download.** Your Nord Account offers a
+  WireGuard config file for each server, and every one carries the same
+  account key. `prepare-config --nordvpn` keeps only that key; the server you
+  downloaded doesn't matter. The download writes the address as
+  `10.5.0.2/16` and names the server by hostname; the tool writes
+  `10.5.0.2/32` and no peer. If your account offers no download,
+  `nordvpn-key` fetches the same key from NordVPN's API with an access token
+  instead. The [setup](setup.md#3-create-the-tunnel-config) step shows both.
+  Expect NordVPN to count the exit as one of the account's devices (not
+  verified).
 - **No peer until you pick a server.** The generated config has no `[Peer]`,
   so a fresh exit carries no traffic, and the exit reports "No NordVPN
   server is selected yet; choose one in the panel." until you choose one.

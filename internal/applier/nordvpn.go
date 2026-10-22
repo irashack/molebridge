@@ -22,8 +22,9 @@ package applier
 //     false, the exit reports the failure; it is never accepted on the address
 //     alone.
 //
-// The applier holds no NordVPN credential: nordvpn-key fetches the private key
-// once at setup, into the tunnel config the applier never mounts.
+// The applier holds no NordVPN credential: prepare-config --nordvpn (or
+// nordvpn-key) writes the private key once at setup, into the tunnel config
+// the applier never mounts.
 
 import (
 	"context"

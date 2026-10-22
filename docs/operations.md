@@ -696,7 +696,7 @@ The state worth keeping is small:
 | What | Why | If lost |
 |---|---|---|
 | `netbird-data` volume | The peer's identity | The exit enrolls as a new peer; recreate its route and group membership |
-| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the exit registers it again on its own. NordVPN: run `nordvpn-key` again with a new access token |
+| `tunnel/wg_confs/*.conf` | The tunnel private key | Mullvad: generate a new device config. PIA: generate a new key; the exit registers it again on its own. NordVPN: download a WireGuard config from your Nord Account again and run `prepare-config --nordvpn` |
 | `secrets/` | Setup key, PIA login, Gatus token; with gluetun, the provider's WireGuard key, the role file and the API key; with a native sidecar, the qBittorrent login for `port-sync` | Re-create them; for gluetun, `gluetun-auth --rotate` writes a new role file and key |
 | `.env` | Settings | Re-create it |
 | `state/panel/desired.json` | The chosen server | Pick again in the panel |
@@ -1017,11 +1017,12 @@ recreate the exit. Once the exit works, remove the old device on mullvad.net.
 the new key in the saved region on its own. To change the PIA password, rewrite
 `secrets/pia/password` and restart the exit.
 
-**NordVPN.** NordVPN's API returns the account's one NordLynx key; how to make
-it issue a new one hasn't been checked. To rebuild the config, move
-`tunnel/wg_confs/nordvpn.conf` aside, run `nordvpn-key` with a new
-access token as in [setup](setup.md#3-create-the-tunnel-config), then
-recreate the exit. The exit applies the saved server again on its own.
+**NordVPN.** Every NordVPN download and NordVPN's API carry the account's one
+NordLynx key; how to make NordVPN issue a new one hasn't been checked. To
+rebuild the config, download a WireGuard config again and run
+`prepare-config --nordvpn` as in [setup](setup.md#3-create-the-tunnel-config)
+(it replaces the file), or move `tunnel/wg_confs/nordvpn.conf` aside and run
+`nordvpn-key` with a new access token, then recreate the exit. The exit applies the saved server again on its own.
 
 ## Removing
 

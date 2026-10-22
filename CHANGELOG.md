@@ -4,6 +4,26 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+**New**:
+- **NordVPN from a downloaded config.** Your Nord Account now offers a
+  WireGuard config file for each server, and every one carries the same
+  account key. `prepare-config --nordvpn` turns one into the NordVPN tunnel
+  config, so setup no longer needs an access token. It keeps only the key
+  and writes the same config `nordvpn-key` does: `10.5.0.2/32` (the download
+  has `/16`), no peer and no DNS line. It accepts Windows line endings in the
+  download. `nordvpn-key` stays for accounts that offer no download.
+  `prepare-config` without the flag now answers a NordVPN download with
+  `this is a NordVPN config; use prepare-config --nordvpn`, and the exit's
+  refusal of a NordVPN tunnel config ends `regenerate it with prepare-config
+  --nordvpn (docs/setup.md)`
+  ([setup](docs/setup.md#3-create-the-tunnel-config)).
+
+Tested: unit tests only, with a fixture shaped like two real downloads (a
+key that matched across both, the `/16` address, a DNS line and a peer named
+by hostname). No exit has run on a config made this way yet.
+
 ## 0.9.3 — 2026-10-20
 
 **Experimental.** Less disk and memory churn on a running exit, smaller

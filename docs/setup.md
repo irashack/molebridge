@@ -209,10 +209,30 @@ Replace `p1234567` with your username, and type the password at the prompt,
 so it stays out of your shell history. `--pia` writes `tunnel/wg_confs/pia.conf`,
 which holds only the private key, and refuses to overwrite an existing one.
 
-**NordVPN** (experimental). In your Nord Account, open NordVPN, then Advanced
-settings, and choose "Get access token". Fetch the key with the token on
-standard input, typed at the prompt so it stays out of your shell history and
-every command line:
+**NordVPN** (experimental). In your Nord Account, open NordVPN's manual
+setup, pick any server, choose WireGuard and download its configuration file.
+Every server's file carries the same account key, so which one you pick
+doesn't matter. Convert it, replacing `<your-file>` with the downloaded
+file's name:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/tunnel/wg_confs:/out" \
+  -v "$HOME/Downloads/<your-file>.conf:/in.conf:ro" \
+  "$IMAGE" prepare-config --nordvpn /in.conf /out/nordvpn.conf &&
+  rm "$HOME/Downloads/<your-file>.conf"
+```
+
+It writes `tunnel/wg_confs/nordvpn.conf`: the key and the address
+`10.5.0.2/32`, with no peer and no DNS line; you pick the server in the panel.
+A file downloaded on Windows may have Windows line endings; the tool accepts
+them, and the config it writes has none. Nothing secret is printed.
+
+If your Nord Account offers no WireGuard download, fetch the same key with an
+access token instead: in your Nord Account, open NordVPN, then Advanced
+settings, and choose "Get access token". Pass the token on standard input,
+typed at the prompt so it stays out of your shell history and every command
+line:
 
 ```sh
 (read -rs nord_token && printf '%s' "$nord_token" |
@@ -221,12 +241,10 @@ every command line:
     "$IMAGE" nordvpn-key - /out/nordvpn.conf)
 ```
 
-The tool asks NordVPN for the account's NordLynx private key and writes
-`tunnel/wg_confs/nordvpn.conf`: the key and the address `10.5.0.2/32`, with no
-peer. It prints `wrote the NordVPN tunnel config (mode 0600)` and nothing
-secret, and never overwrites an existing config. The token isn't needed
-again; revoke it in your Nord Account. For a token file instead of standard
-input, see the [tools reference](tools-reference.md#nordvpn-key).
+It writes the same config, prints `wrote the NordVPN tunnel config (mode
+0600)` and nothing secret, and never overwrites an existing config. The token
+isn't needed again; revoke it in your Nord Account. For a token file instead
+of standard input, see the [tools reference](tools-reference.md#nordvpn-key).
 
 **Who can read it.** Keep the config mode 0600, owned by you, in the 0700
 `tunnel/wg_confs` directory. The `exit` container runs as its own root with

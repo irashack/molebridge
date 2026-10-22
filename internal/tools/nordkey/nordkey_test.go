@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irashack/molebridge/internal/tools/prepareconfig"
 	"github.com/irashack/molebridge/internal/tunnelconf"
 )
 
@@ -486,5 +487,27 @@ func TestClientIgnoresTheProxyEnvironment(t *testing.T) {
 	}
 	if NewClient().Timeout != Timeout {
 		t.Error("no deadline")
+	}
+}
+
+// The config from the API key and the one from a Nord Account download differ
+// only in the header line that names the tool.
+func TestSameConfigAsADownloadedFile(t *testing.T) {
+	fromKey, err := BuildNordConf(privateKey, "51821")
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloaded := "[Interface]\nPrivateKey = " + privateKey + "\nAddress = 10.5.0.2/16\nDNS = 192.0.2.53\n" +
+		"[Peer]\nPublicKey = " + privateKey + "\nAllowedIPs = 0.0.0.0/0\nEndpoint = city.example.test:51820\n"
+	fromFile, err := prepareconfig.BuildNordVPNTunnelConf(downloaded, "51821")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, f := strings.SplitN(fromKey, "\n", 2), strings.SplitN(fromFile, "\n", 2)
+	if k[1] != f[1] {
+		t.Errorf("bodies differ:\n%s\n---\n%s", fromKey, fromFile)
+	}
+	if !strings.Contains(k[0], "molebridge nordvpn-key.") || !strings.Contains(f[0], "molebridge prepare-config --nordvpn.") {
+		t.Errorf("headers %q %q", k[0], f[0])
 	}
 }

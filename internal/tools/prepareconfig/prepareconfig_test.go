@@ -296,14 +296,16 @@ func mk(t *testing.T, dir, name, content string) string {
 }
 
 func TestUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"one"}, {"a", "b", "c"}, {"--pia"}, {"--pia", "a", "b"}} {
+	for _, args := range [][]string{nil, {"one"}, {"a", "b", "c"}, {"--pia"}, {"--pia", "a", "b"},
+		{"--nordvpn"}, {"--nordvpn", "a"}, {"--nordvpn", "a", "b", "c"}} {
 		o, stdout, stderr := opts(nil)
 		if code := Main(args, o); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "usage: molebridge prepare-config") {
 			t.Errorf("%q: %d %q %q", args, code, stdout, stderr)
 		}
 	}
 	o, stdout, _ := opts(nil)
-	if code := Main([]string{"--help"}, o); code != 0 || !strings.Contains(stdout.String(), "--user") || !strings.Contains(stdout.String(), "prepare-config --pia /out/pia.conf") {
+	if code := Main([]string{"--help"}, o); code != 0 || !strings.Contains(stdout.String(), "--user") || !strings.Contains(stdout.String(), "prepare-config --pia /out/pia.conf") ||
+		!strings.Contains(stdout.String(), "prepare-config --nordvpn /in.conf /out/nordvpn.conf") {
 		t.Errorf("help: %d %q", code, stdout)
 	}
 }
@@ -387,5 +389,109 @@ func TestPIACreatesANewConfigAndNeverOverwrites(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err == nil {
 		t.Error("wrote with a bad table")
+	}
+}
+
+// A config as NordVPN's Nord Account download writes it (fictitious values):
+// NordLynx's address at /16, a DNS line and a peer named by hostname.
+const nordDownloaded = `[Interface]
+PrivateKey = ` + private + `
+Address = 10.5.0.2/16
+DNS = 192.0.2.53
+[Peer]
+PublicKey = ` + public + `
+AllowedIPs = 0.0.0.0/0
+Endpoint = city.example.test:51820
+PersistentKeepalive = 25
+`
+
+func TestNordVPNDownloadBecomesTheNordConfig(t *testing.T) {
+	want, err := BuildNordConf(private, "51821", "prepare-config --nordvpn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{
+		"as downloaded": nordDownloaded,
+		"crlf":          strings.ReplaceAll(nordDownloaded, "\n", "\r\n"),
+		"host address":  strings.Replace(nordDownloaded, "10.5.0.2/16", "10.5.0.2/32", 1),
+		"no peer":       nordDownloaded[:strings.Index(nordDownloaded, "[Peer]")],
+	} {
+		out, err := BuildNordVPNTunnelConf(text, "51821")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if out != want {
+			t.Errorf("%s:\n%s", name, out)
+		}
+	}
+	for _, not := range []string{"[Peer]", "DNS", "Endpoint", "example.test", "/16"} {
+		if strings.Contains(want, not) {
+			t.Errorf("config has %q", not)
+		}
+	}
+	conf, err := tunnelconf.Parse(want, tunnelconf.NordVPN, 51821)
+	if err != nil {
+		t.Fatalf("not accepted by the exit's validator: %v\n%s", err, want)
+	}
+	if conf.Addr4 != nordHost || conf.Peer != nil {
+		t.Errorf("address %v peer %+v", conf.Addr4, conf.Peer)
+	}
+}
+
+func TestNordVPNRefusals(t *testing.T) {
+	only := "Interface Address must be NordLynx's 10.5.0.2 and nothing else"
+	for name, c := range map[string]struct{ text, table, msg string }{
+		"bad key":        {strings.Replace(nordDownloaded, private, "not-a-key", 1), "51821", "Interface PrivateKey is missing or is not a WireGuard key"},
+		"no address":     {strings.Replace(nordDownloaded, "Address = 10.5.0.2/16\n", "", 1), "51821", only},
+		"other address":  {strings.Replace(nordDownloaded, "10.5.0.2/16", "192.0.2.2/32", 1), "51821", only},
+		"ipv6 too":       {strings.Replace(nordDownloaded, "10.5.0.2/16", "10.5.0.2/16, 2001:db8::2/128", 1), "51821", only},
+		"bad address":    {strings.Replace(nordDownloaded, "10.5.0.2/16", "10.5.0.2/40", 1), "51821", only},
+		"mullvad file":   {downloaded, "51821", only},
+		"reserved table": {nordDownloaded, "255", "EXIT_TABLE must be an unreserved table number (256..2147483647)"},
+	} {
+		_, err := BuildNordVPNTunnelConf(c.text, c.table)
+		if err == nil || err.Error() != c.msg {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// The Mullvad path names the right flag rather than refusing the /16.
+	if _, err := BuildTunnelConf(nordDownloaded, "51821"); err == nil ||
+		err.Error() != "this is a NordVPN config; use prepare-config --nordvpn" {
+		t.Errorf("mullvad path: %v", err)
+	}
+}
+
+func TestNordVPNWritesMode0600WithoutPrintingKeys(t *testing.T) {
+	dir := t.TempDir()
+	src := mk(t, dir, "download.conf", nordDownloaded)
+	dest := filepath.Join(dir, "wg_confs", "nordvpn.conf")
+	o, stdout, stderr := opts(map[string]string{"EXIT_TABLE": "40000"})
+	if code := Main([]string{"--nordvpn", src, dest}, o); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	info, err := os.Stat(dest)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode: %v %v", info, err)
+	}
+	got, _ := os.ReadFile(dest)
+	if _, err := tunnelconf.Parse(string(got), tunnelconf.NordVPN, 40000); err != nil {
+		t.Errorf("EXIT_TABLE=40000 not applied: %v\n%s", err, got)
+	}
+	if want := "wrote " + dest + " (mode 0600); delete " + src + " now\n"; stdout.String() != want {
+		t.Errorf("stdout %q, want %q", stdout, want)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr %q", stderr)
+	}
+	// Without the flag the same file is refused with a pointer to it, and
+	// nothing is written.
+	other := filepath.Join(dir, "other.conf")
+	o2, stdout2, stderr2 := opts(nil)
+	if code := Main([]string{src, other}, o2); code != 1 || stdout2.Len() != 0 ||
+		stderr2.String() != "error: this is a NordVPN config; use prepare-config --nordvpn\n" {
+		t.Errorf("%d %q %q", code, stdout2, stderr2)
+	}
+	if _, err := os.Stat(other); err == nil {
+		t.Error("wrote the output")
 	}
 }

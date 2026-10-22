@@ -410,7 +410,7 @@ func TestUnreadableFile(t *testing.T) {
 func TestMessagesNameTheProviderSpecificHint(t *testing.T) {
 	for p, want := range map[Provider]string{
 		Mullvad: "prepare-config (docs/setup.md)", PIA: "prepare-config --pia (docs/setup.md)",
-		NordVPN: "nordvpn-key (docs/setup.md)",
+		NordVPN: "prepare-config --nordvpn (docs/setup.md)",
 	} {
 		_, msg := check(t, "[Interface]\n", p)
 		if !strings.HasSuffix(msg, "; regenerate it with "+want) {

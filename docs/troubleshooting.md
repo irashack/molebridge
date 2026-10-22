@@ -105,12 +105,13 @@ table, a second address in a family, a field name in another case such as
 `address` for `Address`, and so on. `<reason>` names the line number (and the
 field, when it is one Molebridge accepts), never the line's text; [the tunnel
 config](configuration.md#the-tunnel-config) lists every reason and what is
-accepted. Regenerate the config with the command the message names (for NordVPN
-and PIA, move the old file aside first: neither tool overwrites one), or, for
+accepted. Regenerate the config with the command the message names (for PIA,
+and for NordVPN with `nordvpn-key`, move the old file aside first: neither
+overwrites one), or, for
 hooks on another table, write them exactly as
 [configuration](configuration.md#the-tunnel-config) shows. The message ends
 `regenerate it with prepare-config --pia (docs/setup.md)` for PIA and
-`regenerate it with nordvpn-key (docs/setup.md)` for NordVPN. When the file
+`regenerate it with prepare-config --nordvpn (docs/setup.md)` for NordVPN. When the file
 itself is the problem, the line reads `the tunnel config <path> is missing;
 regenerate it with …`, or says that it `is not a regular file` (a symlink, for
 example), `is larger than 4 KiB` or `has NUL or carriage-return bytes` (Windows
