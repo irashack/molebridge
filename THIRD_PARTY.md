@@ -105,7 +105,7 @@ module's license text is reproduced as vendored.
 | `github.com/google/go-cmp` | v0.7.0 | LICENSE |
 | `github.com/google/nftables` | v0.3.0 | LICENSE |
 | `github.com/mdlayher/genetlink` | v1.4.0 | LICENSE.md |
-| `github.com/mdlayher/netlink` | v1.9.0 | LICENSE.md |
+| `github.com/mdlayher/netlink` | v1.11.2 | LICENSE.md |
 | `github.com/mdlayher/socket` | v0.6.0 | LICENSE.md |
 | `github.com/vishvananda/netlink` | v1.3.1 | LICENSE |
 | `github.com/vishvananda/netns` | v0.0.5 | LICENSE |
@@ -381,7 +381,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ~~~~
 
-### github.com/mdlayher/netlink v1.9.0
+### github.com/mdlayher/netlink v1.11.2
 
 Packages: github.com/mdlayher/netlink, github.com/mdlayher/netlink/nlenc, github.com/mdlayher/netlink/nltest
 
