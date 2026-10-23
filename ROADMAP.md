@@ -12,7 +12,7 @@ says what it would take as far as we know today.
 - **A sidecar mode** (0.7.0, experimental): Switchyard for an ordinary
   gluetun container ([gluetun sidecar](docs/gluetun-sidecar.md)). It has
   had live passes with NordVPN only, on rootless Podman and on Kubernetes, the
-  latest the upgrade to 0.9.2 ([testing](docs/testing.md#092));
+  latest the upgrade to 0.9.4 ([testing](docs/testing.md#094));
   [testing](docs/testing.md) records the gaps that keep it experimental.
 - **A native sidecar** (0.9.0, experimental, run live with PIA on Kubernetes): Molebridge's own
   tunnel for containers that share the exit's namespace, with a routing contract

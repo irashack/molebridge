@@ -104,6 +104,39 @@ CNI DHCP daemon that gives the overlay exits their LAN address had been
 stopped by a package removal, so the new pod could not start until it was
 restarted.
 
+**v0.9.4-rc.1, the live acceptance, 2026-10-23.** The candidate
+`ghcr.io/irashack/molebridge:v0.9.4-rc.1`, index digest
+`sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835`
+(commit `9654d1b`), signature verified with cosign v3.1.3 against the release
+workflow at that tag and commit. CI, the namespace drills and the race
+detector included, passed on the tag at the first run, and on `main` before
+it. Attested by acceptance run 39876247409.
+
+- **Upgrade from 0.9.3.** Every project went from 0.9.3 to rc.1 with no
+  setting changed and came back `ok`, each on the server it had before: the
+  native Mullvad, PIA and NordVPN overlay exits, three more native exits, the
+  gluetun overlay exit (its preflight from the `gluetun-preflight` init
+  container), the gluetun sidecar, the PIA native sidecar beside qBittorrent
+  and Switchyard, on Kubernetes (k0s with Cilium).
+- **The gluetun sidecar on rootless Podman 5.8.6** as Quadlet units, beside
+  the cluster's copy with its own state: `ok` on 0.9.3, then upgraded in
+  place to rc.1 and healthy and `ok` again 7.2 s after its restart (the image
+  pull included). The application's public address was NordVPN's, not the
+  host's, before and after.
+- **Drift** on the three native overlay exits: IPv4 rules 97, 95 and 1 and
+  IPv6 rule 97 deleted one at a time, each repaired within 10 to 31 ms, and a
+  foreign `lookup main` rule added at 96, removed within 31 to 32 ms (10 ms
+  resolution, polling included).
+- **Tunnel loss** on the same three: the exit table held only its unreachable
+  fallback until the tunnel was back (0.16 to 1.82 s); traffic through it
+  0.29 to 5.1 s after the deletion, and a fresh verified egress 7.7 s, 8.5 s
+  and, on PIA, 63 s after it. An nftables counter on every interface but the
+  tunnel counted no packet to the probe's address during either drill.
+- **Lease lapse** on NordVPN: the worker frozen with SIGSTOP; NetBird stopped
+  at about 32 s, the exit stopped with exit 1 and "the routing guards stay in
+  place" at 35.5 s, the container restarted in the same pod, and the exit
+  reported `ok` 80 s after the freeze.
+
 ## 0.9.3
 
 The acceptance policy for 0.9.3 (`tools/acceptance-policy.json`, version 5)

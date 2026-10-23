@@ -4,11 +4,12 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.9.4 — unreleased
+## 0.9.4 — 2026-10-23
 
 **Experimental.** NordVPN setup from the WireGuard config file your Nord
 Account offers, with no access token, and Go 1.27.3. The release
-candidate's live acceptance follows ([testing](docs/testing.md#094)).
+candidate passed its live acceptance on Kubernetes and rootless Podman
+([testing](docs/testing.md#094)).
 
 **New**:
 - **NordVPN from a downloaded config.** Your Nord Account now offers a
@@ -43,8 +44,11 @@ matched the config the exit was running line for line; only
 result with the exit's settings. The recreated exit, on the 0.9.3 image
 (the tunnel config is read the same way in 0.9.4), then switched servers
 and passed the namespace checks and fail-closed drills in
-[verification](docs/verification.md)
-([testing](docs/testing.md#094)).
+[verification](docs/verification.md). The release candidate's acceptance:
+every homelab project upgraded from 0.9.3 on Kubernetes, the gluetun
+sidecar on rootless Podman Quadlet upgraded in place, drift, tunnel loss
+and lease lapse on the native overlay exits, and the CI namespace drills
+on the tag ([testing](docs/testing.md#094)).
 
 ## 0.9.3 — 2026-10-20
 
