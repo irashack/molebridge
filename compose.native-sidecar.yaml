@@ -24,7 +24,7 @@ name: molebridge-native-sidecar
 
 services:
   exit:
-    image: ghcr.io/irashack/molebridge:v0.9.3@sha256:2fcbaf807e03858d09eafdb3ad57f1c4022769ea7970a408e7ea8f647c4a30e9
+    image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
     # bundle has no Dockerfile and pulls the image instead.
@@ -155,7 +155,7 @@ services:
     # the exit's record and calls qBittorrent's Web API on the namespace's
     # loopback with the login in ./secrets/port-sync.
     profiles: [port-sync]
-    image: ghcr.io/irashack/molebridge:v0.9.3@sha256:2fcbaf807e03858d09eafdb3ad57f1c4022769ea7970a408e7ea8f647c4a30e9
+    image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     command: ["port-sync"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-port-sync"
     restart: unless-stopped
@@ -191,7 +191,7 @@ services:
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: ghcr.io/irashack/molebridge:v0.9.3@sha256:2fcbaf807e03858d09eafdb3ad57f1c4022769ea7970a408e7ea8f647c4a30e9
+    image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-switchyard"
     restart: unless-stopped
