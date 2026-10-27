@@ -592,6 +592,10 @@ host's route carrying the inner headers, so a native overlay exit treats it as
 a precondition: NetBird is not started while it isn't `1`, and the worker logs
 `molebridge-exit: NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface`
 every 30 seconds ([requirements](prerequisites.md#kernel-settings-in-the-exits-namespace)).
+Until NetBird starts, the exit publishes a `failed` record every 5 seconds
+whose message is that line without the prefix and whose `netbird` check
+fails (reason `netbird-failed`); a refusal of the pre-start profile check is
+published the same way.
 With gluetun, gluetun's rule 101 takes those errors into the tunnel whatever
 their source, and rule 104 refuses them while rule 101 is missing, so the worker only warns
 (`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`).
