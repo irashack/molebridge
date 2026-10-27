@@ -5,6 +5,7 @@ package nft
 import (
 	"context"
 	"errors"
+	"iter"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,22 @@ func (s *stallSocket) Receive() ([]netlink.Message, error) {
 		return nil, errors.New("use of closed connection")
 	case <-timeout:
 		return nil, os.ErrDeadlineExceeded
+	}
+}
+
+// ReceiveIter is Receive as the iterator netlink 1.11 added to Socket.
+func (s *stallSocket) ReceiveIter() iter.Seq2[netlink.Message, error] {
+	return func(yield func(netlink.Message, error) bool) {
+		msgs, err := s.Receive()
+		if err != nil {
+			yield(netlink.Message{}, err)
+			return
+		}
+		for _, m := range msgs {
+			if !yield(m, nil) {
+				return
+			}
+		}
 	}
 }
 
