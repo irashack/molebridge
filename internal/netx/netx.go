@@ -8,8 +8,11 @@
 // address to connect to (--cacert, --connect-to), a size bound
 // (--max-filesize), a deadline (--max-time) and whether non-HTTPS URLs are
 // accepted (--proto). Every request ignores proxy settings (--noproxy '*') and
-// none follows a redirect: a 3xx answer is returned as it is and the caller
-// judges the status, as it did with curl's --write-out '%{http_code}'.
+// none follows a redirect. An answer outside 2xx, a redirect included, fails
+// with ErrStatus, so a caller that decodes the body never takes a redirect's
+// or an error page's body for data; a caller that judges the status itself
+// (curl's --write-out '%{http_code}') sets AnyStatus and gets every answer as
+// it is.
 //
 // Errors never carry the URL, the headers or any part of the body: a URL can
 // hold a token, and an answer can hold anything. They say only what kind of
@@ -46,8 +49,8 @@ var (
 	ErrTimeout = errors.New("netx: request timed out")
 	// ErrTooLarge: the answer is larger than MaxBytes.
 	ErrTooLarge = errors.New("netx: response exceeds its size limit")
-	// ErrStatus: the server answered with an HTTP status of 400 or more and
-	// the request did not accept any status.
+	// ErrStatus: the server answered with an HTTP status outside 2xx (a
+	// redirect, an error) and the request did not accept any status.
 	ErrStatus = errors.New("netx: HTTP error status")
 	// ErrTransport: connecting, the TLS handshake or reading failed.
 	ErrTransport = errors.New("netx: request failed")
@@ -111,7 +114,7 @@ type Request struct {
 	// AllowHTTP accepts an http URL too (curl --proto =http,https).
 	AllowHTTP bool
 	// AnyStatus returns the answer whatever its status instead of failing
-	// with ErrStatus from 400 (curl without -f).
+	// with ErrStatus outside 2xx: the caller judges the status.
 	AnyStatus bool
 }
 
@@ -233,7 +236,7 @@ func (Client) Fetch(ctx context.Context, req Request) (Response, error) {
 	if int64(len(raw)) > limit {
 		return Response{}, ErrTooLarge
 	}
-	if response.StatusCode >= 400 && !req.AnyStatus {
+	if (response.StatusCode < 200 || response.StatusCode > 299) && !req.AnyStatus {
 		return Response{}, ErrStatus
 	}
 	return Response{Status: response.StatusCode, Body: raw, Header: response.Header}, nil
