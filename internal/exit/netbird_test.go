@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/irashack/molebridge/internal/proc"
 )
 
 type nbRig struct {
@@ -119,6 +121,34 @@ func TestStopRightAfterStartLeavesNothingAlive(t *testing.T) {
 			t.Fatalf("round %d: a process outlived nbStopped\n%s", i, r.traceText())
 		}
 		r.m.Close()
+	}
+}
+
+// The processes of a finished launch are forgotten when the next one starts:
+// the list does not grow with every relaunch for the supervisor's life.
+func TestANewLaunchForgetsTheProcessesOfFinishedOnes(t *testing.T) {
+	r := newNBRig(t)
+	earlier := map[*proc.Process]bool{}
+	for round := 0; round < 3; round++ {
+		if _, ok := r.m.Start(); !ok {
+			t.Fatalf("round %d: start", round)
+		}
+		r.next(nbStarted)
+		procs := r.m.snapshot()
+		if len(procs) < 3 {
+			t.Fatalf("round %d: the daemon, a probe and `netbird up` should be tracked: %d", round, len(procs))
+		}
+		for _, p := range procs {
+			if earlier[p] {
+				t.Fatalf("round %d: a process of an earlier launch is still tracked", round)
+			}
+			earlier[p] = true
+		}
+		r.m.Stop()
+		r.next(nbStopped)
+		if r.m.Alive() {
+			t.Fatalf("round %d: a process outlived nbStopped", round)
+		}
 	}
 }
 

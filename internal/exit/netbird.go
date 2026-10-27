@@ -171,6 +171,7 @@ func (m *nbManager) Start() (launchInfo, bool) {
 	if m.closed || m.active || m.stopping {
 		return launchInfo{}, false
 	}
+	m.pruneLocked()
 	m.active = true
 	m.launch++
 	ctx, cancel := context.WithCancel(context.Background())
@@ -242,6 +243,28 @@ func (m *nbManager) Stop() {
 		m.mu.Unlock()
 		m.emit(nbEvent{kind: nbStopped, launch: launch})
 	}()
+}
+
+// pruneLocked forgets the processes that are reaped and whose group is gone:
+// nothing of them is left to signal or wait for, and without this every
+// probe, daemon and `netbird up` of every launch would stay in the list for
+// the supervisor's life, each one scanned again by every stop. Start calls it
+// with m.mu held, between launches; a process still around stays tracked.
+// GroupAlive's check is one kill(2) with signal 0, which never blocks.
+func (m *nbManager) pruneLocked() {
+	kept := m.procs[:0]
+	for _, p := range m.procs {
+		select {
+		case <-p.Reaped():
+			if !p.GroupAlive() {
+				continue
+			}
+		default:
+		}
+		kept = append(kept, p)
+	}
+	clear(m.procs[len(kept):])
+	m.procs = kept
 }
 
 func (m *nbManager) snapshot() []*proc.Process {
