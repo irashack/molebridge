@@ -244,8 +244,18 @@ policy or a missing chain or table is a difference in either table, and the
 reason names the table
 ([troubleshooting](troubleshooting.md#a-native-sidecar)).
 
-Marks are matched exactly. Only a process with `CAP_NET_ADMIN` can set a socket
-mark, and the applications get no capabilities.
+Marks are matched exactly. Setting a socket mark (`SO_MARK`) needs
+`CAP_NET_ADMIN`, or, from Linux 5.17, `CAP_NET_RAW` alone. A socket that
+carries the control mark or the WireGuard mark passes rules 88 and 93 and both
+tables to the host interface, so an application that can mark a socket can
+leave outside the tunnel. Give the applications no capabilities at all, in
+particular not `NET_RAW`: Docker's default capability set includes it, which
+is why every example here has `cap_drop: [ALL]` (and the Kubernetes example
+`drop: [ALL]`). An application that only needs `ping` can use an ICMP
+datagram socket, which needs no capability, instead of `NET_RAW`. A
+namespace drill checks both sides: a sender with no capabilities is refused
+the control mark, and one with `NET_RAW` alone sets it and reaches an address
+outside `SIDECAR_LAN_CIDRS` ([testing](testing.md#090) records what has run).
 
 ### Why both
 
@@ -275,8 +285,9 @@ mark, so the lookups take the host path too.
 
 Requests bound to the tunnel interface, the egress checks and PIA's
 port-forwarding calls, carry no mark and follow rule 96 into the exit table.
-The applications get no capability, so they cannot mark a socket and cannot use
-the host path.
+The applications get no capability, in particular not `NET_RAW` (which can set
+a socket mark from Linux 5.17), so they cannot mark a socket and cannot use the
+host path.
 
 ### What stays when the exit stops
 
@@ -488,8 +499,10 @@ needed.
    Then, in `.env`, set `COMPOSE_FILE=compose.native-sidecar.yaml:compose.apps.yaml`
    and remove `COMPOSE_PROFILES=example` once yours are in; until then the
    example application, a busybox that only sleeps, stands in. Give the
-   applications no capabilities: without `NET_ADMIN` they can neither change
-   the rules nor mark a socket past the firewall. To reach an application from
+   applications no capabilities (`cap_drop: [ALL]`; Docker's default set
+   includes `NET_RAW`): without `NET_ADMIN` they cannot change the rules, and
+   without `NET_ADMIN` or `NET_RAW` they cannot mark a socket past the
+   firewall. To reach an application from
    the host, publish its port on the `exit` service (the comment in the Compose
    file shows where) and list the engine's network in `SIDECAR_LAN_CIDRS`.
 

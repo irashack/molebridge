@@ -26,6 +26,8 @@ import (
 // after clearing every capability set: exec leaves a single capability-free
 // thread, so all threads the new Go runtime creates inherit empty sets too.
 // Keep uid 0 because go test's temporary executable directory can be private.
+// Mode "raw" keeps CAP_NET_RAW alone, as an application given NET_RAW for
+// ping would have it (and as Docker's default capability set has it).
 func TestSidecarCapabilityFreeSender(t *testing.T) {
 	mode := os.Getenv("MOLEBRIDGE_NFT_SENDER")
 	if mode == "" {
@@ -40,11 +42,21 @@ func TestSidecarCapabilityFreeSender(t *testing.T) {
 
 func sidecarSenderMain(mode string) error {
 	runtime.LockOSThread()
-	if mode == "drop" {
+	if mode == "drop" || mode == "raw" {
+		// What the exec'd sender keeps: nothing, or CAP_NET_RAW alone. uid 0
+		// gets its bounding set on exec, and no_new_privs keeps it to what is
+		// permitted here.
+		var keep uint32
+		if mode == "raw" {
+			keep = 1 << unix.CAP_NET_RAW
+		}
 		if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 			return err
 		}
 		for cap := uintptr(0); ; cap++ {
+			if keep != 0 && cap == unix.CAP_NET_RAW {
+				continue
+			}
 			if err := unix.Prctl(unix.PR_CAPBSET_DROP, cap, 0, 0, 0); err != nil {
 				if err == unix.EINVAL { // past the kernel's last capability
 					break
@@ -57,6 +69,7 @@ func sidecarSenderMain(mode string) error {
 		}
 		hdr := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
 		var caps [2]unix.CapUserData
+		caps[0] = unix.CapUserData{Effective: keep, Permitted: keep, Inheritable: keep}
 		if err := unix.Capset(&hdr, &caps[0]); err != nil {
 			return err
 		}
@@ -65,6 +78,9 @@ func sidecarSenderMain(mode string) error {
 			return err
 		}
 		if err := os.Setenv("MOLEBRIDGE_NFT_SENDER", "send"); err != nil {
+			return err
+		}
+		if err := os.Setenv("MOLEBRIDGE_NFT_KEEP", fmt.Sprintf("%016x", keep)); err != nil {
 			return err
 		}
 		return unix.Exec(exe, os.Args, os.Environ())
@@ -76,9 +92,14 @@ func sidecarSenderMain(mode string) error {
 	if err != nil {
 		return err
 	}
+	keep := os.Getenv("MOLEBRIDGE_NFT_KEEP")
 	for _, name := range []string{"CapInh:", "CapPrm:", "CapEff:", "CapBnd:", "CapAmb:"} {
-		if !strings.Contains(string(status), name+"\t0000000000000000\n") {
-			return fmt.Errorf("sender capability set %s is not empty", name)
+		want := keep
+		if name == "CapAmb:" {
+			want = "0000000000000000"
+		}
+		if !strings.Contains(string(status), name+"\t"+want+"\n") {
+			return fmt.Errorf("sender capability set %s is not %s", name, want)
 		}
 	}
 	addr := netip.MustParseAddr(os.Getenv("MOLEBRIDGE_NFT_DEST"))
@@ -94,6 +115,23 @@ func sidecarSenderMain(mode string) error {
 	defer unix.Close(fd)
 	if err := unix.SetsockoptString(fd, unix.SOL_SOCKET, unix.SO_BINDTODEVICE, device); err != nil {
 		return fmt.Errorf("capability-free bind device: %w", err)
+	}
+	// The mark, if asked for: "ready marked" once it is set, "ready refused"
+	// if the kernel refuses it to this sender's capabilities.
+	ready := "ready"
+	if v := os.Getenv("MOLEBRIDGE_NFT_MARK"); v != "" {
+		var mark uint32
+		if _, err := fmt.Sscanf(v, "%d", &mark); err != nil {
+			return err
+		}
+		switch err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, int(mark)); {
+		case err == nil:
+			ready = "ready marked"
+		case err == unix.EPERM:
+			ready = "ready refused"
+		default:
+			return fmt.Errorf("set mark: %w", err)
+		}
 	}
 	var dest unix.Sockaddr = &unix.SockaddrInet4{Port: 42345}
 	if addr.Is4() {
@@ -113,7 +151,7 @@ func sidecarSenderMain(mode string) error {
 			commands <- scanner.Text()
 		}
 	}()
-	fmt.Println("ready")
+	fmt.Println(ready)
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
 	sent, denied := 0, 0
@@ -146,6 +184,18 @@ type sidecarSender struct {
 
 func startSidecarSender(t *testing.T, ns *nstest.NS, device, dest string) *sidecarSender {
 	t.Helper()
+	s, ready := startSidecarSenderWith(t, ns, "drop", device, dest, 0)
+	if ready != "ready" {
+		t.Fatalf("sender readiness: %q", ready)
+	}
+	return s
+}
+
+// startSidecarSenderWith starts a sender with no capabilities (mode "drop")
+// or CAP_NET_RAW alone ("raw"), which sets mark on its socket if it is not 0,
+// and returns its readiness line: "ready", "ready marked" or "ready refused".
+func startSidecarSenderWith(t *testing.T, ns *nstest.NS, mode, device, dest string, mark uint32) (*sidecarSender, string) {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +203,10 @@ func startSidecarSender(t *testing.T, ns *nstest.NS, device, dest string) *sidec
 	// Not t.Context(): it is cancelled before the cleanup below waits.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	cmd := exec.CommandContext(ctx, "ip", "netns", "exec", ns.Name, exe, "-test.run=^TestSidecarCapabilityFreeSender$")
-	cmd.Env = append(os.Environ(), "MOLEBRIDGE_NFT_SENDER=drop", "MOLEBRIDGE_NFT_DEVICE="+device, "MOLEBRIDGE_NFT_DEST="+dest)
+	cmd.Env = append(os.Environ(), "MOLEBRIDGE_NFT_SENDER="+mode, "MOLEBRIDGE_NFT_DEVICE="+device, "MOLEBRIDGE_NFT_DEST="+dest)
+	if mark != 0 {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("MOLEBRIDGE_NFT_MARK=%d", mark))
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	in, err := cmd.StdinPipe()
@@ -179,10 +232,11 @@ func startSidecarSender(t *testing.T, ns *nstest.NS, device, dest string) *sidec
 		}
 	})
 	sender := &sidecarSender{in: in, out: bufio.NewReader(out)}
-	if ready, err := sender.out.ReadString('\n'); err != nil || ready != "ready\n" {
+	ready, err := sender.out.ReadString('\n')
+	if err != nil || !strings.HasPrefix(ready, "ready") {
 		t.Fatalf("sender readiness: %q %v", ready, err)
 	}
-	return sender
+	return sender, strings.TrimSuffix(ready, "\n")
 }
 
 // Wait for actual send attempts, not just elapsed time, on a loaded runner.

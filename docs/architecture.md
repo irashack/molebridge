@@ -1241,8 +1241,8 @@ through the tunnel with the host's own. In gluetun's namespace every socket
 without gluetun's mark goes into the tunnel (rule 101), so the exit
 measures the host's address over HTTPS from a socket carrying NetBird's
 control mark: rule 88 sends it to the host table, and the post-rules accept
-it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN`, which the exit
-holds.
+it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN` (or, from Linux
+5.17, `NET_RAW`), which the exit holds.
 
 **gluetun restarting.** Settings put at runtime are lost when gluetun
 restarts; it starts again from `GLUETUN_SERVER_*`. The exit keeps the
@@ -1461,7 +1461,10 @@ as `forwarded_port`, and `molebridge port-sync` can follow it for qBittorrent.
 **What it does not do.** It does not tunnel or configure DNS, check that the
 applications are in its namespace, or defend against a process in the namespace
 that holds `CAP_NET_ADMIN`, which can change the rules, the firewall and its
-marks. The applications are given no capabilities.
+marks, or `CAP_NET_RAW`, which from Linux 5.17 can set the control or
+WireGuard mark on a socket and leave by the host interface: both tables accept
+those marks for any socket in the namespace, not only the exit's. The
+applications are given no capabilities, `NET_RAW` included.
 
 ## Relay catalog
 
