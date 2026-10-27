@@ -3,8 +3,11 @@ package panel
 // New in 0.8.0: Run, the start of `molebridge panel`.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -66,5 +69,41 @@ func TestRunServesUntilTheContextEnds(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return")
+	}
+}
+
+// New in 0.10.0: answers keep the connection open, and the write timeout
+// leaves room for the slowest handler.
+func TestServeKeepsConnectionsOpen(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Serve(ctx, h.srv, listener, &bytes.Buffer{})
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	reader := bufio.NewReader(conn)
+	for i := 0; i < 2; i++ {
+		fmt.Fprintf(conn, "GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			t.Fatalf("request %d on the same connection: %v", i, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Close || resp.Header.Get("Connection") != "" {
+			t.Fatalf("request %d: %d close=%v Connection=%q", i, resp.StatusCode, resp.Close, resp.Header.Get("Connection"))
+		}
+	}
+	rounds := (maxProbeTargets + probeWorkers - 1) / probeWorkers
+	if slowest := time.Duration(rounds*probeAttempts)*probeTimeout + probeWait; writeTimeout <= slowest {
+		t.Fatalf("writeTimeout %v is not above the slowest latency request, %v", writeTimeout, slowest)
 	}
 }

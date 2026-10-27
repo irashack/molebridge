@@ -602,7 +602,6 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, rep reply) {
 	for _, c := range rep.cookies {
 		h.Add("Set-Cookie", c)
 	}
-	h.Set("Connection", "close")
 	for k, v := range s.secHeaders {
 		h.Set(k, v)
 	}
