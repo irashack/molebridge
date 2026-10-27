@@ -72,6 +72,17 @@ jobs:
           # The toolchain the Dockerfile builds with (golang:1.27.3-alpine).
           go-version: "1.27.3"
           cache: false
+      - name: Modules and vendor/
+        # The module cache matches go.sum, and vendor/ is exactly what
+        # `go mod vendor` derives from go.mod and go.sum: an update that
+        # rewrites vendor/ wholesale (Dependabot does) is checked here, not by
+        # reading the diff.
+        run: |
+          go mod verify
+          go mod vendor
+          git diff --exit-code -- vendor go.mod go.sum
+          untracked=$(git status --porcelain --untracked-files=all -- vendor go.mod go.sum)
+          [ -z "$untracked" ] || { echo "go mod vendor changed vendor/:"; echo "$untracked"; exit 1; }
       - name: gofmt
         run: |
           files=$(git ls-files '*.go' ':(exclude)vendor')
