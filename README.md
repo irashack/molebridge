@@ -82,7 +82,8 @@ Since 0.8.0 you pull one signed image and run it.
   forwarded port to qBittorrent ([native sidecar](docs/native-sidecar.md)).
 
 The routing contract, the status record (schema 2) and the state files keep
-the names and fields they had in 0.7.0 ([state files](docs/configuration.md#state-files)).
+the names and fields they had in 0.7.0. What later releases promise to keep,
+and how something is deprecated, is in [compatibility](docs/compatibility.md).
 Upgrading from 0.7 needs new
 Compose files: follow [the upgrade steps](docs/operations.md#upgrading-from-07x).
 What changed in each release is in the [changelog](CHANGELOG.md).
@@ -318,6 +319,7 @@ drills, PIA port forwarding against PIA itself, among others).
 
 **Reference**
 - [Configuration](docs/configuration.md): every setting, file and endpoint.
+- [Compatibility](docs/compatibility.md): what stays the same across releases, and the deprecation policy.
 - [Tools](docs/tools-reference.md): the setup and repair tools that run from the image.
 - [Providers](docs/providers.md): how PIA and NordVPN differ from Mullvad, port forwarding, adding a provider.
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.

@@ -13,6 +13,11 @@ live checks in [verification](docs/verification.md), because CI can't tell
 you that a real client fails closed. Second, update the docs your change
 affects in the same pull request.
 
+A change to anything [compatibility](docs/compatibility.md) lists (the status
+record, the state files, the settings and their defaults, the Compose service
+names, the routing contract's priorities, the exit codes, `/api/status` and
+`/readyz`) follows its deprecation policy, and its changelog entry says so.
+
 ## Where things are
 
 Molebridge is one Go module, `github.com/irashack/molebridge`, Go 1.27 (the
