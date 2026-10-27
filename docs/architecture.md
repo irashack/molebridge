@@ -682,7 +682,14 @@ priorities 94 and 98 alone until PIA's registration gives the tunnel an
 address: until then it adds nothing there, and leaves every rule in the exact
 form of rule 94 or 98 for some address. Any other rule at 94 or 98 (such as
 `lookup main` at 94) is an inserted bypass like the others, removed, and the
-pass is not verified while it stays. The registration installs the pair for the new address
+pass is not verified while it stays. Its removal goes through the deletion
+check like any other: while a tunnel address is live without its pair, that
+address's ICMP already reaches the main table (by rule 32766), removing a
+`lookup main` at 94 would change the path it takes there, and the check
+refuses a new path even when it replaces an escape. The stray then stays,
+the refusal is logged (`molebridge-exit: kept IPv4 rule 94: ...`), and the
+pass stays unverified, as it is anyway with an unprotected address; the
+stray goes once the address has its pair or is no longer live. The registration installs the pair for the new address
 through the mutation owner, and from then on the repairer repairs that pair
 like the other rules; a later registration retires the old address's pair ([providers](providers.md#how-pia-differs)).
 

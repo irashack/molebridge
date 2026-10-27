@@ -119,24 +119,54 @@ func TestPIAAddressChangesAreOneTransaction(t *testing.T) { // PIA's rules 94 an
 
 // Before the registration rules 94 and 98 are left to it, but only in their
 // own shape: a stray there, which a forwarded packet would meet before rule
-// 95, is removed like a stray anywhere else in Molebridge's range.
+// 95, is removed like a stray anywhere else in Molebridge's range, once its
+// removal opens nothing. The rig's IPv4 tunnel address is live with no pair,
+// so its ICMP already reaches the main table (rule 32766); removing a
+// `lookup main` at 94 would change that path, and the deletion check refuses
+// a path that is new even when it replaces an escape. The stray stays,
+// logged, until the address's pair is in. IPv6 has no address, and its stray
+// goes at once.
 func TestPIAStrayAtALeftPriorityIsRemoved(t *testing.T) { // R4: lookup main at 94 before the registration
 	r := piaRig(t)
-	for _, f := range []string{"-4", "-6"} {
-		r.exit.IP(f, "rule", "add", "priority", "94", "lookup", "main")
-		deadline := time.Now().Add(time.Second)
+	gone := func(f string, within time.Duration) bool {
+		deadline := time.Now().Add(within)
 		for {
 			out, _ := r.exit.TryIP(f, "rule", "show", "priority", "94")
 			if !strings.Contains(out, "lookup main") {
-				break
+				return true
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("%s: the stray at 94 stayed for a second:\n%s", f, out)
+				return false
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
 	}
+	for _, f := range []string{"-4", "-6"} {
+		r.exit.IP(f, "rule", "add", "priority", "94", "lookup", "main")
+	}
+	if !gone("-6", time.Second) {
+		t.Fatal("-6: the stray at 94 stayed for a second with no IPv6 address live")
+	}
+	if gone("-4", 300*time.Millisecond) {
+		t.Fatal("-4: the stray went although its removal changes how the unprotected address's ICMP reaches main")
+	}
+	if !strings.Contains(r.logs.text(), "kept IPv4 rule 94") {
+		t.Errorf("the refusal was not logged:\n%s", r.logs.text())
+	}
+	// The pair a registration would leave, for the live address: removing the
+	// stray now sends that ICMP to the exit table, and it goes.
+	a := tunnel4.String()
+	r.exit.IP("-4", "rule", "add", "priority", "98", "from", a, "ipproto", "icmp", "unreachable")
+	r.exit.IP("-4", "rule", "add", "priority", "94", "from", a, "ipproto", "icmp", "lookup", fmt.Sprint(table))
+	if !gone("-4", time.Second) {
+		out, _ := r.exit.TryIP("-4", "rule", "show")
+		t.Fatalf("-4: the stray at 94 stayed for a second with the pair in place:\n%s", out)
+	}
 	if !strings.Contains(r.logs.text(), "removed IPv4 rule 94") {
 		t.Errorf("no removal was logged:\n%s", r.logs.text())
+	}
+	out, _ := r.exit.TryIP("-4", "rule", "show")
+	if !strings.Contains(out, "94:\tfrom "+a+" ipproto icmp lookup") || !strings.Contains(out, "98:\tfrom "+a+" ipproto icmp unreachable") {
+		t.Errorf("the left pair did not stay:\n%s", out)
 	}
 }
