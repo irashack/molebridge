@@ -48,7 +48,12 @@ object is gone from `/api/status`. Not yet run live
 - **Strays at PIA's skipped priorities are removed.** While PIA has no
   registered address, a rule at priority 94 or 98 that is not in the
   return-path shape (such as `lookup main`) is deleted, and the pass is not
-  verified while it stays. The repairer used to skip both priorities. A
+  verified while it stays. While a tunnel address is live without its
+  pair, the deletion check keeps such a stray (`kept IPv4 rule 94: ...`),
+  because that address's ICMP already reaches the main table and the
+  removal would only change the path; the pass stays unverified, as it is
+  anyway, and the stray goes once the address has its pair or is no longer
+  live. The repairer used to skip both priorities. A
   stray there that a kernel delete could mistake for the rule PIA left (no
   source, no protocol, or inverted) is rebuilt around that rule instead of
   deleted, and a rebuild interrupted there puts the rule back from its
