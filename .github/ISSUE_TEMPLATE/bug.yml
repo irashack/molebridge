@@ -13,8 +13,11 @@ body:
     id: version
     attributes:
       label: Release
-      description: The image tag or digest, or the commit for a source build.
-      placeholder: v0.9.4
+      description: >-
+        What `docker compose exec exit molebridge version` prints (0.10.0 and
+        later; the panel's and the exit's first log lines say the same), and
+        the image tag or digest, or the commit for a source build.
+      placeholder: molebridge v0.10.0-rc.1, ghcr.io/irashack/molebridge:v0.10.0
     validations:
       required: true
   - type: dropdown

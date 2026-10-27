@@ -27,6 +27,9 @@ func exitMain(args []string, environ []string, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		// The supervisor's first line names the build. It follows the settings
+		// check so that a refusal stays the one line it is documented as.
+		fmt.Fprintf(stderr, "molebridge-exit: molebridge %s\n", version)
 		return exit.New(exit.Config{Settings: s, Stderr: stderr}).Run()
 	case args[0] == "--worker" && len(args) == 1:
 		return exit.RunWorker(environ, stderr)

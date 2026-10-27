@@ -13,13 +13,21 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
+# The release the binary reports (`molebridge version`, `status`, the first log
+# lines). The release workflow passes the candidate tag; tools/check-reproducible.sh
+# builds with the same flags.
+ARG VERSION=dev
 WORKDIR /src
 # The build context is the allowlist in Dockerfile.dockerignore (Go sources, vendor/,
 # embedded assets). vendor/ is used when the module has dependencies; a module
 # with none builds with -mod=vendor as well.
 COPY . .
-RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
-    go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/molebridge ./cmd/molebridge
+RUN set -eu; \
+    case "$VERSION" in \
+      ""|*[!0-9A-Za-z.+-]*) echo "VERSION must be a tag such as v0.10.0-rc.1, not '$VERSION'" >&2; exit 1 ;; \
+    esac; \
+    CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
+    go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$VERSION" -o /out/molebridge ./cmd/molebridge
 
 # Stage 2: the NetBird client release archive, checked against the hashes
 # committed here. The hashes are the linux_amd64 and linux_arm64 lines of

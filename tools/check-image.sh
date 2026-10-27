@@ -1,10 +1,11 @@
 #!/usr/bin/env sh
 # Static checks of the single Molebridge image (Dockerfile): what it holds, what
 # it must not hold, ownership and modes, license notices, the pinned NetBird
-# client, and the unpacked size limit (80 MB, D10). Nothing is started that
-# needs privileges or a network. Runs for the image's own architecture or, with
-# QEMU, a foreign one.
-#   sh tools/check-image.sh <image> [linux/amd64|linux/arm64]
+# client, the binary's version, the OCI labels, and the unpacked size limit
+# (80 MB, D10). Nothing is started that needs privileges or a network. Runs for
+# the image's own architecture or, with QEMU, a foreign one. With VERSION set,
+# the version role must print exactly `molebridge $VERSION`.
+#   [VERSION=v0.10.0-rc.1] sh tools/check-image.sh <image> [linux/amd64|linux/arm64]
 set -eu
 image=${1:?usage: sh tools/check-image.sh <image> [platform]}
 platform=${2:-}
@@ -22,12 +23,31 @@ cmd=$(docker image inspect "$image" --format '{{json .Config.Cmd}}')
 [ "$cmd" = 'null' ] || [ "$cmd" = '[]' ] || fail "image sets a default command: $cmd"
 pass "entrypoint is the molebridge binary, no default command"
 
+# The labels the Dockerfile sets. The release workflow adds the version and
+# revision labels at publish time; a local build has none.
+for label in org.opencontainers.image.title org.opencontainers.image.description \
+    org.opencontainers.image.source org.opencontainers.image.licenses; do
+    value=$(docker image inspect "$image" --format "{{index .Config.Labels \"$label\"}}")
+    [ -n "$value" ] && [ "$value" != '<no value>' ] || fail "label $label is missing"
+done
+source=$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')
+[ "$source" = 'https://github.com/irashack/molebridge' ] || fail "org.opencontainers.image.source is '$source'"
+pass "OCI labels: title, description, source, licenses"
+
 rc=0
 run "$@" "$image" >/dev/null 2>"${TMPDIR:-/tmp}/check-image.$$" || rc=$?
 usage=$(cat "${TMPDIR:-/tmp}/check-image.$$"); rm -f "${TMPDIR:-/tmp}/check-image.$$"
 [ "$rc" -eq 2 ] || fail "running with no role exited $rc, want 2"
 echo "$usage" | grep -q 'usage: molebridge <role>' || fail "no usage text without a role"
 pass "no role: usage, exit 2"
+
+reported=$(run "$@" "$image" version) || fail "the version role failed"
+if [ -n "${VERSION:-}" ]; then
+    [ "$reported" = "molebridge $VERSION" ] || fail "the version role says '$reported', want 'molebridge $VERSION'"
+else
+    printf '%s\n' "$reported" | grep -Eqx 'molebridge [0-9A-Za-z.+-]+' || fail "the version role says '$reported'"
+fi
+pass "version role: $reported"
 
 run "$@" --entrypoint /usr/local/bin/netbird "$image" version | grep -qx "$netbird_version" ||
     fail "netbird is not version $netbird_version"
@@ -41,6 +61,16 @@ for tool in python3 python bash wg wg-quick tini; do
     fi
 done
 pass "no python, bash, wireguard-tools or tini"
+
+# The panel's Compose health check runs `wget`: busybox's applet.
+wget=$(run "$@" --entrypoint sh "$image" -c 'readlink -f "$(command -v wget)"') || fail "wget is not in the image"
+[ "$wget" = /bin/busybox ] || fail "wget is $wget, not busybox's"
+pass "busybox wget (the panel's health check)"
+
+# Nothing setuid or setgid anywhere on the image's file system.
+special=$(run "$@" --entrypoint sh "$image" -c 'find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -print')
+[ -z "$special" ] || fail "setuid or setgid files: $special"
+pass "no setuid or setgid files"
 
 for f in /usr/share/licenses/molebridge/LICENSE /usr/share/licenses/molebridge/THIRD_PARTY.md \
     /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/JetBrainsMono-OFL.txt \

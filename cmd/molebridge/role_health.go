@@ -36,7 +36,9 @@ func healthMain(args []string, env map[string]string, stdout, stderr io.Writer) 
 	}
 	ok, why := check()
 	if !ok {
-		fmt.Fprintf(stdout, "unhealthy: %s\n", why)
+		// The version rides on the line Docker keeps in the health log, so a
+		// report quoting it says which build failed.
+		fmt.Fprintf(stdout, "unhealthy: %s (molebridge %s)\n", why, version)
 		return 1
 	}
 	return 0

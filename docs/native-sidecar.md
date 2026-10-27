@@ -512,7 +512,8 @@ needed.
    `check-config` prints `molebridge-exit: configuration accepted
    (/config/wg_confs/pia.conf: no address (the exit sets it))` or the one line
    naming what it refused ([troubleshooting](troubleshooting.md#a-native-sidecar)).
-   The log should show, in order, `molebridge-exit: the sidecar firewall is installed`,
+   The log should show, in order, `molebridge-exit: molebridge <version>`,
+   `molebridge-exit: the sidecar firewall is installed`,
    `molebridge-exit: rules installed; the exit table holds its unreachable fallback`,
    `molebridge-exit: bringing the tunnel up` and `molebridge-exit: tunnel up`.
 
@@ -753,9 +754,9 @@ one is gone: on such a kernel a sandbox recreated within those 15 seconds can
 pass the check before the worker has removed the old heartbeat. Use 5.14 or
 later for Kubernetes.
 The worker also removes the file before it installs anything. Before the first
-heartbeat the check prints `unhealthy: no guard heartbeat yet` and exits 1;
-another namespace's prints `unhealthy: the guard heartbeat is from another
-network namespace`; an unknown argument prints `usage: molebridge health
+heartbeat the check prints `unhealthy: no guard heartbeat yet (molebridge
+<version>)` and exits 1; another namespace's prints `unhealthy: the guard
+heartbeat is from another network namespace (molebridge <version>)`; an unknown argument prints `usage: molebridge health
 [--guarded]` and exits 2. The heartbeat stops when the firewall or the
 contract no longer holds, and it is not removed when the exit stops, so it
 goes stale 15 seconds later.

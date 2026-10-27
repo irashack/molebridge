@@ -295,7 +295,8 @@ docker compose ps
 docker compose logs exit
 ```
 
-The log should show, in order, `molebridge-exit: rules installed; the exit table holds its unreachable fallback`,
+The log should start with `molebridge-exit: molebridge <version>`, the
+candidate tag the image was built as, and then show, in order, `molebridge-exit: rules installed; the exit table holds its unreachable fallback`,
 `molebridge-exit: bringing the tunnel up`, `molebridge-exit: tunnel up`,
 `molebridge-exit: ready`, `molebridge-exit: starting NetBird` and
 `molebridge-exit: NetBird is up (launch 1)`, with NetBird's own output

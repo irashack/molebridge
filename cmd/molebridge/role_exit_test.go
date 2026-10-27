@@ -96,7 +96,8 @@ func TestCheckConfig(t *testing.T) {
 func TestHealthRole(t *testing.T) {
 	env, _ := roleEnv(t)
 	var stdout, stderr bytes.Buffer
-	if code := healthMain(nil, env, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "unhealthy") {
+	if code := healthMain(nil, env, &stdout, &stderr); code != 1 || !strings.HasPrefix(stdout.String(), "unhealthy: ") ||
+		!strings.HasSuffix(stdout.String(), " (molebridge dev)\n") {
 		t.Fatalf("%d %q", code, stdout.String())
 	}
 	if code := healthMain([]string{"x"}, env, &stdout, &stderr); code != 2 {
@@ -234,6 +235,7 @@ func TestStatusRoleReadsTheRecordAndTheLease(t *testing.T) {
 		"message: exit owner stopped responding",
 		"lease: held, 14 s to expiry",
 		"routing activity: repairs 2 (last 2026-10-12T11:58:00Z), kernel events 40 (relevant 12), event losses 1, periodic passes 30",
+		"version: dev\n",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
