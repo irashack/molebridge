@@ -3,6 +3,8 @@ package applier
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -110,6 +112,35 @@ func TestARetryIsNotPutOffPastTheCatalogueAge(t *testing.T) {
 	}
 	if !strings.HasPrefix(k.logs[0], "applier: relay catalogue refresh failed: ") || len(k.logs) != 1 {
 		t.Errorf("logs %q", k.logs)
+	}
+}
+
+// A refresh whose error record can't be written either (an unwritable state
+// volume) ends the pass on the I/O failure, and still waits its backoff:
+// one download per step, not one per pass.
+func TestAnUnwritableStateVolumeDoesNotDownloadOnEveryPass(t *testing.T) {
+	fetches := 0
+	a, k := refreshing(t, func() ([]byte, error) { fetches++; return nil, errors.New("netx: request failed") })
+	errorPath := snapshot(a).ErrorPath
+	if err := os.Remove(errorPath); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	// A directory where the record goes: the rename over it fails.
+	if err := os.MkdirAll(filepath.Join(errorPath, "x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failures := 0
+	for k.now = 0; k.now < 400; k.now += PollSec {
+		if err := a.DefaultMaintainCatalog(context.Background()); err != nil {
+			if caught(err) {
+				t.Fatalf("not an I/O failure: %v", err)
+			}
+			failures++
+		}
+	}
+	// At 0, 60 and 180 seconds; the next is due at 420.
+	if fetches != 3 || failures != 3 {
+		t.Errorf("%d downloads, %d failed passes in 400 seconds", fetches, failures)
 	}
 }
 
