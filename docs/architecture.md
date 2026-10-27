@@ -15,12 +15,12 @@
 - [Panel and access](#panel-and-access)
 - [Recovery and verification](#recovery-and-verification)
 
-This page describes 0.9.3. The live runs behind it are on Kubernetes and on
-rootless Podman with Quadlet units, the latest at 0.9.2
-([testing](testing.md#092)); the [native sidecar](#the-native-sidecar) has run
-live with PIA on Kubernetes only. [Testing](testing.md) says what the CI suites
-cover and what was not run. Where a statement comes from the 0.7.0 passes, it
-says so.
+This page describes the current release. The live runs behind it are on
+Kubernetes and on rootless Podman with Quadlet units; the
+[native sidecar](#the-native-sidecar) has run live with PIA on Kubernetes
+only. [Testing](testing.md) says what ran at which revision, what the CI
+suites cover and what was not run. Where a statement comes from the 0.7.0
+passes, it says so.
 
 ## Goal and boundary
 
@@ -48,8 +48,8 @@ share the exit's namespace. It comes in two forms, both experimental. The
 gluetun sidecar (`compose.sidecar.yaml`) selects and checks servers for an
 ordinary gluetun, whose own firewall keeps the containers' traffic in the
 tunnel, with no Molebridge routing contract ([the sidecar
-kind](#the-sidecar-kind)). The native sidecar (`compose.native-sidecar.yaml`,
-new in 0.9.0) is Molebridge's own tunnel, for Mullvad, PIA and NordVPN, and
+kind](#the-sidecar-kind)). The native sidecar (`compose.native-sidecar.yaml`)
+is Molebridge's own tunnel, for Mullvad, PIA and NordVPN, and
 Molebridge itself keeps the containers' traffic in it with a routing contract
 and a firewall, so the fail-closed promise above holds for their traffic too
 ([the native sidecar](#the-native-sidecar)).
@@ -176,7 +176,7 @@ private key), and with PIA the PIA login. It holds `NET_ADMIN` in the tunnel
 namespace, so a compromised exit could read the live key and change routing.
 It is part of the trusted base, along with the container engine, the host and
 NetBird. In 0.7 the tunnel key and the provider logic were in different
-containers; in 0.8.0 they share one process tree, which lets the exit own the
+containers; since 0.8.0 they share one process tree, which lets the exit own the
 whole fail-closed property but removes that split. What remains is exit versus
 panel. The exit's root filesystem is read-only; it writes its state directory,
 the `netbird-data` volume and two tmpfs mounts: `/run`, which holds its runtime
@@ -291,8 +291,11 @@ rather than one command: `netbird service run` as a daemon in a process group
 of its own; `netbird status --check live`, polled once a second for up to 30
 seconds; then `netbird up`, for up to 120 seconds (a first enrollment with a
 setup key can be slow). Its environment is NetBird's own `NB_*` and `WT_*`
-settings plus `PATH`, `HOME`, `TZ` and a private `TMPDIR`; the setup key
-reaches only these processes. NetBird's log goes to the container's tmpfs
+settings plus `PATH`, `HOME`, `TZ` and a private `TMPDIR`. The setup key
+(`NB_SETUP_KEY` or `WT_SETUP_KEY`) is in `netbird up`'s environment alone,
+not the daemon's, the probes' or the worker's; the supervisor keeps it in its
+own environment, which root in the container can read in `/proc/1/environ`
+([secret files](configuration.md#secret-files)). NetBird's log goes to the container's tmpfs
 `/var/log/netbird/client.log`, and NetBird's output is copied to the container
 log with the prefix `netbird: `.
 
@@ -426,10 +429,14 @@ on the tmpfs every 5 seconds, but only while all of these hold:
 
 - the NetBird profile check hasn't refused, and, except for a sidecar (which
   has no NetBird), NetBird has been started;
-- for the overlay kind, the routing contract is verified (natively, with the
-  tunnel interface up) and NetBird is running; for a native sidecar, the
-  contract is verified with the tunnel interface up and the firewall is as
-  installed;
+- for the overlay kind, NetBird is running, and natively the routing
+  contract is verified with the tunnel interface up. With gluetun the
+  contract must hold: Molebridge's rules and both tables are as expected.
+  That is one step short of verified, which also needs the host
+  interface's IPv4 default route that gluetun, not the exit, owns; the
+  `routing` check in the status record is the verified one. For a native
+  sidecar, the contract is verified with the tunnel interface up and the
+  firewall is as installed;
 - the provider logic's own health holds: the last record is less than 150
   seconds old and from a completed check (`ok` or `failed`; startup and a
   switch in progress don't count), and the namespace is intact for the kind.
@@ -502,7 +509,7 @@ refuses to start if the two differ.
 
 | Priority | Rule | Purpose |
 |---|---|---|
-| 1 | `not iif wt0 lookup local` | Replaces the kernel's priority-0 rule. Packets arriving on the overlay are never delivered to a socket on the exit; they fall through to rules 90–97. Loopback and every other interface keep local delivery. |
+| 1 | `not iif wt0 lookup local` | Replaces the kernel's priority-0 rule. Unicast packets arriving on the overlay are never delivered to a socket on the exit; they fall through to rules 90–97. Loopback and every other interface keep local delivery. Multicast and broadcast are outside it ([below](#netbird-and-its-checks)). |
 | 90 | `iif mullvad to <overlay range> lookup main` | Tunnel replies return over the overlay. Client-originated traffic cannot use this exception. |
 | 94 | `from <tunnel address> ipproto icmp lookup 51821` | ICMP errors the exit generates for tunnel traffic (fragmentation needed, packet too big) return through the tunnel. With the tunnel route gone they hit the unreachable fallback, never the host's default route. IPv6 uses `ipproto ipv6-icmp`. |
 | 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
@@ -749,13 +756,22 @@ sandbox.
 
 ## NetBird and its checks
 
-Rule 1 means overlay traffic is never delivered to the exit itself. A packet
-arriving on `wt0` for one of the exit's own addresses, on the overlay or the
-host side, is routed like any other forwarded packet, into the tunnel, or it
-hits the terminal guard. The exit's own addresses become ordinary
+Rule 1 means unicast overlay traffic is never delivered to the exit itself.
+A packet arriving on `wt0` for one of the exit's own addresses, on the overlay
+or the host side, is routed like any other forwarded packet, into the tunnel,
+or it hits the terminal guard. The exit's own addresses become ordinary
 destinations, which the LAN isolation check in
 [verification](verification.md#from-a-client) already covers. Loopback and
 every other interface keep local delivery.
+
+The rule covers only what the kernel routes through the policy rules. The
+kernel decides local delivery of multicast destinations (such as
+`224.0.0.1` or `ff02::1`) and of the limited broadcast `255.255.255.255`
+before it consults them, so a socket in the exit's namespace that listens
+for those can still receive them from `wt0`. Neither is forwarded: Linux
+forwards multicast only for a multicast routing daemon, which the image
+doesn't have, and never forwards the limited broadcast. This has not been
+checked on a live exit.
 
 Molebridge requires NetBird to run with kernel WireGuard and its kernel
 firewall, and supports only NetBird's daemon mode, its default profile and the
@@ -860,10 +876,10 @@ them is an instantaneous defense against a compromised host.
 
 **Experimental.** At 0.7.0 it had live passes with NordVPN on Docker and on
 rootless Podman; see [testing](testing.md#gluetun-backend-pass-at-a3bb14f)
-for what they covered and what they didn't. At 0.8.0 a gluetun exit with
-NordVPN was upgraded from 0.7.0 on rootless Podman and reported healthy and
-connected; the live drills ran on the native exits, not on this backend
-([testing](testing.md#080)). The gluetun behaviors below were read in the
+for what they covered and what they didn't. Since then a gluetun exit with
+NordVPN has been upgraded to each release, on rootless Podman and on
+Kubernetes, and reported healthy and connected; the live drills run on the
+native exits, not on this backend ([testing](testing.md)). The gluetun behaviors below were read in the
 source of the pinned releases (gluetun v3.41.3, NetBird 0.80.0) and exercised
 in isolated namespaces by the drills in `internal/drill`. The 0.7 form without
 the provider logic and the panel, three containers with only a routing guard,
@@ -882,7 +898,7 @@ and is dropped when the tunnel or its routes are gone.
 `compose.gluetun.yaml` replaces `compose.yaml` (set
 `COMPOSE_FILE=compose.gluetun.yaml`; the settings are in
 [configuration](configuration.md#gluetun-backend)). Where 0.7 had `gluetun`,
-`guard`, `netbird`, `applier` and `control-panel`, 0.8.0 has three:
+`guard`, `netbird`, `applier` and `control-panel`, there are now three:
 
 | Container | Image | Role |
 |---|---|---|
@@ -1304,8 +1320,8 @@ tunnel; nothing is forwarded for other devices. It has two forms, told apart by
 `gluetun-*` provider), described here, and the [native sidecar](#the-native-sidecar)
 (`native` and Mullvad, PIA or NordVPN).
 
-The gluetun sidecar is experimental, with one live pass at 0.7.0, NordVPN on
-rootless Podman, and an upgrade of that sidecar to 0.8.0 that reported healthy
+The gluetun sidecar is experimental: it has run live with NordVPN only, on
+rootless Podman and Kubernetes, and reported healthy after each upgrade
 ([gluetun sidecar](gluetun-sidecar.md) says what has been tested). With
 `compose.sidecar.yaml`, the exit and the panel select and check servers
 for an ordinary gluetun whose namespace other containers share
@@ -1350,7 +1366,7 @@ overlay exit's says "exit".
 
 ## The native sidecar
 
-New in 0.9.0 and experimental; run live with PIA on Kubernetes ([testing](testing.md#090)).
+Experimental; run live with PIA on Kubernetes only ([testing](testing.md#090)).
 `EXIT_KIND=sidecar` with `TUNNEL_BACKEND=native` and Mullvad, PIA or NordVPN, in
 `compose.native-sidecar.yaml`. It exists because PIA over WireGuard has no
 other home: Molebridge's gluetun forms don't offer PIA. The procedure, the

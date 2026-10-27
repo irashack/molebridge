@@ -11,12 +11,13 @@ the `overlay` kind (`compose.yaml` or
 itself, and to keep your applications' traffic in it, with PIA over WireGuard or
 Mullvad or NordVPN, use the [native sidecar](native-sidecar.md) instead.
 
-**What has been tested.** At 0.8.0 a sidecar with gluetun and NordVPN, upgraded from 0.7.0
-on rootless Podman with Quadlet units, reported healthy; nothing else was run on it, and the
-attachment procedure has no 0.8.0 record. Mullvad, the four
+**What has been tested.** A sidecar with gluetun and NordVPN has been upgraded to each release
+and reported healthy, on Kubernetes and on rootless Podman with Quadlet units, with the
+application's public address NordVPN's, not the host's; no drill has been run on it, and the
+attachment procedure has no record since the Go rewrite. Mullvad, the four
 [tunnel-tier providers](#tunnel-tier-providers), Docker, podman-compose and an application left
 in gluetun's old namespace are untested, and `compose.sidecar.yaml` is validated with
-`docker compose config` only. The older passes are in [testing](testing.md#080).
+`docker compose config` only. The passes are in [testing](testing.md).
 
 ## What is checked, and by whom
 
@@ -222,8 +223,8 @@ persistent volume, leave the pod out of user namespaces, and set
 `WIREGUARD_ALLOWED_IPS=0.0.0.0/0` when the pod has IPv6 and the provider carries
 none (the IPv6 loop was first seen with this form). The NetBird notes there
 don't apply. Molebridge ships no manifests. A gluetun sidecar with NordVPN has run
-as one pod on k0s with Cilium on the 0.8.0 image, beside an application that only
-waits; no drill was run there.
+as one pod on k0s with Cilium, beside an application that only waits; no drill was
+run there ([testing](testing.md)).
 
 ## Removing
 

@@ -28,9 +28,7 @@ existing read-only mount. A stale status keeps the exit read-only and shows
 its connection as unknown. A `POST /select` for that exit is refused with
 403 and "Exit is set in configuration; change SERVER to choose another
 server." `/api/status` gives the configured name as
-`verdict.configured_server`; `desired` is null. (The deprecated `view`
-object still carries `selection_mode: configuration` and `configured_server`,
-for a 0.6 page left open in a browser.)
+`verdict.configured_server`; `desired` is null.
 
 Change or clear `SERVER` in the exit's configuration and apply it by
 [recreating the exit](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)
@@ -260,7 +258,7 @@ PANEL_EXITS='mullvad=mullvad:Mullvad,pia=pia:PIA Chicago'
   ([the ids](providers.md)).
 - `kind` is optional: `overlay`, the default, for a NetBird exit, or
   `sidecar` for a [gluetun sidecar](gluetun-sidecar.md) (with a
-  `gluetun-<provider>`) or, since 0.9.0, a [native sidecar](native-sidecar.md)
+  `gluetun-<provider>`) or a [native sidecar](native-sidecar.md)
   (with `mullvad`, `pia` or `nordvpn`), such as `torrents=pia/sidecar:Torrents`.
   It must match the exit's `EXIT_KIND`; a
   status record of the other kind shows as "kind mismatch", never as
@@ -306,9 +304,9 @@ services:
 ```
 
 The panel refuses to start unless it passes its isolation check
-([below](#privilege-isolation)). A panel reads its own release's status records and the previous release's: a 0.8
-panel reads 0.7 and 0.8 exits, and a 0.7 panel reads 0.8 exits, because the state
-files are unchanged. A 0.6 panel misreads 0.7 and later exits
+([below](#privilege-isolation)). A panel reads its own release's status records and the previous release's,
+and those of every release since 0.7.0 so far, because the state files are unchanged
+([compatibility](compatibility.md)). A 0.6 panel misreads 0.7 and later exits
 ([upgrades](operations.md#upgrading-from-07x)).
 
 Each exit's own `switchyard` container keeps working. Both write the same

@@ -179,8 +179,9 @@ is 1 for all of these:
   restarted the container ([the lease](architecture.md#the-lease)). The worker
   does not renew while a loop it supervises is late, and says so:
   `molebridge-exit: a supervised loop is late; no lease renewal is sent` (at most
-  every 10 seconds). Causes are a stalled host or a container starved of CPU (a
-  quota that throttles it for many seconds), a kernel request that did not
+  every 10 seconds). Causes are a stalled host, a host that was suspended for
+  longer than `GUARD_GRACE` ([host suspend](operations.md#host-suspend)), a
+  container starved of CPU (a quota that throttles it for many seconds), a kernel request that did not
   finish in 10 seconds, or a hang. A refusal on the supervisor's side is
   `molebridge-exit: renewal refused: <reason>`, which a healthy exit never logs.
   If the lease had already expired when a message from the worker arrived, the
@@ -381,7 +382,7 @@ the tools reference. `no forwarded port yet` is normal until PIA has allotted on
 `NetBird gate: refusing to start NetBird: <reason> (see docs/troubleshooting.md)`.**
 The exit refuses settings Molebridge doesn't support on the exit, before it starts
 anything, and again before it lets NetBird start. The line still says "NetBird
-gate"; there is no gate container in 0.8.0. If it appears at start, the container
+gate"; there is no gate container any more. If it appears at start, the container
 exits with status 1; later, it appears as `molebridge-exit: NetBird is not
 started: NetBird gate: ...`, repeated every 30 seconds, and the exit stays
 not-ready. [Architecture](architecture.md#netbird-and-its-checks) explains the
@@ -642,9 +643,9 @@ refused:
 
 - `PROVIDER must be one of: <ids>`: the panel's `PROVIDER` (single-exit panel) is not a
   provider id.
-- `EXIT_KIND must be overlay or sidecar`: the single-exit panel's kind. Since 0.9.0 a
-  sidecar may use a native provider (a [native sidecar](native-sidecar.md)); 0.8.0
-  refused it with `a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)`.
+- `EXIT_KIND must be overlay or sidecar`: the single-exit panel's kind. A sidecar may
+  use a native provider (a [native sidecar](native-sidecar.md)); 0.8.0 refused that with
+  `a sidecar exit needs a gluetun provider (PROVIDER=gluetun-<name>)`.
 - `PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in '<entry>'`,
   `PANEL_EXITS: provider must be one of <ids>, in '<entry>'`,
   `PANEL_EXITS: the kind after / is overlay or sidecar, in '<entry>'`,
@@ -997,8 +998,8 @@ reported as connected in this state. The exit found one of these:
   show `table ip netbird` (NetBird's nftables backend) or `table ip filter` holding chains
   named `NETBIRD-…`. The check looks for those names, so a renamed table
   (`NB_NFTABLES_TABLE`) fails it. The image has no iptables, so NetBird uses nftables; the
-  kernel needs `nf_tables` ([requirements](prerequisites.md#host)). The 0.8.0 live pass saw
-  NetBird on that path ([testing](testing.md#080)).
+  kernel needs `nf_tables` ([requirements](prerequisites.md#host)). The live runs saw
+  NetBird on that path ([testing](testing.md)).
 
 ## Clients
 

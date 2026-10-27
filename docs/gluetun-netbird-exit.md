@@ -22,18 +22,18 @@ isn't covered ([other providers](other-providers.md)).
 
 ## What was tested
 
-[Testing](testing.md#080) is the record. At 0.8.0 a gluetun overlay exit with NordVPN, upgraded
-from 0.7.0 on rootless Podman with Quadlet units, came up healthy and connected. No drill was run
-on it live and no client was held on it; the gluetun rules, monitors and stop sequence are covered
-by the namespace drills in CI only. The design itself was verified live at 0.7.0, with NordVPN
-through gluetun v3.41.3, on Docker
+[Testing](testing.md) is the record. A gluetun overlay exit with NordVPN has been upgraded to
+each release and come up healthy and connected, on rootless Podman with Quadlet units and on
+Kubernetes, with its preflight from an init container there. No drill has been run on the Go exit
+of this form live and no client has been held on it; the gluetun rules, monitors and stop sequence
+are covered by the namespace drills in CI only. The design itself was verified live before the Go
+rewrite, with NordVPN through gluetun v3.41.3, on Docker
 ([2026-10-08](testing.md#gluetun-backend-pass-at-a3bb14f)) and on rootless Podman with a Linux
 client held on the exit ([2026-10-11](testing.md#070-on-rootless-podman-at-d5a234a)).
 
-**Not tested at any version:** any gluetun provider other than NordVPN, IPv6 through gluetun,
-the `SERVER_CATEGORIES` override, podman-compose, and Docker Engine on Linux. **Not tested at
-0.8.0:** running `compose.gluetun.yaml` at all, and NetBird Cloud
-([the list](testing.md#not-tested-at-080)).
+**Not tested:** any gluetun provider other than NordVPN, IPv6 through gluetun, the
+`SERVER_CATEGORIES` override, podman-compose, Docker Engine on Linux, running
+`compose.gluetun.yaml` at all, and NetBird Cloud ([the list](testing.md#not-tested-at-080)).
 
 ## What you get, and what you don't
 
@@ -88,9 +88,11 @@ The exit also needs the same NetBird requirements as Molebridge:
 - **NetBird runs with kernel WireGuard and its kernel firewall**, with
   `NB_DISABLE_USERSPACE_ROUTING=true`, in daemon mode with its default
   profile. [The exit](#the-checks-in-the-exit) refuses other settings.
-- **Overlay traffic is never delivered to the exit itself.** The contract's rule
-  1 routes every packet arriving on `wt0` like forwarded traffic, so features
-  that serve devices from the exit don't work there.
+- **Unicast overlay traffic is never delivered to the exit itself.** The
+  contract's rule 1 routes every unicast packet arriving on `wt0` like
+  forwarded traffic, so features that serve devices from the exit don't work
+  there (multicast and broadcast are outside the rule:
+  [architecture](architecture.md#netbird-and-its-checks)).
   [Keep these off for the exit peer](#keep-these-off-for-the-exit-peer).
 
 The contract works in policy routing. The firewall rules in this setup only open
@@ -130,7 +132,7 @@ gluetun recreates its interface, and that is the exit's loop.
 
 ### The checks in the exit
 
-In 0.7 a script in front of NetBird (the gate) did these. In 0.8.0 the exit does them itself,
+In 0.7 a script in front of NetBird (the gate) did these. Now the exit does them itself,
 because it starts NetBird. They matter because rules 88 and 89 only see packets that carry
 NetBird's mark: if NetBird runs without it, its control traffic is unmarked and reaches
 gluetun's rule 101. The mechanism is in
@@ -182,9 +184,9 @@ traffic out: rules 1, 95 and 97 hold forwarded traffic throughout.
   always-on host. The setup asks gluetun for the kernel implementation
   (`WIREGUARD_IMPLEMENTATION=kernelspace`), which fails instead of falling back to a userspace tunnel.
   It was tried on a 7.0 kernel in OrbStack's VM on macOS and on rootless Podman, and nowhere else.
-- **Docker with Compose 2.24 or later.** At 0.8.0 this Compose file has been validated with
-  `docker compose config` only; the live pass used Quadlet units, and 0.7's version ran on Docker
-  (OrbStack). Rootless Podman with podman-compose is untested for this setup
+- **Docker with Compose 2.24 or later.** This Compose file has been validated with
+  `docker compose config` only; the live runs used Quadlet units and Kubernetes, and 0.7's
+  version ran on Docker (OrbStack). Rootless Podman with podman-compose is untested for this setup
   ([below](#rootless-podman)). Molebridge's own stack is tested as described in
   [requirements](prerequisites.md#host).
 - **A NetBird account** with admin access, either NetBird Cloud or self-hosted (only a self-hosted
@@ -595,7 +597,7 @@ application of your own in the namespace.
 
 ### Local delivery
 
-A packet that arrives on `wt0` must never reach a process on the exit. Start a listener inside the
+A unicast packet that arrives on `wt0` must never reach a process on the exit. Start a listener inside the
 namespace, in the shell, then connect to it from a device on the exit:
 
 ```sh
@@ -614,8 +616,8 @@ overlay address gets no reply for the same reason, although the access policy al
 
 ## Rootless Podman
 
-At 0.8.0 a gluetun overlay exit with NordVPN ran on rootless Podman 5.8 as Quadlet units
-([testing](testing.md#080)), upgraded from 0.7.0; podman-compose has not been run with this form. A rootless
+A gluetun overlay exit with NordVPN has run on rootless Podman 5.8 as Quadlet units
+([testing](testing.md#080)); podman-compose has not been run with this form. A rootless
 engine puts the namespace on a private network, so NetBird's only host candidate is an address nothing outside the
 host can reach. Devices on your LAN still connect directly, but devices
 elsewhere fall back to a relay without any error. The method that worked for
@@ -636,9 +638,9 @@ Gluetun's control server stays unpublished. The tools run as `podman run` withou
 ## Kubernetes
 
 Molebridge ships no manifests for the gluetun forms. A gluetun overlay exit with
-NordVPN has run as one pod on Kubernetes (k0s with Cilium) on the 0.8.0 image,
-with the preflight mounted from a ConfigMap of the script; the
-`gluetun-preflight` tool below is new in 0.9.1 and has not run there. Put
+NordVPN runs as one pod on Kubernetes (k0s with Cilium), with its preflight
+written by an init container running the `gluetun-preflight` tool below
+([testing](testing.md#094)). Put
 `gluetun` and `exit` in one pod, so they share its network namespace as
 `network_mode: service:gluetun` does, and keep the settings and mounts of
 `compose.gluetun.yaml`. Four things differ from Compose:

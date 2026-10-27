@@ -87,8 +87,8 @@ above: no login.
 
 This has unit and integration tests against a fake issuer and, at 0.7.0, one live
 pass with Pocket ID v2.16.0, as an admin; see
-[testing](testing.md#sign-in-pass-at-62a0170). The Go panel of 0.8.0 has had no
-live sign-in yet ([testing](testing.md#080)).
+[testing](testing.md#sign-in-pass-at-62a0170). The current Go panel has had no
+live sign-in yet ([testing](testing.md#not-tested-at-080)).
 
 You still need something in front of the panel that serves it over https.
 The sign-in cookies are marked `Secure`, and the panel itself listens on plain

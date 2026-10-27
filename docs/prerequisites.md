@@ -1,10 +1,11 @@
 # Requirements
 
 Everything here is needed before [setup](setup.md). Where something has only
-been tested in one configuration, this page says so. [Testing](testing.md#080)
-is the record of what ran live at 0.8.0; "tested" statements below that name
-an earlier release are about that release. The sidecar forms ([gluetun](gluetun-sidecar.md)
-and [native](native-sidecar.md), the latter new in 0.9.0 and run live with PIA on Kubernetes only)
+been tested in one configuration, this page says so. [Testing](testing.md)
+is the record of what ran live, where and at which revision; "tested"
+statements below that name an earlier release are about that release. The
+sidecar forms ([gluetun](gluetun-sidecar.md) and [native](native-sidecar.md),
+the latter run live with PIA on Kubernetes only)
 need no NetBird account: read the host, runtime and network parts, and skip
 [NetBird](#netbird).
 
@@ -21,7 +22,7 @@ need no NetBird account: read the host, runtime and network parts, and skip
   [native sidecar](native-sidecar.md#the-firewall) installs its whole firewall
   in nftables, with the `inet` family and the `meta mark` and `ct state` matches. The exit
   fails its `netbird` check without NetBird's firewall in place. On the
-  0.8.0 live host NetBird created its `netbird` tables in nftables, as
+  live hosts NetBird created its `netbird` tables in nftables, as
   intended ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)).
 - **Docker Engine with Compose 2.24 or later, or rootless Podman with
   podman-compose.** The Compose files use `env_file` entries with
@@ -30,8 +31,8 @@ need no NetBird account: read the host, runtime and network parts, and skip
 
 | Runtime | Status |
 |---|---|
-| Debian testing, amd64, rootless Podman 5.8 with Quadlet units | Tested at 0.8.0: upgrade from 0.7.0 of native Mullvad, PIA and NordVPN exits and of NordVPN through gluetun (overlay exit and sidecar), and live drills from the native exits' namespaces ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)). This repository ships no Quadlet units. No client device was held on an exit at 0.8.0; one was at 0.7.0, on the same host and setup ([testing](testing.md#070-on-rootless-podman-at-d5a234a)) |
-| Debian 13, amd64, rootless Podman 5.4 with podman-compose 1.6 | Tested on 2026-09-24 at `5a6e0b5` (in v0.1.0), the only podman-compose pass: long-running, reboot, clean install, drills with a client ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)). The 0.8.0 Compose files have not run on it |
+| Debian testing, amd64, rootless Podman 5.8 with Quadlet units | Tested live: the native Mullvad, PIA and NordVPN exits and NordVPN through gluetun (overlay exit and sidecar) ran here from 0.8.0 to 0.9.0, with live drills from the native exits' namespaces ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)), and the gluetun sidecar still does ([testing](testing.md#094)). This repository ships no Quadlet units. A client device was last held on an exit at 0.7.0, on the same host and setup ([testing](testing.md#070-on-rootless-podman-at-d5a234a)) |
+| Debian 13, amd64, rootless Podman 5.4 with podman-compose 1.6 | Tested on 2026-09-24 at `5a6e0b5` (in v0.1.0), the only podman-compose pass: long-running, reboot, clean install, drills with a client ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)). The current Compose files have not run on it |
 | macOS with OrbStack, Apple silicon | Tested in earlier passes, the last on 2026-10-08, before 0.7.0 |
 | Other Linux with Docker Engine and Compose 2.24+ | Expected to work; not tested at any version |
 | Docker Desktop | Untested |
@@ -51,13 +52,14 @@ need no NetBird account: read the host, runtime and network parts, and skip
   with no client traffic ([testing](testing.md#resources-at-080-on-rootless-podman)):
   a Mullvad or PIA exit, NetBird included, used 0.3 to 0.5 % of one core and
   67 to 78 MB; a NordVPN exit 189 MB; a gluetun exit 123 MB; Switchyard
-  27 MB. The image is 61 MB unpacked. NordVPN's and gluetun's server lists
-  are large and Go keeps much of the heap that parses them. For comparison,
+  27 MB. The image was 61 MB unpacked. NordVPN's and gluetun's server lists
+  are large and Go kept much of the heap that parsed them; 0.9.3 changed that
+  parsing, and nothing has been measured the same way since. For comparison,
   0.7.0 measured on the same host ([testing](testing.md#resources-at-070-on-rootless-podman)):
   a Mullvad exit with its panel used 6 to 8 % of one core and about 100 MB
   in four containers, most of the processor time the routing container's
   repair pass every 2 seconds and NetBird, and its images took about 260 MB.
-  0.8.0 runs no such pass: a netlink event triggers the repair, and the full
+  The Go exit runs no such pass: a netlink event triggers the repair, and the full
   pass is a fallback every `ROUTING_RECONCILE_INTERVAL` seconds (30 by
   default). The Compose files limit the exit container to 512 MiB and the
   panel to 128 MiB. The exit's limit is NordVPN's: its server list is about
@@ -125,8 +127,8 @@ people. Some forbid it.
   carries the NetBird client at the version pinned in its `Dockerfile`
   (0.80.0 at this writing); NetBird updates arrive as Molebridge patch
   releases. Only self-hosted servers have been tried: 0.78 and 0.79 with 0.79
-  clients in earlier passes, and at 0.8.0 a self-hosted server with the
-  image's 0.80.0 client. NetBird Cloud has not. The account needs admin access, because
+  clients in earlier passes, and since then a self-hosted server with the
+  image's client. NetBird Cloud has not. The account needs admin access, because
   you will create groups, a policy, a setup key and a route.
 - **Clients that support exit nodes.** Current iOS, Android, macOS, Windows
   and Linux clients do.
@@ -162,8 +164,8 @@ people. Some forbid it.
 - **Nothing else for the exit peer.** Don't enable NetBird SSH for it, don't
   give `exit-nodes` DNS nameservers, don't route domain resources or domain
   routes through it, and don't turn on Rosenpass for it. None of them is
-  supported on the exit peer: overlay traffic is never delivered to the exit
-  itself, so they don't work there. The exit refuses to start NetBird with
+  supported on the exit peer: unicast overlay traffic is never delivered to
+  the exit itself, so they don't work there. The exit refuses to start NetBird with
   Rosenpass on ([troubleshooting](troubleshooting.md#startup)).
 
 On phones, turn off *Force relay connection* in the NetBird app (Settings →
@@ -205,7 +207,8 @@ and cut throughput by more than half.
 
 Live passes on macOS with OrbStack and on rootless Podman, including the
 client-held fail-closed drills at 0.7.0 ([testing](testing.md#070-on-rootless-podman-at-d5a234a)),
-and a native exit upgraded from 0.7.0 and drilled on rootless Podman at 0.8.0.
+and on Kubernetes; the native NordVPN exit is drilled in each release's
+live acceptance, without a client device ([testing](testing.md)).
 
 - **An active account** with NordVPN's VPN service.
 - **A WireGuard config file** for any server, downloaded from your Nord
@@ -215,7 +218,7 @@ and a native exit upgraded from 0.7.0 and drilled on rootless Podman at 0.8.0.
   (NordVPN, then Advanced settings, then "Get access token") lets
   `nordvpn-key` fetch the same key once, at setup; the exit never stores the
   token.
-- **Memory for the server list.** On the 0.8.0 live host a NordVPN exit
+- **Memory for the server list.** Measured at 0.8.0, a NordVPN exit
   idled at 189 MB, 136 MB of it anonymous memory. Parsing a list at the
   32 MiB limit took about 300 MB in a local test. The Compose files' 512 MiB
   limit for the exit container is sized for it.

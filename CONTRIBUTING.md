@@ -13,6 +13,11 @@ live checks in [verification](docs/verification.md), because CI can't tell
 you that a real client fails closed. Second, update the docs your change
 affects in the same pull request.
 
+A change to anything [compatibility](docs/compatibility.md) lists (the status
+record, the state files, the settings and their defaults, the Compose service
+names, the routing contract's priorities, the exit codes, `/api/status` and
+`/readyz`) follows its deprecation policy, and its changelog entry says so.
+
 ## Where things are
 
 Molebridge is one Go module, `github.com/irashack/molebridge`, Go 1.27 (the
@@ -151,7 +156,7 @@ to see the other looks.
 ## Building the image
 
 The release image is built and signed by GitHub Actions on a tag; you don't need to build it to run
-Molebridge. To build the same image from a checkout:
+Molebridge. How a release is cut, accepted and promoted is in [releasing](docs/releasing.md). To build the same image from a checkout:
 
 ```sh
 docker build --tag molebridge:dev --file Dockerfile .
@@ -170,9 +175,9 @@ services:
   switchyard: {image: molebridge:dev}
 ```
 
-List only services your Compose file has: `compose.gluetun.yaml` has no
-`switchyard`, so leave that line out there, or Compose adds a stray service.
-Then `docker compose build exit` and `docker compose up -d` run your build. Compose reads
+Every form has both services (`compose.gluetun.yaml` takes its `switchyard`
+from `compose.yaml` with `extends`, and the override's image replaces the
+extended one). Then `docker compose build exit` and `docker compose up -d` run your build. Compose reads
 `compose.override.yaml` by itself only when `COMPOSE_FILE` is unset; with a gluetun form, add it, as in
 `COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
 `netbird_<version>_checksums.txt`, and reading the checks in `internal/nbprofile` against the new release's
