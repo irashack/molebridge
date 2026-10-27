@@ -39,7 +39,11 @@ operational, and says why it isn't, at most once a minute for each reason:
 - `the NetBird profile check refused`: the stored profile lacks the tunnel interface
   in its blacklist, or isn't right; see [below](#netbirds-settings-and-profile).
 - `NetBird has not been started yet`: the contract isn't verified yet, or NetBird is
-  still starting.
+  still starting. When the log also says `NetBird is not started: <reason>`, the exit
+  is holding NetBird back until you fix the reason (on a native exit
+  `net.ipv4.icmp_errors_use_inbound_ifaddr is not 1`, see
+  [requirements](prerequisites.md#kernel-settings-in-the-exits-namespace)); the panel
+  shows `failed` with that line as the message until NetBird starts.
 - `the routing contract is not verified`: see `not ready:` further down. A native
   sidecar says it too when its tunnel interface is down.
 - `the sidecar firewall is not as installed`: a native sidecar's firewall differs from

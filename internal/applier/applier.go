@@ -1050,6 +1050,9 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 	a.ensureIngressGuard(ctx)
 	a.hooks.BeforeTick(ctx, a)
 	result, err := a.tick(ctx)
+	// ioFailure is the cause of this pass's end only: a pass that ends on
+	// anything else (a canceled context) or completes leaves none behind.
+	a.ioFailure = ""
 	if err != nil {
 		var io *ioError
 		if errors.As(err, &io) {
@@ -1057,7 +1060,6 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 		}
 		return nil, err
 	}
-	a.ioFailure = ""
 	a.hooks.AfterTick(ctx, a, result)
 	return result, nil
 }
@@ -1143,6 +1145,12 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 	// keep it as idle heap until the next refresh.
 	debug.FreeOSMemory()
 	if err != nil {
+		// The refresh failed and so did writing its error record (an
+		// unwritable state volume): the pass ends on the I/O failure, but the
+		// next download still waits its backoff, or every pass would fetch
+		// the list again.
+		a.catalogRetry = math.Min(math.Max(2*a.catalogRetry, CatalogRetrySec), CatalogRetryMaxSec)
+		a.nextCatalog = a.clock() + a.catalogRetryWait()
 		return wrapIO(err)
 	}
 	if refreshed {

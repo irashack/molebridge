@@ -123,7 +123,8 @@ leave by the host interface. The exit stays up, unready, and logs every 30
 seconds `molebridge-exit: NetBird is not started:
 net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service
 (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would
-leave by the host interface`; NetBird starts once the sysctl is `1`. With
+leave by the host interface`; the panel, `/readyz` and `molebridge status`
+show `failed` with the same message. NetBird starts once the sysctl is `1`. With
 gluetun those errors go into the tunnel through gluetun's own rules either
 way, so the exit only warns there (`molebridge-exit: warning:
 net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or

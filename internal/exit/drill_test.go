@@ -770,8 +770,18 @@ func TestDrillReturnPathSysctlHoldsNetBird(t *testing.T) {
 	if l.traceHas("service run") {
 		t.Fatalf("NetBird was started without the sysctl:\n%s", p.out.String())
 	}
+	// The record names the hold rather than "Applier starting; waiting for
+	// verification.".
+	held := func() bool {
+		r := l.result()
+		return r != nil && r["status"] == "failed" &&
+			strings.Contains(fmt.Sprint(r["message"]), "NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1")
+	}
+	l.waitFor(15*time.Second, "the record to name the hold", held)
 	l.exit.Sysctl("net.ipv4.icmp_errors_use_inbound_ifaddr=1")
 	l.waitReady(p)
+	// The hold clears: the pipeline's own records replace it.
+	l.waitFor(60*time.Second, "the record to stop naming the hold", func() bool { return l.result() != nil && !held() })
 	_ = p.cmd.Process.Signal(syscall.SIGTERM)
 	p.wait(20 * time.Second)
 }

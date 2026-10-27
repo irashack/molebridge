@@ -94,6 +94,31 @@ func TestAMissingCredentialFileIsInspectedOnTheNextPassAndRetried(t *testing.T) 
 	}
 }
 
+func TestAPassEndedOtherwiseForgetsAnEarlierIOFailure(t *testing.T) {
+	// Pass N ended on a file error outside any switch; pass N+1 leaves its
+	// switch attempting on a canceled context. The inspection that follows
+	// must not name pass N's file error.
+	dir := t.TempDir()
+	k := newKernel(t)
+	k.keys = []string{otherKey}
+	o := &overridden{Provider: NewMullvad()}
+	a := buildApplier(t, k, dir, o, "")
+	a.ioFailure = "open /state/applier/relay-error.json: read-only file system"
+	o.applyRelay = func(context.Context, *Applier, *providers.Relay, []string) error { return context.Canceled }
+	desire(t, a, requestAt(testHost, nil))
+	if _, err := a.Tick(context.Background()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("tick: %v", err)
+	}
+	if a.attempt.State != "attempting" || a.ioFailure != "" {
+		t.Fatalf("%s %q", a.attempt.State, a.ioFailure)
+	}
+	o.applyRelay = nil
+	r := mustTick(t, a)
+	if a.attempt.State != "failed" || message(r) != "The last switch was interrupted; retrying automatically." {
+		t.Errorf("%s %q", a.attempt.State, message(r))
+	}
+}
+
 func TestACompletedPassForgetsAnEarlierIOFailure(t *testing.T) {
 	// The cause an inspection names is the failure of the pass just before.
 	a, _, _ := mullvadSetup(t)

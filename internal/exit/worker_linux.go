@@ -85,7 +85,10 @@ type worker struct {
 	nbRunning atomic.Bool
 	blocked   atomic.Bool
 	// refusal is the profile check's refusal that set blocked.
-	refusal   atomic.Pointer[string]
+	refusal atomic.Pointer[string]
+	// held is why the readiness loop holds NetBird back while the contract
+	// holds (a missing precondition), nil once it starts NetBird.
+	held      atomic.Pointer[string]
 	pipeOn    atomic.Bool
 	launch    atomic.Int64
 	netbirdCh chan Msg
@@ -661,15 +664,18 @@ func (w *worker) readinessLoop() {
 			if w.s.Native() {
 				if err := returnPathPrecondition(); err != nil {
 					r.markUnready()
+					w.hold(err)
 					w.warnEvery("return-path", 30*time.Second, "NetBird is not started: %v", err)
 					continue
 				}
 			}
 			if err := w.recheckNetBird(); err != nil {
 				r.markUnready()
+				w.hold(err)
 				w.warnEvery("recheck", 30*time.Second, "NetBird is not started: %v", err)
 				continue
 			}
+			w.held.Store(nil)
 			w.logf("ready")
 			w.renewOnce()
 			_ = w.send.send(Msg{Type: TypeReady})
@@ -784,13 +790,17 @@ func truncate(s string, n int) string {
 // pipelineLoop runs the control cycle, once NetBird is up and its profile
 // verified (overlay) or at once (sidecar). Once the profile check after
 // `netbird up` has refused, the cycle never runs again in this generation and
-// the loop publishes the refusal instead, on every pass so the record stays
-// fresh for its readers.
+// the loop publishes the refusal instead; while NetBird is held back before
+// its first start (hold), it publishes why. Either is published on every
+// pass, so the record stays fresh for its readers, and a hold stops being
+// published once NetBird starts.
 func (w *worker) pipelineLoop() {
 	for {
 		switch {
 		case w.blocked.Load():
-			w.publishRefusal()
+			w.publishHeld(w.refusal.Load())
+		case !w.pipeOn.Load() && w.held.Load() != nil:
+			w.publishHeld(w.held.Load())
 		case w.pipeOn.Load():
 			if err := w.pipe.Tick(w.ctx); err != nil && w.ctx.Err() == nil {
 				w.warnEvery("tick", 30*time.Second, "applier: control cycle failed: %v", err)
@@ -802,15 +812,21 @@ func (w *worker) pipelineLoop() {
 	}
 }
 
-// publishRefusal hands the supervisor the failed record that names the
-// profile refusal.
-func (w *worker) publishRefusal() {
-	refusal := w.refusal.Load()
-	if refusal == nil {
+// hold records why the readiness loop does not start NetBird, as the log
+// line says it: "NetBird is not started: <reason>".
+func (w *worker) hold(err error) {
+	why := "NetBird is not started: " + err.Error()
+	w.held.Store(&why)
+}
+
+// publishHeld hands the supervisor the failed record that names why NetBird
+// does not run.
+func (w *worker) publishHeld(why *string) {
+	if why == nil {
 		return
 	}
-	if err := w.send.send(Msg{Type: TypeStatus, Record: ProfileRefusedRecord(w.s, time.Now(), *refusal)}); err != nil {
-		w.warnEvery("refusal", time.Minute, "cannot publish the profile refusal: %v", err)
+	if err := w.send.send(Msg{Type: TypeStatus, Record: NetBirdHeldRecord(w.s, time.Now(), *why)}); err != nil {
+		w.warnEvery("held", time.Minute, "cannot publish why NetBird does not run: %v", err)
 	}
 }
 
