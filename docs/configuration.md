@@ -262,9 +262,7 @@ records.
 
 ## gluetun backend
 
-Experimental. Live passes used NordVPN only; what ran at 0.8.0 is in
-[testing](testing.md#080), earlier passes in
-[testing](testing.md#gluetun-backend-pass-at-a3bb14f). The design is in [architecture](architecture.md#gluetun-backend) and
+Experimental. Live passes used NordVPN only ([testing](testing.md)). The design is in [architecture](architecture.md#gluetun-backend) and
 what differs for you in [providers](providers.md#the-gluetun-backend). Copy
 `.env.gluetun.example` to `.env`; it sets `COMPOSE_FILE=compose.gluetun.yaml`,
 and that file replaces `compose.yaml`. `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
@@ -338,14 +336,14 @@ above. The NetBird, overlay, table and mark settings don't apply.
 it isn't read from `.env`. `EXIT_KIND` is `overlay` when unset, as in
 `compose.yaml` and `compose.gluetun.yaml`. The exit refuses to start with any
 other value. With `TUNNEL_BACKEND=gluetun` a sidecar needs a `gluetun-*`
-provider; with `TUNNEL_BACKEND=native` it is the [native sidecar](#native-sidecar)
-(before 0.9.0 the exit refused that combination). A separate Switchyard names
+provider; with `TUNNEL_BACKEND=native` it is the [native sidecar](#native-sidecar).
+A separate Switchyard names
 the kind in `PANEL_EXITS` instead, as `id=<provider>/sidecar`. The exit's and
 the panel's kind must agree, or the panel shows "kind mismatch".
 
 ## Native sidecar
 
-Experimental, new in 0.9.0; see [the native sidecar](native-sidecar.md) for setup
+Experimental; see [the native sidecar](native-sidecar.md) for setup
 and what has been tested. Copy `.env.native-sidecar.example` to `.env`; it sets
 `COMPOSE_FILE=compose.native-sidecar.yaml`. `PROVIDER`, `EXIT_IF`, `SERVER`,
 the tunnel config, the PIA login, the panel settings and the Gatus settings
@@ -513,9 +511,9 @@ any more.
 ## State files
 
 Under `state/`, written with temp-file-and-rename. None hold secrets. These
-names, paths, fields and timestamp formats are the same as in 0.7.0: a 0.7.0
-Switchyard reads a 0.8.0 exit, and a bridge that reads `result.json` keeps
-working. With `PRIVATE_STATE_DIR` set, the three files only the exit reads
+names, paths, fields and timestamp formats are the same as in 0.7.0, so a
+bridge that reads `result.json` keeps working; what later releases keep is in
+[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the three files only the exit reads
 (`attempt.json`, `gluetun-selection.json` and `tunnel.json`) are in that
 directory instead of `applier/`
 ([below](#keeping-the-published-files-in-memory)). For a healthy
@@ -532,12 +530,12 @@ records](architecture.md#example-records).
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
 
-**`owner_record` in 0.8.0.** The check keeps its meaning, "the exit's owner is
-live", and carries one new member on a native exit: `expires_at`, the lease
+**`owner_record`.** The check means "the exit's owner is live", and since
+0.8.0 carries one more member on a native exit: `expires_at`, the lease
 expiry the supervisor accepted, on the wall clock, in the same timestamp
 format as `at`. A passing check is
 `{"state": "pass", "at": "…", "expires_at": "…"}`; a failing one has no
-`expires_at`. A 0.8.0 reader treats `expires_at` as an extra upper bound on
+`expires_at`. A reader since 0.8.0 treats `expires_at` as an extra upper bound on
 the check, never an extension: a record without it is judged as in 0.7.0, and
 a malformed one, or one that has passed, fails the check. A 0.7.0 reader
 ignores the member. For the gluetun backend and the sidecar the check stays

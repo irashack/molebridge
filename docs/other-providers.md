@@ -9,10 +9,10 @@ native support. There's no generic "bring your own WireGuard config" mode,
 because each provider handles keys, server lists and switching differently.
 
 Providers gluetun supports but Molebridge doesn't list (AirVPN and
-ProtonVPN, for example) can't be used in 0.8.0 either: the exit refuses a
-`PROVIDER` that isn't in its registry. Earlier releases ran any gluetun
-WireGuard provider in a form without server selection; 0.8.0 doesn't, because
-the exit always runs the provider logic
+ProtonVPN, for example) can't be used either: the exit refuses a
+`PROVIDER` that isn't in its registry. Releases before 0.8.0 ran any gluetun
+WireGuard provider in a form without server selection; that form is gone,
+because the exit always runs the provider logic
 ([gluetun as a NetBird exit](gluetun-netbird-exit.md)). Adding one means a
 registry entry and a parser for gluetun's list of its servers, and the live
 checks below.

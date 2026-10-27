@@ -5,7 +5,7 @@ into. Rootless Podman has its own section [below](#rootless-podman); where a
 Podman command differs from the Docker one, it is given there. The exit
 container is `<project>-exit` and the panel `<project>-switchyard`, with
 `molebridge` as the project name unless you set `COMPOSE_PROJECT_NAME`.
-Nothing in 0.8.0 needs Python or a helper on the host: the commands here are
+Nothing needs Python or a helper on the host: the commands here are
 the engine's own and the image's roles.
 
 ## Health
@@ -210,7 +210,7 @@ nothing changed. Don't edit it while the exit runs.
 
 An exit repairs most things by itself, and stops and restarts itself when its
 worker stops answering ([the lease](architecture.md#the-lease)). There is no
-recovery helper in 0.8.0. What you do by hand is recreate containers, and the
+recovery helper. What you do by hand is recreate containers, and the
 rule that decides which ones is about network namespaces.
 
 **Why it matters.** A container that joins another's network namespace
@@ -285,7 +285,7 @@ host that doesn't depend on this exit.
 
 ## Upgrades
 
-Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8, or from 0.8 to 0.9:
+Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade from 0.8.0 or later:
 
 1. [Verify the new download](setup.md#1-download-and-verify) as for a first
    install. The signature covers the bundle's Compose files and the image, not
@@ -315,7 +315,8 @@ and the gluetun sidecar behave as in 0.8.0, and their Compose files change only 
 the image they pin.
 
 To roll back, put the previous bundle's files back and run the same two
-commands. State files have stayed readable across releases so far, but take
+commands. State files have stayed readable across releases so far
+([compatibility](compatibility.md) says what later releases keep), but take
 the [backup](#backups) first in case one changes.
 
 ### Upgrading from 0.7.x
@@ -599,8 +600,8 @@ Every line must be `PASS`. A `FAIL ... is not in ...'s current namespace` means
 that member was left behind: recreate gluetun and the member together
 ([recovery](#recovery)). Name every member explicitly: a list built from
 `docker compose ps -q` leaves out stopped containers, so they would never be
-checked. This script is new in 0.8.0 and no run of it is recorded in
-[testing](testing.md#080), on Docker or on Podman.
+checked. No run of this script is recorded in [testing](testing.md), on
+Docker or on Podman.
 
 ## NetBird interface blacklist
 
@@ -927,14 +928,14 @@ out`; and NetBird showed a P2P pair. A LAN client connected directly. On
 host and server-reflexive (`srflx`) candidates, to two exits set up this way,
 one Mullvad and one NordVPN, and held it through a speed test. The
 podman-compose form shown above, Docker with this method, and rootless Docker
-are untested, and so is all of it at 0.8.0, where the exit container owns the
-namespace that the routing container did.
+are untested, and so is all of it with the current exit container, which owns
+the namespace that the routing container did.
 
 ## Rootless Podman
 
-At 0.8.0 the live pass ran on Debian with rootless Podman 5.8 and Quadlet
+The live runs on rootless Podman used Debian with Podman 5.8 and Quadlet
 units, which this repository doesn't ship: give the exit and the panel the
-container definitions `compose.yaml` shows ([testing](testing.md#080)). The
+container definitions `compose.yaml` shows ([testing](testing.md)). The
 podman-compose commands below were last run in September 2026, on Debian 13
 with Podman 5.4 and podman-compose 1.6 on amd64, long before 0.7.0
 ([testing](testing.md#rootless-podman-pass)); the 0.7.0 and later passes used
@@ -1018,7 +1019,7 @@ systemctl --user enable --now molebridge.service
 Set `WorkingDirectory` to your install directory. On the tested host, a reboot
 brought the then four containers back healthy in 76 seconds with no
 intervention ([testing](testing.md#live-client-and-reboot-pass-at-5a6e0b5)).
-That's one reboot on one host, long before 0.8.0, so check health and the
+That's one reboot on one host, before the Go rewrite, so check health and the
 namespaces after a reboot anyway. Podman doesn't act on failing healthchecks: a hung exit is stopped by
 its own supervisor, but a dependent stranded in an old namespace stays stranded
 until you recreate it together with its owner.

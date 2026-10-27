@@ -27,7 +27,7 @@ says what it would take as far as we know today.
   refresh says why it waits, and `fix-blacklist` makes the profile edits an
   enrolled exit needs when it moves runtime.
 - **One signed image, pull and run** (0.8.0, experimental, live-tested on
-  rootless Podman only): the Python and the routing shell were ported to one
+  rootless Podman and Kubernetes, not on Docker): the Python and the routing shell were ported to one
   Go binary (`routing/gluetun-preflight`, which runs inside gluetun, is the
   one script left), published as a signed multi-architecture image with a
   signed Compose bundle, so there is nothing to build and no Python on the
@@ -37,7 +37,7 @@ says what it would take as far as we know today.
 - **Repair driven by the kernel's notifications** (0.8.0): a changed rule,
   route, link or address starts a repair at once, and the 30-second pass is
   the fallback ([drift and repair](docs/architecture.md#drift-and-repair)).
-  Live, a deleted rule was back in 8 to 23 ms ([testing](docs/testing.md#080)).
+  The live drills' repair times are in [testing](docs/testing.md).
 - **Running without Switchyard** (0.8.0, partly): the panel is its own
   container, so `docker compose up -d exit` starts an exit alone, and
   `molebridge status` reads the verdict from inside it
@@ -65,8 +65,8 @@ have to keep carrying the check for old readers, which saves nothing.
 
 ### Smaller memory with large server catalogs
 
-A Mullvad or PIA exit idles at 67–78 MB, but a NordVPN exit uses about
-190 MB and a gluetun exit about 120 MB ([resources](docs/testing.md#resources-at-080-on-rootless-podman)),
+Measured at 0.8.0, a Mullvad or PIA exit idled at 67–78 MB, but a NordVPN exit
+used about 190 MB and a gluetun exit about 120 MB ([resources](docs/testing.md#resources-at-080-on-rootless-podman)),
 against a target of 70 MB. The likely cause was the server catalog: the whole
 provider file was decoded into memory before it was filtered, and Go kept much
 of that heap afterwards.

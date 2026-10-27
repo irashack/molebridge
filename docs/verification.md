@@ -2,13 +2,13 @@
 
 Run these on your own host before relying on the exit, and again after
 changing routing, the tunnel config, Compose networking or the image.
-[Testing](testing.md#080) records which checks have run, where and when. At
-0.8.0 only a few of them ran live, on rootless Podman with Quadlet: the repair
-and tunnel-loss drills on native Mullvad, PIA and NordVPN exits, and a frozen
+[Testing](testing.md) records which checks have run, where and when. Only
+some of them run live in each release's acceptance: the repair and
+tunnel-loss drills on native Mullvad, PIA and NordVPN exits, and a frozen
 worker on the NordVPN exit, all from inside the exit's namespace with no
-client device. The gluetun exits were not drilled, and the client checks,
-status drills, drills with a client holding the exit, and everything on Docker
-Engine were not run at 0.8.0.
+client device. The gluetun exits are not drilled live, and the client checks,
+the drills with a client holding the exit and everything on Docker Engine
+have not run since the Go rewrite.
 
 Keep an independent host access path. Do not share raw addresses or peer
 information from diagnostics. Never run `wg showconf`, `wg show ... dump` or

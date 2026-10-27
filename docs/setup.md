@@ -6,12 +6,12 @@ in [requirements](prerequisites.md) is ready. It is for the NetBird exit; the
 have their own set-up pages and share step 1. Plan for about half an hour,
 most of it in the NetBird dashboard.
 
-**What was tested.** Molebridge 0.8.0 is experimental. It has run live only on
-a Debian host with rootless Podman 5.8, started from Quadlet units written for
-that host, which this repository doesn't ship. The Compose commands on this
-page are what the bundle is for, but at 0.8.0 they have not been run on any
-engine; Docker Engine on Linux and NetBird Cloud are untested too
-([testing](testing.md#080)). If you use Quadlet, a unit needs the settings in
+**What was tested.** Molebridge is experimental. Its live runs used Quadlet
+units on a Debian host with rootless Podman 5.8, and Kubernetes manifests,
+neither of which this repository ships. The Compose commands on this page are
+what the bundle is for, but they have not been run on any engine, and Docker
+Engine on Linux and NetBird Cloud are untested too
+([testing](testing.md#not-tested-at-080)). If you use Quadlet, a unit needs the settings in
 `compose.yaml` ([the list in the upgrade notes](operations.md#upgrading-from-07x),
 step 3). Keep a way into the host that doesn't depend on the exit.
 
@@ -375,9 +375,9 @@ test; the [verification](verification.md) drills are.
 
 ## With the gluetun backend instead
 
-**Experimental.** At 0.8.0 a gluetun exit with NordVPN, upgraded from 0.7.0,
-ran live on rootless Podman with Quadlet units. No other provider and no
-Docker host has run it at 0.8.0 ([testing](testing.md#080)). gluetun owns the
+**Experimental.** A gluetun exit with NordVPN has run live on rootless Podman
+with Quadlet units and on Kubernetes. No other provider has, and no Docker
+host since the Go rewrite ([testing](testing.md)). gluetun owns the
 tunnel and brings its provider support ([providers](providers.md#the-gluetun-backend)).
 
 [gluetun as a NetBird exit](gluetun-netbird-exit.md#set-up) is the

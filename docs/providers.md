@@ -10,13 +10,13 @@ Compose gives the exit and the panel the registry id
 |---|---|---|---|
 | `mullvad` (default) | Tested on the hosts in [testing](testing.md) | a server | One device key and tunnel address, valid on every server |
 | `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | a region | A key registered on each server, with a different tunnel address on each |
-| `nordvpn` | Experimental: live passes on macOS with OrbStack and on rootless Podman, most recently at 0.8.0, see [testing](testing.md#080) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
-| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md#080); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
+| `nordvpn` | Experimental: live passes on macOS with OrbStack, rootless Podman and Kubernetes, see [testing](testing.md) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
+| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
 
 The `gluetun-*` ids also serve the experimental [gluetun
 sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
 be verified. The native ids also serve the experimental [native
-sidecar](native-sidecar.md) (new in 0.9.0, run live with PIA on Kubernetes): Molebridge's own
+sidecar](native-sidecar.md) (run live with PIA on Kubernetes only): Molebridge's own
 tunnel for containers that share the exit's namespace, and the only form that
 offers PIA to them.
 
@@ -195,10 +195,10 @@ only the peer. The exit holds no NordVPN credential. What differs:
 | Egress is confirmed by | `am.i.mullvad.net`, for each address family | `ips/insights` (`protected: true`), IPv4 |
 
 Tested: native NordVPN has run live on macOS with OrbStack and Docker
-([testing](testing.md#nordvpn-pass-at-036e1cc)) and on rootless Podman, most
-recently at 0.8.0, where no client device was held on it through the failure
-drills ([testing](testing.md#080)). The insights cache retry is covered by unit
-tests only.
+([testing](testing.md#nordvpn-pass-at-036e1cc)), on rootless Podman and on
+Kubernetes, where it is drilled in each release's live acceptance
+without a client device held on it ([testing](testing.md)). The insights cache
+retry is covered by unit tests only.
 
 ## Port forwarding
 
@@ -266,9 +266,9 @@ v3.41.3 owns the tunnel instead of Molebridge, and brings its own provider
 support. Molebridge keeps its routing contract, its NetBird and its provider
 logic in the `exit` container, beside gluetun, and the panel;
 [architecture](architecture.md#gluetun-backend) describes how. Its live passes
-used NordVPN only, most recently at 0.8.0 in the overlay and sidecar forms on
-rootless Podman ([testing](testing.md#080)); the other gluetun providers have
-had no live pass. The panel is optional:
+used NordVPN only, in the overlay and sidecar forms on rootless Podman and
+Kubernetes ([testing](testing.md)); the other gluetun providers have had no
+live pass. The panel is optional:
 [gluetun as a NetBird exit](gluetun-netbird-exit.md).
 
 You set gluetun's provider with `GLUETUN_PROVIDER`; `PROVIDER` doesn't
@@ -304,7 +304,7 @@ How it differs from a native provider:
   without marking them, so for Surfshark only the ordinary and static-IP
   servers (`xx-yyy.prod.surfshark.com`, `xx-yyy-st001.prod.surfshark.com`)
   are listed.
-- Other gluetun providers aren't available in 0.9.0. AirVPN and ProtonVPN list
+- Other gluetun providers aren't available. AirVPN and ProtonVPN list
   several servers under one name, and gluetun's `custom` provider has no list,
   so the panel can't select their servers; the exit refuses a `PROVIDER` that
   isn't in its registry. PIA stays native: its port forwarding and per-server

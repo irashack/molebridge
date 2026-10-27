@@ -1,6 +1,6 @@
 # The native sidecar
 
-Experimental, new in 0.9.0. Use this when your application needs a tunnel
+Experimental. Use this when your application needs a tunnel
 that Molebridge builds itself, in a network namespace the application shares.
 The exit owns the namespace and the WireGuard tunnel, as a native overlay exit
 does, and keeps the application's traffic in that tunnel with a routing
@@ -16,13 +16,13 @@ container* is a Kubernetes feature: an init container with
 `restartPolicy: Always`, which the [Kubernetes example](#kubernetes) uses for
 the exit.
 
-**What has been tested.** At 0.9.0 the unit tests and `go vet` pass, and the
-namespace drills passed in a privileged rootful Podman container on Debian
-forky/sid, kernel 7.2.8 (amd64), including the drills for this form and an
-end-to-end drill of the real binary. It has run live with PIA, port
-forwarding included, on Kubernetes (k0s with Cilium) beside qBittorrent, in the
-form of the example below. Docker Engine, podman-compose, the Compose form on
-a live engine, and Mullvad and NordVPN as native sidecars are untested. Exactly what ran, and what did not, is in [testing](testing.md#090).
+**What has been tested.** The namespace drills cover this form, including an
+end-to-end drill of the real binary, and CI runs them. It has run live with
+PIA, port forwarding included, on Kubernetes (k0s with Cilium) beside
+qBittorrent, in the form of the example below, and has been upgraded there to
+each release. Docker Engine, podman-compose, the Compose form on a live
+engine, and Mullvad and NordVPN as native sidecars are untested. Exactly what
+ran, and what did not, is in [testing](testing.md#090).
 
 ## When to use it
 
@@ -33,7 +33,7 @@ a live engine, and Mullvad and NordVPN as native sidecars are untested. Exactly 
 | What keeps the applications' traffic in the tunnel | Molebridge: the routing contract and the firewall below, checked by the exit | gluetun's firewall, not checked by Molebridge |
 | Stays closed while the exit is down | Yes: the rules and the firewall stay when the exit stops or restarts | Depends on gluetun's firewall |
 | PIA port forwarding | Yes, to the namespace itself | No |
-| Live record | None yet | A NordVPN pass at 0.8.0 |
+| Live record | PIA, on Kubernetes | NordVPN, on Kubernetes and rootless Podman |
 
 Choose the native sidecar for PIA over WireGuard. gluetun supports PIA over
 OpenVPN only, and Molebridge's gluetun forms don't offer PIA. Choose the
