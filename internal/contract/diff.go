@@ -98,6 +98,8 @@ func subsetOf(have []string, want []string) bool {
 // Nothing is returned when the rules are exactly the expected ones. This is
 // rule_actions of routing/contract-rules, with several expected rules allowed
 // at one priority for the two return-path pairs of PIA's address change.
+// At a priority the Spec skips only return-path shaped rules are let be. Below
+// the owned range, a leftover protective copy is removed (leftoverCopy).
 func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Action {
 	want := map[uint32][]rtnl.Rule{}
 	for _, r := range spec.Rules(f) {
@@ -109,8 +111,30 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 	}
 	var removals []Action
 	subbed := map[uint32]bool{}
+	left := LeftReturnPath(spec, f, actual)
 	for _, a := range actual {
-		if !spec.Owned(a.Priority) || spec.Skipped(f, a.Priority) {
+		if !spec.Owned(a.Priority) {
+			if leftoverCopy(spec, want, a) {
+				removals = append(removals, Action{Kind: Del, Priority: a.Priority, Rule: a})
+			}
+			continue
+		}
+		if spec.Skipped(f, a.Priority) {
+			// Left to the transaction that sets the address are rules in the
+			// shape it installs, for whatever address; anything else at the
+			// priority is a stray like any other. One that a kernel delete by
+			// its attributes could mistake for a rule that stays is rebuilt
+			// around the rules that stay (LeftReturnPath).
+			switch {
+			case spec.ReturnPathShaped(f, a):
+			case coveredBy(a, left[a.Priority]):
+				if !subbed[a.Priority] {
+					subbed[a.Priority] = true
+					removals = append(removals, Action{Kind: Sub, Priority: a.Priority, Rule: a})
+				}
+			default:
+				removals = append(removals, Action{Kind: Del, Priority: a.Priority, Rule: a})
+			}
 			continue
 		}
 		expected, ok := want[a.Priority]
@@ -160,6 +184,55 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 		}
 	}
 	return append(out, removals...)
+}
+
+// LeftReturnPath returns, per priority the Spec skips in a family, the
+// return-path shaped rules found there (once each): what a rebuild of that
+// priority puts back.
+func LeftReturnPath(spec Spec, f rtnl.Family, actual []rtnl.Rule) map[uint32][]rtnl.Rule {
+	out := map[uint32][]rtnl.Rule{}
+	for _, a := range actual {
+		if !spec.Skipped(f, a.Priority) || !spec.ReturnPathShaped(f, a) {
+			continue
+		}
+		dup := false
+		for _, x := range out[a.Priority] {
+			dup = dup || equalItems(x.Items(), a.Items())
+		}
+		if !dup {
+			out[a.Priority] = append(out[a.Priority], a)
+		}
+	}
+	return out
+}
+
+func coveredBy(a rtnl.Rule, rules []rtnl.Rule) bool {
+	items := a.Items()
+	for _, r := range rules {
+		if subsetOf(items, r.Items()) {
+			return true
+		}
+	}
+	return false
+}
+
+// leftoverCopy: a rule just below a priority Molebridge owns, at one it does
+// not, that is exactly an expected rule of the priority above. Only a rebuild
+// puts one there (its protective copy, see the mutation owner's rebuild), and
+// a rebuild that did not complete leaves it; nothing else would ever look at
+// it. With gluetun that is a copy of rule 102 at gluetun's 101.
+func leftoverCopy(spec Spec, want map[uint32][]rtnl.Rule, a rtnl.Rule) bool {
+	above := a.Priority + 1
+	if above == 0 || !spec.Owned(above) {
+		return false
+	}
+	items := a.Items()
+	for _, e := range want[above] {
+		if equalItems(items, e.Items()) {
+			return true
+		}
+	}
+	return false
 }
 
 // Priorities returns the distinct priorities the actions touch, ascending.

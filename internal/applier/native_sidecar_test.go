@@ -331,8 +331,8 @@ func TestNativeSidecarPIAReconcilesWithForwardingOff(t *testing.T) {
 	}
 	mustTick(t, a)
 	mustTick(t, a)
-	if !reflect.DeepEqual(k.forwardedPorts, []int{0}) || !piaOf(a).guardInstalled {
-		t.Errorf("cleanup %v guard %v", k.forwardedPorts, piaOf(a).guardInstalled)
+	if !reflect.DeepEqual(k.forwardedPorts, []int{0}) || !a.ingressGuarded() {
+		t.Errorf("cleanup %v guard %v", k.forwardedPorts, a.ingressGuarded())
 	}
 	noOverlayCalls(t, k)
 }

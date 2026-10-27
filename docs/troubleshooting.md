@@ -925,7 +925,8 @@ registering the same server again`; an egress-check failure alone doesn't.
 **`molebridge-exit: applier: repairing the tunnel's address and return-path rules failed:
 <reason>`, `applier: installing the ingress guard failed: <reason>`, `applier: clearing a
 forwarded port left by an earlier run failed: <reason>` or `applier: removing the forwarded
-port from the firewall failed: <reason>`.** PIA only. The exit retries the first three on
+port from the firewall failed: <reason>`.** PIA only, except the ingress guard, which every
+native overlay exit installs. The exit retries the first three on
 every pass (every 5 seconds) until they succeed, and the last with the next forwarding
 attempt or switch. It logs the first failure, each change of reason, and the same reason
 again every 10 minutes while it lasts. A repaired tunnel logs

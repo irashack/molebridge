@@ -307,10 +307,12 @@ func (w *worker) run() int {
 	if s.OtherConfs > 0 {
 		w.logf("warning: %d other .conf file(s) in %s are ignored; only %s.conf is used", s.OtherConfs, s.ConfDir, s.Routing.ExitIf)
 	}
-	if s.Overlay() {
-		if v, err := os.ReadFile(contract.ReturnPathSysctl); err != nil || !contract.ReturnPathEnabled(string(v)) {
-			w.logf("warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail")
-		}
+	if s.Overlay() && !s.Native() && returnPathPrecondition() != nil {
+		// gluetun's own rule 101 takes the exit's ICMP errors into the
+		// tunnel, sourced from its address, whatever the sysctl says, and
+		// rule 104 refuses them without it: only path MTU discovery suffers.
+		// A native overlay holds NetBird instead (readinessLoop).
+		w.logf("warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail")
 	}
 
 	if s.Routing.IsGluetun() {
@@ -656,6 +658,13 @@ func (w *worker) readinessLoop() {
 		}
 		switch r.step(time.Now(), holds, w.tunnelUp.Load(), w.blocked.Load()) {
 		case actReady:
+			if w.s.Native() {
+				if err := returnPathPrecondition(); err != nil {
+					r.markUnready()
+					w.warnEvery("return-path", 30*time.Second, "NetBird is not started: %v", err)
+					continue
+				}
+			}
 			if err := w.recheckNetBird(); err != nil {
 				r.markUnready()
 				w.warnEvery("recheck", 30*time.Second, "NetBird is not started: %v", err)
@@ -687,6 +696,23 @@ func (w *worker) unreadyReason(res mutator.PassResult) string {
 		msg += ": " + strings.Join(parts, ", ")
 	}
 	return msg
+}
+
+// returnPathSysctl is the file returnPathPrecondition reads (tests replace it).
+var returnPathSysctl = contract.ReturnPathSysctl
+
+// returnPathPrecondition: the kernel sources ICMP errors from the inbound
+// interface's address. A native overlay exit needs it before NetBird starts:
+// without it the errors the exit generates for traffic arriving from the
+// tunnel (fragmentation needed toward the overlay) are sourced from the
+// host's address, so rule 94 cannot match them and they leave by the host
+// interface carrying the inner headers.
+func returnPathPrecondition() error {
+	v, err := os.ReadFile(returnPathSysctl)
+	if err != nil || !contract.ReturnPathEnabled(string(v)) {
+		return errors.New("net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface")
+	}
+	return nil
 }
 
 // recheckNetBird repeats the checks that run before the daemon starts

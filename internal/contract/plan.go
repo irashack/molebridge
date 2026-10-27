@@ -67,7 +67,10 @@ type Plan struct {
 	// not yet what rule 103 needs.
 	HoldKillSwitch bool
 	Rules          []Action
-	Routes         []RouteAction
+	// Left are the return-path shaped rules found at the priorities the
+	// Spec skips (LeftReturnPath): what a rebuild there restores.
+	Left   map[uint32][]rtnl.Rule
+	Routes []RouteAction
 	// Unprotected: a live tunnel address lacks its return-path pair.
 	Unprotected bool
 	// Effective is the expected state this plan was judged against: the Spec
@@ -168,6 +171,7 @@ func (s Spec) PlanFamily(snap *rtnl.Snapshot, f rtnl.Family, in PlanInput) Plan 
 	}
 	p.Effective = spec
 	p.Rules = Diff(spec, f, snap.Rules[f], DiffOptions{HoldKillSwitch: p.HoldKillSwitch})
+	p.Left = LeftReturnPath(spec, f, snap.Rules[f])
 	p.Routes = ExitTableActions(snap.RoutesInTable(f, c.Table), f, c.Table, p.ExitIf.Index, p.Tunnel)
 	if len(p.Rules) > 0 {
 		p.Problems = append(p.Problems, ProblemRules)

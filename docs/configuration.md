@@ -552,7 +552,9 @@ Routing installs the return-path rule and its backstop (rules 94 and 98)
 from the tunnel config's `Address` line (a PIA config has none; the exit
 installs both per registration); `compose.yaml` sets
 `net.ipv4.icmp_errors_use_inbound_ifaddr` on the `exit` service for the
-same reason, and the exit warns when it is not `1`. See
+same reason. A native overlay exit doesn't start NetBird while it is not `1`;
+with gluetun the exit warns. See
+[requirements](prerequisites.md#kernel-settings-in-the-exits-namespace) and
 [architecture](architecture.md#routing-contract).
 
 ### Keeping the published files in memory

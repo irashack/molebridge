@@ -755,3 +755,23 @@ func cgroupUsec() int64 {
 	}
 	return -1
 }
+
+// R3: a native overlay exit whose namespace sources ICMP errors from the
+// outgoing interface's address holds NetBird, with the refusal in the log,
+// and starts it once the sysctl is set.
+func TestDrillReturnPathSysctlHoldsNetBird(t *testing.T) {
+	skipWithoutWireGuard(t)
+	l := newLab(t, false)
+	l.exit.Sysctl("net.ipv4.icmp_errors_use_inbound_ifaddr=0")
+	p := l.start()
+	const refusal = "molebridge-exit: NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1"
+	l.waitFor(60*time.Second, "the refusal", func() bool { return strings.Contains(p.out.String(), refusal) })
+	time.Sleep(3 * time.Second)
+	if l.traceHas("service run") {
+		t.Fatalf("NetBird was started without the sysctl:\n%s", p.out.String())
+	}
+	l.exit.Sysctl("net.ipv4.icmp_errors_use_inbound_ifaddr=1")
+	l.waitReady(p)
+	_ = p.cmd.Process.Signal(syscall.SIGTERM)
+	p.wait(20 * time.Second)
+}

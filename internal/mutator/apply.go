@@ -196,7 +196,12 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 				errs = append(errs, opErr(fmt.Sprintf("left %s rule %d as it is", f, a.Priority), err))
 				continue
 			}
-			n, err := tx.rebuild(spec, f, a.Priority)
+			want := spec.RulesAt(f, a.Priority)
+			if spec.Skipped(f, a.Priority) {
+				// Left to a transaction: what goes back is what it left.
+				want = p.Left[a.Priority]
+			}
+			n, err := tx.rebuild(f, a.Priority, want)
 			mutations += n
 			if err != nil {
 				errs = append(errs, err)
@@ -222,10 +227,11 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 				}
 			}
 			ch, err := tx.delRule(a.Rule)
-			if err != nil && len(spec.RulesAt(f, a.Priority)) == 0 {
+			if err != nil && spec.Owned(a.Priority) && len(spec.RulesAt(f, a.Priority)) == 0 && len(p.Left[a.Priority]) == 0 {
 				// The attributes were refused (a selector the kernel will
-				// not take back); nothing is expected at this priority, so
-				// removing whatever is first there is safe.
+				// not take back); nothing is expected or left alone at this
+				// priority, and it is Molebridge's, so removing whatever is
+				// first there is safe.
 				var gone bool
 				gone, err = tx.DelRulePriority(f, a.Priority)
 				ch = gone
@@ -279,11 +285,13 @@ func clearSource(r rtnl.Route) rtnl.Route {
 	return r
 }
 
-// rebuild replaces everything at a priority with its expected rules without a
-// gap: a copy of each goes in one priority earlier, the priority is cleared and
-// refilled, then the copies go. Each copy's selectors or action differ from
-// the expected rule at that earlier priority, so removing it cannot take that
-// one.
+// rebuild replaces everything at a priority with want (its expected rules, or
+// the rules left to a transaction there) without a gap: a copy of each goes in
+// one priority earlier, the priority is cleared and refilled, then the copies
+// go. Each copy's selectors or action differ from the expected rule at that
+// earlier priority, so removing it cannot take that one. A copy that stays
+// below the owned range (gluetun's 101) is removed by a later pass once the
+// rule it stands in for is read back (contract.Diff's leftoverCopy).
 //
 // Nothing is deleted at the priority unless every copy is in the kernel: a
 // copy whose request failed, for whatever reason and however often, ends the
@@ -292,8 +300,7 @@ func clearSource(r rtnl.Route) rtnl.Route {
 // priority is cleared, and the refilled rules before the copies go. The
 // copies come out only if this call put them in, and stay while anything is
 // unconfirmed.
-func (tx *Tx) rebuild(spec contract.Spec, f rtnl.Family, priority uint32) (mutations int, err error) {
-	want := spec.RulesAt(f, priority)
+func (tx *Tx) rebuild(f rtnl.Family, priority uint32, want []rtnl.Rule) (mutations int, err error) {
 	if len(want) == 0 {
 		return 0, fmt.Errorf("rebuild %s rule %d: nothing is expected there", f, priority)
 	}

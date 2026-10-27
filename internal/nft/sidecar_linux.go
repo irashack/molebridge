@@ -138,6 +138,10 @@ func sidecarRules(f SidecarFirewall, tableName string) (*nftables.Table, []*nfta
 	for _, name := range []string{"lo", f.ExitIf} {
 		add(out, append(sidecarInterface(expr.MetaKeyOIFNAME, name), &expr.Verdict{Kind: expr.VerdictAccept})...)
 	}
+	// The marks are accepted from any socket in the namespace: an application
+	// that can set one (CAP_NET_ADMIN, or from Linux 5.17 CAP_NET_RAW alone)
+	// leaves by the host interface, which is why the applications get no
+	// capabilities.
 	for _, mark := range []uint32{f.TunnelMark, f.ControlMark} {
 		b := make([]byte, 4)
 		binary.NativeEndian.PutUint32(b, mark)

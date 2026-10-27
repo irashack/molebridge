@@ -267,14 +267,19 @@ sidecar the firewall is the second of two layers.
 - **Looking.** The `netbird` check lists the namespace's chains to see
   NetBird's kernel firewall ([NetBird and its checks](#netbird-and-its-checks)).
   This is a read.
-- **PIA's ingress guard.** With PIA the exit installs table
-  `inet molebridge_guard`, a forward hook that drops anything arriving from the
-  tunnel interface and not leaving over the overlay. An earlier table of that
-  name is replaced; nothing removes it.
+- **The ingress guard.** Every native overlay exit (Mullvad, PIA, NordVPN)
+  installs table `inet molebridge_guard`, a forward hook that drops anything
+  arriving from the tunnel interface and not leaving over the overlay. The
+  routing contract holds what arrives from the overlay; this holds what
+  arrives from the tunnel, so a VPN server cannot send through the exit to
+  the host's network or out of its host interface. An earlier table of that
+  name is replaced; nothing removes it. The applier installs it on its first
+  pass and retries every pass until it succeeds.
 - **PIA's port forwarding.** While forwarding is on, table
   `ip molebridge_forward` holds the DNAT and masquerade rules for the forwarded
   port ([providers](providers.md#port-forwarding)). A native sidecar has
-  neither this table nor the ingress guard.
+  neither this table nor the ingress guard; with gluetun, gluetun's firewall
+  owns the namespace's forwarding and the exit installs neither.
 - **The native sidecar's firewall.** Tables `inet molebridge_sidecar` and
   `inet molebridge_sidecar_backstop`, installed and read back by the exit
   ([the native sidecar](#the-native-sidecar)).
@@ -565,7 +570,8 @@ tunnel config has an address: they are installed from the config's `Address`
 line, so they exist before the interface does, and they stay through tunnel
 downtime. Exactly one IPv4 address and at most one IPv6 address are supported.
 A PIA config has no address: the exit adds rules 94 and 98 with the address it
-registers; until then the repairer leaves both priorities alone, and after
+registers; until then the repairer leaves rules of that shape at both
+priorities alone (and removes anything else there), and after
 registration it repairs that pair like the other rules
 ([providers](providers.md#how-pia-differs)). Table numbers 0–255 are reserved
 and refused. Interface names, overlay ranges and the tunnel config are
@@ -580,8 +586,16 @@ purpose: an unqualified rule would force everything sourced from the tunnel
 address into the tunnel, including traffic from anything else sharing the
 namespace. `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr=1` so
 IPv4 errors carry the tunnel address; the kernel already selects the inbound
-interface's address for IPv6. The worker warns (`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`)
-when it isn't set. Without rule 94 the errors would leave over the host's
+interface's address for IPv6. Without the sysctl the errors carry the address
+of the host interface, rule 94 cannot match them, and they would leave by the
+host's route carrying the inner headers, so a native overlay exit treats it as
+a precondition: NetBird is not started while it isn't `1`, and the worker logs
+`molebridge-exit: NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface`
+every 30 seconds ([requirements](prerequisites.md#kernel-settings-in-the-exits-namespace)).
+With gluetun, gluetun's rule 101 takes those errors into the tunnel whatever
+their source, and rule 104 refuses them while rule 101 is missing, so the worker only warns
+(`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`).
+Without rule 94 the errors would leave over the host's
 route with an unroutable source, and large UDP flows would silently stall; rule
 98 drops them instead when rule 94 or the exit table's routes are gone.
 
@@ -652,14 +666,19 @@ pass once the result verifies; if it doesn't verify, rule 80 stays until a pass
 does. A native sidecar never adds it: its firewall already holds the traffic. With gluetun only the first installation uses rule 80; a repair there
 doesn't add it. A wrong rule whose selectors are a subset of the right one's is rebuilt behind
 a copy one priority earlier, so a repair never leaves rules 94 and 98 both
-missing. A pass that finds everything in place changes nothing. Each change
+missing. With gluetun the copy of rule 102 sits at gluetun's 101; if the
+rebuild cannot confirm its result the copy stays, and a later pass removes it
+once rule 102 is read back. A pass that finds everything in place changes nothing. Each change
 is logged, for example `molebridge-exit: added IPv4 rule 97`,
 `molebridge-exit: removed IPv4 rule 50: <the rule>` or
 `molebridge-exit: IPv4 unreachable fallback in table 51821 restored`.
 
-With PIA's addressless config, the repairer leaves priorities 94 and 98 alone
-until PIA's registration gives the tunnel an address: until then it adds and
-removes nothing there. The registration installs the pair for the new address
+With PIA's addressless config, the repairer leaves the return-path rules at
+priorities 94 and 98 alone until PIA's registration gives the tunnel an
+address: until then it adds nothing there, and leaves every rule in the exact
+form of rule 94 or 98 for some address. Any other rule at 94 or 98 (such as
+`lookup main` at 94) is an inserted bypass like the others, removed, and the
+pass is not verified while it stays. The registration installs the pair for the new address
 through the mutation owner, and from then on the repairer repairs that pair
 like the other rules; a later registration retires the old address's pair ([providers](providers.md#how-pia-differs)).
 
@@ -1245,8 +1264,8 @@ through the tunnel with the host's own. In gluetun's namespace every socket
 without gluetun's mark goes into the tunnel (rule 101), so the exit
 measures the host's address over HTTPS from a socket carrying NetBird's
 control mark: rule 88 sends it to the host table, and the post-rules accept
-it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN`, which the exit
-holds.
+it on `HOST_IF`. Setting a socket mark needs `NET_ADMIN` (or, from Linux
+5.17, `NET_RAW`), which the exit holds.
 
 **gluetun restarting.** Settings put at runtime are lost when gluetun
 restarts; it starts again from `GLUETUN_SERVER_*`. The exit keeps the
@@ -1465,7 +1484,10 @@ as `forwarded_port`, and `molebridge port-sync` can follow it for qBittorrent.
 **What it does not do.** It does not tunnel or configure DNS, check that the
 applications are in its namespace, or defend against a process in the namespace
 that holds `CAP_NET_ADMIN`, which can change the rules, the firewall and its
-marks. The applications are given no capabilities.
+marks, or `CAP_NET_RAW`, which from Linux 5.17 can set the control or
+WireGuard mark on a socket and leave by the host interface: both tables accept
+those marks for any socket in the namespace, not only the exit's. The
+applications are given no capabilities, `NET_RAW` included.
 
 ## Relay catalog
 
@@ -1679,11 +1701,11 @@ step, and the 90-second guard has passed.
 Some changes stay outside the pipeline because they repair or protect
 rather than select: PIA's repair of an interrupted switch
 ([providers](providers.md#how-pia-differs)), which runs on every pass before
-the gates so a damaged exit can pass them; PIA's ingress guard; PIA's port
-forwarding, which runs only while the verdict is `ok`; and gluetun's
-server-list refresh. PIA's repair, its ingress guard and the cleanup of a
-forwarded port left by an earlier run are retried on every pass until they
-succeed. A failure of one of them, or of taking the forwarded port out of
+the gates so a damaged exit can pass them; the ingress guard of every native
+overlay exit; PIA's port forwarding, which runs only while the verdict is
+`ok`; and gluetun's server-list refresh. PIA's repair, the ingress guard and
+the cleanup of a forwarded port left by an earlier run are retried on every
+pass until they succeed. A failure of one of them, or of taking the forwarded port out of
 the firewall, is logged when it starts or its reason changes, and again
 every 10 minutes while it lasts.
 

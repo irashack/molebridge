@@ -23,6 +23,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -36,11 +37,11 @@ import (
 	"time"
 
 	"github.com/google/nftables"
-	"github.com/vishvananda/netlink"
-	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/irashack/molebridge/internal/nbprofile"
+	"github.com/irashack/molebridge/internal/rtnl"
+	"github.com/irashack/molebridge/internal/tunnel/wgnl"
 )
 
 func dir() string {
@@ -104,8 +105,11 @@ func service() {
 	trace("links %s", strings.Join(strings.Fields(strings.ReplaceAll(run("ip", "-o", "link", "show"), "\n", " ; ")), " "))
 	name := iface()
 	if mode != "existing" {
-		l := &netlink.Wireguard{LinkAttrs: netlink.LinkAttrs{Name: name}}
-		if err := netlink.LinkAdd(l); err != nil {
+		rt, err := rtnl.Dial(rtnl.Options{})
+		if err == nil {
+			err = rt.AddLink(name, "wireguard")
+		}
+		if err != nil {
 			trace("link add failed: %v", err)
 			fmt.Fprintf(os.Stderr, "fake netbird: cannot create %s: %v\n", name, err)
 			os.Exit(1)
@@ -113,18 +117,21 @@ func service() {
 		if v := os.Getenv("NB_FAKE_FWMARK"); v != "" {
 			n, err := strconv.ParseUint(strings.TrimPrefix(v, "0x"), 16, 32)
 			if err == nil {
-				c, err := wgctrl.New()
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				c, err := wgnl.Dial(ctx, 0)
 				if err == nil {
 					key, _ := wgtypes.GeneratePrivateKey()
 					mark := int(n)
-					_ = c.ConfigureDevice(name, wgtypes.Config{PrivateKey: &key, FirewallMark: &mark})
-					c.Close()
+					_ = c.Configure(ctx, name, wgtypes.Config{PrivateKey: &key, FirewallMark: &mark})
+					_ = c.Close()
 				}
+				cancel()
 			}
 		}
-		if link, err := netlink.LinkByName(name); err == nil {
-			_ = netlink.LinkSetUp(link)
+		if link, err := rt.LinkByName(name); err == nil {
+			_ = rt.SetLinkUp(link.Index)
 		}
+		_ = rt.Close()
 		nc, err := nftables.New()
 		if err == nil {
 			t := nc.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "netbird"})
@@ -164,8 +171,11 @@ func service() {
 	<-sig
 	trace("terminated")
 	if mode != "existing" {
-		if link, err := netlink.LinkByName(name); err == nil {
-			_ = netlink.LinkDel(link)
+		if rt, err := rtnl.Dial(rtnl.Options{}); err == nil {
+			if link, err := rt.LinkByName(name); err == nil {
+				_ = rt.DelLink(link.Index)
+			}
+			_ = rt.Close()
 		}
 		if nc, err := nftables.New(); err == nil {
 			nc.DelTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "netbird"})

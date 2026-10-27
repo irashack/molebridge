@@ -24,6 +24,14 @@ need no NetBird account: read the host, runtime and network parts, and skip
   fails its `netbird` check without NetBird's firewall in place. On the
   live hosts NetBird created its `netbird` tables in nftables, as
   intended ([testing](testing.md#live-pass-on-rootless-podman-with-quadlet)).
+- **IPv6 in the kernel**, even when your tunnel carries IPv4 only. The exit
+  reads and guards both address families on every pass, and a kernel booted
+  with `ipv6.disable=1`, or built without IPv6, can't be read. Every form
+  except the gluetun sidecar then stops at start with a line ending in
+  `rtnl: dump IPv6 rules: address family not supported by protocol`,
+  followed by `molebridge-exit: the routing contract could not be installed;
+  no tunnel was started`. Turning IPv6 off with the `disable_ipv6` sysctls
+  is fine: the family is still there.
 - **Docker Engine with Compose 2.24 or later, or rootless Podman with
   podman-compose.** The Compose files use `env_file` entries with
   `required: false` and bind mounts that must exist, which older Compose
@@ -96,6 +104,39 @@ Three things differ from Docker:
 
 For containers to start at boot you also need a lingering systemd user unit,
 shown in [operations](operations.md#rootless-podman).
+
+### Kernel settings in the exit's namespace
+
+An overlay exit needs three sysctls in its network namespace, which
+`compose.yaml` sets on the `exit` service and `compose.gluetun.yaml` on the
+`gluetun` service: `net.ipv4.ip_forward=1` and
+`net.ipv6.conf.all.forwarding=1`, so the namespace forwards overlay traffic,
+and `net.ipv4.icmp_errors_use_inbound_ifaddr=1`, so the ICMP errors the exit
+generates for traffic arriving from the tunnel (fragmentation needed) carry
+the tunnel address and rule 94 returns them through the tunnel
+([architecture](architecture.md#routing-contract)). If you write your own
+Quadlet units or manifests, keep all three.
+
+A native overlay exit (Mullvad, PIA, NordVPN) doesn't start NetBird without
+the third: with it at `0` those errors would carry the host's address and
+leave by the host interface. The exit stays up, unready, and logs every 30
+seconds `molebridge-exit: NetBird is not started:
+net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service
+(compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would
+leave by the host interface`; NetBird starts once the sysctl is `1`. With
+gluetun those errors go into the tunnel through gluetun's own rules either
+way, so the exit only warns there (`molebridge-exit: warning:
+net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or
+IPv4 path MTU discovery through the exit will fail`). A native sidecar needs
+none of the three.
+
+**On Kubernetes**, the kubelet treats these sysctls as unsafe: a pod that
+sets them in `securityContext.sysctls` is rejected (`SysctlForbidden`)
+unless the node's kubelet allows them, with
+`--allowed-unsafe-sysctls=net.ipv4.ip_forward,net.ipv6.conf.all.forwarding,net.ipv4.icmp_errors_use_inbound_ifaddr`
+or `allowedUnsafeSysctls` in its configuration file. Molebridge ships no
+manifests for overlay exits, and an overlay exit's pod with these settings
+has not been run at this release.
 
 ## Network
 

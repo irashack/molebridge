@@ -80,10 +80,8 @@ type wgAPI interface {
 // socket is closed (a kernel stuck in the system call) is reported as
 // rtnl.ErrStuck and its socket is abandoned for a new one.
 //
-// No library opens a socket the Manager cannot reach: wgctrl and
-// vishvananda/netlink are not used by any of the operations above. The
-// deprecated Wg, WgDo, LinkDo and Netlink accessors (legacy_linux.go) are the
-// only places they remain.
+// No library opens a socket the Manager cannot reach: of wgctrl only the
+// wgtypes values are used, and vishvananda/netlink not at all.
 type Manager struct {
 	opts   Options
 	dialRT func() (routeAPI, error)
@@ -96,8 +94,6 @@ type Manager struct {
 	rt     routeAPI
 	wg     wgAPI
 	closed bool
-
-	legacy
 }
 
 // Open opens the sockets.
@@ -149,9 +145,6 @@ func (m *Manager) Close() error {
 		if e := rt.Close(); err == nil {
 			err = e
 		}
-	}
-	if e := m.closeLegacy(); err == nil {
-		err = e
 	}
 	return err
 }

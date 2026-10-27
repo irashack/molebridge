@@ -2,7 +2,8 @@
 // Copyright (C) 2018-2022 Matt Layher), which is vendored but internal to
 // wgctrl and so cannot be imported. The encoding and decoding of WireGuard's
 // generic netlink attributes is unchanged; what this package adds is a
-// connection whose deadline and lifetime the caller owns (conn_linux.go).
+// connection whose deadline and lifetime the caller owns (conn_linux.go), and
+// a device read that leaves the private and preshared keys out.
 
 //go:build linux
 // +build linux
@@ -71,7 +72,9 @@ func parseDeviceLoop(m genetlink.Message) (*wgtypes.Device, error) {
 		case unix.WGDEVICE_A_IFNAME:
 			d.Name = ad.String()
 		case unix.WGDEVICE_A_PRIVATE_KEY:
-			ad.Do(parseKey(&d.PrivateKey))
+			// Not decoded: nothing that reads a device needs the tunnel's
+			// private key, and every read (every 2 seconds on wt0 with
+			// gluetun) would otherwise leave a copy on the heap.
 		case unix.WGDEVICE_A_PUBLIC_KEY:
 			ad.Do(parseKey(&d.PublicKey))
 		case unix.WGDEVICE_A_LISTEN_PORT:
@@ -113,7 +116,7 @@ func parsePeer(ad *netlink.AttributeDecoder) wgtypes.Peer {
 		case unix.WGPEER_A_PUBLIC_KEY:
 			ad.Do(parseKey(&p.PublicKey))
 		case unix.WGPEER_A_PRESHARED_KEY:
-			ad.Do(parseKey(&p.PresharedKey))
+			// Not decoded, like the private key.
 		case unix.WGPEER_A_ENDPOINT:
 			p.Endpoint = &net.UDPAddr{}
 			ad.Do(parseSockaddr(p.Endpoint))

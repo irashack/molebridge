@@ -90,7 +90,9 @@ type Applier struct {
 
 	catalog Catalog
 	bootID  string
-	attempt *attempt.Attempt
+	// guardInstalled: the ingress guard is in place (ensureIngressGuard).
+	guardInstalled bool
+	attempt        *attempt.Attempt
 	// request is the panel's latest valid request (its acknowledgement), or
 	// the configured one; invalidDesired is whether desired.json is unreadable.
 	request        *state.Request
@@ -1045,6 +1047,7 @@ func (a *Applier) releaseSignature(why string) string {
 // or a canceled context; every other failure is a step that failed and is
 // reported in the record.
 func (a *Applier) Tick(ctx context.Context) (*Record, error) {
+	a.ensureIngressGuard(ctx)
 	a.hooks.BeforeTick(ctx, a)
 	result, err := a.tick(ctx)
 	if err != nil {
@@ -1058,6 +1061,30 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 	a.hooks.AfterTick(ctx, a, result)
 	return result, nil
 }
+
+// ensureIngressGuard installs the forward-path guard on a native overlay
+// exit, whatever the provider: table inet molebridge_guard drops anything
+// forwarded from the tunnel interface that is not leaving over the overlay,
+// so a VPN server cannot send through the exit to the host's network or out
+// of its host interface. Retried every tick until it succeeds, logged as
+// stepFailed logs, and never removed. A native sidecar has its own firewall,
+// installed before the applier starts; the gluetun backend leaves the
+// namespace's forwarding to gluetun's firewall.
+func (a *Applier) ensureIngressGuard(ctx context.Context) {
+	if a.guardInstalled || a.kind() != "overlay" || a.backend() != providers.BackendNative {
+		return
+	}
+	if err := a.sys.InstallIngressGuard(ctx); err != nil {
+		a.stepFailed(ctx, "ingress-guard", "applier: installing the ingress guard failed", err)
+		return
+	}
+	a.guardInstalled = true
+	a.stepSucceeded("ingress-guard", "applier: the ingress guard is installed")
+}
+
+// ingressGuarded: forwarded tunnel ingress is held to the overlay, by the
+// ingress guard or, in a native sidecar, by the sidecar firewall.
+func (a *Applier) ingressGuarded() bool { return a.guardInstalled || a.nativeSidecar() }
 
 func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	if err := a.hooks.MaintainCatalog(ctx, a); err != nil {

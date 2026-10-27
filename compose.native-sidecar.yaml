@@ -40,8 +40,10 @@ services:
     # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
     # panel requests, and writes state directories your host user owns
     # (rootful Docker; a rootless engine's container root is that user already).
-    # The applications get none of these: without NET_ADMIN they can neither
-    # change the rules nor mark a socket past the firewall.
+    # The applications get none of these, and no capability at all: without
+    # NET_ADMIN they cannot change the rules, and without NET_ADMIN or NET_RAW
+    # (enough for SO_MARK from Linux 5.17, and in Docker's default set) they
+    # cannot mark a socket past the firewall. Hence cap_drop: [ALL] on each.
     cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
     read_only: true

@@ -413,3 +413,46 @@ func TestSidecarFirewallDropsLANDNS(t *testing.T) {
 	}
 	verifySidecarDrill(t, ns, f, true, "")
 }
+
+// R1: setting a socket mark needs only CAP_NET_RAW from Linux 5.17. A sender
+// with no capabilities cannot set the control mark; one with NET_RAW alone
+// can, and its bound socket then passes both tables to the host interface,
+// to a destination outside the LAN allowlist. That is the documented hazard
+// of giving an application NET_RAW (or Docker's default set): the firewall
+// accepts the marks of any socket in the namespace.
+func TestSidecarFirewallNetRawSenderCanMarkPastIt(t *testing.T) {
+	ns, peer := sidecarHostLink(t)
+	peer.IP("addr", "add", "192.0.2.1/32", "dev", "host1")
+	sidecarListen(t, peer, "0.0.0.0:42345")
+	sidecarLeakCounter(t, peer)
+	f := sidecarDrillFirewall()
+	installSidecarDrill(t, ns, f)
+	t.Run("no capabilities", func(t *testing.T) {
+		sender, ready := startSidecarSenderWith(t, ns, "drop", "host0", "192.0.2.1", f.ControlMark)
+		if ready != "ready refused" {
+			t.Fatalf("a sender with no capabilities: %q", ready)
+		}
+		sender.wait(t, 100, true)
+		if n := sidecarLeaked(t, peer); n != 0 {
+			t.Fatalf("%d packets escaped", n)
+		}
+	})
+	t.Run("NET_RAW only", func(t *testing.T) {
+		sender, ready := startSidecarSenderWith(t, ns, "raw", "host0", "192.0.2.1", f.ControlMark)
+		if ready == "ready refused" {
+			t.Skip("this kernel (before 5.17) refuses SO_MARK without NET_ADMIN")
+		}
+		if ready != "ready marked" {
+			t.Fatalf("readiness: %q", ready)
+		}
+		sender.wait(t, 50, false)
+		deadline := time.Now().Add(5 * time.Second)
+		for sidecarLeaked(t, peer) == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("the control-marked socket of a NET_RAW sender did not reach the host side; the hazard the docs describe is not what this kernel does")
+			}
+			sender.wait(t, 10, false)
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+}
