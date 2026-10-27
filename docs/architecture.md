@@ -1449,7 +1449,11 @@ marks. The applications are given no capabilities.
 With the native backend, the exit downloads the catalog; with gluetun
 it reads gluetun's file instead ([the exit with
 gluetun](#the-exit-with-gluetun)). The exit fetches the fixed HTTPS
-Mullvad relay API at startup and every six hours. Redirects and proxy environment overrides are refused. Input is size
+Mullvad relay API at startup and every six hours, and sooner when the catalog
+stops being fresh on the wall clock: the age is judged on the wall clock and
+the schedule kept on the boot clock, so a clock that steps after a refresh
+(a host without a real-time clock that synchronizes late) gets a new catalog
+within five minutes of the last refresh rather than after six hours. Redirects and proxy environment overrides are refused. Input is size
 limited, decoded as JSON with duplicate keys rejected, and checked for active
 WireGuard entries, hostname shape, canonical 32-byte base64 keys, IPv4 endpoints
 and bounded location strings. The optional display attributes (Mullvad-owned,

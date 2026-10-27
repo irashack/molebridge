@@ -113,6 +113,53 @@ func TestARetryIsNotPutOffPastTheCatalogueAge(t *testing.T) {
 	}
 }
 
+// A wall-clock step after a successful refresh (a host without a real-time
+// clock that synchronizes late) leaves the catalogue stale, or from the
+// future, long before the next refresh on the boot clock: it is refreshed
+// within CatalogRetryUnusableMaxSec of the last refresh, not after
+// RefreshIntervalS.
+func TestAWallClockStepAfterARefreshIsRefreshedWithinTheUnusableBound(t *testing.T) {
+	for name, step := range map[string]time.Duration{
+		"forward":  (providers.CatalogMaxAge + 3600) * time.Second,
+		"backward": -2 * time.Hour,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fetches := 0
+			a, k := refreshing(t, func() ([]byte, error) { fetches++; return mullvadPayload(nil), nil })
+			wall := time.Now()
+			a.wallNow = func() time.Time { return wall }
+			if wait := due(t, a, k); wait != providers.RefreshIntervalS || fetches != 1 || !a.catalog.Usable() {
+				t.Fatalf("first refresh: %v %d %v", wait, fetches, a.catalog.Usable())
+			}
+			refreshedAt := k.now
+			wall = wall.Add(step)
+			if a.catalog.Usable() {
+				t.Fatal("the step should leave the catalogue unusable")
+			}
+			// Not before the bound: every pass would download otherwise.
+			k.now = refreshedAt + CatalogRetryUnusableMaxSec - 1
+			if err := a.DefaultMaintainCatalog(context.Background()); err != nil || fetches != 1 {
+				t.Fatalf("before the bound: %v %d", err, fetches)
+			}
+			k.now = refreshedAt + CatalogRetryUnusableMaxSec
+			if err := a.DefaultMaintainCatalog(context.Background()); err != nil || fetches != 2 {
+				t.Fatalf("at the bound: %v %d", err, fetches)
+			}
+			if !a.catalog.Usable() || a.nextCatalog != k.now+providers.RefreshIntervalS {
+				t.Errorf("after: %v %v", a.catalog.Usable(), a.nextCatalog-k.now)
+			}
+			// Usable again, the schedule decides.
+			k.now += CatalogRetryUnusableMaxSec
+			if err := a.DefaultMaintainCatalog(context.Background()); err != nil || fetches != 2 {
+				t.Errorf("usable again: %v %d", err, fetches)
+			}
+			if len(k.logs) != 0 {
+				t.Errorf("logs %q", k.logs)
+			}
+		})
+	}
+}
+
 // The catalogue's signature is cached, and follows the catalogue: a name
 // added in place or a new catalogue changes it, the same names do not.
 func TestCatalogueSignatureFollowsTheCatalogue(t *testing.T) {

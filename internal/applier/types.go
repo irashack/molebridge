@@ -36,7 +36,11 @@ const (
 	// starts over. While the catalogue is fresh, a retry is never put off past
 	// the moment it would stop being fresh (providers.CatalogMaxAge); while
 	// there is no usable catalogue, and so no switching, the wait is at most
-	// CatalogRetryUnusableMaxSec.
+	// CatalogRetryUnusableMaxSec. That bound holds after a success too: a
+	// catalogue the wall clock has since stepped away from (a host without a
+	// real-time clock that synchronizes after the refresh) is no longer
+	// fresh, and is refreshed within CatalogRetryUnusableMaxSec of the last
+	// refresh, not after RefreshIntervalS.
 	CatalogRetrySec            = 60
 	CatalogRetryMaxSec         = 60 * 60
 	CatalogRetryUnusableMaxSec = 5 * 60

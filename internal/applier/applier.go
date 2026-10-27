@@ -103,6 +103,8 @@ type Applier struct {
 	// success.
 	catalogRetry   float64
 	catalogFailure string
+	// catalogTried is when the last catalogue refresh ran (boot clock).
+	catalogTried float64
 	// signature caches catalogSignature for one catalogue. The pointer is
 	// weak so the cache never keeps a replaced catalogue alive, and a weak
 	// pointer never equals one made from a later object at the same address.
@@ -1091,11 +1093,23 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	return result, nil
 }
 
-// DefaultMaintainCatalog refreshes the catalogue when it is due.
+// DefaultMaintainCatalog refreshes the catalogue when it is due: on its
+// schedule, and while it is not usable no later than
+// CatalogRetryUnusableMaxSec after the last refresh, whatever the schedule.
+// Freshness is judged on the wall clock and the schedule kept on the boot
+// clock, so after a successful refresh the wall clock stepping (a host
+// without a real-time clock that synchronizes late) can make the catalogue
+// stale or from the future long before the schedule's next refresh.
 func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
-	if a.clock() < a.nextCatalog {
+	now := a.clock()
+	due := a.nextCatalog
+	if !a.catalog.Usable() {
+		due = math.Min(due, a.catalogTried+CatalogRetryUnusableMaxSec)
+	}
+	if now < due {
 		return nil
 	}
+	a.catalogTried = now
 	refreshed, err := a.catalog.Refresh(ctx, func() ([]byte, error) { return a.hooks.FetchCatalog(ctx, a) })
 	// A provider's server list is megabytes of JSON parsed into a much smaller
 	// catalogue; hand the parse's garbage back to the kernel now rather than
