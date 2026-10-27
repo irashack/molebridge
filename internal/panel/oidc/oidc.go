@@ -845,6 +845,14 @@ type discovered struct {
 	at        float64
 }
 
+// discovery is a fetch of the discovery document in progress; whoever finds
+// one waits for it and takes its answer instead of fetching again.
+type discovery struct {
+	done      chan struct{}
+	endpoints Endpoints
+	err       error
+}
+
 // Authenticator holds the discovery cache, pending sign-ins and sessions for
 // one panel process.
 type Authenticator struct {
@@ -867,6 +875,7 @@ type Authenticator struct {
 	consumed      *list.List
 	consumedIndex map[string]*list.Element
 	endpoints     *discovered
+	discovering   *discovery // nil when no fetch is running
 }
 
 type consumedItem struct {
@@ -904,33 +913,48 @@ func (a *Authenticator) now() float64 {
 
 // -- discovery ---------------------------------------------------------------
 
+// discover is the issuer's endpoints, from the cache while it is fresh. One
+// fetch runs at a time: when the cache expires, the requests that arrive
+// while it is being refreshed wait for that fetch and share its answer.
 func (a *Authenticator) discover() (Endpoints, error) {
 	now := a.now()
 	a.mu.Lock()
 	cached := a.endpoints
-	a.mu.Unlock()
 	if cached != nil && cached.endpoints != nil && now-cached.at < DiscoveryTTL {
+		a.mu.Unlock()
 		return *cached.endpoints, nil
 	}
 	if cached != nil && cached.endpoints == nil && now-cached.at < DiscoveryRetryS {
 		// A recent failure: don't let every anonymous /login wait on it.
+		a.mu.Unlock()
 		return Endpoints{}, authErr("discovery: the issuer could not be reached recently; retrying shortly")
 	}
+	if running := a.discovering; running != nil {
+		a.mu.Unlock()
+		<-running.done
+		return running.endpoints, running.err
+	}
+	fetch := &discovery{done: make(chan struct{})}
+	a.discovering = fetch
+	a.mu.Unlock()
+
 	doc, err := httpJSON(a.client, strings.TrimRight(a.config.Issuer, "/")+"/.well-known/openid-configuration", nil, nil, "discovery")
 	var endpoints Endpoints
 	if err == nil {
 		endpoints, err = ParseDiscovery(doc, a.config.Issuer)
 	}
-	if err != nil {
-		a.mu.Lock()
-		a.endpoints = &discovered{nil, now}
-		a.mu.Unlock()
-		return Endpoints{}, err
-	}
 	a.mu.Lock()
-	a.endpoints = &discovered{&endpoints, now}
+	if err != nil {
+		a.endpoints = &discovered{nil, now}
+		fetch.err = err
+	} else {
+		a.endpoints = &discovered{&endpoints, now}
+		fetch.endpoints = endpoints
+	}
+	a.discovering = nil
 	a.mu.Unlock()
-	return endpoints, nil
+	close(fetch.done)
+	return fetch.endpoints, fetch.err
 }
 
 // -- sign-in -------------------------------------------------------------------
