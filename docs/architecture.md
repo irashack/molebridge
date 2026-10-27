@@ -575,8 +575,16 @@ purpose: an unqualified rule would force everything sourced from the tunnel
 address into the tunnel, including traffic from anything else sharing the
 namespace. `compose.yaml` sets `net.ipv4.icmp_errors_use_inbound_ifaddr=1` so
 IPv4 errors carry the tunnel address; the kernel already selects the inbound
-interface's address for IPv6. The worker warns (`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`)
-when it isn't set. Without rule 94 the errors would leave over the host's
+interface's address for IPv6. Without the sysctl the errors carry the address
+of the host interface, rule 94 cannot match them, and they would leave by the
+host's route carrying the inner headers, so a native overlay exit treats it as
+a precondition: NetBird is not started while it isn't `1`, and the worker logs
+`molebridge-exit: NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface`
+every 30 seconds ([requirements](prerequisites.md#kernel-settings-in-the-exits-namespace)).
+With gluetun, gluetun's rule 101 takes those errors into the tunnel whatever
+their source, and rule 104 refuses them while rule 101 is missing, so the worker only warns
+(`molebridge-exit: warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail`).
+Without rule 94 the errors would leave over the host's
 route with an unroutable source, and large UDP flows would silently stall; rule
 98 drops them instead when rule 94 or the exit table's routes are gone.
 
