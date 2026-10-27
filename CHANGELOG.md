@@ -75,14 +75,19 @@ object is gone from `/api/status`. Not yet run live
   until the container restarted. The next pass, 5 seconds later, now
   reports `The last switch stopped on a file error (<error>); retrying
   automatically.` and applies the switch again on its backoff once the file
-  is fixed.
+  is fixed. When the state volume can't be written, a failed catalog
+  refresh waits its usual backoff instead of downloading the provider's
+  list again every 5 seconds.
 - **A wall-clock step after a catalog refresh** (a board without a
   real-time clock that syncs time late) gets a new catalog within 5 minutes
   instead of reporting `catalogue-stale` for up to 6 hours.
 - **The post-`netbird up` profile refusal shows as `failed`** in the panel,
   `/readyz` and `molebridge status`, with the refusal as the message. It
   used to show "Applier starting; waiting for verification." for as long as
-  the container ran.
+  the container ran. Likewise, while a native exit holds NetBird back
+  because the ICMP sysctl is not 1 or the profile check before start
+  refuses, the status is `failed` with `NetBird is not started: <reason>`;
+  the normal status returns once the cause is fixed and NetBird starts.
 - **A status record larger than the 16 KiB its readers accept is not
   written**; the previous record stays and the exit logs `cannot write
   <path>: state file exceeds its size limit`.
