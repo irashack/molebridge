@@ -52,6 +52,14 @@ jobs:
         with:
           image: ${{ env.REHEARSAL_IMAGE }}
           tag: rehearsal-${{ github.run_id }}
+      - name: The image reports the tag it was built as
+        env:
+          DIGEST: ${{ steps.pub.outputs.digest }}
+          TAG: rehearsal-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          got=$(docker run --rm --network none --platform linux/amd64 "$REHEARSAL_IMAGE@$DIGEST" version)
+          [ "$got" = "molebridge $TAG" ] || { echo "::error::the image says '$got', want 'molebridge $TAG'"; exit 1; }
       - name: Bundle, signed and attested (once the Compose files name the image)
         id: bundle
         env:
@@ -160,6 +168,13 @@ jobs:
         with:
           image: ${{ env.IMAGE }}
           tag: ${{ github.ref_name }}
+      - name: The image reports the tag it was built as
+        env:
+          DIGEST: ${{ steps.pub.outputs.digest }}
+        run: |
+          set -euo pipefail
+          got=$(docker run --rm --network none --platform linux/amd64 "$IMAGE@$DIGEST" version)
+          [ "$got" = "molebridge $GITHUB_REF_NAME" ] || { echo "::error::the image says '$got', want 'molebridge $GITHUB_REF_NAME'"; exit 1; }
       - name: Build and sign the bundle
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
