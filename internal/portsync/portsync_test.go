@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -667,6 +668,25 @@ func TestReadCredentialStripsOneNewline(t *testing.T) {
 	os.Symlink(filepath.Join(dir, "target"), link)
 	if got, err := ReadCredential(link); err != nil || got != "pw" {
 		t.Errorf("symlink: %q %v", got, err)
+	}
+	// A FIFO, or a link to one, is refused at once instead of blocking the
+	// role until a writer appears.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Symlink(fifo, filepath.Join(dir, "fifo-link"))
+	for _, p := range []string{fifo, filepath.Join(dir, "fifo-link"), dir} {
+		done := make(chan error, 1)
+		go func() { _, err := ReadCredential(p); done <- err }()
+		select {
+		case err := <-done:
+			if err == nil || err.Error() != "is not a regular file" {
+				t.Errorf("%s: %v", filepath.Base(p), err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: the read blocked", filepath.Base(p))
+		}
 	}
 }
 

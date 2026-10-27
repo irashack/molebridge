@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/validate"
@@ -35,12 +36,16 @@ type publisher struct {
 }
 
 func newPublisher(s *Settings, lease *Lease, boot bootclock.Clock, wall func() time.Time, logf func(string, ...any)) *publisher {
-	return &publisher{s: s, lease: lease, boot: boot, wall: wall, logf: logf, out: newCoalescer(),
-		write: func(path string, v any) error {
-			// No fsync: the record is rewritten every 2 seconds on a native exit
-			// and every inspection otherwise, and nothing restores from it.
-			return jsonfile.Write(path, v, jsonfile.Options{Public: true, NoSync: true})
-		}}
+	return &publisher{s: s, lease: lease, boot: boot, wall: wall, logf: logf, out: newCoalescer(), write: writeResult}
+}
+
+// writeResult writes result.json. A record past the readers' bound
+// (applier.ResultMaxBytes) is refused with jsonfile.ErrSizeLimit and the last
+// one stays: written, every reader would read nothing. No fsync: the record
+// is rewritten every 2 seconds on a native exit and every inspection
+// otherwise, and nothing restores from it.
+func writeResult(path string, v any) error {
+	return jsonfile.Write(path, v, jsonfile.Options{Public: true, NoSync: true, MaxBytes: applier.ResultMaxBytes})
 }
 
 // ownerCheck is the check as it would be written now.

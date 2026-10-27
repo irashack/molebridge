@@ -468,7 +468,9 @@ requirements. The reasons:
   cannot be verified`. After `netbird up` the exit read the profile again and found
   none. NetBird failed to enroll or to write its state; see NetBird's output above
   the line. The exit admits no traffic and stops NetBird; the refusal holds until
-  the container restarts, so fix the cause and restart the exit.
+  the container restarts, so fix the cause and restart the exit. A refusal after
+  `netbird up`, this one or the blacklist one above, is also the message of the
+  exit's record, which shows `failed` in the panel and in `molebridge status`.
 - With gluetun only: `<name> is set; the gluetun backend needs NetBird to mark its
   control traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
   `NB_DISABLE_CUSTOM_ROUTING` (remove the variable); `CONTROL_MARK must be
@@ -890,6 +892,12 @@ the repairer's lines).
 switch, or lost the answer to its change. At start it inspected the tunnel first, found
 another server live, and applies the selection again on the backoff. Its log shows
 `molebridge-exit: applier: an interrupted switch is inspected before anything else`.
+
+**"The last switch stopped on a file error (<error>); retrying automatically."** A switch
+failed on the exit's own files: the error names which, for example a PIA credential file
+under `secrets/pia/` that is missing or unreadable, or a state volume that is full. The
+log shows the same error after `applier: control cycle failed:`. Fix the file; the switch
+is applied again on its backoff without a restart.
 
 **"The live server is not the selected one; waiting for convergence."** The tunnel runs
 another server than the one you selected; with `SERVER` set the message is "The configured

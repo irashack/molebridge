@@ -355,6 +355,10 @@ The supervisor, not the worker, writes `state/applier/result.json`
 (atomically, mode 0644). That is what lets a hung worker's last good record
 stop looking good:
 
+- A record larger than 16 KiB, the bound every reader applies, is not
+  written: the previous file stays, and the exit logs `molebridge-exit:
+  cannot write <path>: state file exceeds its size limit`, at most once a
+  minute like any other write failure.
 - The supervisor writes a starting record when it starts, status `unknown`
   with the message `Applier starting; waiting for verification.`.
 - The worker hands each finished inspection to the supervisor, with the
@@ -838,7 +842,10 @@ itself:
   entry is in effect, because `netbird up` in daemon mode can return at once when
   the daemon is already connected, before a configuration change applies. If the
   profile isn't right, the pipeline does not run and the exit tells the
-  supervisor to stop NetBird.
+  supervisor to stop NetBird. Until the container restarts, the exit publishes
+  a `failed` record every 5 seconds whose message is the refusal and whose
+  `netbird` check fails, so the panel, `/readyz` and `molebridge status` name
+  the cause.
 
 Only the tunnel interface is required, never the host interface: the blacklist
 filters NetBird's connection candidates, and excluding the host interface would
@@ -1465,7 +1472,11 @@ marks. The applications are given no capabilities.
 With the native backend, the exit downloads the catalog; with gluetun
 it reads gluetun's file instead ([the exit with
 gluetun](#the-exit-with-gluetun)). The exit fetches the fixed HTTPS
-Mullvad relay API at startup and every six hours. Redirects and proxy environment overrides are refused. Input is size
+Mullvad relay API at startup and every six hours, and sooner when the catalog
+stops being fresh on the wall clock: the age is judged on the wall clock and
+the schedule kept on the boot clock, so a clock that steps after a refresh
+(a host without a real-time clock that synchronizes late) gets a new catalog
+within five minutes of the last refresh rather than after six hours. Redirects and proxy environment overrides are refused. Input is size
 limited, decoded as JSON with duplicate keys rejected, and checked for active
 WireGuard entries, hostname shape, canonical 32-byte base64 keys, IPv4 endpoints
 and bounded location strings. The optional display attributes (Mullvad-owned,
@@ -1656,7 +1667,12 @@ interrupted by a crash or a lost response, is inspected first, never
 replayed: the target live means `idle` or `unverified`; anything else is a
 failed attempt, "The last switch was interrupted; retrying automatically.",
 applied again on its backoff after another inspection. Other states are
-kept. Deadlines are kept on the boot clock with the boot's id: after a
+kept. A pass that stops on the applier's own file I/O failure after saving
+the attempt as `attempting` (a PIA credential file that is missing, a state
+volume that is full) leaves it so, and the next pass, 5 seconds later,
+inspects it the same way; its message then names the failure: "The last
+switch stopped on a file error (<error>); retrying automatically.", with
+the error cut to 256 characters. Deadlines are kept on the boot clock with the boot's id: after a
 reboot a due re-check runs at once, a re-apply waits the current backoff
 step, and the 90-second guard has passed.
 

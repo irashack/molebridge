@@ -149,9 +149,39 @@ func TestRedirectsAreAnswersNotInstructions(t *testing.T) {
 		http.Redirect(w, r, "/next", http.StatusFound)
 	}))
 	defer server.Close()
-	response, err := Client{}.Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true})
+	// A redirect is not data: without AnyStatus it fails like an error status.
+	if _, err := (Client{}).Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true}); !errors.Is(err, ErrStatus) || followed {
+		t.Fatalf("%v followed=%v", err, followed)
+	}
+	response, err := Client{}.Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true, AnyStatus: true})
 	if err != nil || response.Status != http.StatusFound || followed {
 		t.Fatalf("%v %+v followed=%v", err, response, followed)
+	}
+}
+
+// Every 2xx is an answer; everything outside it fails with ErrStatus unless
+// the caller judges the status itself.
+func TestOnlyA2xxAnswerIsDataWithoutAnyStatus(t *testing.T) {
+	for status, accepted := range map[int]bool{200: true, 201: true, 204: true, 299: true,
+		300: false, 301: false, 304: false, 307: false, 308: false, 400: false, 404: false, 500: false} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/elsewhere")
+			w.WriteHeader(status)
+			if status != 204 && status != 304 {
+				io.WriteString(w, `{"ip": "203.0.113.9"}`)
+			}
+		}))
+		response, err := Client{}.Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true})
+		if accepted && (err != nil || response.Status != status) {
+			t.Errorf("%d: %v %+v", status, err, response)
+		}
+		if !accepted && (!errors.Is(err, ErrStatus) || response.Body != nil) {
+			t.Errorf("%d should fail with ErrStatus: %v %+v", status, err, response)
+		}
+		if response, err := (Client{}).Fetch(context.Background(), Request{URL: server.URL, AllowHTTP: true, AnyStatus: true}); err != nil || response.Status != status {
+			t.Errorf("%d with AnyStatus: %v %+v", status, err, response)
+		}
+		server.Close()
 	}
 }
 

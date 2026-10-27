@@ -1,10 +1,16 @@
 package exit
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/validate"
 )
 
@@ -146,5 +152,45 @@ func TestOtherKindsGetNoLeaseOnlyPublication(t *testing.T) {
 		if o := h.writes[0]["checks"].(map[string]any)["owner_record"].(map[string]any); o["state"] != "n/a" {
 			t.Errorf("%s: owner_record %v", s.Kind(), o)
 		}
+	}
+}
+
+// A record past the readers' 16 KiB bound is refused and logged, and the last
+// one stays: written, every reader would read nothing and say nothing. A
+// full volume is logged the same way.
+func TestARecordTheReadersWouldRefuseIsNotWritten(t *testing.T) {
+	h := newPubHarness(t)
+	var logs []string
+	h.p.logf = func(format string, a ...any) { logs = append(logs, fmt.Sprintf(format, a...)) }
+	h.p.s.StateDir = t.TempDir()
+	h.p.write = writeResult
+	path := h.p.s.PathResult()
+	h.p.Full(okRecord(h.p.s, h.wall))
+	h.p.Wait(time.Second)
+	good, ok := readResult(path)
+	if !ok || good["status"] != "ok" {
+		t.Fatalf("the first record: %v %v", good, ok)
+	}
+	large := okRecord(h.p.s, h.wall)
+	large["message"] = strings.Repeat("x", applier.ResultMaxBytes)
+	h.p.Full(large)
+	h.p.Wait(time.Second)
+	if kept, ok := readResult(path); !ok || !reflect.DeepEqual(kept, good) {
+		t.Errorf("the last record should stay: %v %v", kept, ok)
+	}
+	if len(logs) != 1 || logs[0] != "cannot write "+path+": state file exceeds its size limit" {
+		t.Errorf("logs %q", logs)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(path))
+	if len(entries) != 1 {
+		t.Errorf("a temporary file was left: %v", entries)
+	}
+
+	h.p.warnedAt = time.Time{}
+	h.p.write = func(string, any) error { return &os.PathError{Op: "write", Path: path, Err: syscall.ENOSPC} }
+	h.p.Full(okRecord(h.p.s, h.wall))
+	h.p.Wait(time.Second)
+	if len(logs) != 2 || logs[1] != "cannot write "+path+": write "+path+": no space left on device" {
+		t.Errorf("logs %q", logs)
 	}
 }

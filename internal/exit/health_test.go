@@ -1,10 +1,12 @@
 package exit
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -140,4 +142,47 @@ func dirNames(t *testing.T, dir string) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+// The heartbeat readers read as the writers write: a symbolic link, a file
+// that is not regular (a FIFO, which would otherwise block the reader) or an
+// oversized file is no heartbeat, however fresh what it points at.
+func TestHeartbeatReadersFollowNoLinkAndReadBounded(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the boot id comes from /proc")
+	}
+	now := 1000 * time.Second
+	clock := func() time.Duration { return now }
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := writeHeartbeat(real, now); err != nil {
+		t.Fatal(err)
+	}
+	if ok, why := Healthy(real, clock); !ok {
+		t.Fatal(why)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	large := filepath.Join(dir, "large")
+	content, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(large, append(content, bytes.Repeat([]byte(" "), heartbeatMaxBytes)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{link, fifo, large} {
+		if ok, why := Healthy(path, clock); ok || why != "no heartbeat yet" {
+			t.Errorf("%s: %v %q", filepath.Base(path), ok, why)
+		}
+		if ok, why := Guarded(path, clock); ok || why != "no guard heartbeat yet" {
+			t.Errorf("guarded %s: %v %q", filepath.Base(path), ok, why)
+		}
+	}
 }

@@ -19,6 +19,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -126,8 +127,14 @@ func checkURL(raw string) error {
 
 // ReadCredential reads one credential file: at most MaxCredentialBytes, one
 // trailing newline removed, not empty. The error never carries the content.
+//
+// Unlike the exit's secret readers it follows a symbolic link, as documented
+// (docs/native-sidecar.md): a Kubernetes secret volume presents each file as
+// one, and the role mounts its secret as a directory. What the link names
+// must still be a regular file, and the file is opened without blocking, so a
+// FIFO is refused rather than stalling the role.
 func ReadCredential(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", errors.New("cannot be opened")
 	}

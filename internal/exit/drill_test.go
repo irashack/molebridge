@@ -644,8 +644,13 @@ func TestDrillProfileWithoutTheTunnelExclusionAdmitsNothing(t *testing.T) {
 	if !strings.Contains(p.out.String(), "does not exclude the tunnel interface") {
 		t.Errorf("the refusal is not in the log:\n%s", p.out.String())
 	}
-	if r := l.result(); r != nil && r["status"] != "unknown" {
-		t.Errorf("the pipeline must stay off: %v", r["status"])
+	// The pipeline stays off; the record says why instead of "Applier
+	// starting; waiting for verification." for the life of the exit.
+	if r := l.result(); r == nil || r["status"] != "failed" ||
+		!strings.Contains(fmt.Sprint(r["message"]), "does not exclude the tunnel interface") {
+		t.Errorf("the record must name the refusal: %v", r)
+	} else if sel, _ := r["selection"].(map[string]any); sel["source"] != "seed" {
+		t.Errorf("the pipeline must stay off: %v", r["selection"])
 	}
 	_ = p.cmd.Process.Signal(syscall.SIGTERM)
 	p.wait(20 * time.Second)

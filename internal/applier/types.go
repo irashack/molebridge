@@ -36,7 +36,11 @@ const (
 	// starts over. While the catalogue is fresh, a retry is never put off past
 	// the moment it would stop being fresh (providers.CatalogMaxAge); while
 	// there is no usable catalogue, and so no switching, the wait is at most
-	// CatalogRetryUnusableMaxSec.
+	// CatalogRetryUnusableMaxSec. That bound holds after a success too: a
+	// catalogue the wall clock has since stepped away from (a host without a
+	// real-time clock that synchronizes after the refresh) is no longer
+	// fresh, and is refreshed within CatalogRetryUnusableMaxSec of the last
+	// refresh, not after RefreshIntervalS.
 	CatalogRetrySec            = 60
 	CatalogRetryMaxSec         = 60 * 60
 	CatalogRetryUnusableMaxSec = 5 * 60
@@ -50,6 +54,9 @@ const (
 	// Invalid input is bounded too, so even JSON-escaped Unicode fits the
 	// readers' 16 KiB status limit.
 	ServerReportChars = 256
+	// IOFailureReportChars is the longest I/O failure a record's message
+	// quotes.
+	IOFailureReportChars = 256
 	// ResultMaxBytes is the readers' bound on result.json.
 	ResultMaxBytes = 16384
 	// ReturnPathSysctl is the file whose content "1" makes the kernel source
@@ -84,7 +91,9 @@ var ErrCredentialRejected = fmt.Errorf("%w: the provider refused the login", Err
 // ioError marks a failure of the applier's own file I/O (reading a credential
 // file, writing state). In Python these were OSError, which the pipeline's
 // `except (RuntimeError, ValueError, UnicodeError)` does not catch: they leave
-// the control cycle (Tick returns them) with the attempt as it was saved.
+// the control cycle (Tick returns them) with the attempt as it was saved. An
+// attempt left attempting is inspected by the next pass (resume), which names
+// the failure in its message.
 type ioError struct{ err error }
 
 func (e *ioError) Error() string { return e.err.Error() }

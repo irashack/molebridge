@@ -90,6 +90,24 @@ func StartingRecord(s *Settings, now time.Time) map[string]any {
 	return toMap(rec)
 }
 
+// refusalReportChars is the longest profile refusal a record's message
+// carries: the same bound as the unready message's reason.
+const refusalReportChars = 900
+
+// ProfileRefusedRecord is the record of an overlay exit whose NetBird profile
+// the check after `netbird up` refused: NetBird is stopped and the control
+// cycle never runs, so nothing else would replace the starting record. It is
+// the starting record failed, with the netbird check failed at now and the
+// refusal as the message.
+func ProfileRefusedRecord(s *Settings, now time.Time, refusal string) map[string]any {
+	rec := StartingRecord(s, now)
+	checks, _ := rec["checks"].(map[string]any)
+	checks["netbird"] = map[string]any{"state": "fail", "at": validate.FormatTime(now)}
+	rec["status"] = "failed"
+	rec["message"] = truncateRunes(strings.ToValidUTF8(refusal, "�"), refusalReportChars)
+	return rec
+}
+
 // RoutingActivity is the routing_activity member of a record: what the
 // mutation owner and the kernel watcher counted since the worker started.
 // Only exits with a routing contract carry it. No reader judges it.

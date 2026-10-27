@@ -84,6 +84,8 @@ type worker struct {
 	fatalMsg  atomic.Pointer[string]
 	nbRunning atomic.Bool
 	blocked   atomic.Bool
+	// refusal is the profile check's refusal that set blocked.
+	refusal   atomic.Pointer[string]
 	pipeOn    atomic.Bool
 	launch    atomic.Int64
 	netbirdCh chan Msg
@@ -375,9 +377,11 @@ func (w *worker) run() int {
 		w.watcher = wt
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
 		go func() {
+			// Run returns nil once the worker stops; an error is the event
+			// socket failing, and without the watcher nothing repairs the
+			// contract: the worker ends with a failure.
 			if err := wt.Run(w.ctx); err != nil {
-				w.logf("%v", err)
-				w.cancel()
+				w.fatal(err.Error())
 			}
 		}()
 	}
@@ -728,6 +732,8 @@ func (w *worker) netbirdLoop() {
 				// admit nothing unless the tunnel is excluded.
 				if err := nbprofile.CheckBlacklistAfterUp(w.s.NBPaths, w.s.Routing.OverlayIf, w.s.Routing.ExitIf); err != nil {
 					w.logf("%v", err)
+					refusal := err.Error()
+					w.refusal.Store(&refusal)
 					w.blocked.Store(true)
 					w.nbRunning.Store(false)
 					_ = w.send.send(Msg{Type: TypeUnready, Reason: truncate(err.Error(), 900)})
@@ -750,10 +756,16 @@ func truncate(s string, n int) string {
 }
 
 // pipelineLoop runs the control cycle, once NetBird is up and its profile
-// verified (overlay) or at once (sidecar).
+// verified (overlay) or at once (sidecar). Once the profile check after
+// `netbird up` has refused, the cycle never runs again in this generation and
+// the loop publishes the refusal instead, on every pass so the record stays
+// fresh for its readers.
 func (w *worker) pipelineLoop() {
 	for {
-		if w.pipeOn.Load() && !w.blocked.Load() {
+		switch {
+		case w.blocked.Load():
+			w.publishRefusal()
+		case w.pipeOn.Load():
 			if err := w.pipe.Tick(w.ctx); err != nil && w.ctx.Err() == nil {
 				w.warnEvery("tick", 30*time.Second, "applier: control cycle failed: %v", err)
 			}
@@ -761,6 +773,18 @@ func (w *worker) pipelineLoop() {
 		if !sleepCtx(w.ctx, TickInterval) {
 			return
 		}
+	}
+}
+
+// publishRefusal hands the supervisor the failed record that names the
+// profile refusal.
+func (w *worker) publishRefusal() {
+	refusal := w.refusal.Load()
+	if refusal == nil {
+		return
+	}
+	if err := w.send.send(Msg{Type: TypeStatus, Record: ProfileRefusedRecord(w.s, time.Now(), *refusal)}); err != nil {
+		w.warnEvery("refusal", time.Minute, "cannot publish the profile refusal: %v", err)
 	}
 }
 

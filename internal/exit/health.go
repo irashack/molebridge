@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/bootclock"
+	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/state"
 )
 
@@ -62,15 +64,29 @@ func replaceFile(path string, data []byte) (err error) {
 	return os.Rename(f.Name(), path)
 }
 
+// heartbeatMaxBytes bounds a heartbeat file: its one line is under 100
+// bytes.
+const heartbeatMaxBytes = 512
+
+// readHeartbeat reads a heartbeat file the way the other state files are
+// read (jsonfile.ReadBytes): a symbolic link, a file that is not regular (a
+// FIFO is never opened for reading) or one past heartbeatMaxBytes is not
+// read. The writers replace the file by rename and never follow a link; the
+// readers don't either.
+func readHeartbeat(path string) (string, bool) {
+	b, ok := jsonfile.ReadBytes(path, heartbeatMaxBytes)
+	return string(b), ok
+}
+
 // HeartbeatAge reads the heartbeat and returns its age on the boot clock. An
-// absent file, another boot's, a malformed one or one from the future is an
-// error.
+// absent or unreadable file, another boot's, a malformed one or one from the
+// future is an error.
 func HeartbeatAge(path string, clock bootclock.Clock) (time.Duration, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
+	b, ok := readHeartbeat(path)
+	if !ok {
 		return 0, fmt.Errorf("no heartbeat yet")
 	}
-	f := strings.Fields(string(b))
+	f := strings.Fields(b)
 	if len(f) != 4 || f[0] != "molebridge-heartbeat" || f[1] != "1" {
 		return 0, fmt.Errorf("the heartbeat is unreadable")
 	}
@@ -128,11 +144,11 @@ func writeGuarded(path string, now time.Duration) error {
 // Guarded is `molebridge health --guarded`: the guard heartbeat is from this
 // boot and this network namespace, and fresh on the boot clock.
 func Guarded(path string, clock bootclock.Clock) (bool, string) {
-	b, err := os.ReadFile(path)
-	if err != nil {
+	b, ok := readHeartbeat(path)
+	if !ok {
 		return false, "no guard heartbeat yet"
 	}
-	f := strings.Fields(string(b))
+	f := strings.Fields(b)
 	if len(f) != 5 || f[0] != "molebridge-guarded" || f[1] != "1" {
 		return false, "the guard heartbeat is unreadable"
 	}
@@ -159,4 +175,6 @@ func Guarded(path string, clock bootclock.Clock) (bool, string) {
 // readResult reads the published status record, bounded and strictly.
 //
 //lint:ignore U1000 linux-only: called from worker_linux.go
-func readResult(path string) (map[string]any, bool) { return state.ReadObject(path, 16384) }
+func readResult(path string) (map[string]any, bool) {
+	return state.ReadObject(path, applier.ResultMaxBytes)
+}

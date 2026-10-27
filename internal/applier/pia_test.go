@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -338,6 +339,16 @@ func TestPIAMalformedCredentialsRefused(t *testing.T) {
 	}
 	if _, err := readSecret(filepath.Join(dir, "missing")); err == nil || caught(err) {
 		t.Errorf("missing file: %v", err)
+	}
+	// A FIFO is refused without blocking, a directory too: I/O failures.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{fifo, dir} {
+		if _, err := readSecret(path); err == nil || caught(err) || !strings.Contains(err.Error(), "is not a regular file") {
+			t.Errorf("%s: %v", path, err)
+		}
 	}
 }
 

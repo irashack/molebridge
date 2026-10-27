@@ -14,7 +14,8 @@ package applier
 // the key in a mode-0600 header file; the same bounds are the netx.Request
 // here: plain HTTP allowed (AllowHTTP), no proxy and no redirect (netx never
 // does either), a 2-second connect, a 10-second total, a 16384-byte answer,
-// and an HTTP status of 400 or more a failure (-f).
+// and an HTTP status of 400 or more a failure (-f); netx fails a redirect
+// (3xx) too, which curl would have returned as an answer.
 
 import (
 	"context"
