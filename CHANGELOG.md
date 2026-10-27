@@ -47,7 +47,12 @@ object is gone from `/api/status`. Not yet run live
 - **Strays at PIA's skipped priorities are removed.** While PIA has no
   registered address, a rule at priority 94 or 98 that is not in the
   return-path shape (such as `lookup main`) is deleted, and the pass is not
-  verified while it stays. The repairer used to skip both priorities.
+  verified while it stays. The repairer used to skip both priorities. A
+  stray there that a kernel delete could mistake for the rule PIA left (no
+  source, no protocol, or inverted) is rebuilt around that rule instead of
+  deleted, and a rebuild interrupted there puts the rule back from its
+  protective copy. At every priority, a copy of an expected rule that
+  differs only in flags is now rebuilt rather than deleted.
 - **A gluetun repair's protective copy at priority 101 is removed** when the
   rebuilt rule 102 could not be confirmed. It used to stay for good. The
   delete-by-priority fallback can no longer reach gluetun's own rule 101.
