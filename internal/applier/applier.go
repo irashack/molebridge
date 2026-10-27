@@ -1050,6 +1050,9 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 	a.ensureIngressGuard(ctx)
 	a.hooks.BeforeTick(ctx, a)
 	result, err := a.tick(ctx)
+	// ioFailure is the cause of this pass's end only: a pass that ends on
+	// anything else (a canceled context) or completes leaves none behind.
+	a.ioFailure = ""
 	if err != nil {
 		var io *ioError
 		if errors.As(err, &io) {
@@ -1057,7 +1060,6 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 		}
 		return nil, err
 	}
-	a.ioFailure = ""
 	a.hooks.AfterTick(ctx, a, result)
 	return result, nil
 }
