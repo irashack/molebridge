@@ -22,10 +22,14 @@ type hostPort struct {
 var loopbackHosts = map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
 
 // splitHost is _split_host: (hostname, port) from a Host-style value; false
-// when malformed.
+// when malformed. An IPv6 address must be bracketed: net/url reads
+// `2001:db8::1` as host `2001:db8:` and port 1, which no request would match.
 func splitHost(value string) (hostPort, bool) {
 	u, err := url.Parse("//" + pystr.Strip(value))
 	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return hostPort{}, false
+	}
+	if strings.Contains(u.Hostname(), ":") && !strings.HasPrefix(u.Host, "[") {
 		return hostPort{}, false
 	}
 	port, ok := parsePort(u.Port())

@@ -98,7 +98,8 @@ func TestSignInPublicHostIsAllowed(t *testing.T) {
 // It now stops the panel at start, naming the entry.
 func TestMalformedPublicHostsAreRefusedAtStart(t *testing.T) {
 	for _, entry := range []string{"https://exit.example.test", "exit.example.test/", "exit.example.test:99999",
-		"user@exit.example.test", "exit.example.test?x", "exit.example.test:port", ":8095", "["} {
+		"user@exit.example.test", "exit.example.test?x", "exit.example.test:port", ":8095", "[",
+		"2001:db8::1", "2001:db8::1:8095", "::1"} {
 		raw := "good.example.test, " + entry
 		_, err := ConfigFromEnv(map[string]string{"PROVIDER": "mullvad", "PANEL_PUBLIC_HOSTS": raw})
 		want := "PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as exit.example.net or " +
@@ -111,6 +112,21 @@ func TestMalformedPublicHostsAreRefusedAtStart(t *testing.T) {
 	cfg, err := ConfigFromEnv(map[string]string{"PROVIDER": "mullvad", "PANEL_PUBLIC_HOSTS": " exit.example.test , ,host.docker.internal:8095,"})
 	if err != nil || len(cfg.Settings.PublicHosts) != 2 {
 		t.Fatalf("%v %v", cfg, err)
+	}
+	// Bracketed IPv6 and plain IPv4, with or without a port, are accepted
+	// and match requests for them.
+	cfg, err = ConfigFromEnv(map[string]string{"PROVIDER": "mullvad",
+		"PANEL_PUBLIC_HOSTS": "[2001:db8::1],[2001:db8::2]:8095,192.0.2.10,192.0.2.11:8095"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]bool{
+		"[2001:db8::1]": true, "[2001:db8::1]:443": true, "[2001:db8::2]:8095": true, "[2001:db8::2]": false,
+		"192.0.2.10": true, "192.0.2.11:8095": true, "192.0.2.11": false,
+	} {
+		if got := cfg.Settings.HostAllowed(host); got != want {
+			t.Errorf("HostAllowed(%q) = %v, want %v", host, got, want)
+		}
 	}
 }
 
