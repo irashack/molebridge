@@ -650,6 +650,7 @@ no access log line. Other methods than `GET`, `HEAD` and `POST` get 501.
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |
 | `/readyz`, `/readyz?exit=<id>` | 200 only when all exits, or the named exit, have a fresh verified connected state; 503 otherwise. An unknown ID in multi-exit mode returns 404 |
+| `/metrics` | Prometheus text format, since 0.10.0: [metrics](#metrics) |
 
 With sign-in on, these are added, and they answer 404 when it is off:
 
@@ -669,9 +670,63 @@ Without a session:
 | `/api/status`, `/api/exits`, `/api/latency` | 401 with `{"error": "sign in required"}` |
 | `POST /select` | 401 `sign in required` |
 | `/healthz`, `/static/*`, `/manifest.webmanifest`, `/readyz` without `?exit=` | As without sign-in |
+| `/metrics` | Only `molebridge_ready` |
 
 `/readyz?exit=<id>` needs a session granted that exit. For anyone else it
 answers 404 `unknown exit`, as for an exit that doesn't exist. The same holds
 for an exit the person isn't granted on the page, the embed, `/api/status` and
 `/api/latency` (404 `unknown exit`) and on `POST /select` (400 `unknown exit`).
 The Host check comes first for all of these except `/healthz`.
+
+### Metrics
+
+`GET /metrics` answers in the Prometheus text format (version 0.0.4) with
+what the panel already reads for `/readyz` and `/api/status`. Each scrape reads
+the exits' records and catalogues again; the panel keeps no history. It is
+exposed as `/readyz` is: `molebridge_ready` to anyone who passes the Host
+check, and the per-exit series for the exits `/readyz?exit=<id>` would answer
+for. Without sign-in that is every exit. With sign-in on it is the exits the
+caller's session is granted, so a scraper without a session gets only
+`molebridge_ready`; the panel has no separate token for metrics.
+
+| Metric | Type | Labels | Value |
+|---|---|---|---|
+| `molebridge_ready` | gauge | | 1 when every exit has a fresh verified connected state (`/readyz` answers 200), else 0 |
+| `molebridge_exit_info` | gauge | `exit`, `provider`, `kind` | 1 for each exit |
+| `molebridge_exit_state` | gauge | `exit`, `state` | 1 for the verdict's state (`ok`, `failed`, `applying`, `unknown`), 0 for the other three |
+| `molebridge_exit_check` | gauge | `exit`, `check`, `state` | 1 for each check's state as `/api/status` gives it (`pass`, `fail`, `unknown`, `n/a`, `not-checked`, `legacy`), 0 for the others |
+| `molebridge_exit_checked_timestamp_seconds` | gauge | `exit` | The record's `checked_at`, as Unix time; absent without a record |
+| `molebridge_exit_handshake_age_seconds` | gauge | `exit` | The record's handshake `age_s`, as of `checked_at`; only while the verdict says the handshake was measured (`pass` or `fail`) |
+| `molebridge_exit_catalog_fetched_timestamp_seconds` | gauge | `exit` | The relay catalogue's `fetched_at`, as Unix time |
+| `molebridge_exit_catalog_relays` | gauge | `exit` | Relays in the catalogue that passed validation |
+| `molebridge_exit_routing_repairs_total` | counter | `exit` | `routing_activity.repairs`: repair passes that changed the kernel |
+| `molebridge_exit_routing_last_repair_timestamp_seconds` | gauge | `exit` | `routing_activity.last_repair_at`, as Unix time; absent before the first repair |
+| `molebridge_exit_routing_kernel_events_total` | counter | `exit` | `routing_activity.events` |
+| `molebridge_exit_routing_relevant_events_total` | counter | `exit` | `routing_activity.relevant_events` |
+| `molebridge_exit_routing_events_lost_total` | counter | `exit` | `routing_activity.events_lost` |
+| `molebridge_exit_routing_periodic_passes_total` | counter | `exit` | `routing_activity.periodic_passes` |
+
+`exit` is the id from `PANEL_EXITS`, and empty for a single-exit panel. The
+routing counters come from the record's
+[`routing_activity`](architecture.md#the-status-record): they are as old as
+`checked_at`, start again from zero when the exit's worker restarts (which
+Prometheus's `rate()` and `increase()` allow for), and are absent for a
+gluetun sidecar, an exit older than 0.9.3, or a member that doesn't read as
+the exit writes it.
+
+A scrape from Prometheus on the same host, where the Compose file publishes
+the panel on `127.0.0.1:8095`:
+
+```yaml
+scrape_configs:
+  - job_name: molebridge
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8095"]
+```
+
+`curl -s http://127.0.0.1:8095/metrics` shows the same text. A Prometheus
+in a container reaches the panel under another name, which the Host check
+answers 421 until you add it to `PANEL_PUBLIC_HOSTS`. An alert on a
+switched-off or failing exit could be `molebridge_exit_state{state="ok"} == 0`
+held for a few minutes, since a switch passes through `applying`.

@@ -544,7 +544,7 @@ func htmlReply(code int, body string, extra ...[2]string) reply {
 var knownRoutes = map[string]bool{
 	"/": true, "/embed": true, "/healthz": true, "/readyz": true, "/api/status": true, "/api/exits": true,
 	"/api/latency": true, "/select": true, "/manifest.webmanifest": true, "/login": true,
-	"/auth/callback": true, "/logout": true, "/signed-out": true,
+	"/auth/callback": true, "/logout": true, "/signed-out": true, "/metrics": true,
 }
 
 // headRefused are the GET routes HEAD may not stand in for.
@@ -812,6 +812,10 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleIndex(w, r, query, session, embed)
+	case path == "/metrics":
+		// Exposed like /readyz: the aggregate to anyone, the exits only as
+		// /readyz?exit= would answer for them.
+		s.handleMetrics(w, r, session)
 	case path == "/manifest.webmanifest":
 		s.send(w, r, reply{code: 200, contentType: "application/manifest+json", body: s.manifest,
 			headers: [][2]string{{"Cache-Control", "public, max-age=86400"}}})
