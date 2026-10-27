@@ -7,11 +7,16 @@ name: Scan
 #   image         grype against the latest published release's image, both
 #                 architectures: Alpine's packages, the molebridge binary and
 #                 the NetBird client
-# Findings go into one open issue titled "Scheduled scan findings", opened or
-# updated by the report job, the only job that can write issues, and only for
-# a run on main. A clean scan changes nothing; close the issue once a release
-# fixes what it lists. A failed scan fails the run, which GitHub reports to
-# the maintainer like any failed workflow.
+# A govulncheck finding is a reachable vulnerability in what main builds, and
+# may have no fix yet: it goes only to the run's summary and fails the run,
+# which GitHub reports to the maintainer privately like any failed workflow,
+# and is handled through SECURITY.md, never in a public issue. The image's
+# findings are already-public CVEs in bundled packages (Alpine's, the NetBird
+# client, Go modules in the binaries): they go into one open issue titled
+# "Scheduled scan findings", opened or updated by the report job, the only job
+# that can write issues, and only for a run on main. A clean image scan
+# changes nothing; close the issue once a release fixes what it lists. A
+# failed scan fails the run too.
 
 on:
   schedule:
@@ -35,9 +40,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
-    outputs:
-      found: ${{ steps.scan.outputs.found }}
-      report: ${{ steps.scan.outputs.report }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,19 +52,28 @@ jobs:
           go-version: "1.27.3"
           cache: false
       - name: Scan
-        id: scan
-        # Exit status 3 means vulnerabilities were found; anything else that
-        # is not 0 is a failed scan.
+        # Exit status 3 means vulnerabilities were found. The report stays in
+        # this run (its log and summary) and the run fails; it is never passed
+        # to the job that writes the public issue.
         run: |
           set -uo pipefail
           go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... > govulncheck.txt 2>&1
           rc=$?
           cat govulncheck.txt
           case "$rc" in
-            0) echo "found=false" >> "$GITHUB_OUTPUT" ;;
-            3) echo "found=true" >> "$GITHUB_OUTPUT"
-               # Base64 keeps the multi-line report one output line.
-               echo "report=$(head -c 60000 govulncheck.txt | base64 -w0)" >> "$GITHUB_OUTPUT" ;;
+            0) echo "govulncheck: no reachable vulnerabilities." >> "$GITHUB_STEP_SUMMARY" ;;
+            3) {
+                 echo "## govulncheck found reachable vulnerabilities"
+                 echo
+                 echo "Handle them through SECURITY.md, not in a public issue."
+                 echo
+                 echo '```text'
+                 head -c 60000 govulncheck.txt
+                 echo
+                 echo '```'
+               } >> "$GITHUB_STEP_SUMMARY"
+               echo "::error::govulncheck found reachable vulnerabilities; see the run summary and handle them through SECURITY.md"
+               exit 1 ;;
             *) echo "::error::govulncheck failed with status $rc"; exit 1 ;;
           esac
 
@@ -142,10 +153,10 @@ jobs:
 
   report:
     name: Open or update the findings issue
-    needs: [govulncheck, image]
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (needs.govulncheck.outputs.found == 'true' || needs.image.outputs.found == 'true')
+    # Only the image scan feeds it: a govulncheck finding never reaches an
+    # issue, and a failed govulncheck job does not hold this one back.
+    needs: [image]
+    if: github.ref == 'refs/heads/main' && needs.image.outputs.found == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -154,9 +165,6 @@ jobs:
       - name: Open or update the issue
         env:
           GH_TOKEN: ${{ github.token }}
-          GO_FOUND: ${{ needs.govulncheck.outputs.found }}
-          GO_REPORT: ${{ needs.govulncheck.outputs.report }}
-          IMAGE_FOUND: ${{ needs.image.outputs.found }}
           IMAGE_REPORT: ${{ needs.image.outputs.report }}
           TAG: ${{ needs.image.outputs.tag }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -164,26 +172,15 @@ jobs:
           set -euo pipefail
           title="Scheduled scan findings"
           {
-            echo "The weekly scan ([run]($RUN_URL)) found the following. This issue is"
-            echo "rewritten by each scan that finds something; close it once a release"
-            echo "fixes what it lists. A suspected vulnerability in Molebridge's own code"
-            echo "goes through SECURITY.md, not here."
+            echo "The weekly image scan ([run]($RUN_URL)) lists known, already-public CVEs"
+            echo "in the packages the $TAG image bundles (Alpine, the NetBird client, Go"
+            echo "modules), rewritten by each scan that finds some; close it once a release"
+            echo "fixes them. Anything in Molebridge's own code goes through SECURITY.md."
             echo
-            if [ "$GO_FOUND" = true ]; then
-              echo "## govulncheck on main"
-              echo
-              echo '```text'
-              printf '%s' "$GO_REPORT" | base64 -d
-              echo
-              echo '```'
-              echo
-            fi
-            if [ "$IMAGE_FOUND" = true ]; then
-              echo "## The $TAG image (grype, medium and above)"
-              echo
-              printf '%s' "$IMAGE_REPORT" | base64 -d
-              echo
-            fi
+            echo "## The $TAG image (grype, medium and above)"
+            echo
+            printf '%s' "$IMAGE_REPORT" | base64 -d
+            echo
           } > body.md
           number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
             --json number,title --jq "map(select(.title == \"$title\")) | first | .number // empty")
