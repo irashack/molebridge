@@ -28,9 +28,7 @@ existing read-only mount. A stale status keeps the exit read-only and shows
 its connection as unknown. A `POST /select` for that exit is refused with
 403 and "Exit is set in configuration; change SERVER to choose another
 server." `/api/status` gives the configured name as
-`verdict.configured_server`; `desired` is null. (The deprecated `view`
-object still carries `selection_mode: configuration` and `configured_server`,
-for a 0.6 page left open in a browser.)
+`verdict.configured_server`; `desired` is null.
 
 Change or clear `SERVER` in the exit's configuration and apply it by
 [recreating the exit](operations.md#recovery). [Configuration](configuration.md#a-server-set-in-configuration)

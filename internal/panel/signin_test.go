@@ -749,7 +749,7 @@ func TestPageCookiesAreSecureWithSignInOn(t *testing.T) {
 
 func TestFriendCanReadStatusAndLatencyOfTheGrantedExit(t *testing.T) {
 	p := newAccessPanel(t)
-	view := jsonBody(t, p.get("/api/status?exit=a", p.friend, nil))["view"].(map[string]any)
+	view := jsonBody(t, p.get("/api/status?exit=a", p.friend, nil))["verdict"].(map[string]any)
 	eq(t, "state", view["state"], any("ok"))
 	eq(t, "latency", p.get("/api/latency?exit=a", p.friend, nil).Body, `{"latency": {}}`)
 	eq(t, "readyz", p.get("/readyz?exit=a", p.friend, nil).Status, 200)

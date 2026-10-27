@@ -593,7 +593,7 @@ func TestStaleSuccessIsUnknownInAPIHTMLAndReadiness(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	mustWrite(t, h.srv.Single.ResultPath, map[string]any{"server": "se-sto-wg-001", "status": "ok",
 		"checked_at": "2000-01-01T00:00:00Z", "routing_ok": true, "mullvad_exit_ip": true})
-	if view := jsonBody(t, h.get("/api/status", "", nil))["view"].(map[string]any); view["state"] != "unknown" {
+	if view := jsonBody(t, h.get("/api/status", "", nil))["verdict"].(map[string]any); view["state"] != "unknown" {
 		t.Fatalf("view = %v", view)
 	}
 	mustContain(t, h.get("/", "", nil).Body, "status stale")

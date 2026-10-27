@@ -294,6 +294,10 @@ Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade within 0.8, or
 and the gluetun sidecar behave as in 0.8.0, and their Compose files change only in
 the image they pin.
 
+0.10.0 removes `/api/status`'s `view` object and the 0.6 fields it derived
+into `result`, deprecated since 0.7.0. A script that reads them should read
+`verdict` instead ([panel endpoints](configuration.md#panel-endpoints)).
+
 To roll back, put the previous bundle's files back and run the same two
 commands. State files have stayed readable across releases so far, but take
 the [backup](#backups) first in case one changes.

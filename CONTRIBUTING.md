@@ -47,7 +47,7 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `internal/panel/` is Switchyard, with `internal/panel/oidc/` for sign-in. Its
   front end is `panel/static/`, dependency-free; `panel/js-tests/` tests
   `panel/static/panel.js` with Node's own runner against the panel's answers for the
-  fixtures in `panel/fixtures/`.
+  fixture records in `internal/panel/fixtures_test.go`.
 - `internal/tools/` holds the setup tools' code; `internal/state/`, `internal/validate/`,
   `internal/jsonfile/`, `internal/netx/` and `internal/bootclock/` are the shared
   strict I/O, validation, HTTP client and boot clock.
@@ -145,7 +145,7 @@ MOLEBRIDGE_PANEL_ISOLATION_CHECK=off MOLEBRIDGE_PANEL_LISTEN=127.0.0.1:8099 \
   STATE_DIR=/tmp/panel-state PROVIDER=mullvad go run ./cmd/molebridge panel
 ```
 
-`panel/fixtures/` has the records the tests use. Set `PANEL_THEME=light` or `PANEL_STYLE=dashboard`
+`internal/panel/fixtures_test.go` has the records the tests use. Set `PANEL_THEME=light` or `PANEL_STYLE=dashboard`
 to see the other looks.
 
 ## Building the image

@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -341,58 +340,19 @@ func (s *Server) verdictJSON(ex Exit, v verdict.Verdict) validate.Obj {
 	return v.AsJSON().Set("checks", checks).Set("not_checked_by", by)
 }
 
-// legacyView is /api/status's `view`, deprecated: kept whole for one release
-// because a 0.6 page still open in a browser reads it until it reloads.
-func legacyView(v verdict.Verdict) validate.Obj {
-	var tier, configured any
-	if v.Tier != "" {
-		tier = v.Tier
-	}
-	mode := "panel"
-	if v.ConfiguredServer != "" {
-		mode, configured = "configuration", v.ConfiguredServer
-	}
-	return validate.Members("state", v.State, "label", v.Label, "tier", tier, "selection_mode", mode,
-		"configured_server", configured)
-}
-
-// statusPayload is /api/status's body.
+// statusPayload is /api/status's body: the request, the record as the exit
+// wrote it, and the verdict. 0.10.0 removed the `view` object and the 0.6
+// diagnostic fields derived into `result`, deprecated since 0.7.0.
 func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 	var result any
 	if status.Result != nil {
 		result = status.Result
-		if projection, ok := verdict.LegacyProjection(status.Result, status.Verdict); ok {
-			// Deprecated, one release: the 0.6 diagnostic fields a cached 0.6
-			// script reads, derived from the verdict for a schema-2 record
-			// (null where unknown or not applicable). A record's own fields
-			// win.
-			merged := validate.Obj{}
-			for _, p := range projection.JSONObject() {
-				if own, present := status.Result[p.Key]; present {
-					merged = append(merged, validate.Pair{Key: p.Key, Value: own})
-				} else {
-					merged = append(merged, p)
-				}
-			}
-			rest := make([]string, 0, len(status.Result))
-			for k := range status.Result {
-				if !projectionHas(projection.JSONObject(), k) {
-					rest = append(rest, k)
-				}
-			}
-			sort.Strings(rest)
-			for _, k := range rest {
-				merged = append(merged, validate.Pair{Key: k, Value: status.Result[k]})
-			}
-			result = merged
-		}
 	}
 	var desired any
 	if status.Desired != nil {
 		desired = status.Desired
 	}
-	return validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict),
-		"view", legacyView(status.Verdict))
+	return validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict))
 }
 
 // cachedSnapshot is the exit's catalogue and the snapshot's other members
@@ -1236,13 +1196,4 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.send(w, r, plain(code, message))
-}
-
-func projectionHas(o validate.Obj, key string) bool {
-	for _, p := range o {
-		if p.Key == key {
-			return true
-		}
-	}
-	return false
 }
