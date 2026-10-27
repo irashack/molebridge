@@ -30,9 +30,7 @@ import (
 )
 
 const (
-	maxBodyBytes   = 4096
-	csrfCookieName = "csrf_nonce"
-	exitCookieName = "molebridge_exit"
+	maxBodyBytes = 4096
 	// ListenAddr is where the panel listens: all interfaces in its own
 	// container, published on loopback only by the Compose file.
 	ListenAddr = "0.0.0.0:8080"
@@ -450,6 +448,29 @@ func summaryJSON(x ExitSummary) validate.Obj {
 
 // -- CSRF ----------------------------------------------------------------------
 
+// The page's own cookies: the CSRF nonce and the exit this browser last
+// opened. With sign-in on the panel is served over https, and since 0.10.0
+// they take the __Host- prefix like the sign-in cookies, so a sibling
+// subdomain cannot plant a second csrf_nonce that would make every POST 403
+// (getCookieStrict refuses a repeated name) until it expired. A cookie under
+// the old name is simply not read: the CSRF nonce is replaced on the next
+// page load, as after any restart, and the remembered exit is forgotten
+// once. Without sign-in the names are unchanged, as the page may be served
+// over plain http, where a __Host- cookie cannot be set.
+func (s *Server) csrfCookieName() string {
+	if s.Auth != nil {
+		return "__Host-csrf_nonce"
+	}
+	return "csrf_nonce"
+}
+
+func (s *Server) exitCookieName() string {
+	if s.Auth != nil {
+		return "__Host-molebridge_exit"
+	}
+	return "molebridge_exit"
+}
+
 func newCSRFNonce() string {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -778,7 +799,7 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			ex := visible[0]
-			if remembered, have := s.cookie(r, exitCookieName); have {
+			if remembered, have := s.cookie(r, s.exitCookieName()); have {
 				if e, ok := s.authorizedExit(remembered, session); ok {
 					ex = e
 				}
@@ -1006,7 +1027,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 	if !ok {
 		return
 	}
-	nonce, have := s.cookie(r, csrfCookieName)
+	nonce, have := s.cookie(r, s.csrfCookieName())
 	if !have || !csrfNonceRE.MatchString(nonce) {
 		nonce = newCSRFNonce()
 	}
@@ -1040,9 +1061,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 	if s.Auth != nil {
 		secure = "; Secure"
 	}
-	cookies := []string{fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Strict%s", csrfCookieName, nonce, secure)}
+	cookies := []string{fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Strict%s", s.csrfCookieName(), nonce, secure)}
 	if ex.ID != "" {
-		cookies = append(cookies, fmt.Sprintf("%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict%s", exitCookieName, ex.ID, secure))
+		cookies = append(cookies, fmt.Sprintf("%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict%s", s.exitCookieName(), ex.ID, secure))
 	}
 	rep := htmlReply(200, body)
 	rep.cookies = cookies
@@ -1155,7 +1176,7 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 	session := s.session(r)
 	if path == "/logout" {
 		// A missing session is fine: signing out twice lands on the same page.
-		nonce, haveNonce := s.cookie(r, csrfCookieName)
+		nonce, haveNonce := s.cookie(r, s.csrfCookieName())
 		if session != nil && !s.verifyCSRF(nonce, haveNonce, fields["csrf_token"], session.CSRFKey) {
 			s.send(w, r, plain(403, "invalid or missing csrf token"))
 			return
@@ -1171,7 +1192,7 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 	if s.signedOut(w, r, session, false) {
 		return
 	}
-	nonce, haveNonce := s.cookie(r, csrfCookieName)
+	nonce, haveNonce := s.cookie(r, s.csrfCookieName())
 	if !s.verifyCSRF(nonce, haveNonce, fields["csrf_token"], s.csrfBinding(session)) {
 		s.send(w, r, plain(403, "invalid or missing csrf token"))
 		return

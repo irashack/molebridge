@@ -2077,7 +2077,13 @@ prefix, so a sibling subdomain can't set or overwrite them. They are
 `SameSite=Lax` because the browser comes back from the provider by a
 cross-site redirect and must bring them. The CSRF token that protects `POST
 /select` and `POST /logout` is also bound to the session, and with sign-in on
-the CSRF and last-exit cookies are `Secure` too. A `/login` request whose
+the CSRF and last-exit cookies are `Secure` too and, since 0.10.0, named
+`__Host-csrf_nonce` and `__Host-molebridge_exit`. Under their old names a
+`csrf_nonce` planted from a sibling subdomain made the strict reader below
+refuse the repeated name, and every switch 403, until it expired. Cookies left
+under the old names are not read: the CSRF nonce is replaced on the next page
+load, and the remembered exit is forgotten once. Without sign-in the names stay
+`csrf_nonce` and `molebridge_exit`. A `/login` request whose
 `X-Forwarded-Proto` says it arrived over plain http is sent to the canonical
 https address once (marked `canonical=1`, so a proxy that always says http
 cannot loop); the header only steers that redirect.

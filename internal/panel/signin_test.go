@@ -155,7 +155,7 @@ func (p *authPanel) selectAs(cookie, exitID, server string, tokens *[2]string, o
 	}
 	fields := [][2]string{{"server", server}, {"csrf_token", token}, {"exit", exitID}}
 	fields = append(fields, extra...)
-	return p.post("/select", fields, cookie+"; csrf_nonce="+nonce, origin)
+	return p.post("/select", fields, cookie+"; __Host-csrf_nonce="+nonce, origin)
 }
 
 func (p *authPanel) assertNoDesired(exits ...Exit) {
@@ -199,7 +199,7 @@ func TestFullPageRedirectsToTheCanonicalLoginURL(t *testing.T) {
 	eq(t, "next", u.Query().Get("next"), "/")
 	eq(t, "next for an exit", queryOf(t, p.get("/?exit=a", "", nil).Location()).Get("next"), "/?exit=a")
 	eq(t, "Cache-Control", a.Header.Get("Cache-Control"), "no-store")
-	if _, set := a.Cookies["csrf_nonce"]; set {
+	if _, set := a.Cookies["__Host-csrf_nonce"]; set {
 		t.Error("a signed-out page set a CSRF cookie")
 	}
 }
@@ -248,7 +248,7 @@ func TestSelectIs401AndWritesNothing(t *testing.T) {
 	// Even with a token that would verify for an anonymous caller.
 	nonce := newCSRFNonce()
 	for _, exitID := range []string{"a", "b", "mine", "nope"} {
-		a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", exitID}}, "csrf_nonce="+nonce, "")
+		a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", exitID}}, "__Host-csrf_nonce="+nonce, "")
 		eq(t, "status", a.Status, 401)
 	}
 	p.assertNoDesired()
@@ -308,7 +308,7 @@ func TestUnknownSessionCookiesAreSignedOut(t *testing.T) {
 		eq(t, "api "+value, p.get("/api/exits", cookie, nil).Status, 401)
 		eq(t, "page "+value, p.get("/?exit=a", cookie, nil).Status, 303)
 		nonce := newCSRFNonce()
-		a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", "a"}}, cookie+"; csrf_nonce="+nonce, "")
+		a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", "a"}}, cookie+"; __Host-csrf_nonce="+nonce, "")
 		eq(t, "select "+value, a.Status, 401)
 	}
 	p.assertNoDesired()
@@ -628,10 +628,10 @@ func (p *accessPanel) assertSameAsNonexistent(request func(exitID string) answer
 		if got.Status != baseline.Status || got.Body != baseline.Body || got.signature() != baseline.signature() {
 			p.t.Errorf("exit %s is distinguishable: %d %q", other, got.Status, got.Body)
 		}
-		if _, ok := got.Cookies["csrf_nonce"]; ok {
+		if _, ok := got.Cookies["__Host-csrf_nonce"]; ok {
 			p.t.Errorf("exit %s set a CSRF cookie", other)
 		}
-		if _, ok := got.Cookies["molebridge_exit"]; ok {
+		if _, ok := got.Cookies["__Host-molebridge_exit"]; ok {
 			p.t.Errorf("exit %s set an exit cookie", other)
 		}
 	}
@@ -683,7 +683,7 @@ func TestUnparsableExitValuesAreRefusedAlike(t *testing.T) {
 func TestSelectWithoutAnExitFieldIsRefused(t *testing.T) {
 	p := newAccessPanel(t)
 	nonce, token := p.pageTokens(p.friend, "a", "/")
-	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}}, p.friend+"; csrf_nonce="+nonce, "")
+	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "status", a.Status, 400)
 	p.assertNoDesired()
 }
@@ -718,7 +718,7 @@ func TestRootRedirectsToTheGrantedExitEvenIfTheCookieNamesAnother(t *testing.T) 
 	p := newAccessPanel(t)
 	for _, other := range []string{"b", "mine", "nope"} {
 		for path, target := range map[string]string{"/": "/?exit=a", "/embed": "/embed?exit=a"} {
-			a := p.get(path, p.friend+"; molebridge_exit="+other, nil)
+			a := p.get(path, p.friend+"; __Host-molebridge_exit="+other, nil)
 			if a.Status != 303 || a.Location() != target {
 				t.Errorf("cookie %s, %s: %d %q", other, path, a.Status, a.Location())
 			}
@@ -729,24 +729,51 @@ func TestRootRedirectsToTheGrantedExitEvenIfTheCookieNamesAnother(t *testing.T) 
 
 func TestRootRedirectForAdminFollowsTheCookie(t *testing.T) {
 	p := newAccessPanel(t)
-	eq(t, "b", p.get("/", p.admin+"; molebridge_exit=b", nil).Location(), "/?exit=b")
-	eq(t, "gone", p.get("/", p.admin+"; molebridge_exit=gone", nil).Location(), "/?exit=mine")
+	eq(t, "b", p.get("/", p.admin+"; __Host-molebridge_exit=b", nil).Location(), "/?exit=b")
+	eq(t, "gone", p.get("/", p.admin+"; __Host-molebridge_exit=gone", nil).Location(), "/?exit=mine")
 }
 
 func TestGrantedPageSetsTheExitCookieOnlyForTheGrantedExit(t *testing.T) {
 	p := newAccessPanel(t)
 	a := p.get("/?exit=a", p.friend, nil)
-	eq(t, "exit cookie", a.Cookies["molebridge_exit"].Value, "a")
+	eq(t, "exit cookie", a.Cookies["__Host-molebridge_exit"].Value, "a")
 }
 
 func TestPageCookiesAreSecureWithSignInOn(t *testing.T) {
 	p := newAccessPanel(t)
 	a := p.get("/?exit=a", p.friend, nil)
-	for _, name := range []string{"csrf_nonce", "molebridge_exit"} {
+	for _, name := range []string{"__Host-csrf_nonce", "__Host-molebridge_exit"} {
 		if !hasAll(a.Cookies[name].Attrs, "secure", "httponly", "samesite=strict", "path=/") {
 			t.Errorf("%s: %+v", name, a.Cookies[name])
 		}
+		for attr := range a.Cookies[name].Attrs {
+			if strings.HasPrefix(attr, "domain") {
+				t.Errorf("%s has a Domain", name)
+			}
+		}
 	}
+	for _, old := range []string{"csrf_nonce", "molebridge_exit"} {
+		if _, set := a.Cookies[old]; set {
+			t.Errorf("the old name %s was set", old)
+		}
+	}
+}
+
+// New in 0.10.0: with sign-in on, a csrf_nonce planted from a sibling
+// subdomain (or left from 0.9) no longer breaks every POST, and is not read.
+func TestAPlantedOrOldCSRFCookieIsIgnoredWithSignInOn(t *testing.T) {
+	p := newAccessPanel(t)
+	nonce, token := p.pageTokens(p.friend, "a", "/")
+	fields := [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}
+	planted := p.friend + "; csrf_nonce=" + newCSRFNonce() + "; __Host-csrf_nonce=" + nonce + "; csrf_nonce=" + newCSRFNonce()
+	eq(t, "beside a planted cookie", p.post("/select", fields, planted, "").Status, 303)
+	// A token made for a nonce under the old name does not verify.
+	old := newCSRFNonce()
+	oldFields := [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(old, "")}, {"exit", "a"}}
+	eq(t, "old name only", p.post("/select", oldFields, p.friend+"; csrf_nonce="+old, "").Status, 403)
+	// The remembered exit under the old name is forgotten, once.
+	eq(t, "old exit cookie", p.get("/", p.admin+"; molebridge_exit=b", nil).Location(), "/?exit=mine")
+	eq(t, "new exit cookie", p.get("/", p.admin+"; __Host-molebridge_exit=b", nil).Location(), "/?exit=b")
 }
 
 func TestFriendCanReadStatusAndLatencyOfTheGrantedExit(t *testing.T) {
@@ -873,7 +900,7 @@ func TestLogCarriesNoCredentials(t *testing.T) {
 	cookie := oidc.SessionCookie + "=" + sessionID
 	nonce, token := p.pageTokens(cookie, "a", "/")
 	p.selectAs(cookie, "a", "", &[2]string{nonce, token}, "")
-	p.post("/logout", [][2]string{{"csrf_token", token}}, cookie+"; csrf_nonce="+nonce, "")
+	p.post("/logout", [][2]string{{"csrf_token", token}}, cookie+"; __Host-csrf_nonce="+nonce, "")
 	p.get("/auth/callback?code="+code+"&state=x", oidc.LoginCookie+"="+loginID, nil)
 	form := p.issuer.TokenRequests()[len(p.issuer.TokenRequests())-1].Form
 	idToken := p.issuer.LastToken()
@@ -893,16 +920,16 @@ func TestCSRFTokenOfAnotherSessionIsRefused(t *testing.T) {
 	other := p.signIn([]string{"friends-a"}, "other", "u-other", "/")
 	nonce, token := p.pageTokens(p.friend, "a", "/")
 	fields := [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}
-	eq(t, "another session", p.post("/select", fields, other+"; csrf_nonce="+nonce, "").Status, 403)
+	eq(t, "another session", p.post("/select", fields, other+"; __Host-csrf_nonce="+nonce, "").Status, 403)
 	p.assertNoDesired()
 	// The same token with its own session works.
-	eq(t, "own session", p.post("/select", fields, p.friend+"; csrf_nonce="+nonce, "").Status, 303)
+	eq(t, "own session", p.post("/select", fields, p.friend+"; __Host-csrf_nonce="+nonce, "").Status, 303)
 }
 
 func TestTokenNotBoundToASessionIsRefused(t *testing.T) {
 	p := newSwitchPanel(t)
 	nonce := newCSRFNonce()
-	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", "a"}}, p.friend+"; csrf_nonce="+nonce, "")
+	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", p.srv.csrfToken(nonce, "")}, {"exit", "a"}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "status", a.Status, 403)
 	p.assertNoDesired()
 }
@@ -910,7 +937,7 @@ func TestTokenNotBoundToASessionIsRefused(t *testing.T) {
 func TestAdminsTokenDoesNotWorkForAFriend(t *testing.T) {
 	p := newSwitchPanel(t)
 	nonce, token := p.pageTokens(p.admin, "b", "/")
-	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; csrf_nonce="+nonce, "")
+	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "status", a.Status, 403)
 	p.assertNoDesired()
 }
@@ -932,10 +959,10 @@ func TestOriginCheckUsesThePublicHost(t *testing.T) {
 func TestLogoutNeedsTheCSRFToken(t *testing.T) {
 	p := newSwitchPanel(t)
 	nonce, token := p.pageTokens(p.friend, "a", "/")
-	eq(t, "no token", p.post("/logout", nil, p.friend+"; csrf_nonce="+nonce, "").Status, 403)
-	eq(t, "bad token", p.post("/logout", [][2]string{{"csrf_token", strings.Repeat("f", 64)}}, p.friend+"; csrf_nonce="+nonce, "").Status, 403)
+	eq(t, "no token", p.post("/logout", nil, p.friend+"; __Host-csrf_nonce="+nonce, "").Status, 403)
+	eq(t, "bad token", p.post("/logout", [][2]string{{"csrf_token", strings.Repeat("f", 64)}}, p.friend+"; __Host-csrf_nonce="+nonce, "").Status, 403)
 	other := p.signIn([]string{"friends-a"}, "other", "u-other", "/")
-	eq(t, "other session", p.post("/logout", [][2]string{{"csrf_token", token}}, other+"; csrf_nonce="+nonce, "").Status, 403)
+	eq(t, "other session", p.post("/logout", [][2]string{{"csrf_token", token}}, other+"; __Host-csrf_nonce="+nonce, "").Status, 403)
 	eq(t, "friend still in", p.get("/api/exits", p.friend, nil).Status, 200)
 	eq(t, "other still in", p.get("/api/exits", other, nil).Status, 200)
 }
@@ -943,7 +970,7 @@ func TestLogoutNeedsTheCSRFToken(t *testing.T) {
 func TestLogoutEndsTheSessionAndRedirectsToSignedOut(t *testing.T) {
 	p := newSwitchPanel(t)
 	nonce, token := p.pageTokens(p.friend, "a", "/")
-	a := p.post("/logout", [][2]string{{"csrf_token", token}}, p.friend+"; csrf_nonce="+nonce, "")
+	a := p.post("/logout", [][2]string{{"csrf_token", token}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "status", a.Status, 303)
 	eq(t, "location", a.Location(), publicURL+"/signed-out")
 	c := a.Cookies[oidc.SessionCookie]
@@ -952,7 +979,7 @@ func TestLogoutEndsTheSessionAndRedirectsToSignedOut(t *testing.T) {
 	}
 	eq(t, "api", p.get("/api/exits", p.friend, nil).Status, 401)
 	eq(t, "page", p.get("/?exit=a", p.friend, nil).Status, 303)
-	after := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; csrf_nonce="+nonce, "")
+	after := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "select", after.Status, 401)
 	p.assertNoDesired()
 	mustContain(t, p.log.String(), "signed out: user=friend-a")
@@ -983,7 +1010,7 @@ func TestExpiredSessionIsSignedOut(t *testing.T) {
 	eq(t, "embed", embed.Status, 200) // the sign-in link page
 	mustNotContain(t, embed.Body, "csrf_token")
 	nonce := newCSRFNonce()
-	sel := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", strings.Repeat("f", 64)}, {"exit", "a"}}, p.friend+"; csrf_nonce="+nonce, "")
+	sel := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", strings.Repeat("f", 64)}, {"exit", "a"}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "select", sel.Status, 401)
 	eq(t, "admin", p.get("/api/exits", p.admin, nil).Status, 401)
 	p.assertNoDesired()
@@ -993,7 +1020,7 @@ func TestTokenFromBeforeExpiryDoesNotSwitchAfterIt(t *testing.T) {
 	p := newSwitchPanel(t)
 	nonce, token := p.pageTokens(p.friend, "a", "/")
 	p.clock.Advance(float64(p.srv.Settings.Auth.SessionTTL) + 1)
-	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; csrf_nonce="+nonce, "")
+	a := p.post("/select", [][2]string{{"server", selectServer}, {"csrf_token", token}, {"exit", "a"}}, p.friend+"; __Host-csrf_nonce="+nonce, "")
 	eq(t, "status", a.Status, 401)
 	p.assertNoDesired()
 }
