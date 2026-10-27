@@ -33,6 +33,12 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
     restart: unless-stopped
     cap_add: [NET_ADMIN]
+    # gluetun keeps the engine's default capabilities on top of NET_ADMIN;
+    # this only stops anything it runs from gaining more through a setuid or
+    # file-capability binary. Dropping the defaults and a read-only root have
+    # not been tried with gluetun, so neither is set. gluetun has no pids
+    # limit: its process tree is gluetun's to size, not Molebridge's.
+    security_opt: ["no-new-privileges:true"]
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
@@ -137,7 +143,7 @@ services:
     image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
-    # bundle has no Dockerfile and pulls the image instead.
+    # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
     build:
       context: .
       dockerfile: Dockerfile
@@ -244,6 +250,8 @@ services:
           # provider, about 7.5 MB of JSON parsed whole when it changes (the
           # applier had 384m); the guard had 64m.
           memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
 
   switchyard:
     # compose.yaml's panel, for this exit's gluetun provider.

@@ -52,6 +52,7 @@ provider than the panel is configured for.
   routing activity: repairs 0 (last none), kernel events 24 (relevant 6), event losses 0, periodic passes 8
   heartbeat: fresh (3 s old)
   lease: held, 27 s to expiry
+  version: v0.10.0-rc.1
   ```
 
   A failure adds a `message:` line, and an exit with `SERVER` set a
@@ -67,7 +68,8 @@ provider than the panel is configured for.
   seconds, then `stale`, or `none (<why>)` when there is no usable file. The
   `lease:` line reads `held, <n> s to expiry`, `lapsed`, `starting` or
   `revoked`, or `unknown (<why>)` when the supervisor hasn't written its file
-  in the last 10 seconds. A gluetun exit has no `owner_record` check, so it
+  in the last 10 seconds. The `version:` line is the binary's own (the
+  [`version` role](tools-reference.md#other-roles)). A gluetun exit has no `owner_record` check, so it
   shows `n/a` there.
 
   `status` reads the exit's own files only. It does not prove that client
@@ -78,7 +80,8 @@ provider than the panel is configured for.
   `n/a` or `not-checked`.
 - The exit container's health check is `molebridge health`, which is
   operational only: it passes while the worker's heartbeat is at most 15
-  seconds old, and otherwise prints `unhealthy: <why>` and exits 1. The worker
+  seconds old, and otherwise prints `unhealthy: <why> (molebridge <version>)`
+  and exits 1. The worker
   writes the heartbeat every 5 seconds while the tunnel interface exists, the
   contract holds, NetBird is running (a native sidecar: the firewall is as
   installed) and a completed check, `ok` or `failed`,

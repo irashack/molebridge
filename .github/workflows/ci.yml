@@ -72,6 +72,17 @@ jobs:
           # The toolchain the Dockerfile builds with (golang:1.27.3-alpine).
           go-version: "1.27.3"
           cache: false
+      - name: Modules and vendor/
+        # The module cache matches go.sum, and vendor/ is exactly what
+        # `go mod vendor` derives from go.mod and go.sum: an update that
+        # rewrites vendor/ wholesale (Dependabot does) is checked here, not by
+        # reading the diff.
+        run: |
+          go mod verify
+          go mod vendor
+          git diff --exit-code -- vendor go.mod go.sum
+          untracked=$(git status --porcelain --untracked-files=all -- vendor go.mod go.sum)
+          [ -z "$untracked" ] || { echo "go mod vendor changed vendor/:"; echo "$untracked"; exit 1; }
       - name: gofmt
         run: |
           files=$(git ls-files '*.go' ':(exclude)vendor')
@@ -111,7 +122,10 @@ jobs:
           fi
       - name: Reproducible binary
         # Two builds from separate trees, linux/amd64 and linux/arm64, equal
-        # SHA-256. The OCI image is not claimed reproducible.
+        # SHA-256, with a version stamped as the release build stamps it. The
+        # OCI image is not claimed reproducible.
+        env:
+          VERSION: v0.0.0-rc.0
         run: sh tools/check-reproducible.sh
       - name: Third-party notices are current
         run: |
@@ -163,6 +177,7 @@ jobs:
           push: false
           provenance: false
           sbom: false
+          build-args: VERSION=ci
       - name: Load the amd64 image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -173,6 +188,7 @@ jobs:
           tags: molebridge:ci-amd64
           provenance: false
           sbom: false
+          build-args: VERSION=ci
       - name: Load the arm64 image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -183,9 +199,15 @@ jobs:
           tags: molebridge:ci-arm64
           provenance: false
           sbom: false
+          build-args: VERSION=ci
       - name: Check the amd64 image
+        env:
+          # The build argument the builds above pass.
+          VERSION: ci
         run: sh tools/check-image.sh molebridge:ci-amd64 linux/amd64
       - name: Check the arm64 image
+        env:
+          VERSION: ci
         run: sh tools/check-image.sh molebridge:ci-arm64 linux/arm64
       - name: Exit life cycle (amd64)
         # The image's exit role in a namespace a busybox container keeps

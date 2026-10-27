@@ -74,6 +74,9 @@ runs:
         # are attested below, bound to the signing identity.
         provenance: false
         sbom: false
+        # The binary reports the tag it was built as (`molebridge version`).
+        build-args: |
+          VERSION=${{ inputs.tag }}
         labels: |
           org.opencontainers.image.revision=${{ github.sha }}
           org.opencontainers.image.version=${{ inputs.tag }}

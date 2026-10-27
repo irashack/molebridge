@@ -27,7 +27,7 @@ services:
     image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
-    # bundle has no Dockerfile and pulls the image instead.
+    # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
     build:
       context: .
       dockerfile: Dockerfile
@@ -112,6 +112,8 @@ services:
       resources:
         limits:
           memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
 
   example-app:
     # A stand-in for your application: it only sleeps, in the exit's
@@ -187,6 +189,8 @@ services:
       resources:
         limits:
           memory: 32m
+          # One Go process, as the panel.
+          pids: 128
 
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
@@ -242,6 +246,8 @@ services:
       resources:
         limits:
           memory: 128m
+          # As compose.yaml's panel.
+          pids: 128
 
 networks:
   panel:

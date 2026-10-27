@@ -134,6 +134,19 @@ image are the ones this repository's workflows built from `$COMMIT`, and the
 image passed the acceptance run. It says nothing about your `.env`, local
 Compose overrides, or files on your host. Those are yours to review.
 
+**Which tags exist.** Each candidate is pushed as `:vX.Y.Z-rc.N` and each
+release as `:vX.Y.Z`; the release workflow refuses to move either once it
+exists. A release also moves a floating tag without the `v`, such as
+`ghcr.io/irashack/molebridge:0.10`, to the highest release of that minor
+version. It is a convenience for `docker pull`, nothing more: it changes
+with every patch release, and what cosign signed is the image digest, not
+the tag, so `cosign verify` on `:0.10` checks whichever digest the tag names
+when you ask. The bundle's Compose files never use it; they pin `:$TAG`
+together with `@$DIGEST`, and you should too. Every image reports the tag it
+was built as with `docker run --rm ghcr.io/irashack/molebridge@$DIGEST version`:
+a release prints its candidate's tag (`molebridge $RC`), because promotion
+does not rebuild it.
+
 ## 2. Configure
 
 From the extracted directory:
@@ -287,15 +300,18 @@ It prints `molebridge-exit: configuration accepted (/config/wg_confs/mullvad.con
 `NetBird gate: configuration accepted`, or the one line naming the setting,
 file or NetBird configuration it refused
 ([troubleshooting](troubleshooting.md#startup)). It changes no routing and
-creates no tunnel. Then start both containers:
+creates no tunnel. Then fetch every image the Compose file names, by the
+digests the bundle pins, and start both containers:
 
 ```sh
+docker compose pull
 docker compose up -d
 docker compose ps
 docker compose logs exit
 ```
 
-The log should show, in order, `molebridge-exit: rules installed; the exit table holds its unreachable fallback`,
+The log should start with `molebridge-exit: molebridge <version>`, the
+candidate tag the image was built as, and then show, in order, `molebridge-exit: rules installed; the exit table holds its unreachable fallback`,
 `molebridge-exit: bringing the tunnel up`, `molebridge-exit: tunnel up`,
 `molebridge-exit: ready`, `molebridge-exit: starting NetBird` and
 `molebridge-exit: NetBird is up (launch 1)`, with NetBird's own output

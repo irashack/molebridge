@@ -40,6 +40,9 @@ def exitcaps: (.cap_add | sort) == ["DAC_OVERRIDE","NET_ADMIN","NET_RAW"];
 def jsonlog: .logging.driver == "json-file" and (.logging.options | keys) == ["max-size"];
 def noSecretMounts: [sources[] | select(test("secrets|tunnel"))] == [];
 def stateOnly: (targets | sort) == ["/state/applier","/state/panel"];
+def pids($n): .deploy.resources.limits.pids == $n;
+def mine: .image | startswith("ghcr.io/irashack/molebridge:");
+def allLimited: [.services[] | select(mine) | .deploy.resources.limits.pids] | all(. != null);
 '
 
 # --- the native form --------------------------------------------------------
@@ -106,6 +109,8 @@ ok native "SERVER goes only to the exit" '
 ok native "Switchyard knows the provider, the root statement and the exits" '
   .services.switchyard.environment as $e |
   $e.PROVIDER == "mullvad" and $e.PANEL_ALLOW_ROOT == "" and $e.PANEL_EXITS == "" and $e.STATE_DIR == "/state"'
+ok native "process limits: 512 for the exit, 128 for the panel" '
+  '"$defs"' (.services.exit | pids(512)) and (.services.switchyard | pids(128)) and allLimited'
 pass "native form: two services, hardened, secrets only where they belong"
 
 # One file serves every provider.
@@ -175,6 +180,11 @@ ok gluetun "Switchyard is the same service as in compose.yaml, for this exit's p
   .environment.PROVIDER == "gluetun-nordvpn" and .command == ["panel"]'
 ok gluetun "no old service remains" '.services | has("guard") or has("netbird") or has("applier") or has("control-panel") | not'
 ok gluetun "volumes" '(.volumes | keys) == ["gluetun-data","gluetun-servers","netbird-data"]'
+ok gluetun "gluetun gains no privileges through setuid binaries; its process count is its own" '
+  .services.gluetun.security_opt == ["no-new-privileges:true"] and .services.gluetun.cap_add == ["NET_ADMIN"] and
+  .services.gluetun.deploy.resources.limits.pids == null'
+ok gluetun "process limits: 512 for the exit, 128 for the panel" '
+  '"$defs"' (.services.exit | pids(512)) and (.services.switchyard | pids(128)) and allLimited'
 pass "gluetun form: three containers, the exit sees the API key only"
 
 # --- the sidecar ------------------------------------------------------------
@@ -211,6 +221,12 @@ ok sidecar "Switchyard: sidecar kind, no capabilities, no secrets, loopback port
   .ports[0].host_ip == "127.0.0.1" and .ports[0].target == 8080 and (.networks | keys) == ["panel"]'
 ok sidecar "SERVER goes only to the exit" '[.services | to_entries[] | select(.value.environment.SERVER != null) | .key] == ["exit"]'
 ok sidecar "no NetBird volume and no old service" '(.volumes | keys) == ["gluetun-data","gluetun-servers"] and (.services | has("applier") or has("control-panel") | not)'
+ok sidecar "gluetun gains no privileges through setuid binaries, as in the overlay form" '
+  .services.gluetun.security_opt == ["no-new-privileges:true"] and .services.gluetun.cap_add == ["NET_ADMIN"]'
+ok sidecar "process limits: 512 for the exit, 128 for the panel" '
+  '"$defs"' (.services.exit | pids(512)) and (.services.switchyard | pids(128)) and allLimited'
+ok sidecar "the example application is not restarted by the engine (a reboot would start it before the firewall)" '
+  .services["example-app"].restart == "no"'
 pass "sidecar form: the exit holds the API key only, gluetun has no post-rules"
 
 # --- the native sidecar -----------------------------------------------------
@@ -316,6 +332,8 @@ ok nsc-set "the settings reach the container that reads them" '
   .services.exit.environment.SIDECAR_HOST_RESOLVERS == "203.0.113.10" and
   .services.exit.environment.PIA_PORT_FORWARD == "on" and .services["port-sync"].environment.PORT_SYNC_URL == "http://127.0.0.1:8081" and
   (.services | keys) == ["exit","port-sync","switchyard"]'
+ok nsc "process limits: 512 for the exit, 128 for port-sync and the panel" '
+  '"$defs"' (.services.exit | pids(512)) and (.services["port-sync"] | pids(128)) and (.services.switchyard | pids(128)) and allLimited'
 pass "native sidecar form: the exit holds the tunnel and the PIA login, the applications and port-sync hold nothing"
 
 # --- the settings -----------------------------------------------------------

@@ -25,7 +25,7 @@ func init() {
 // statusMain prints the runtime half of an exit's status, from inside its
 // container: the verdict of internal/verdict on state/applier/result.json (the
 // one judgment every reader makes), the heartbeat's age and the supervisor's
-// lease. Everything printed is a fixed label, a reason code, a check state or
+// lease, then the binary's own version. Everything printed is a fixed label, a reason code, a check state or
 // a number; nothing secret is read. Exit status 0 when the exit is connected,
 // 1 when it is not, 2 for a usage error.
 func statusMain(args []string, env map[string]string, clock bootclock.Clock, wall func() time.Time, stdout, stderr io.Writer) int {
@@ -85,6 +85,7 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 		fmt.Fprintf(stdout, "heartbeat: fresh (%d s old)\n", int(age/time.Second))
 	}
 	fmt.Fprintf(stdout, "lease: %s\n", leaseLine(exit.LeasePathOf(env), clock))
+	fmt.Fprintf(stdout, "version: %s\n", version)
 	// The sidecar attachment and the host's checks are not made from here.
 	if v.State == "ok" {
 		return 0

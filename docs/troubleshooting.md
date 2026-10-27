@@ -278,7 +278,7 @@ with Cilium this form was tested against, pods had `all=0` and `eth0=2`.
 
 **A Kubernetes pod stays in `Init` and the application never starts, or the exit
 is restarted during its startup probe.** The startup probe `molebridge health
---guarded` prints `unhealthy: <reason>` and exits 1 until the worker has
+--guarded` prints `unhealthy: <reason> (molebridge <version>)` and exits 1 until the worker has
 installed the firewall and the routing contract; `no guard heartbeat yet`
 means it hasn't yet, and `the guard heartbeat is from another network
 namespace` that the file on `/run` is an earlier sandbox's (the new worker

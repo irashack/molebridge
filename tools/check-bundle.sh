@@ -6,7 +6,8 @@
 # (the exit and Switchyard, plus gluetun for the gluetun forms, and the example
 # application and port-sync, in their profiles, for the native sidecar), that
 # every Molebridge image they reference, port-sync's included, is the exact
-# pinned tag@digest reference the bundle was built with, that the native
+# pinned tag@digest reference the bundle was built with, that no service has a
+# build section (the bundle has no Dockerfile), that the native
 # sidecar's exit is the native sidecar kind and the panel is the sidecar
 # kind, that the relative file the gluetun forms bind-mount
 # (routing/gluetun-preflight) is in the bundle and executable by sh, that each
@@ -59,8 +60,10 @@ for form in "compose.yaml:.env" "compose.gluetun.yaml:.env.gluetun.example" "com
     mine=$(echo "$images" | grep '^ghcr\.io/irashack/molebridge' || true)
     [ -n "$mine" ] || fail "$file references no Molebridge image"
     echo "$mine" | grep -vxF "$ref" && fail "$file references a Molebridge image other than $ref"
+    built=$(resolved "$file" "$envfile" | jq -r '.services | to_entries[] | select(.value.build != null) | .key')
+    [ -z "$built" ] || fail "$file builds $(echo "$built" | tr '\n' ' ')from a Dockerfile the bundle does not have"
 done
-pass "every Molebridge image is the pinned reference"
+pass "every Molebridge image is the pinned reference, and nothing is built"
 
 # Services, and the kind each gluetun form tells its preflight.
 services() { resolved "$1" "$2" | jq -r '.services | keys | join(" ")'; }

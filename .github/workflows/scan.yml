@@ -1,0 +1,201 @@
+name: Scan
+
+# Weekly, and on demand: what is known about the code on main and the image
+# people run, now, rather than when the code last changed.
+#   govulncheck   the Go code on the checked-out ref, with its vendored
+#                 modules (reachable vulnerabilities only, as in CI)
+#   image         grype against the latest published release's image, both
+#                 architectures: Alpine's packages, the molebridge binary and
+#                 the NetBird client
+# Findings go into one open issue titled "Scheduled scan findings", opened or
+# updated by the report job, the only job that can write issues, and only for
+# a run on main. A clean scan changes nothing; close the issue once a release
+# fixes what it lists. A failed scan fails the run, which GitHub reports to
+# the maintainer like any failed workflow.
+
+on:
+  schedule:
+    # Mondays at 05:17 UTC.
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scan-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/irashack/molebridge
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      found: ${{ steps.scan.outputs.found }}
+      report: ${{ steps.scan.outputs.report }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain the Dockerfile builds with (golang:1.27.3-alpine).
+          go-version: "1.27.3"
+          cache: false
+      - name: Scan
+        id: scan
+        # Exit status 3 means vulnerabilities were found; anything else that
+        # is not 0 is a failed scan.
+        run: |
+          set -uo pipefail
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... > govulncheck.txt 2>&1
+          rc=$?
+          cat govulncheck.txt
+          case "$rc" in
+            0) echo "found=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "found=true" >> "$GITHUB_OUTPUT"
+               # Base64 keeps the multi-line report one output line.
+               echo "report=$(head -c 60000 govulncheck.txt | base64 -w0)" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::govulncheck failed with status $rc"; exit 1 ;;
+          esac
+
+  image:
+    name: Image (latest release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      found: ${{ steps.scan.outputs.found }}
+      report: ${{ steps.scan.outputs.report }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install crane and grype
+        uses: ./.github/actions/install-release-tools
+        with:
+          crane: "true"
+          grype: "true"
+      - name: Find the latest release's image
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The latest release, never a candidate (gh skips pre-releases).
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' ||
+            { echo "::error::the latest release tag is not like v0.10.0: $tag"; exit 1; }
+          digest=$(crane digest "$IMAGE:$tag")
+          printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$' ||
+            { echo "::error::no index digest for $IMAGE:$tag"; exit 1; }
+          echo "Scanning $IMAGE:$tag@$digest" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "tag=$tag"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Scan
+        id: scan
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          DIGEST: ${{ steps.release.outputs.digest }}
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            grype --quiet --platform "linux/$arch" -o json "registry:$IMAGE@$DIGEST" > "grype-$arch.json"
+          done
+          # Medium and above, per package and vulnerability, both
+          # architectures merged: one table row each.
+          jq -rs '
+            [.[].matches[]
+             | select(.vulnerability.severity as $s | ["Medium","High","Critical"] | index($s))
+             | {id: .vulnerability.id, severity: .vulnerability.severity,
+                pkg: .artifact.name, version: .artifact.version, type: .artifact.type,
+                fix: ((.vulnerability.fix.versions // []) | join(", "))}]
+            | unique_by([.id, .pkg, .version])
+            | sort_by(.severity, .id)
+            | .[] | "| \(.id) | \(.severity) | \(.pkg) \(.version) (\(.type)) | \(if .fix == "" then "none yet" else .fix end) |"
+          ' grype-amd64.json grype-arm64.json > findings.txt
+          if [ ! -s findings.txt ]; then
+            echo "No findings of medium severity or above." >> "$GITHUB_STEP_SUMMARY"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "| Vulnerability | Severity | Package | Fixed in |"
+            echo "|---|---|---|---|"
+            head -n 200 findings.txt
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "report=$(base64 -w0 < report.md)" >> "$GITHUB_OUTPUT"
+
+  report:
+    name: Open or update the findings issue
+    needs: [govulncheck, image]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (needs.govulncheck.outputs.found == 'true' || needs.image.outputs.found == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GO_FOUND: ${{ needs.govulncheck.outputs.found }}
+          GO_REPORT: ${{ needs.govulncheck.outputs.report }}
+          IMAGE_FOUND: ${{ needs.image.outputs.found }}
+          IMAGE_REPORT: ${{ needs.image.outputs.report }}
+          TAG: ${{ needs.image.outputs.tag }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Scheduled scan findings"
+          {
+            echo "The weekly scan ([run]($RUN_URL)) found the following. This issue is"
+            echo "rewritten by each scan that finds something; close it once a release"
+            echo "fixes what it lists. A suspected vulnerability in Molebridge's own code"
+            echo "goes through SECURITY.md, not here."
+            echo
+            if [ "$GO_FOUND" = true ]; then
+              echo "## govulncheck on main"
+              echo
+              echo '```text'
+              printf '%s' "$GO_REPORT" | base64 -d
+              echo
+              echo '```'
+              echo
+            fi
+            if [ "$IMAGE_FOUND" = true ]; then
+              echo "## The $TAG image (grype, medium and above)"
+              echo
+              printf '%s' "$IMAGE_REPORT" | base64 -d
+              echo
+            fi
+          } > body.md
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
+            --json number,title --jq "map(select(.title == \"$title\")) | first | .number // empty")
+          if [ -z "$number" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file body.md
+            exit 0
+          fi
+          # Rewrite the body; comment only when the findings changed, so an
+          # unchanged week sends no notification.
+          old=$(gh issue view "$number" --repo "$GITHUB_REPOSITORY" --json body --jq .body | tr -d '\r' | sed '1,4d')
+          new=$(sed '1,4d' body.md)
+          gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file body.md
+          if [ "$old" != "$new" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "The findings changed: see the description ([run]($RUN_URL))."
+          fi

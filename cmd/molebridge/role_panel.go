@@ -17,6 +17,8 @@ func init() {
 				fmt.Fprintln(os.Stderr, "usage: molebridge panel (settings come from the environment)")
 				return 2
 			}
+			// The first line names the build, before any refusal.
+			fmt.Fprintf(os.Stderr, "molebridge panel: molebridge %s\n", version)
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 			defer stop()
 			return panel.Run(ctx, fixBlacklistEnv(), os.Stderr, panel.DefaultProbe())

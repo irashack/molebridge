@@ -110,6 +110,7 @@ podman-compose (untested for this form). No Python is needed.
      downloader:
        image: <your image, pinned>
        network_mode: service:gluetun
+       restart: "no"
        depends_on:
          gluetun:
            condition: service_healthy
@@ -137,6 +138,7 @@ podman-compose (untested for this form). No Python is needed.
 
    ```sh
    docker compose config --quiet
+   docker compose pull
    docker compose up -d gluetun
    docker compose run --rm --no-deps exit check-config
    docker compose up -d
@@ -150,6 +152,21 @@ podman-compose (untested for this form). No Python is needed.
    [Switchyard sign-in](access.md#sign-in-with-openid-connect). Choose a
    server and check that the panel confirms it. Your applications'
    connections may drop during a switch.
+
+## Starting at boot
+
+`depends_on` holds your applications back only when `docker compose up`
+starts them. After a reboot or an engine restart, Docker starts every
+`restart: unless-stopped` or `restart: always` container by itself, without
+waiting for anything, and an application in gluetun's namespace can then run
+before gluetun has set up its firewall, while the namespace still has the
+host's routes. So give your applications `restart: "no"`, as `example-app`
+has, and start the stack at boot with Compose, which waits for gluetun to be
+healthy. gluetun and the exit keep `unless-stopped`. The native sidecar's
+[starting at boot](native-sidecar.md#starting-at-boot) has a systemd unit
+for this; use it with this directory and Compose file. Then run the
+[attachment check](#checking-that-containers-share-gluetuns-namespace).
+This boot order has not been tested with the gluetun sidecar.
 
 ## Checking that containers share gluetun's namespace
 

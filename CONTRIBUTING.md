@@ -29,7 +29,7 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
   `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
   `gluetun-auth`, `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`,
-  `port-sync`); each has a `role_*.go` file.
+  `port-sync`, `version`); each has a `role_*.go` file.
 - `internal/exit/`: the exit container's process: the supervisor, the worker, the
   lease, the NetBird child, status publication and the stop sequence.
 - `internal/contract/`: the routing contract: expected rules and routes, the diff and
@@ -78,6 +78,7 @@ to the commit CI tested. Locally:
 
 ```sh
 gofmt -l $(git ls-files '*.go' ':(exclude)vendor')    # prints nothing
+go mod verify && go mod vendor && git diff --exit-code -- vendor go.mod go.sum
 go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
@@ -163,6 +164,10 @@ docker build --tag molebridge:dev --file Dockerfile .
 sh tools/check-image.sh molebridge:dev linux/amd64    # what the image contains
 ```
 
+The binary reports the Dockerfile's `VERSION` build argument (`molebridge version`,
+`status`, the first log lines); it is `dev` unless you pass one, such as
+`--build-arg VERSION=v0.10.0-dev.1`. The release workflow passes the candidate tag.
+
 It cross-compiles the binary with `CGO_ENABLED=0 GOFLAGS=-mod=vendor` (so the `vendor/` directory is
 the dependency list) and adds the NetBird client from the release archive pinned in the `Dockerfile`,
 checked against the SHA-256 committed there. To run your build through Compose, give it a local name in
@@ -177,7 +182,8 @@ services:
 
 Every form has both services (`compose.gluetun.yaml` takes its `switchyard`
 from `compose.yaml` with `extends`, and the override's image replaces the
-extended one). Then `docker compose build exit` and `docker compose up -d` run your build. Compose reads
+extended one). Then `docker compose build exit` and `docker compose up -d` run your build. The `build:` key is only in the
+repository's Compose files: `tools/make-bundle.sh` leaves it out of the release bundle, which has no Dockerfile. Compose reads
 `compose.override.yaml` by itself only when `COMPOSE_FILE` is unset; with a gluetun form, add it, as in
 `COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
 `netbird_<version>_checksums.txt`, and reading the checks in `internal/nbprofile` against the new release's

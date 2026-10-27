@@ -6,6 +6,12 @@ name: Acceptance
 # only when it finds this attestation, signed by this workflow on main, naming
 # the tagged commit and complete coverage (tools/acceptance-policy.json).
 #
+# Everything this job runs comes from main, the ref its identity names: the
+# local action, the predicate writer and the verifier. From the candidate it
+# takes only tools/acceptance-policy.json, the coverage that candidate was
+# released against, and only once its commit is on main. Whoever can push a
+# candidate tag therefore cannot choose the code that signs as this workflow.
+#
 # Inputs:
 #   rc_tag    the candidate tag, e.g. v0.8.0-rc.1
 #   coverage  JSON: {"platforms":[...],"providers":[...],"kinds":[...],
@@ -60,12 +66,31 @@ jobs:
           set -euo pipefail
           printf '%s' "$RC_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$' ||
             { echo "::error::rc_tag must look like v0.8.0-rc.1"; exit 1; }
-      - name: Check out the candidate's source
+      - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The policy and the predicate writer are the candidate's own.
-          ref: refs/tags/${{ inputs.rc_tag }}
+          # The commit this run's identity names (refs/heads/main), with all
+          # history and tags, so the candidate can be checked against main.
           persist-credentials: false
+          fetch-depth: 0
+      - name: Find the candidate on main and take its policy
+        id: source
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse --verify --quiet "refs/tags/$RC_TAG^{commit}") ||
+            { echo "::error::there is no tag $RC_TAG"; exit 1; }
+          git merge-base --is-ancestor "$commit" origin/main ||
+            { echo "::error::$RC_TAG ($commit) is not on main"; exit 1; }
+          # The one file taken from the candidate: the coverage it was released
+          # against, which the promotion check reads from the same commit.
+          policy="$RUNNER_TEMP/acceptance-policy.json"
+          git show "$commit:tools/acceptance-policy.json" > "$policy"
+          {
+            echo "commit=$commit"
+            echo "policy=$policy"
+          } >> "$GITHUB_OUTPUT"
       - name: Log in to ghcr.io
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -81,9 +106,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RC_TAG: ${{ inputs.rc_tag }}
+          COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           set -euo pipefail
-          commit=$(git rev-parse "refs/tags/$RC_TAG^{commit}")
+          commit=$COMMIT
           digest=$(crane digest "$IMAGE:$RC_TAG")
           build_id="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/$RC_TAG"
           # The digest must be the candidate's own build of this commit.
@@ -98,7 +124,6 @@ jobs:
             --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" >/dev/null
           bundle_sha=$(sha256sum "bundle/molebridge-$RC_TAG.tar.gz" | cut -d' ' -f1)
           {
-            echo "commit=$commit"
             echo "digest=$digest"
             echo "bundle_sha=$bundle_sha"
           } >> "$GITHUB_OUTPUT"
@@ -107,7 +132,8 @@ jobs:
           RC_TAG: ${{ inputs.rc_tag }}
           COVERAGE: ${{ inputs.coverage }}
           EVIDENCE: ${{ inputs.evidence }}
-          COMMIT: ${{ steps.rc.outputs.commit }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+          POLICY: ${{ steps.source.outputs.policy }}
           DIGEST: ${{ steps.rc.outputs.digest }}
           BUNDLE_SHA: ${{ steps.rc.outputs.bundle_sha }}
         run: |
@@ -116,7 +142,7 @@ jobs:
           printf '%s' "$EVIDENCE" > evidence.json
           sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --tag "$RC_TAG" \
             --image "$IMAGE" --digest "$DIGEST" --bundle-name "molebridge-$RC_TAG.tar.gz" --bundle-sha256 "$BUNDLE_SHA" \
-            --coverage coverage.json --evidence evidence.json > predicate.json
+            --coverage coverage.json --evidence evidence.json --policy "$POLICY" > predicate.json
           jq . predicate.json
       - name: Attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
@@ -130,7 +156,8 @@ jobs:
       - name: Verify what was just attested, with the promotion policy
         env:
           GH_TOKEN: ${{ github.token }}
-          COMMIT: ${{ steps.rc.outputs.commit }}
+          COMMIT: ${{ steps.source.outputs.commit }}
+          POLICY: ${{ steps.source.outputs.policy }}
           DIGEST: ${{ steps.rc.outputs.digest }}
         run: |
           set -euo pipefail
@@ -147,4 +174,5 @@ jobs:
             sleep 10
           done
           sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$COMMIT" --image "$IMAGE"
+            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$COMMIT" --image "$IMAGE" \
+            --policy "$POLICY"
