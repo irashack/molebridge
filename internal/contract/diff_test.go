@@ -216,6 +216,40 @@ func TestLeftReturnPathIsNotCompared(t *testing.T) {
 			rule(4, 94, from("203.0.113.6/32"), proto(1), table(51821)))
 		expectActions(t, "pairs of any address", Diff(spec, rtnl.V4, withPair, DiffOptions{}))
 	}
+	// Anything else there is still a stray: only the return-path shape is
+	// left to the transaction.
+	pair := []rtnl.Rule{rule(4, 94, from("203.0.113.5/32"), proto(1), table(51821)), rule(4, 98, from("203.0.113.5/32"), proto(1), unreachable())}
+	for name, c := range map[string]struct {
+		stray rtnl.Rule
+		want  string
+	}{
+		"lookup main at 94":       {rule(4, 94, table(rtnl.TableMain)), "del 94"},
+		"unreachable at 98":       {rule(4, 98, unreachable()), "del 98"},
+		"94 into another table":   {rule(4, 94, from("203.0.113.5/32"), proto(1), table(rtnl.TableMain)), "del 94"},
+		"98 with an iif":          {rule(4, 98, iif("wt0"), from("203.0.113.5/32"), proto(1), unreachable()), "del 98"},
+		"94 for a whole prefix":   {rule(4, 94, from("203.0.113.0/24"), proto(1), table(51821)), "del 94"},
+		"94 without its protocol": {rule(4, 94, from("203.0.113.5/32"), table(51821)), "sub 94"},
+	} {
+		rules := append(append(append([]rtnl.Rule{}, bare...), pair...), c.stray)
+		expectActions(t, name, Diff(spec, rtnl.V4, rules, DiffOptions{}), c.want)
+	}
+	if left := LeftReturnPath(spec, rtnl.V4, append(append(append([]rtnl.Rule{}, bare...), pair...), pair[0])); len(left[94]) != 1 || len(left[98]) != 1 {
+		t.Errorf("left: %v", left)
+	}
+}
+
+// A protective copy of rule 102 left at gluetun's 101 (a rebuild that did not
+// complete) is removed; gluetun's own rule 101 is not Molebridge's.
+func TestALeftoverCopyBelowTheOwnedRangeIsRemoved(t *testing.T) {
+	spec := glSpecWithAddresses()
+	own101 := rule(4, 101, not(), mark(0xca6c), table(51820))
+	rules := append(glRules(rtnl.V4), own101)
+	expectActions(t, "gluetun's 101", Diff(spec, rtnl.V4, rules, DiffOptions{}))
+	cp := spec.RulesAt(rtnl.V4, PrioGluetunMark)[0]
+	cp.Priority = 101
+	expectActions(t, "a copy of 102 at 101", Diff(spec, rtnl.V4, append(rules, cp), DiffOptions{}), "del 101")
+	// Natively 101 is nobody's, and 102 nothing of Molebridge's.
+	expectActions(t, "natively", Diff(nativeSpec(), rtnl.V4, append(nativeRules(rtnl.V4), cp), DiffOptions{}))
 }
 
 func TestTwoReturnPathPairsDuringAnAddressChange(t *testing.T) {

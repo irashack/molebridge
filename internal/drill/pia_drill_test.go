@@ -116,3 +116,27 @@ func TestPIAAddressChangesAreOneTransaction(t *testing.T) { // PIA's rules 94 an
 		t.Errorf("rule 98 was not repaired after the transaction: %q", out)
 	}
 }
+
+// Before the registration rules 94 and 98 are left to it, but only in their
+// own shape: a stray there, which a forwarded packet would meet before rule
+// 95, is removed like a stray anywhere else in Molebridge's range.
+func TestPIAStrayAtALeftPriorityIsRemoved(t *testing.T) { // R4: lookup main at 94 before the registration
+	r := piaRig(t)
+	for _, f := range []string{"-4", "-6"} {
+		r.exit.IP(f, "rule", "add", "priority", "94", "lookup", "main")
+		deadline := time.Now().Add(time.Second)
+		for {
+			out, _ := r.exit.TryIP(f, "rule", "show", "priority", "94")
+			if !strings.Contains(out, "lookup main") {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: the stray at 94 stayed for a second:\n%s", f, out)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if !strings.Contains(r.logs.text(), "removed IPv4 rule 94") {
+		t.Errorf("no removal was logged:\n%s", r.logs.text())
+	}
+}

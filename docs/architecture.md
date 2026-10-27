@@ -554,7 +554,8 @@ tunnel config has an address: they are installed from the config's `Address`
 line, so they exist before the interface does, and they stay through tunnel
 downtime. Exactly one IPv4 address and at most one IPv6 address are supported.
 A PIA config has no address: the exit adds rules 94 and 98 with the address it
-registers; until then the repairer leaves both priorities alone, and after
+registers; until then the repairer leaves rules of that shape at both
+priorities alone (and removes anything else there), and after
 registration it repairs that pair like the other rules
 ([providers](providers.md#how-pia-differs)). Table numbers 0–255 are reserved
 and refused. Interface names, overlay ranges and the tunnel config are
@@ -641,14 +642,19 @@ pass once the result verifies; if it doesn't verify, rule 80 stays until a pass
 does. A native sidecar never adds it: its firewall already holds the traffic. With gluetun only the first installation uses rule 80; a repair there
 doesn't add it. A wrong rule whose selectors are a subset of the right one's is rebuilt behind
 a copy one priority earlier, so a repair never leaves rules 94 and 98 both
-missing. A pass that finds everything in place changes nothing. Each change
+missing. With gluetun the copy of rule 102 sits at gluetun's 101; if the
+rebuild cannot confirm its result the copy stays, and a later pass removes it
+once rule 102 is read back. A pass that finds everything in place changes nothing. Each change
 is logged, for example `molebridge-exit: added IPv4 rule 97`,
 `molebridge-exit: removed IPv4 rule 50: <the rule>` or
 `molebridge-exit: IPv4 unreachable fallback in table 51821 restored`.
 
-With PIA's addressless config, the repairer leaves priorities 94 and 98 alone
-until PIA's registration gives the tunnel an address: until then it adds and
-removes nothing there. The registration installs the pair for the new address
+With PIA's addressless config, the repairer leaves the return-path rules at
+priorities 94 and 98 alone until PIA's registration gives the tunnel an
+address: until then it adds nothing there, and leaves every rule in the exact
+form of rule 94 or 98 for some address. Any other rule at 94 or 98 (such as
+`lookup main` at 94) is an inserted bypass like the others, removed, and the
+pass is not verified while it stays. The registration installs the pair for the new address
 through the mutation owner, and from then on the repairer repairs that pair
 like the other rules; a later registration retires the old address's pair ([providers](providers.md#how-pia-differs)).
 

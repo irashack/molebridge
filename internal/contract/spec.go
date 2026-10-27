@@ -38,9 +38,10 @@ type Spec struct {
 	// interface. More than one address is expected only while PIA's address
 	// changes.
 	ReturnPath map[rtnl.Family][]netip.Addr
-	// LeaveReturnPath, per family, leaves rules 94 and 98 out of the
-	// comparison entirely: a native config without an address leaves them to
-	// the transaction that sets the address (MOLEBRIDGE_RULE94=applier).
+	// LeaveReturnPath, per family, leaves the return-path rules at 94 and 98
+	// out of the comparison: a native config without an address leaves them
+	// to the transaction that sets the address (MOLEBRIDGE_RULE94=applier).
+	// Any other rule at those priorities is still removed (Skipped).
 	LeaveReturnPath map[rtnl.Family]bool
 	// TempGuard, per family, expects the temporary priority-80 rule that
 	// blocks forwarded traffic while rules 90-97 are rebuilt.
@@ -80,9 +81,43 @@ func (s Spec) Owned(priority uint32) bool {
 	return priority <= PrioBackstop
 }
 
-// Skipped reports priorities left out of the comparison.
+// Skipped reports the priorities whose return-path rules are left out of the
+// comparison: a rule there in the shape a transaction installs
+// (ReturnPathShaped) is neither expected nor removed. Anything else there is
+// still a stray (Diff).
 func (s Spec) Skipped(f rtnl.Family, priority uint32) bool {
 	return !s.Config.IsGluetun() && s.LeaveReturnPath[f] && (priority == PrioReturnPath || priority == PrioBackstop)
+}
+
+// returnPathPair is rule 94 for one tunnel address and, natively, the
+// backstop at 98 behind it.
+func returnPathPair(c Config, f rtnl.Family, a netip.Addr) []rtnl.Rule {
+	r := lookup(PrioReturnPath, f, c.Table)
+	r.Src, r.IPProto = hostPrefix(a), rtnl.Some(icmp(f))
+	out := []rtnl.Rule{r}
+	if !c.IsGluetun() {
+		// The backstop behind 94: the same packets are unreachable if 94
+		// or the exit table's routes are ever gone.
+		r = reject(PrioBackstop, f)
+		r.Src, r.IPProto = hostPrefix(a), rtnl.Some(icmp(f))
+		out = append(out, r)
+	}
+	return out
+}
+
+// ReturnPathShaped reports whether a rule is exactly rule 94 or 98 as the
+// contract writes it for some address of the family. Only the address is
+// free: another selector, action or table makes it a different rule.
+func (s Spec) ReturnPathShaped(f rtnl.Family, r rtnl.Rule) bool {
+	if r.Family != f || !r.Src.IsValid() || r.Src.Bits() != r.Src.Addr().BitLen() || (f == rtnl.V4) != r.Src.Addr().Is4() {
+		return false
+	}
+	for _, e := range returnPathPair(s.Config, f, r.Src.Addr()) {
+		if e.Priority == r.Priority && equalItems(r.Items(), e.Items()) {
+			return true
+		}
+	}
+	return false
 }
 
 func hostPrefix(a netip.Addr) netip.Prefix { return netip.PrefixFrom(a, a.BitLen()) }
@@ -171,14 +206,7 @@ func (s Spec) Rules(f rtnl.Family) []rtnl.Rule {
 		}
 	}
 	for _, a := range s.ReturnPath[f] {
-		r := lookup(PrioReturnPath, f, c.Table)
-		r.Src, r.IPProto = hostPrefix(a), rtnl.Some(icmp(f))
-		add(r)
-		if !c.IsGluetun() {
-			// The backstop behind 94: the same packets are unreachable if 94
-			// or the exit table's routes are ever gone.
-			r = reject(PrioBackstop, f)
-			r.Src, r.IPProto = hostPrefix(a), rtnl.Some(icmp(f))
+		for _, r := range returnPathPair(c, f, a) {
 			add(r)
 		}
 	}
