@@ -94,7 +94,6 @@ type Manager struct {
 	rt     routeAPI
 	wg     wgAPI
 	closed bool
-
 }
 
 // Open opens the sockets.
