@@ -291,8 +291,11 @@ rather than one command: `netbird service run` as a daemon in a process group
 of its own; `netbird status --check live`, polled once a second for up to 30
 seconds; then `netbird up`, for up to 120 seconds (a first enrollment with a
 setup key can be slow). Its environment is NetBird's own `NB_*` and `WT_*`
-settings plus `PATH`, `HOME`, `TZ` and a private `TMPDIR`; the setup key
-reaches only these processes. NetBird's log goes to the container's tmpfs
+settings plus `PATH`, `HOME`, `TZ` and a private `TMPDIR`. The setup key
+(`NB_SETUP_KEY` or `WT_SETUP_KEY`) is in `netbird up`'s environment alone,
+not the daemon's, the probes' or the worker's; the supervisor keeps it in its
+own environment, which root in the container can read in `/proc/1/environ`
+([secret files](configuration.md#secret-files)). NetBird's log goes to the container's tmpfs
 `/var/log/netbird/client.log`, and NetBird's output is copied to the container
 log with the prefix `netbird: `.
 
@@ -426,10 +429,14 @@ on the tmpfs every 5 seconds, but only while all of these hold:
 
 - the NetBird profile check hasn't refused, and, except for a sidecar (which
   has no NetBird), NetBird has been started;
-- for the overlay kind, the routing contract is verified (natively, with the
-  tunnel interface up) and NetBird is running; for a native sidecar, the
-  contract is verified with the tunnel interface up and the firewall is as
-  installed;
+- for the overlay kind, NetBird is running, and natively the routing
+  contract is verified with the tunnel interface up. With gluetun the
+  contract must hold: Molebridge's rules and both tables are as expected.
+  That is one step short of verified, which also needs the host
+  interface's IPv4 default route that gluetun, not the exit, owns; the
+  `routing` check in the status record is the verified one. For a native
+  sidecar, the contract is verified with the tunnel interface up and the
+  firewall is as installed;
 - the provider logic's own health holds: the last record is less than 150
   seconds old and from a completed check (`ok` or `failed`; startup and a
   switch in progress don't count), and the namespace is intact for the kind.
@@ -502,7 +509,7 @@ refuses to start if the two differ.
 
 | Priority | Rule | Purpose |
 |---|---|---|
-| 1 | `not iif wt0 lookup local` | Replaces the kernel's priority-0 rule. Packets arriving on the overlay are never delivered to a socket on the exit; they fall through to rules 90–97. Loopback and every other interface keep local delivery. |
+| 1 | `not iif wt0 lookup local` | Replaces the kernel's priority-0 rule. Unicast packets arriving on the overlay are never delivered to a socket on the exit; they fall through to rules 90–97. Loopback and every other interface keep local delivery. Multicast and broadcast are outside it ([below](#netbird-and-its-checks)). |
 | 90 | `iif mullvad to <overlay range> lookup main` | Tunnel replies return over the overlay. Client-originated traffic cannot use this exception. |
 | 94 | `from <tunnel address> ipproto icmp lookup 51821` | ICMP errors the exit generates for tunnel traffic (fragmentation needed, packet too big) return through the tunnel. With the tunnel route gone they hit the unreachable fallback, never the host's default route. IPv6 uses `ipproto ipv6-icmp`. |
 | 95 | `iif wt0 lookup 51821` | Forwarded traffic uses the exit table. |
@@ -749,13 +756,22 @@ sandbox.
 
 ## NetBird and its checks
 
-Rule 1 means overlay traffic is never delivered to the exit itself. A packet
-arriving on `wt0` for one of the exit's own addresses, on the overlay or the
-host side, is routed like any other forwarded packet, into the tunnel, or it
-hits the terminal guard. The exit's own addresses become ordinary
+Rule 1 means unicast overlay traffic is never delivered to the exit itself.
+A packet arriving on `wt0` for one of the exit's own addresses, on the overlay
+or the host side, is routed like any other forwarded packet, into the tunnel,
+or it hits the terminal guard. The exit's own addresses become ordinary
 destinations, which the LAN isolation check in
 [verification](verification.md#from-a-client) already covers. Loopback and
 every other interface keep local delivery.
+
+The rule covers only what the kernel routes through the policy rules. The
+kernel decides local delivery of multicast destinations (such as
+`224.0.0.1` or `ff02::1`) and of the limited broadcast `255.255.255.255`
+before it consults them, so a socket in the exit's namespace that listens
+for those can still receive them from `wt0`. Neither is forwarded: Linux
+forwards multicast only for a multicast routing daemon, which the image
+doesn't have, and never forwards the limited broadcast. This has not been
+checked on a live exit.
 
 Molebridge requires NetBird to run with kernel WireGuard and its kernel
 firewall, and supports only NetBird's daemon mode, its default profile and the

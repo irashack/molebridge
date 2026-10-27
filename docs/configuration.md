@@ -48,7 +48,7 @@ they differ the row says so.
 | `PANEL_FRAME_ANCESTORS` | switchyard | empty | Space-separated origins matching `https://[a-z0-9.-]+`: lowercase `https://` and host, with no port, path, trailing slash or wildcard. Example: `https://dashboard.example.net https://home.example.net`. Invalid entries are ignored; no accepted entries means framing is forbidden. |
 | `PANEL_TITLE` | switchyard | `Switchyard` | Page and app name. |
 | `PANEL_SHORT_TITLE` | switchyard | `Switchyard` | Home-screen icon label. |
-| `PANEL_HOST_LABEL` | switchyard | `this exit` (`this gluetun` in `compose.sidecar.yaml`) | Used in "Fastest from …". |
+| `PANEL_HOST_LABEL` | switchyard | `this exit` (`this gluetun` in `compose.sidecar.yaml`, `this tunnel` in `compose.native-sidecar.yaml`) | Used in "Fastest from …". |
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | switchyard | empty, `Home` | Optional back link in the page header. |
 | `PANEL_THEME` | switchyard | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
 | `PANEL_STYLE` | switchyard | `provider` | `provider` uses the provider's colors; `dashboard` uses the neutral Catppuccin palette and JetBrains Mono. Any other value means `provider`. Mullvad's tree and PIA's region list keep their layout in either style. |
@@ -499,9 +499,16 @@ each is needed only while `prepare-config --nordvpn` or `nordvpn-key` runs.
 Delete the download afterwards, and the token file if you saved one. `secrets/netbird.env` and `secrets/applier.env` reach the exit
 through `env_file`, so their permissions are a host check
 ([operations](operations.md#host-checks)). The supervisor hands `NB_SETUP_KEY`
-only to the NetBird processes, not to its worker, and hands NetBird only
-its own `NB_*` and `WT_*` settings, so `GATUS_TOKEN` and PIA's files never
-reach NetBird.
+only to `netbird up`, the command that enrolls, not to NetBird's daemon, its
+liveness probes or the worker, and hands NetBird only its own `NB_*` and
+`WT_*` settings, so `GATUS_TOKEN` and PIA's files never reach NetBird. The
+supervisor itself, PID 1, keeps both in its environment for the life of the
+container, so root in the container (and on the host) can read them in
+`/proc/1/environ`, and the engine keeps them in the container's configuration
+(`docker inspect`). Once the peer has enrolled, delete `secrets/netbird.env`
+as [setup](setup.md#5-check-then-start) says, then recreate the exit
+(`docker compose up -d --force-recreate exit`) so that neither holds the key
+any more.
 
 ## State files
 

@@ -132,6 +132,26 @@ a failure, with the exit's message or the verdict's label as the error.
 It pushes after each periodic check and each outcome of a switch, never
 while a switch is in progress, so an ordinary switch isn't a failed sample.
 
+### Host suspend
+
+The supervisor's [lease](architecture.md#the-lease) runs on the boot clock,
+which keeps counting while the host is suspended. If the host sleeps for
+longer than `GUARD_GRACE` (30 seconds by default), the lease has expired
+when it wakes, and the exit stops as it would for a hung worker: it logs
+`molebridge-exit: stopping (lease lapsed)`, stops NetBird, removes the
+interfaces it owns, leaves the routing guards in place and exits with
+status 1. The restart policy then starts it again (`restart: unless-stopped`
+in the Compose files; in a Quadlet unit or a Kubernetes pod, the one you
+set). This is by design: after a gap that long the supervisor can't tell a
+sleeping host from a stuck routing owner, so it starts clean. Devices using
+the exit lose their connections through it until it is back. A shorter
+suspend doesn't lapse the lease.
+
+A suspend has not been tested; the lease-lapse drill, which freezes the
+worker instead, runs the same stop and restart; in the 0.9.x acceptance runs
+the exit was `ok` again 46 to 86 seconds after the freeze
+([testing](testing.md#094)).
+
 ## Retries
 
 The exit retries by itself

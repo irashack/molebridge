@@ -88,9 +88,11 @@ The exit also needs the same NetBird requirements as Molebridge:
 - **NetBird runs with kernel WireGuard and its kernel firewall**, with
   `NB_DISABLE_USERSPACE_ROUTING=true`, in daemon mode with its default
   profile. [The exit](#the-checks-in-the-exit) refuses other settings.
-- **Overlay traffic is never delivered to the exit itself.** The contract's rule
-  1 routes every packet arriving on `wt0` like forwarded traffic, so features
-  that serve devices from the exit don't work there.
+- **Unicast overlay traffic is never delivered to the exit itself.** The
+  contract's rule 1 routes every unicast packet arriving on `wt0` like
+  forwarded traffic, so features that serve devices from the exit don't work
+  there (multicast and broadcast are outside the rule:
+  [architecture](architecture.md#netbird-and-its-checks)).
   [Keep these off for the exit peer](#keep-these-off-for-the-exit-peer).
 
 The contract works in policy routing. The firewall rules in this setup only open
@@ -595,7 +597,7 @@ application of your own in the namespace.
 
 ### Local delivery
 
-A packet that arrives on `wt0` must never reach a process on the exit. Start a listener inside the
+A unicast packet that arrives on `wt0` must never reach a process on the exit. Start a listener inside the
 namespace, in the shell, then connect to it from a device on the exit:
 
 ```sh

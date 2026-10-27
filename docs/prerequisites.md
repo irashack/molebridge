@@ -162,8 +162,8 @@ people. Some forbid it.
 - **Nothing else for the exit peer.** Don't enable NetBird SSH for it, don't
   give `exit-nodes` DNS nameservers, don't route domain resources or domain
   routes through it, and don't turn on Rosenpass for it. None of them is
-  supported on the exit peer: overlay traffic is never delivered to the exit
-  itself, so they don't work there. The exit refuses to start NetBird with
+  supported on the exit peer: unicast overlay traffic is never delivered to
+  the exit itself, so they don't work there. The exit refuses to start NetBird with
   Rosenpass on ([troubleshooting](troubleshooting.md#startup)).
 
 On phones, turn off *Force relay connection* in the NetBird app (Settings →

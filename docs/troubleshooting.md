@@ -179,8 +179,9 @@ is 1 for all of these:
   restarted the container ([the lease](architecture.md#the-lease)). The worker
   does not renew while a loop it supervises is late, and says so:
   `molebridge-exit: a supervised loop is late; no lease renewal is sent` (at most
-  every 10 seconds). Causes are a stalled host or a container starved of CPU (a
-  quota that throttles it for many seconds), a kernel request that did not
+  every 10 seconds). Causes are a stalled host, a host that was suspended for
+  longer than `GUARD_GRACE` ([host suspend](operations.md#host-suspend)), a
+  container starved of CPU (a quota that throttles it for many seconds), a kernel request that did not
   finish in 10 seconds, or a hang. A refusal on the supervisor's side is
   `molebridge-exit: renewal refused: <reason>`, which a healthy exit never logs.
   If the lease had already expired when a message from the worker arrived, the
