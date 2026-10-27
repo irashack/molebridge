@@ -122,7 +122,10 @@ func ConfigFromEnv(env map[string]string) (*Config, error) {
 		}
 		signIn = &hostPort{host, port}
 	}
-	settings.PublicHosts = parsePublicHosts(env["PANEL_PUBLIC_HOSTS"], signIn)
+	settings.PublicHosts, err = parsePublicHosts(env["PANEL_PUBLIC_HOSTS"], signIn)
+	if err != nil {
+		return nil, err
+	}
 	if len(exits) == 0 && single.Provider == "" {
 		return nil, errors.New("panel: no provider")
 	}

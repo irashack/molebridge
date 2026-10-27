@@ -651,6 +651,10 @@ refused:
   `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
+- `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as
+  exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
+  Write `exit.example.net`, not `https://exit.example.net` or `exit.example.net/`.
+  Releases before 0.10.0 ignored such an entry, and every request then got 421.
 - The sign-in messages in [the next section](#sign-in).
 
 `molebridge panel: cannot listen: <reason>` means the panel could not bind its port

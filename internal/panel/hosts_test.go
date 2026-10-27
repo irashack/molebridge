@@ -10,7 +10,11 @@ import (
 )
 
 func settingsWithHosts(raw string) *Settings {
-	return &Settings{PublicHosts: parsePublicHosts(raw, nil)}
+	hosts, err := parsePublicHosts(raw, nil)
+	if err != nil {
+		panic(err)
+	}
+	return &Settings{PublicHosts: hosts}
 }
 
 func TestOriginAllowlist(t *testing.T) {
@@ -83,9 +87,30 @@ func TestForwardedHostHeaderIsNotTrusted(t *testing.T) {
 }
 
 func TestSignInPublicHostIsAllowed(t *testing.T) {
-	s := &Settings{PublicHosts: parsePublicHosts("", &hostPort{"exit.example.test", -1})}
+	hosts, _ := parsePublicHosts("", &hostPort{"exit.example.test", -1})
+	s := &Settings{PublicHosts: hosts}
 	if !s.HostAllowed("exit.example.test") || !s.OriginAllowed("https://exit.example.test") {
 		t.Fatal("PANEL_PUBLIC_URL's host is not allowed")
+	}
+}
+
+// A malformed entry used to be dropped, leaving every request to get 421.
+// It now stops the panel at start, naming the entry.
+func TestMalformedPublicHostsAreRefusedAtStart(t *testing.T) {
+	for _, entry := range []string{"https://exit.example.test", "exit.example.test/", "exit.example.test:99999",
+		"user@exit.example.test", "exit.example.test?x", "exit.example.test:port", ":8095", "["} {
+		raw := "good.example.test, " + entry
+		_, err := ConfigFromEnv(map[string]string{"PROVIDER": "mullvad", "PANEL_PUBLIC_HOSTS": raw})
+		want := "PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as exit.example.net or " +
+			"host.docker.internal:8095 (no scheme or path), in '" + entry + "'"
+		if err == nil || err.Error() != want {
+			t.Errorf("%q: %v", entry, err)
+		}
+	}
+	// Spaces and empty entries are still fine.
+	cfg, err := ConfigFromEnv(map[string]string{"PROVIDER": "mullvad", "PANEL_PUBLIC_HOSTS": " exit.example.test , ,host.docker.internal:8095,"})
+	if err != nil || len(cfg.Settings.PublicHosts) != 2 {
+		t.Fatalf("%v %v", cfg, err)
 	}
 }
 
