@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 # Tests tools/make-bundle.sh on a fake source tree: the image rewrite in every
-# form, the member list and metadata, determinism, and the refusals. Needs GNU
+# form, the build sections removed, the member list and metadata,
+# determinism, and the refusals. Needs GNU
 # tar (tar, or gtar on a Mac); without it the test says so and skips.
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -27,6 +28,16 @@ cat > "$src/compose.yaml" <<'EOM'
 services:
   exit:
     image: ghcr.io/irashack/molebridge:0.8
+    # Only for a checkout:
+    # the bundle has no Dockerfile.
+    build:
+      context: .
+      # a comment inside the block
+
+      dockerfile: Dockerfile
+
+    # The command.
+    command: ["exit"]
   panel:
     image: "${MOLEBRIDGE_IMAGE:-ghcr.io/irashack/molebridge:0.8.0}"  # panel
   other:
@@ -102,6 +113,12 @@ grep -q "docker run $ref gluetun-auth" "$x/routing/gluetun-preflight" || fail "p
 grep -q ':0.8\|<tag>\|2222\|3333\|4444' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
 pass "image references rewritten in every form"
 
+grep -q 'build\|context\|Dockerfile\|checkout\|inside the block' "$x"/compose*.yaml && fail "a build section or its comment is left"
+printf '%s\n' 'services:' '  exit:' "    image: $ref" '' '    # The command.' '    command: ["exit"]' > "$work/want-exit"
+head -n 6 "$x/compose.yaml" | cmp -s - "$work/want-exit" || { head -n 6 "$x/compose.yaml" >&2; fail "the lines around a removed build section"; }
+grep -q '^  port-sync:$' "$x/compose.native-sidecar.yaml" || fail "the service after a removed build section"
+pass "build sections and their comments removed, the rest kept"
+
 # Metadata: owner 0, one mtime (listed in UTC, whatever the local zone), normalized modes.
 listing=$(TZ=UTC $tar -tvzf "$archive" --numeric-owner)
 echo "$listing" | grep -qv ' 0/0 ' && fail "owner not 0/0"
@@ -158,6 +175,8 @@ printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge-ci:x\n' > "$s
 refuses "another package under the same owner" 'still names the image' v0.8.0 "$digest" "$work/o3"
 printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge:\n' > "$src/compose.yaml"
 refuses "an unparseable reference" 'still names the image' v0.8.0 "$digest" "$work/o3"
+printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge:0.8\n    "build": .\n' > "$src/compose.yaml"
+refuses "a build key the script cannot remove" 'still has a build: key' v0.8.0 "$digest" "$work/o3"
 cp "$work/compose.yaml.bak" "$src/compose.yaml"
 rm "$src/compose.sidecar.yaml"; ln -s compose.yaml "$src/compose.sidecar.yaml"
 refuses "a symlink" 'missing bundle file: compose.sidecar.yaml' v0.8.0 "$digest" "$work/o3"

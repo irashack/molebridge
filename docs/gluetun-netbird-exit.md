@@ -275,6 +275,7 @@ native exit and says where this form differs.
 7. **Start gluetun, check, then start the rest:**
 
    ```sh
+   docker compose pull
    docker compose up -d gluetun
    docker compose run --rm --no-deps exit check-config
    docker compose up -d

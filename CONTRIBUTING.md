@@ -176,7 +176,8 @@ services:
 
 List only services your Compose file has: `compose.gluetun.yaml` has no
 `switchyard`, so leave that line out there, or Compose adds a stray service.
-Then `docker compose build exit` and `docker compose up -d` run your build. Compose reads
+Then `docker compose build exit` and `docker compose up -d` run your build. The `build:` key is only in the
+repository's Compose files: `tools/make-bundle.sh` leaves it out of the release bundle, which has no Dockerfile. Compose reads
 `compose.override.yaml` by itself only when `COMPOSE_FILE` is unset; with a gluetun form, add it, as in
 `COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`. Updating NetBird means changing `NETBIRD_VERSION` and both `NETBIRD_SHA256_*` hashes together, from
 `netbird_<version>_checksums.txt`, and reading the checks in `internal/nbprofile` against the new release's

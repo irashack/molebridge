@@ -287,9 +287,11 @@ It prints `molebridge-exit: configuration accepted (/config/wg_confs/mullvad.con
 `NetBird gate: configuration accepted`, or the one line naming the setting,
 file or NetBird configuration it refused
 ([troubleshooting](troubleshooting.md#startup)). It changes no routing and
-creates no tunnel. Then start both containers:
+creates no tunnel. Then fetch every image the Compose file names, by the
+digests the bundle pins, and start both containers:
 
 ```sh
+docker compose pull
 docker compose up -d
 docker compose ps
 docker compose logs exit

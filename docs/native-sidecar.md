@@ -504,6 +504,7 @@ needed.
 
    ```sh
    docker compose config --quiet
+   docker compose pull
    docker compose run --rm --no-deps exit check-config
    docker compose up -d exit switchyard
    docker compose logs exit

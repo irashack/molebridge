@@ -136,6 +136,7 @@ podman-compose (untested for this form). No Python is needed.
 
    ```sh
    docker compose config --quiet
+   docker compose pull
    docker compose up -d gluetun
    docker compose run --rm --no-deps exit check-config
    docker compose up -d

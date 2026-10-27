@@ -8,6 +8,9 @@
 # The rewrite keys on the image name, not on which file or key holds it, and
 # the script refuses a bundle that would still carry any other reference, or a
 # Compose file with none (an unpinned image would defeat the signature).
+# Each Compose file also loses its `build:` keys and the comment block right
+# above each: the bundle has no Dockerfile, and an installer that ran
+# `compose build` or `up --build` would otherwise fail under the digest.
 #
 #   sh tools/make-bundle.sh <tag> <sha256:index-digest> [output-directory]
 #
@@ -78,10 +81,33 @@ mkdir -p "$stage/routing"
 # optional @sha256: digest, and not by anything that would make it a longer
 # name (molebridge-ci, molebridge/x) or another tag character.
 pattern='ghcr\.io/irashack/molebridge(:([A-Za-z0-9_][A-Za-z0-9_.-]*|<[A-Za-z_-]+>))?(@sha256:[0-9a-fA-F]+)?([^A-Za-z0-9_.:@/-]|$)'
+# strip_build: a Compose file without its `build:` keys. A key goes with every
+# deeper-indented line under it and the comment lines directly above it at any
+# indent; blank lines inside the block go too, one after it stays.
+strip_build() {
+    awk '
+        function indent(line) { match(line, /^ */); return RLENGTH }
+        skip >= 0 {
+            if ($0 ~ /^[ \t]*$/) { blanks = blanks $0 "\n"; next }
+            if (indent($0) > skip) { blanks = ""; next }
+            skip = -1; printf "%s", blanks; blanks = ""
+        }
+        /^ *#/ { held = held $0 "\n"; next }
+        /^ *build:/ { skip = indent($0); held = ""; next }
+        { printf "%s", held; held = ""; print }
+        END { printf "%s%s", held, blanks }
+    ' skip=-1 "$1"
+}
 for f in $files; do
     dest=$stage/$f
     case "$f" in
-        compose*.yaml | .env*.example | routing/gluetun-preflight)
+        compose*.yaml)
+            strip_build "$src/$f" | sed -E "s#$pattern#$ref\\4#g" > "$dest"
+            if grep -Eq '^[[:space:]]*["'"'"']?build["'"'"']?[[:space:]]*:' "$dest"; then
+                die "$f still has a build: key this script does not remove"
+            fi
+            ;;
+        .env*.example | routing/gluetun-preflight)
             sed -E "s#$pattern#$ref\\4#g" "$src/$f" > "$dest"
             ;;
         *)

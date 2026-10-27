@@ -27,7 +27,7 @@ services:
     image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
-    # bundle has no Dockerfile and pulls the image instead.
+    # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
     build:
       context: .
       dockerfile: Dockerfile

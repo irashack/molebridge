@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Tests tools/check-bundle.sh with a minimal fake source tree: a good bundle
-# passes; a bundle with an unpinned Molebridge image, a missing preflight or
-# an invalid Compose file is refused. Needs GNU tar (tar, or gtar on a Mac),
+# passes; a bundle with an unpinned Molebridge image, a build section, a
+# missing preflight or an invalid Compose file is refused. Needs GNU tar (tar, or gtar on a Mac),
 # Docker Compose and jq; skips when one is missing.
 set -eu
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -25,6 +25,10 @@ cat > "$src/compose.yaml" <<'EOM'
 services:
   exit:
     image: ghcr.io/irashack/molebridge:0.8
+    # For a checkout only.
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       PROVIDER: ${PROVIDER:-mullvad}
   switchyard:
@@ -100,6 +104,18 @@ sed 's#image: ghcr.io/irashack/molebridge:.*#image: ghcr.io/irashack/molebridge:
 tar -czf "$work/bad/unpinned.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1
 sh "$here/check-bundle.sh" "$work/bad/unpinned.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted an unpinned image"
 pass "refuses an unpinned image"
+
+# A build section put back by hand, on the native sidecar's profiled port-sync.
+mkdir -p "$work/bad/b"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/b"
+awk '{ print } /port-sync:/ { p = 1 } p && /^    image: / { print "    build: {context: .}"; p = 0 }' \
+    "$work/bad/b/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml" > "$work/bad/c" &&
+    cp "$work/bad/c" "$work/bad/b/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml"
+grep -q 'build: {context: .}' "$work/bad/b/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml" || fail "the test did not add a build section"
+tar -czf "$work/bad/build.tar.gz" -C "$work/bad/b" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/build.tar.gz" "$ref" >"$work/bad/out" 2>&1 && fail "accepted a service with a build section"
+grep -q 'FAIL compose.native-sidecar.yaml builds port-sync from a Dockerfile' "$work/bad/out" || { cat "$work/bad/out" >&2; fail "a build section: wrong message"; }
+pass "refuses a service with a build section"
 
 # A gluetun form that tells its preflight the wrong kind, and a form missing a service.
 mkdir -p "$work/bad/k"
