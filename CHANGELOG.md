@@ -4,6 +4,153 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.10.0 — unreleased
+
+**Experimental.** Fixes and hardening from an outside review of 0.9.4: the
+ingress guard on every native overlay exit, a readiness precondition for the
+ICMP source sysctl, recovery from a switch stuck in `attempting`, a version
+the binary knows, `/metrics` and `HEAD` on the panel, bounded sign-in
+traffic, and a draft compatibility contract for 1.x. The deprecated `view`
+object is gone from `/api/status`. Not yet run live
+([testing](docs/testing.md#0100)).
+
+**Breaking**:
+- **`/api/status` no longer sends `view`** or the 0.6 fields it derived into
+  `result`, deprecated since 0.7.0 and promised for one release. Read
+  `verdict` instead.
+- **A native overlay exit no longer starts NetBird while
+  `net.ipv4.icmp_errors_use_inbound_ifaddr` is not 1.** It used to warn, and
+  the exit's ICMP errors for tunnel traffic could leave by the host interface
+  from the host's address. It now stays up and logs every 30 seconds
+  `molebridge-exit: NetBird is not started: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface`.
+  The shipped Compose files set it; Kubernetes needs the kubelet's
+  unsafe-sysctl allowance ([prerequisites](docs/prerequisites.md#kernel-settings-in-the-exits-namespace)).
+  With gluetun the exit still only warns: gluetun's rules send those errors
+  into the tunnel.
+- **With sign-in on, the panel's CSRF and last-exit cookies are named
+  `__Host-csrf_nonce` and `__Host-molebridge_exit`,** so a cookie planted from
+  a sibling subdomain can no longer make every switch fail with 403. The
+  remembered exit is forgotten once after the upgrade.
+- **A malformed `PANEL_PUBLIC_HOSTS` entry stops the panel at start**, such
+  as `https://exit.example.net` or `exit.example.net/`, with
+  `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
+  It used to be ignored, and every request then got 421.
+
+**Fail-closed and routing**:
+- **Every native overlay exit installs the ingress guard** `inet
+  molebridge_guard`, not only PIA. A VPN server can no longer send through a
+  Mullvad or NordVPN exit to the host's network or out of its host
+  interface. The exit logs `applier: the ingress guard is installed`, or
+  `applier: installing the ingress guard failed: <reason>` and retries every
+  pass. A drill sends from the tunnel side to a host-only address with and
+  without the guard.
+- **Strays at PIA's skipped priorities are removed.** While PIA has no
+  registered address, a rule at priority 94 or 98 that is not in the
+  return-path shape (such as `lookup main`) is deleted, and the pass is not
+  verified while it stays. The repairer used to skip both priorities.
+- **A gluetun repair's protective copy at priority 101 is removed** when the
+  rebuilt rule 102 could not be confirmed. It used to stay for good. The
+  delete-by-priority fallback can no longer reach gluetun's own rule 101.
+- **Relays at non-public addresses are dropped.** Every catalog (Mullvad,
+  PIA, NordVPN, gluetun) drops a relay whose IPv4 address is private,
+  loopback, link-local, multicast, unspecified, or in 100.64.0.0/10,
+  0.0.0.0/8 or 240.0.0.0/4, so a tampered list can't point the panel's
+  latency probes, or a switch, at the host's own networks.
+- **Native sidecar docs: `NET_RAW` is enough to mark a socket** since Linux
+  5.17, and a marked socket leaves by the host interface. Give applications
+  no capabilities at all (`cap_drop: [ALL]`); Docker's default set includes
+  `NET_RAW`. A drill checks both cases.
+- **IPv6 in the kernel is a requirement**, even for IPv4-only tunnels.
+  Without it the exit stops with `rtnl: dump IPv6 rules: address family not
+  supported by protocol` ([prerequisites](docs/prerequisites.md)).
+
+**Exit and applier**:
+- **A switch stopped by the exit's own file error recovers.** A missing PIA
+  credential file or a full state volume left the attempt in `attempting`
+  until the container restarted. The next pass, 5 seconds later, now
+  reports `The last switch stopped on a file error (<error>); retrying
+  automatically.` and applies the switch again on its backoff once the file
+  is fixed.
+- **A wall-clock step after a catalog refresh** (a board without a
+  real-time clock that syncs time late) gets a new catalog within 5 minutes
+  instead of reporting `catalogue-stale` for up to 6 hours.
+- **The post-`netbird up` profile refusal shows as `failed`** in the panel,
+  `/readyz` and `molebridge status`, with the refusal as the message. It
+  used to show "Applier starting; waiting for verification." for as long as
+  the container ran.
+- **A status record larger than the 16 KiB its readers accept is not
+  written**; the previous record stays and the exit logs `cannot write
+  <path>: state file exceeds its size limit`.
+- **`molebridge health`** reads the heartbeat bounded (512 bytes) and no
+  longer follows a symbolic link or blocks on a FIFO.
+- **A FIFO in place of a PIA or port-sync credential file is refused** at
+  once instead of blocking. PIA's files must be regular files; port-sync
+  still follows symbolic links, so a Kubernetes secret can be mounted as a
+  directory.
+- A failed kernel watcher ends the worker with status 1, not 0. The exit's
+  HTTP client treats any answer outside 2xx, redirects included, as a
+  failure unless the caller checks the status itself. The supervisor drops
+  finished NetBird processes. WireGuard device reads no longer decode the
+  private or preshared key.
+
+**Panel**:
+- **`/metrics`** in the Prometheus text format: readiness, each exit's
+  verdict and check states, record and handshake age, catalog age and size,
+  and the routing repair counters. It is exposed as `/readyz` is; with
+  sign-in on, an exit's series need a session granted that exit
+  ([metrics](docs/configuration.md#metrics)).
+- **`HEAD`** is answered like `GET` without a body, so `curl -I` and uptime
+  monitors work; it was 501. `/api/latency`, `/login` and `/auth/callback`
+  answer `HEAD` with 405.
+- **Sign-in is bounded against anonymous traffic.** `/login` and
+  `/auth/callback` share an allowance of 30 requests at once and one every
+  2 seconds, and at most four callbacks talk to the identity provider at a
+  time; beyond that the panel answers 429 "Too many sign-ins" with
+  `Retry-After`. Junk callbacks can no longer get the panel's client locked
+  out at the identity provider. Discovery is fetched once when its cache
+  expires, and `sign-in failed: …` and `sign-in unavailable: …` are logged
+  at most once a minute per message.
+- The panel keeps connections open between requests (idle timeout 60
+  seconds, write timeout 2 minutes) instead of closing each one.
+
+**Version**: `molebridge version` prints `molebridge <tag>`; `molebridge
+status` ends with a `version:` line; `health` prints `unhealthy: <reason>
+(molebridge <version>)`; the exit's log starts with `molebridge-exit:
+molebridge <version>` and the panel's with `molebridge panel: molebridge
+<version>`. A release reports the candidate tag it was built as, because
+promotion doesn't rebuild. A build without the `VERSION` argument says `dev`.
+
+**Compose and the bundle**:
+- The release bundle's Compose files no longer carry a `build:` section,
+  which pointed at a Dockerfile the bundle doesn't have, and setup now runs
+  `docker compose pull` before `docker compose up -d`
+  ([setup](docs/setup.md)).
+- Every Molebridge container has a process limit
+  (`deploy.resources.limits.pids`): 512 for the exit, 128 for the panel and
+  port-sync. gluetun runs with `no-new-privileges`.
+- The gluetun sidecar's example application is no longer restarted by the
+  engine (`restart: "no"`), as with the native sidecar.
+
+**Docs**: a draft [compatibility contract](docs/compatibility.md) for 1.x and
+the deprecation policy; a [release runbook](docs/releasing.md); the floating
+`ghcr.io/irashack/molebridge:0.9` style tag documented as a mutable pull
+convenience; the "at 0.8.0" asides replaced by current statements. Corrected:
+the setup key reaches only `netbird up` but stays readable in the exit's
+`/proc/1/environ` until the exit is recreated; rule 1 keeps unicast overlay
+traffic from local delivery, not multicast or broadcast; a host suspended
+longer than `GUARD_GRACE` restarts the exit by design.
+
+**Dependencies**: `mdlayher/netlink` 1.9.0 to 1.11.2 (a panic on unaligned
+messages, `Receive` blocking `Send`). `vishvananda/netlink` and
+`golang.zx2c4.com/wireguard` are no longer vendored: the code that used them
+had no production callers.
+
+**Release process**: live acceptance runs `main`'s tooling and refuses a
+candidate that isn't on `main`; CI checks that `vendor/` matches `go mod
+vendor`; a weekly scan runs govulncheck on `main` and grype on the latest
+release image and keeps findings in one issue. The acceptance policy
+(version 7) drills the upgrade from 0.9.4.
+
 ## 0.9.4 — 2026-10-23
 
 **Experimental.** NordVPN setup from the WireGuard config file your Nord

@@ -15,6 +15,30 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.10.0
+
+Not yet run live. The acceptance policy for 0.10.0
+(`tools/acceptance-policy.json`, version 7) drills the upgrade from the
+release before it, `upgrade-from-0.9.4`; the platforms, providers, kinds and
+other drills are 0.9.4's.
+
+0.10.0 fixes the findings of an outside review of 0.9.4 (see the
+[changelog](../CHANGELOG.md)). The changes that touch fail-closed behavior
+are the ingress guard on every native overlay exit, the readiness
+precondition on `net.ipv4.icmp_errors_use_inbound_ifaddr`, the removal of
+strays at PIA's skipped priorities 94 and 98, and the cleanup of a gluetun
+repair's copy at 101. Each has a new namespace drill; none has run on a
+real host yet.
+
+**The checks.** Run in a Linux container (kernel 6.18, amd64) with Go
+1.27.0: `gofmt -l`, `go vet ./...` with and without `-tags drill`,
+staticcheck v0.8.2 with and without `-tags drill`, `go test ./...`, the
+panel's script tests, `go mod verify`, `tools/gen-third-party.sh --check`,
+`tools/check-compose.sh`, the release tooling's tests and
+`tools/check-doc-links.sh`. The namespace drills could not run there: that
+kernel has no dummy links, no WireGuard and no IPv6. CI runs them on every
+push.
+
 ## 0.9.4
 
 The acceptance policy for 0.9.4 (`tools/acceptance-policy.json`, version 6)
