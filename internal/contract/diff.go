@@ -123,11 +123,13 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 			// Left to the transaction that sets the address are rules in the
 			// shape it installs, for whatever address; anything else at the
 			// priority is a stray like any other. One that a kernel delete by
-			// its attributes could mistake for a rule that stays is rebuilt
-			// around the rules that stay (LeftReturnPath).
+			// its attributes could take a rule that stays for (an absent
+			// source or protocol is a wildcard there, and the invert flag is
+			// not compared) is rebuilt around the rules that stay
+			// (LeftReturnPath).
 			switch {
 			case spec.ReturnPathShaped(f, a):
-			case coveredBy(a, left[a.Priority]):
+			case deleteMayTake(a, left[a.Priority]):
 				if !subbed[a.Priority] {
 					subbed[a.Priority] = true
 					removals = append(removals, Action{Kind: Sub, Priority: a.Priority, Rule: a})
@@ -150,7 +152,7 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 				matched[a.Priority][i], kept = true, true
 				break
 			}
-			if subsetOf(items, ei) {
+			if subsetOf(items, ei) || rtnl.DeleteMatches(a, e) {
 				covered = true
 			}
 		}
@@ -183,15 +185,29 @@ func Diff(spec Spec, f rtnl.Family, actual []rtnl.Rule, opt DiffOptions) []Actio
 			out = append(out, Action{Kind: Add, Priority: p, Rule: e})
 		}
 	}
+	// A left rule known only from its protective copy one priority earlier (a
+	// rebuild that did not complete) goes back before the copy can go.
+	for _, p := range []uint32{PrioBackstop, PrioReturnPath} {
+		for _, l := range left[p] {
+			if !hasItems(actual, p, l) {
+				out = append(out, Action{Kind: Add, Priority: p, Rule: l})
+			}
+		}
+	}
 	return append(out, removals...)
 }
 
 // LeftReturnPath returns, per priority the Spec skips in a family, the
 // return-path shaped rules found there (once each): what a rebuild of that
-// priority puts back.
+// priority puts back. A rule one priority earlier that is such a rule's
+// shape counts as its protective copy (a rebuild puts it there): the rule
+// it stands in for is left too, so it is put back before the copy goes.
 func LeftReturnPath(spec Spec, f rtnl.Family, actual []rtnl.Rule) map[uint32][]rtnl.Rule {
 	out := map[uint32][]rtnl.Rule{}
 	for _, a := range actual {
+		if spec.Skipped(f, a.Priority+1) {
+			a.Priority++
+		}
 		if !spec.Skipped(f, a.Priority) || !spec.ReturnPathShaped(f, a) {
 			continue
 		}
@@ -206,10 +222,20 @@ func LeftReturnPath(spec Spec, f rtnl.Family, actual []rtnl.Rule) map[uint32][]r
 	return out
 }
 
-func coveredBy(a rtnl.Rule, rules []rtnl.Rule) bool {
-	items := a.Items()
+// deleteMayTake: a kernel delete with a's attributes could remove one of
+// rules instead of a.
+func deleteMayTake(a rtnl.Rule, rules []rtnl.Rule) bool {
 	for _, r := range rules {
-		if subsetOf(items, r.Items()) {
+		if rtnl.DeleteMatches(a, r) || subsetOf(a.Items(), r.Items()) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasItems(rules []rtnl.Rule, priority uint32, want rtnl.Rule) bool {
+	for _, r := range rules {
+		if r.Priority == priority && equalItems(r.Items(), want.Items()) {
 			return true
 		}
 	}

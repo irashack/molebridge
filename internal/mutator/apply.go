@@ -94,13 +94,20 @@ type ruleReader interface {
 // priority later with the same selectors (a protective copy stands in for
 // it), and, for the kernel's priority-0 local-delivery rule, the guard at
 // priority 1 that replaces it.
-func dependents(spec contract.Spec, f rtnl.Family, a contract.Action) []rtnl.Rule {
+//
+// At a priority the Spec skips, the rules left there (Plan.Left) stand in for
+// the expected ones.
+func dependents(spec contract.Spec, left map[uint32][]rtnl.Rule, f rtnl.Family, a contract.Action) []rtnl.Rule {
 	if a.Priority == 0 {
 		return spec.RulesAt(f, contract.PrioLocalGuard)
 	}
 	var out []rtnl.Rule
 	items := a.Rule.Items()
-	for _, e := range spec.RulesAt(f, a.Priority+1) {
+	above := spec.RulesAt(f, a.Priority+1)
+	if spec.Skipped(f, a.Priority+1) {
+		above = left[a.Priority+1]
+	}
+	for _, e := range above {
 		if equalStrings(e.Items(), items) {
 			out = append(out, e)
 		}
@@ -213,7 +220,7 @@ func (tx *Tx) apply(p contract.Plan, removals bool) (mutations int, errs []error
 				errs = append(errs, opErr(fmt.Sprintf("kept %s rule %d", f, a.Priority), err))
 				continue
 			}
-			if deps := dependents(spec, f, a); len(deps) > 0 {
+			if deps := dependents(spec, p.Left, f, a); len(deps) > 0 {
 				addedNow := false
 				for _, d := range deps {
 					addedNow = addedNow || added[copyKey(d.Priority, d)]

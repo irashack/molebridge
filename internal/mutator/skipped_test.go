@@ -50,6 +50,13 @@ func TestAStrayAtALeftPriorityIsRemoved(t *testing.T) {
 		// A subset of the pair's rule 94: deleting it by its attributes could
 		// take the rule that stays, so the priority is rebuilt around it.
 		"94 without its protocol": {Family: rtnl.V4, Priority: 94, Action: rtnl.FRActToTbl, Table: 51821, Src: netip.MustParsePrefix("203.0.113.11/32")},
+		// The kernel's delete takes an absent source or protocol as a wildcard
+		// and ignores the invert flag: each of these deleted by its attributes
+		// would take the left rule.
+		"unreachable at 98":     {Family: rtnl.V4, Priority: 98, Action: rtnl.FRActUnreachable},
+		"94 without its source": {Family: rtnl.V4, Priority: 94, Action: rtnl.FRActToTbl, Table: 51821, IPProto: rtnl.Some(uint8(1))},
+		"94 inverted": {Family: rtnl.V4, Priority: 94, Action: rtnl.FRActToTbl, Table: 51821, Flags: rtnl.FIBRuleInvert,
+			Src: netip.MustParsePrefix("203.0.113.11/32"), IPProto: rtnl.Some(uint8(1))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newPIAHarness(t, piaScenario{name: name, old: a, leave: true})
@@ -75,6 +82,41 @@ func TestAStrayAtALeftPriorityIsRemoved(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A rebuild at a left priority whose refill is not read back leaves the
+// protective copy one priority earlier and the priority cleared. The next
+// pass puts the left rule back from the copy before the copy goes.
+func TestALeftRuleComesBackFromItsCopyAfterAnUnconfirmedRebuild(t *testing.T) {
+	a := netip.MustParseAddr("203.0.113.11")
+	pair := contract.Spec{Config: nativeConfig(), ReturnPath: map[rtnl.Family][]netip.Addr{rtnl.V4: {a}}}
+	want := pair.RulesAt(rtnl.V4, contract.PrioReturnPath)[0]
+	h := newPIAHarness(t, piaScenario{name: "unconfirmed rebuild", old: a, leave: true})
+	stray := rtnl.Rule{Family: rtnl.V4, Priority: 94, Action: rtnl.FRActToTbl, Table: 51821, Src: netip.MustParsePrefix("203.0.113.11/32")}
+	h.k.mu.Lock()
+	h.k.rules[rtnl.V4] = append(h.k.rules[rtnl.V4], stray)
+	sortRules(h.k.rules[rtnl.V4])
+	// The refill of 94 "succeeds" and installs nothing.
+	h.k.lie = func(op string) bool { return op == "add 2 94" }
+	h.k.mu.Unlock()
+	if res, err := h.m.ReconcileNow(context.Background(), "rebuild 94"); err == nil && res.Verified {
+		t.Fatalf("verified with rule 94 missing: %+v", res)
+	}
+	copy93 := want
+	copy93.Priority = 93
+	if hasRule(h.k, want) || !hasRule(h.k, copy93) {
+		t.Fatalf("not the state to test: %v", h.k.ruleSummary(rtnl.V4))
+	}
+	h.k.mu.Lock()
+	h.k.lie = nil
+	h.k.mu.Unlock()
+	res, err := h.m.ReconcileNow(context.Background(), "again")
+	if err != nil || !res.Verified {
+		t.Fatalf("%+v %v\n%v", res, err, h.k.ruleSummary(rtnl.V4))
+	}
+	if !hasRule(h.k, want) || hasRule(h.k, copy93) || hasRule(h.k, stray) {
+		t.Errorf("rule 94 not restored from its copy: %v", h.k.ruleSummary(rtnl.V4))
 	}
 }
 

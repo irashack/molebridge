@@ -198,7 +198,9 @@ func TestForeignAttributesNeverMatch(t *testing.T) {
 	expectActions(t, "tos on 96", Diff(nativeSpec(), rtnl.V4, rules, DiffOptions{}), "add 96", "del 96")
 	rules = nativeRules(rtnl.V4)
 	at(t, rules, 90).Flags |= 0x100
-	expectActions(t, "unknown flag on 90", Diff(nativeSpec(), rtnl.V4, rules, DiffOptions{}), "add 90", "del 90")
+	// The kernel's delete does not compare flags, so deleting the flagged
+	// copy by its attributes could take the exact rule 90: rebuilt instead.
+	expectActions(t, "unknown flag on 90", Diff(nativeSpec(), rtnl.V4, rules, DiffOptions{}), "add 90", "sub 90")
 	// Protocol (who installed the rule) is not a selector.
 	rules = nativeRules(rtnl.V4)
 	at(t, rules, 97).Protocol = rtnl.Some(uint8(3))
@@ -223,8 +225,13 @@ func TestLeftReturnPathIsNotCompared(t *testing.T) {
 		stray rtnl.Rule
 		want  string
 	}{
-		"lookup main at 94":       {rule(4, 94, table(rtnl.TableMain)), "del 94"},
-		"unreachable at 98":       {rule(4, 98, unreachable()), "del 98"},
+		"lookup main at 94": {rule(4, 94, table(rtnl.TableMain)), "del 94"},
+		// The kernel's delete takes an absent source or protocol as a
+		// wildcard and ignores the invert flag: each of these could take the
+		// left rule, so the priority is rebuilt around it.
+		"unreachable at 98":       {rule(4, 98, unreachable()), "sub 98"},
+		"94 without its source":   {rule(4, 94, proto(1), table(51821)), "sub 94"},
+		"94 inverted":             {rule(4, 94, not(), from("203.0.113.5/32"), proto(1), table(51821)), "sub 94"},
 		"94 into another table":   {rule(4, 94, from("203.0.113.5/32"), proto(1), table(rtnl.TableMain)), "del 94"},
 		"98 with an iif":          {rule(4, 98, iif("wt0"), from("203.0.113.5/32"), proto(1), unreachable()), "del 98"},
 		"94 for a whole prefix":   {rule(4, 94, from("203.0.113.0/24"), proto(1), table(51821)), "del 94"},
@@ -236,6 +243,13 @@ func TestLeftReturnPathIsNotCompared(t *testing.T) {
 	if left := LeftReturnPath(spec, rtnl.V4, append(append(append([]rtnl.Rule{}, bare...), pair...), pair[0])); len(left[94]) != 1 || len(left[98]) != 1 {
 		t.Errorf("left: %v", left)
 	}
+	// A left rule known only from its protective copy one priority earlier
+	// (a rebuild whose refill was not confirmed) goes back before the copy
+	// goes.
+	cp := pair[0]
+	cp.Priority = 93
+	rules := append(append(append([]rtnl.Rule{}, bare...), pair[1]), cp)
+	expectActions(t, "only the copy of 94", Diff(spec, rtnl.V4, rules, DiffOptions{}), "add 94", "del 93")
 }
 
 // A protective copy of rule 102 left at gluetun's 101 (a rebuild that did not
