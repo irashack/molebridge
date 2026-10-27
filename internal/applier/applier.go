@@ -122,6 +122,11 @@ type Applier struct {
 	switchDeadline *float64
 	retryDeadline  *float64
 	started        bool
+	// ioFailure is the applier's own file I/O failure that ended the last
+	// pass, "" after a pass that completed. A pass that stops on one after
+	// saving an attempt as attempting leaves it so; the next pass inspects it
+	// (resume) and reports this as the cause.
+	ioFailure string
 	// failures are the steps retried on every pass that are failing now, with
 	// their last logged line (stepFailed).
 	failures map[string]stepFailure
@@ -1041,8 +1046,13 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 	a.hooks.BeforeTick(ctx, a)
 	result, err := a.tick(ctx)
 	if err != nil {
+		var io *ioError
+		if errors.As(err, &io) {
+			a.ioFailure = err.Error()
+		}
 		return nil, err
 	}
+	a.ioFailure = ""
 	a.hooks.AfterTick(ctx, a, result)
 	return result, nil
 }
@@ -1054,7 +1064,12 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	a.target = a.resolve(false)
 	var result *Record
 	var err error
-	if !a.started {
+	// An attempt saved as attempting is inspected first: at start, the one a
+	// stopped process left; later, the one a pass that ended on the applier's
+	// own I/O failure left (a missing credential file, a full state disk).
+	// Tick runs on one goroutine, so at the top of a pass the state is always
+	// such a leftover, never a switch in progress.
+	if !a.started || a.attempt.State == "attempting" {
 		a.started = true
 		if result, err = a.resume(ctx); err != nil {
 			return nil, err
@@ -1127,14 +1142,21 @@ func (a *Applier) catalogRetryWait() float64 {
 	return wait
 }
 
-// resume: at start, an attempt interrupted mid-mutation is inspected first,
-// never replayed: its live server either is the target (verify) or not (a
-// failed, uncertain attempt, re-applied on its backoff, which inspects again
-// first).
+// resume: an attempt interrupted mid-mutation (by a stop, or by the
+// applier's own I/O failure) is inspected first, never replayed: its live
+// server either is the target (verify) or not (a failed, uncertain attempt,
+// re-applied on its backoff, which inspects again first).
 func (a *Applier) resume(ctx context.Context) (*Record, error) {
 	at := a.attempt
 	if at.State != "attempting" {
 		return nil, nil
+	}
+	interrupted := "The last switch was interrupted; retrying automatically."
+	if a.ioFailure != "" {
+		interrupted = "The last switch stopped on a file error (" +
+			truncateChars(strings.ToValidUTF8(a.ioFailure, "\uFFFD"), IOFailureReportChars) +
+			"); retrying automatically."
+		a.ioFailure = ""
 	}
 	a.log("applier: an interrupted switch is inspected before anything else")
 	f := a.measure(ctx, false)
@@ -1151,7 +1173,7 @@ func (a *Applier) resume(ctx context.Context) (*Record, error) {
 	} else {
 		at.State, at.Outcome = "failed", "mutation-failed"
 		at.MutationCertainty = "uncertain"
-		at.Message = "The last switch was interrupted; retrying automatically."
+		at.Message = interrupted
 		at.Schedule("reapply", a.clock())
 	}
 	if err := a.saveAttempt(); err != nil {

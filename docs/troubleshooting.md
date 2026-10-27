@@ -890,6 +890,12 @@ switch, or lost the answer to its change. At start it inspected the tunnel first
 another server live, and applies the selection again on the backoff. Its log shows
 `molebridge-exit: applier: an interrupted switch is inspected before anything else`.
 
+**"The last switch stopped on a file error (<error>); retrying automatically."** A switch
+failed on the exit's own files: the error names which, for example a PIA credential file
+under `secrets/pia/` that is missing or unreadable, or a state volume that is full. The
+log shows the same error after `applier: control cycle failed:`. Fix the file; the switch
+is applied again on its backoff without a restart.
+
 **"The live server is not the selected one; waiting for convergence."** The tunnel runs
 another server than the one you selected; with `SERVER` set the message is "The configured
 SERVER is not the current server; waiting for convergence." Usually gluetun restarted on

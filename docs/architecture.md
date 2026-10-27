@@ -1640,7 +1640,12 @@ interrupted by a crash or a lost response, is inspected first, never
 replayed: the target live means `idle` or `unverified`; anything else is a
 failed attempt, "The last switch was interrupted; retrying automatically.",
 applied again on its backoff after another inspection. Other states are
-kept. Deadlines are kept on the boot clock with the boot's id: after a
+kept. A pass that stops on the applier's own file I/O failure after saving
+the attempt as `attempting` (a PIA credential file that is missing, a state
+volume that is full) leaves it so, and the next pass, 5 seconds later,
+inspects it the same way; its message then names the failure: "The last
+switch stopped on a file error (<error>); retrying automatically.", with
+the error cut to 256 characters. Deadlines are kept on the boot clock with the boot's id: after a
 reboot a due re-check runs at once, a re-apply waits the current backoff
 step, and the 90-second guard has passed.
 

@@ -50,6 +50,9 @@ const (
 	// Invalid input is bounded too, so even JSON-escaped Unicode fits the
 	// readers' 16 KiB status limit.
 	ServerReportChars = 256
+	// IOFailureReportChars is the longest I/O failure a record's message
+	// quotes.
+	IOFailureReportChars = 256
 	// ResultMaxBytes is the readers' bound on result.json.
 	ResultMaxBytes = 16384
 	// ReturnPathSysctl is the file whose content "1" makes the kernel source
@@ -84,7 +87,9 @@ var ErrCredentialRejected = fmt.Errorf("%w: the provider refused the login", Err
 // ioError marks a failure of the applier's own file I/O (reading a credential
 // file, writing state). In Python these were OSError, which the pipeline's
 // `except (RuntimeError, ValueError, UnicodeError)` does not catch: they leave
-// the control cycle (Tick returns them) with the attempt as it was saved.
+// the control cycle (Tick returns them) with the attempt as it was saved. An
+// attempt left attempting is inspected by the next pass (resume), which names
+// the failure in its message.
 type ioError struct{ err error }
 
 func (e *ioError) Error() string { return e.err.Error() }

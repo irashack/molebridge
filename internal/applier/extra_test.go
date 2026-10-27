@@ -51,12 +51,16 @@ func TestAnUncertainFailureIsRecordedAsUncertain(t *testing.T) {
 	}
 }
 
-func TestAMissingCredentialFileLeavesTheControlCycleAsInPython(t *testing.T) {
-	// PIA's read_secret raised OSError, which the pipeline's handlers do not
-	// catch: the control cycle failed ("applier: control cycle failed") with
-	// the attempt saved as it was, `attempting`. Ported as it was.
+func TestAMissingCredentialFileIsInspectedOnTheNextPassAndRetried(t *testing.T) {
+	// PIA's credential file missing when a switch starts is the applier's own
+	// I/O failure: the pass ends ("applier: control cycle failed") with the
+	// attempt saved as attempting. Python's process died there and its
+	// restart inspected the attempt; the worker survives, so its next pass
+	// inspects it, fails it with the cause in the message, and once the file
+	// is back the re-apply on the backoff switches.
 	a, k, _, _, secrets := piaSetup(t, false)
-	if err := os.Remove(filepath.Join(secrets, "password")); err != nil {
+	password := filepath.Join(secrets, "password")
+	if err := os.Remove(password); err != nil {
 		t.Fatal(err)
 	}
 	piaDesire(t, a)
@@ -70,11 +74,33 @@ func TestAMissingCredentialFileLeavesTheControlCycleAsInPython(t *testing.T) {
 	if saved(t, filepath.Dir(filepath.Dir(a.attemptPath)))["state"] != "attempting" {
 		t.Error("not saved as attempting")
 	}
-	// The next pass finds an attempt in flight and only runs the health
-	// check; a restart inspects it, fails it and schedules a re-apply.
+	r = mustTick(t, a)
+	if a.attempt.State != "failed" || a.attempt.NextAction != "reapply" || a.attempt.NextActionAt == nil {
+		t.Fatalf("after the next pass: %s %s", a.attempt.State, a.attempt.NextAction)
+	}
+	want := "The last switch stopped on a file error (open " + password +
+		": no such file or directory); retrying automatically."
+	if r.Get("status") != "failed" || message(r) != want {
+		t.Errorf("record: %v %q", r.Get("status"), message(r))
+	}
+	if saved(t, filepath.Dir(filepath.Dir(a.attemptPath)))["state"] != "failed" {
+		t.Error("the inspection was not saved")
+	}
+	writeFile(t, password, piaPassword, 0o600)
+	k.now = *a.attempt.NextActionAt
 	mustTick(t, a)
-	if a.attempt.State != "attempting" || len(k.mutations) != 0 {
-		t.Errorf("%s %v", a.attempt.State, k.mutations)
+	if a.attempt.State != "idle" || a.attempt.Outcome != "verified" || len(k.mutations) == 0 {
+		t.Errorf("after the re-apply: %s %s %v", a.attempt.State, a.attempt.Outcome, k.mutations)
+	}
+}
+
+func TestACompletedPassForgetsAnEarlierIOFailure(t *testing.T) {
+	// The cause an inspection names is the failure of the pass just before.
+	a, _, _ := mullvadSetup(t)
+	a.ioFailure = "earlier"
+	mustTick(t, a)
+	if a.ioFailure != "" {
+		t.Errorf("%q", a.ioFailure)
 	}
 }
 
