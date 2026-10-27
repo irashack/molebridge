@@ -165,7 +165,7 @@ description is without them.
 ## Image tags
 
 - `vX.Y.Z` is a release. It is never moved or deleted, and its index digest is
-  the one the live acceptance attested. Pin it
+  the one the live acceptance attested ([releasing](releasing.md)). Pin it
   with its digest, as the Compose files and the bundle do.
 - `X.Y`, without the `v` (for example `ghcr.io/irashack/molebridge:0.9`),
   follows the newest `vX.Y.Z` patch release. It moves, so it is a

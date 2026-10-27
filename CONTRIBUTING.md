@@ -156,7 +156,7 @@ to see the other looks.
 ## Building the image
 
 The release image is built and signed by GitHub Actions on a tag; you don't need to build it to run
-Molebridge. To build the same image from a checkout:
+Molebridge. How a release is cut, accepted and promoted is in [releasing](docs/releasing.md). To build the same image from a checkout:
 
 ```sh
 docker build --tag molebridge:dev --file Dockerfile .
