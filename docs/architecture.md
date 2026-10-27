@@ -352,6 +352,10 @@ The supervisor, not the worker, writes `state/applier/result.json`
 (atomically, mode 0644). That is what lets a hung worker's last good record
 stop looking good:
 
+- A record larger than 16 KiB, the bound every reader applies, is not
+  written: the previous file stays, and the exit logs `molebridge-exit:
+  cannot write <path>: state file exceeds its size limit`, at most once a
+  minute like any other write failure.
 - The supervisor writes a starting record when it starts, status `unknown`
   with the message `Applier starting; waiting for verification.`.
 - The worker hands each finished inspection to the supervisor, with the
