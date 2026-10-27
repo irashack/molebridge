@@ -846,11 +846,11 @@ func TestPIAFailedGuardOrCleanupIsRetried(t *testing.T) {
 	a, k, _, _, _ := piaSetup(t, false)
 	k.nftFailures = 2
 	mustTick(t, a)
-	if piaOf(a).guardInstalled || piaOf(a).forwardReconciled {
+	if a.ingressGuarded() || piaOf(a).forwardReconciled {
 		t.Fatal("marked done after failures")
 	}
 	mustTick(t, a)
-	if !piaOf(a).guardInstalled || !piaOf(a).forwardReconciled || k.nftOps[0] != "guard" || k.nftOps[1] != "remove-forward" {
+	if !a.ingressGuarded() || !piaOf(a).forwardReconciled || k.nftOps[0] != "guard" || k.nftOps[1] != "remove-forward" {
 		t.Fatalf("%v", k.nftOps)
 	}
 }

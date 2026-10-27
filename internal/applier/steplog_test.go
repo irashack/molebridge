@@ -99,3 +99,37 @@ func TestASwitchLogsEachStateChangeOnce(t *testing.T) {
 		t.Fatalf("rejection logged %d times: %q", n, k.logs)
 	}
 }
+
+// Every native overlay exit installs the ingress guard, not only PIA: once,
+// retried every pass until it succeeds, before the provider's own steps. The
+// gluetun backend and the native sidecar install none.
+func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
+	for name, setup := range map[string]func(testing.TB) (*Applier, *kernel, string){"mullvad": mullvadSetup, "nordvpn": nordSetup} {
+		t.Run(name, func(t *testing.T) {
+			a, k, _ := setup(t)
+			k.nftFailures = 1
+			mustTick(t, a)
+			if a.ingressGuarded() || k.guardInstalled != 0 {
+				t.Fatal("marked done after a failure")
+			}
+			if n := k.countLogged("applier: installing the ingress guard failed: "); n != 1 {
+				t.Errorf("failure logged %d times: %q", n, k.logs)
+			}
+			k.now += PollSec
+			mustTick(t, a)
+			k.now += PollSec
+			mustTick(t, a)
+			if !a.ingressGuarded() || k.guardInstalled != 1 {
+				t.Fatalf("guard installed %d times", k.guardInstalled)
+			}
+			if n := k.countLogged("applier: the ingress guard is installed"); n != 1 {
+				t.Errorf("recovery logged %d times: %q", n, k.logs)
+			}
+		})
+	}
+	f := newGluetunFixture(t, glOptions{})
+	mustTick(t, f.a)
+	if f.k.guardInstalled != 0 {
+		t.Error("the gluetun backend installed the ingress guard")
+	}
+}

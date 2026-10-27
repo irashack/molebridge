@@ -267,14 +267,19 @@ sidecar the firewall is the second of two layers.
 - **Looking.** The `netbird` check lists the namespace's chains to see
   NetBird's kernel firewall ([NetBird and its checks](#netbird-and-its-checks)).
   This is a read.
-- **PIA's ingress guard.** With PIA the exit installs table
-  `inet molebridge_guard`, a forward hook that drops anything arriving from the
-  tunnel interface and not leaving over the overlay. An earlier table of that
-  name is replaced; nothing removes it.
+- **The ingress guard.** Every native overlay exit (Mullvad, PIA, NordVPN)
+  installs table `inet molebridge_guard`, a forward hook that drops anything
+  arriving from the tunnel interface and not leaving over the overlay. The
+  routing contract holds what arrives from the overlay; this holds what
+  arrives from the tunnel, so a VPN server cannot send through the exit to
+  the host's network or out of its host interface. An earlier table of that
+  name is replaced; nothing removes it. The applier installs it on its first
+  pass and retries every pass until it succeeds.
 - **PIA's port forwarding.** While forwarding is on, table
   `ip molebridge_forward` holds the DNAT and masquerade rules for the forwarded
   port ([providers](providers.md#port-forwarding)). A native sidecar has
-  neither this table nor the ingress guard.
+  neither this table nor the ingress guard; with gluetun, gluetun's firewall
+  owns the namespace's forwarding and the exit installs neither.
 - **The native sidecar's firewall.** Tables `inet molebridge_sidecar` and
   `inet molebridge_sidecar_backstop`, installed and read back by the exit
   ([the native sidecar](#the-native-sidecar)).
@@ -1653,11 +1658,11 @@ step, and the 90-second guard has passed.
 Some changes stay outside the pipeline because they repair or protect
 rather than select: PIA's repair of an interrupted switch
 ([providers](providers.md#how-pia-differs)), which runs on every pass before
-the gates so a damaged exit can pass them; PIA's ingress guard; PIA's port
-forwarding, which runs only while the verdict is `ok`; and gluetun's
-server-list refresh. PIA's repair, its ingress guard and the cleanup of a
-forwarded port left by an earlier run are retried on every pass until they
-succeed. A failure of one of them, or of taking the forwarded port out of
+the gates so a damaged exit can pass them; the ingress guard of every native
+overlay exit; PIA's port forwarding, which runs only while the verdict is
+`ok`; and gluetun's server-list refresh. PIA's repair, the ingress guard and
+the cleanup of a forwarded port left by an earlier run are retried on every
+pass until they succeed. A failure of one of them, or of taking the forwarded port out of
 the firewall, is logged when it starts or its reason changes, and again
 every 10 minutes while it lasts.
 

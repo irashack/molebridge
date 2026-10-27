@@ -177,7 +177,6 @@ type piaProvider struct {
 	nextForward       float64
 	nftPort           int
 	forwardReconciled bool
-	guardInstalled    bool
 }
 
 // NewPIA is the PIA provider.
@@ -735,24 +734,14 @@ func (p *piaProvider) ReleaseSignature(a *Applier, why string) (string, bool) {
 	return string(raw), true
 }
 
-// BeforeTick keeps the tunnel's address and rules consistent, installs the
-// ingress guard and clears a leftover forwarding table on an overlay, or
-// clears the native sidecar firewall's forwarded port. Each is retried every
-// tick until it succeeds. A failure is logged when it starts or its cause
-// changes, and at most every FailureRelog while it persists (stepFailed).
+// BeforeTick keeps the tunnel's address and rules consistent and clears a
+// leftover forwarding table on an overlay, or clears the native sidecar
+// firewall's forwarded port (the ingress guard, which every native overlay
+// has, is the Applier's: ensureIngressGuard). Each is retried every tick until
+// it succeeds. A failure is logged when it starts or its cause changes, and
+// at most every FailureRelog while it persists (stepFailed).
 func (p *piaProvider) BeforeTick(ctx context.Context, a *Applier) {
 	p.repairTunnel(ctx, a)
-	if a.nativeSidecar() {
-		// The exit installs the sidecar firewall before starting the applier.
-		p.guardInstalled = true
-	} else if !p.guardInstalled {
-		if err := a.sys.InstallIngressGuard(ctx); err != nil {
-			a.stepFailed(ctx, "pia-guard", "applier: installing the ingress guard failed", err)
-		} else {
-			p.guardInstalled = true
-			a.stepSucceeded("pia-guard", "applier: the ingress guard is installed")
-		}
-	}
 	if !p.forwardReconciled {
 		// A namespace that outlived the applier can still admit the port from
 		// an earlier run, perhaps one with forwarding on. Retried every tick
@@ -781,7 +770,7 @@ func (p *piaProvider) AfterTick(ctx context.Context, a *Applier, _ *Record) {
 	if !p.cfg.PortForward {
 		return
 	}
-	if p.guardInstalled && p.forwardReconciled {
+	if a.ingressGuarded() && p.forwardReconciled {
 		p.maintainForward(ctx, a)
 	} else {
 		// Never forward a port before the ingress guard is in place, nor before
