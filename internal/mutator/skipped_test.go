@@ -2,11 +2,13 @@ package mutator
 
 // The priorities left to a transaction (rules 94 and 98 of an addressless
 // config) and the protective copy a gluetun rebuild puts below the owned
-// range: neither is a place a stray can stay.
+// range: neither is a place a stray can stay, unless the deletion check
+// refuses its removal.
 
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/irashack/molebridge/internal/contract"
@@ -163,5 +165,58 @@ func TestAGluetunCopyAt101IsRemovedOnceRule102IsBack(t *testing.T) {
 	}
 	if !hasRule(k, gl101) || !hasRule(k, want) {
 		t.Errorf("gluetun's 101 or rule 102 went: %v", k.ruleSummary(rtnl.V4))
+	}
+}
+
+// The CI drill's first state: rules 94 and 98 left to PIA's registration, a
+// tunnel address live with no pair (so its ICMP already reaches the main
+// table, by rule 32766), and a `lookup main` at 94. Removing the stray would
+// only change the path by which that ICMP reaches main, and the deletion
+// check refuses any path that is new, also one that replaces an escape: the
+// stray stays, the refusal is logged and the pass is not verified (it is not
+// with an unprotected address either). With the address's pair left there,
+// or with no address live, the stray goes.
+func TestAStrayAtALeftPriorityStaysWhileTheLiveAddressIsUnprotected(t *testing.T) {
+	a := netip.MustParseAddr("203.0.113.11")
+	stray := rtnl.Rule{Family: rtnl.V4, Priority: 94, Action: rtnl.FRActToTbl, Table: rtnl.TableMain}
+	for _, c := range []struct {
+		name       string
+		live, pair bool
+		removed    bool
+	}{
+		{"live address without its pair", true, false, false},
+		{"live address with its pair", true, true, true},
+		{"no live address", false, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sc := piaScenario{name: c.name, leave: true}
+			if c.pair {
+				sc.old = a
+			}
+			h := newPIAHarness(t, sc)
+			logs := &logCollector{}
+			h.m.Close()
+			h.m = start(t, h.k, h.spec, func(o *Options) { o.Logf = logs.logf })
+			if c.live && !c.pair {
+				h.k.setAddr(rtnl.V4, "mullvad", a, true)
+			}
+			h.k.mu.Lock()
+			h.k.rules[rtnl.V4] = append(h.k.rules[rtnl.V4], stray)
+			sortRules(h.k.rules[rtnl.V4])
+			h.k.mu.Unlock()
+			res, _ := h.m.ReconcileNow(context.Background(), c.name)
+			logs.mu.Lock()
+			text := strings.Join(logs.lines, "\n")
+			logs.mu.Unlock()
+			if hasRule(h.k, stray) == c.removed {
+				t.Errorf("stray removed %t, want %t: %v\n%s", !hasRule(h.k, stray), c.removed, h.k.ruleSummary(rtnl.V4), text)
+			}
+			if res.Verified != c.removed {
+				t.Errorf("verified %t: %+v", res.Verified, res)
+			}
+			if !c.removed && !strings.Contains(text, "kept IPv4 rule 94") {
+				t.Errorf("the refusal is not logged:\n%s", text)
+			}
+		})
 	}
 }
