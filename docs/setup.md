@@ -134,6 +134,19 @@ image are the ones this repository's workflows built from `$COMMIT`, and the
 image passed the acceptance run. It says nothing about your `.env`, local
 Compose overrides, or files on your host. Those are yours to review.
 
+**Which tags exist.** Each candidate is pushed as `:vX.Y.Z-rc.N` and each
+release as `:vX.Y.Z`; the release workflow refuses to move either once it
+exists. A release also moves a floating tag without the `v`, such as
+`ghcr.io/irashack/molebridge:0.10`, to the highest release of that minor
+version. It is a convenience for `docker pull`, nothing more: it changes
+with every patch release, and what cosign signed is the image digest, not
+the tag, so `cosign verify` on `:0.10` checks whichever digest the tag names
+when you ask. The bundle's Compose files never use it; they pin `:$TAG`
+together with `@$DIGEST`, and you should too. Every image reports the tag it
+was built as with `docker run --rm ghcr.io/irashack/molebridge@$DIGEST version`:
+a release prints its candidate's tag (`molebridge $RC`), because promotion
+does not rebuild it.
+
 ## 2. Configure
 
 From the extracted directory:

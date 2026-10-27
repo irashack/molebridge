@@ -5,7 +5,10 @@ name: Release
 #                       (ghcr.io/irashack/molebridge-ci), never the release one
 #   tag v*-rc.*         build, push, sign and attest a release candidate
 #   tag v* (no -rc)     promote the accepted candidate for the same commit,
-#                       without rebuilding
+#                       without rebuilding; also move the floating minor tag
+#                       (`:0.10`, no v), a mutable pull convenience the
+#                       Compose files never use (docs/setup.md, "Which tags
+#                       exist")
 # The jobs' `if:` conditions are mutually exclusive. Each job has the
 # permissions it uses and no others.
 
