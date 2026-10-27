@@ -136,14 +136,16 @@ gh workflow run acceptance.yml --ref main \
 gh run watch "$(gh run list --workflow acceptance.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 
-The workflow resolves the candidate's commit and index digest, checks the
+The workflow refuses a candidate whose commit is not on `main`, then resolves
+the candidate's commit and index digest, checks the
 digest's build provenance and the bundle's attestation against
 `release.yml` at that tag, and writes the predicate with
 `tools/make-acceptance-predicate.sh`. That script refuses unless the coverage
 includes everything the policy names and every drill has the result
 `passed`; it prints `make-acceptance-predicate: refused: coverage is
-incomplete or a drill did not pass:` and the missing items. It runs from the
-candidate's checkout, so the policy that counts is the candidate's own. The
+incomplete or a drill did not pass:` and the missing items. The tools run from
+`main`'s checkout; only `tools/acceptance-policy.json` is taken from the
+candidate, so the policy that counts is the candidate's own. The
 attestation is then pushed to the registry beside the image and checked with
 the same policy promotion uses.
 
