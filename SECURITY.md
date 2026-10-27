@@ -2,6 +2,10 @@
 
 Molebridge is an experimental, single-maintainer project. Security fixes land
 on `main` and go into the next release; only the latest release is supported.
+Once a week a scheduled workflow (`.github/workflows/scan.yml`) runs
+`govulncheck` on `main` and grype against the latest release's image, and
+keeps any known, already-public advisory it finds in one open issue titled
+"Scheduled scan findings".
 
 ## Reporting a vulnerability
 
