@@ -432,6 +432,8 @@ func TestLoginCookieIsSignedAndTamperingFails(t *testing.T) {
 
 func TestManyLoginsDoNotBreakSomeoneElsesSignIn(t *testing.T) {
 	p := newAuthPanel(t, nil)
+	// The rate limit is not what this is about: room for every request.
+	p.srv.signInLimit = newTokenBucket(100, signInEvery)
 	login, query := p.beginLogin("/")
 	cookie := login.Cookies[oidc.LoginCookie].Value
 	for i := 0; i < 30; i++ {

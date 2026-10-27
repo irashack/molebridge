@@ -86,13 +86,24 @@ type Limits struct {
 	MaxSessions           int
 	MaxSessionsPerSubject int
 	MaxConsumedLogins     int
+	// MaxTokenExchanges bounds the callbacks talking to the issuer's token
+	// (and userinfo) endpoint at once. Anyone can start a sign-in and send
+	// its callback a junk code, and each such pair is a POST to the issuer as
+	// this panel's client, with its secret for a confidential client; some
+	// issuers lock a client out after enough failures.
+	MaxTokenExchanges int
 }
 
 // DefaultLimits are oidc.py's MAX_SESSIONS, MAX_SESSIONS_PER_SUBJECT and
-// MAX_CONSUMED_LOGINS.
+// MAX_CONSUMED_LOGINS, and four token exchanges at once.
 func DefaultLimits() Limits {
-	return Limits{MaxSessions: 4096, MaxSessionsPerSubject: 16, MaxConsumedLogins: 65536}
+	return Limits{MaxSessions: 4096, MaxSessionsPerSubject: 16, MaxConsumedLogins: 65536, MaxTokenExchanges: 4}
 }
+
+// ErrBusy is Finish's answer while MaxTokenExchanges callbacks are already
+// talking to the issuer. The pending sign-in is not used up: the same
+// callback may be tried again.
+var ErrBusy = &AuthError{Msg: "callback: too many sign-ins are in progress"}
 
 // AuthError is a sign-in that cannot complete. The message is fixed text,
 // safe to show and to log; it never carries a token or an issuer response
@@ -876,6 +887,7 @@ type Authenticator struct {
 	consumedIndex map[string]*list.Element
 	endpoints     *discovered
 	discovering   *discovery // nil when no fetch is running
+	exchanges     int        // callbacks inside the token exchange
 }
 
 type consumedItem struct {
@@ -1073,8 +1085,13 @@ func (a *Authenticator) open(value string) (PendingLogin, error) {
 }
 
 // Finish completes a sign-in: the session id, the session and the path to
-// land on. The pending sign-in is used up whatever the outcome.
+// land on. The pending sign-in is used up whatever the outcome, except
+// ErrBusy, which is answered before the cookie is opened.
 func (a *Authenticator) Finish(loginCookie, state, code string) (string, *Session, string, error) {
+	if !a.enterExchange() {
+		return "", nil, "", ErrBusy
+	}
+	defer a.leaveExchange()
 	pending, err := a.open(loginCookie)
 	if err != nil {
 		return "", nil, "", err
@@ -1161,6 +1178,25 @@ func (a *Authenticator) Finish(loginCookie, state, code string) (string, *Sessio
 	a.seq++
 	a.sessions[sessionID] = &sessionEntry{session, a.seq}
 	return sessionID, session, pending.NextPath, nil
+}
+
+// enterExchange takes one of the MaxTokenExchanges places, without waiting:
+// a callback that finds none answers at once rather than holding a goroutine
+// and a connection for as long as the issuer takes.
+func (a *Authenticator) enterExchange() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.exchanges >= a.Limits.MaxTokenExchanges {
+		return false
+	}
+	a.exchanges++
+	return true
+}
+
+func (a *Authenticator) leaveExchange() {
+	a.mu.Lock()
+	a.exchanges--
+	a.mu.Unlock()
 }
 
 // older orders sessions by expiry, then by when they were made. The caller

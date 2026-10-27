@@ -82,6 +82,9 @@ type Server struct {
 
 	limitMu sync.Mutex
 	limited map[string]*limitedLine
+
+	// signInLimit is the one bucket /login and /auth/callback draw from.
+	signInLimit *tokenBucket
 }
 
 // relayCacheEntry is one exit's validated catalogue and the snapshot's other
@@ -111,7 +114,7 @@ func NewServer(cfg *Config, opt Options) *Server {
 		Settings: cfg.Settings, Exits: cfg.Exits, Single: cfg.Single,
 		Log: opt.Log, now: opt.Now, mono: opt.Mono, dial: opt.Dial, files: opt.Files,
 		latency: newLatencyState(), selectLocks: map[string]*sync.Mutex{}, relayCache: map[string]relayCacheEntry{},
-		limited: map[string]*limitedLine{},
+		limited: map[string]*limitedLine{}, signInLimit: newTokenBucket(signInBurst, signInEvery),
 	}
 	if s.Log == nil {
 		s.Log = os.Stderr
@@ -806,9 +809,13 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleLatency(w, r, query, ex)
 	case path == "/login" && s.Auth != nil:
-		s.handleLogin(w, r, query, session)
+		if s.signInAdmitted(w, r, safeNext(first(query, "next"))) {
+			s.handleLogin(w, r, query, session)
+		}
 	case path == "/auth/callback" && s.Auth != nil:
-		s.handleCallback(w, r, query)
+		if s.signInAdmitted(w, r, "/") {
+			s.handleCallback(w, r, query)
+		}
 	case path == "/signed-out" && s.Auth != nil:
 		body := s.RenderMessage("Signed out", "You have signed out of this panel.", &[2]string{s.loginURL("/"), "Sign in"}, false)
 		s.send(w, r, htmlReply(200, body))
@@ -926,7 +933,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, query map[s
 	}
 	cookie, authorizeURL, err := s.Auth.Begin(nextPath)
 	if err != nil {
-		s.logEvent("sign-in unavailable: " + err.Error())
+		s.logLimited("sign-in unavailable: " + err.Error())
 		body := s.RenderMessage("Sign-in unavailable", "The identity provider could not be reached. Try again in a minute.",
 			&[2]string{s.loginURL(nextPath), "Try again"}, false)
 		s.send(w, r, htmlReply(503, body))
@@ -949,8 +956,17 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request, query ma
 	} else {
 		sessionID, session, nextPath, err = s.Auth.Finish(loginID, first(query, "state"), first(query, "code"))
 	}
+	if err == oidc.ErrBusy {
+		// The pending sign-in is still good, and its cookie is kept: the same
+		// callback works once a place is free.
+		s.logLimited("refused sign-in callback: too many sign-ins are talking to the identity provider")
+		s.sendTooManySignIns(w, r, "/", busyRetryAfter)
+		return
+	}
 	if err != nil {
-		s.logEvent("sign-in failed: " + err.Error())
+		// Logged at most once a minute per message, like the Host and Origin
+		// rejections: anyone can cause these.
+		s.logLimited("sign-in failed: " + err.Error())
 		refused := strings.HasPrefix(err.Error(), "access:")
 		heading, message, code := "Sign-in failed", "The sign-in could not be completed. Start it again from the panel.", 400
 		if refused {

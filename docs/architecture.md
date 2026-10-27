@@ -2018,6 +2018,18 @@ replayed, then sends the code and the PKCE verifier to the token endpoint. A
 code intercepted on its way to the browser is useless without the verifier,
 which never leaves the panel except to the token endpoint.
 
+**Bounds on anonymous sign-in traffic.** Anyone who reaches the panel can
+start a sign-in and send its callback a junk code, and each such pair is a
+request to the token endpoint as the panel's client. `/login` and
+`/auth/callback` therefore draw from one token bucket for the whole process (30
+at once, one more every 2 seconds), and at most four callbacks talk to the
+token and userinfo endpoints at a time. A request over either bound gets 429
+with `Retry-After`; a callback turned away for the second keeps its sign-in.
+A flood can keep people from signing in while it lasts, but it cannot get the
+panel's client locked out at the provider, and sessions already open are not
+affected. When the discovery cache expires, one request fetches the document
+and the others wait for its answer.
+
 **Discovery.** The `issuer` in the document must equal `PANEL_OIDC_ISSUER`
 exactly. The authorization and token endpoints must be https (http only for a
 loopback test issuer), and if the document lists the PKCE methods it supports,

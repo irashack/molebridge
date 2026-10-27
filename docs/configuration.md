@@ -649,8 +649,8 @@ With sign-in on, these are added, and they answer 404 when it is off:
 
 | Path | Purpose |
 |---|---|
-| `/login?next=<path>` | Starts sign-in and redirects to the issuer. Only `/` and `/embed`, each with an optional `?exit=<id>`, are accepted as `next`; anything else lands on `/`. Someone who already has a session is redirected to `next` |
-| `/auth/callback` | Where the issuer sends the browser back. Sets the session cookie and redirects to `next`, or shows "Not allowed" (403), "Sign-in failed" (400) |
+| `/login?next=<path>` | Starts sign-in and redirects to the issuer. Only `/` and `/embed`, each with an optional `?exit=<id>`, are accepted as `next`; anything else lands on `/`. Someone who already has a session is redirected to `next`. 429 "Too many sign-ins" with `Retry-After` beyond 30 requests at once and one every 2 seconds, shared with `/auth/callback` across the panel |
+| `/auth/callback` | Where the issuer sends the browser back. Sets the session cookie and redirects to `next`, or shows "Not allowed" (403), "Sign-in failed" (400), or "Too many sign-ins" (429 with `Retry-After`) beyond the allowance it shares with `/login` or while four other callbacks are waiting on the issuer |
 | `POST /logout` | Ends the session. Requires the CSRF token. Redirects to `/signed-out` |
 | `/signed-out` | A page confirming the sign-out, with a sign-in link |
 
