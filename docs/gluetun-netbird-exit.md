@@ -103,7 +103,7 @@ Three containers, with the first two sharing one network namespace owned by `glu
 
 | Service | Role |
 |---|---|
-| `gluetun` | Owns the namespace, creates the tunnel interface (`wg0` by default), runs its own firewall. Starts through `routing/gluetun-preflight`. |
+| `gluetun` | Owns the namespace, creates the tunnel interface (`wg0` by default), runs its own firewall. Starts through `routing/gluetun-preflight`. The engine's default capabilities plus `NET_ADMIN`, with `no-new-privileges`; Compose drops none of the defaults and leaves its root file system writable, because neither has been tried with gluetun. |
 | `exit` | The Molebridge image's `exit` role, joined to gluetun's namespace (`network_mode: service:gluetun`) with `TUNNEL_BACKEND=gluetun`. Installs and keeps the rules and routes below, runs NetBird as a supervised child, reads gluetun's server list and switches servers through its control server. `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`. |
 | `switchyard` | The panel. Optional; on its own network. |
 
@@ -662,9 +662,12 @@ with the preflight mounted from a ConfigMap of the script; the
 - **No user namespace for this pod.** gluetun needs `/dev/net/tun`, which the pod
   gets as a `hostPath` volume of type `CharDevice`; with `hostUsers: false` runc
   can't idmap-mount a device node (`failed to set MOUNT_ATTR_IDMAP`), so the pod
-  doesn't start. Leave `hostUsers` unset or `true`, and keep the capabilities to
-  Compose's: `NET_ADMIN` for gluetun, and `NET_ADMIN`, `NET_RAW` and
-  `DAC_OVERRIDE` for `exit` with a read-only root.
+  doesn't start. Leave `hostUsers` unset or `true`, and give the containers no
+  more than Compose does: gluetun the runtime's default capabilities plus
+  `NET_ADMIN` (Compose also sets `no-new-privileges`, which no pod has
+  run with); `exit` only `NET_ADMIN`,
+  `NET_RAW` and `DAC_OVERRIDE`, every other capability dropped, with a
+  read-only root.
 - **IPv6 in the pod.** Cilium and most CNIs give a dual-stack pod an IPv6 address
   where rootless Podman's pasta (`-4`) gives none. gluetun then also adds a
   `::/0` route on its tunnel, and with a provider that carries no IPv6 over

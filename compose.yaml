@@ -172,6 +172,11 @@ services:
           # NetBird beside it. It is a ceiling, not a reservation: Mullvad and
           # PIA exits idle far below it.
           memory: 512m
+          # Every process and thread in the container counts: the
+          # supervisor, the worker, the cleanup child and NetBird are Go
+          # programs, each with up to about one thread per CPU plus a few.
+          # 512 holds them on a 64-CPU host and still stops a runaway fork.
+          pids: 512
 
   switchyard:
     image: ghcr.io/irashack/molebridge:v0.9.4@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835
@@ -240,6 +245,8 @@ services:
       resources:
         limits:
           memory: 128m
+          # One Go process: up to about one thread per CPU, plus a few.
+          pids: 128
 
 networks:
   panel:

@@ -38,6 +38,12 @@ services:
     entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
     restart: unless-stopped
     cap_add: [NET_ADMIN]
+    # gluetun keeps the engine's default capabilities on top of NET_ADMIN;
+    # this only stops anything it runs from gaining more through a setuid or
+    # file-capability binary. Dropping the defaults and a read-only root have
+    # not been tried with gluetun, so neither is set. gluetun has no pids
+    # limit: its process tree is gluetun's to size, not Molebridge's.
+    security_opt: ["no-new-privileges:true"]
     devices:
       - /dev/net/tun:/dev/net/tun
     # Publish your applications' ports here, and open them in gluetun's
@@ -204,6 +210,8 @@ services:
           # gluetun's server list for every provider is about 7.5 MB of
           # JSON, parsed whole when it changes.
           memory: 384m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
 
   example-app:
     # A stand-in for your application: it only sleeps, in gluetun's
@@ -214,7 +222,14 @@ services:
     profiles: [example]
     image: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-example-app"
-    restart: unless-stopped
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run in gluetun's namespace before gluetun has set
+    # up its firewall, with the host's routes open to it. Start the stack at
+    # boot with `docker compose up -d`, which waits for gluetun to be
+    # healthy (docs/gluetun-sidecar.md#starting-at-boot). Give your
+    # applications the same policy.
+    restart: "no"
     network_mode: service:gluetun
     init: true
     command: ["sleep", "2147483647"]
@@ -293,6 +308,8 @@ services:
       resources:
         limits:
           memory: 128m
+          # As compose.yaml's panel.
+          pids: 128
 
 networks:
   panel:
