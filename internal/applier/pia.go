@@ -24,6 +24,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"mime/multipart"
@@ -226,13 +227,20 @@ func (p *piaProvider) NoPeerMessage(a *Applier, keys []string) string {
 // -- secrets ---------------------------------------------------------------------------
 
 // readSecret reads one credential per file; one trailing newline is tolerated,
-// nothing else. A file that cannot be opened or read is an I/O failure.
+// nothing else. A file that cannot be opened or read is an I/O failure, and so
+// is a symbolic link or anything but a regular file: opened without following
+// a link and without blocking, so a FIFO put there never stalls the applier.
 func readSecret(path string) (string, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", wrapIO(err)
 	}
 	defer file.Close()
+	if info, err := file.Stat(); err != nil {
+		return "", wrapIO(err)
+	} else if !info.Mode().IsRegular() {
+		return "", wrapIO(fmt.Errorf("%s is not a regular file", path))
+	}
 	raw, err := io.ReadAll(io.LimitReader(file, secretMaxBytes+1))
 	if err != nil {
 		return "", wrapIO(err)

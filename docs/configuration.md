@@ -487,7 +487,7 @@ contents anywhere.
 | `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | With Mullvad |
 | `tunnel/wg_confs/pia.conf` | PIA tunnel private key only; no address or peer | With PIA |
 | `tunnel/wg_confs/nordvpn.conf` | NordLynx private key and the address `10.5.0.2/32`; no peer | With NordVPN |
-| `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file | With PIA |
+| `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file; each a regular file, not a symbolic link | With PIA |
 | `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
 | `secrets/applier.env` | `GATUS_TOKEN` | Only with `GATUS_URL` |
 | `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
