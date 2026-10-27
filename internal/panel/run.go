@@ -41,6 +41,13 @@ func Run(ctx context.Context, env map[string]string, stderr io.Writer, probe Iso
 	return Serve(ctx, NewServer(cfg, Options{Log: stderr}), listener, stderr)
 }
 
+const (
+	idleTimeout = 60 * time.Second
+	// Own probes take at most ceil(maxProbeTargets/probeWorkers) rounds of
+	// probeAttempts*probeTimeout (33 s), then probeWait (60 s).
+	writeTimeout = probeWait + time.Minute
+)
+
 // Serve runs the panel on a listener until ctx ends, then closes it. As a
 // container's PID 1 the panel must stop on SIGTERM, or every stop would wait
 // out the engine's timeout and end in SIGKILL.
@@ -50,7 +57,15 @@ func Serve(ctx context.Context, s *Server, listener net.Listener, stderr io.Writ
 		// The Python panel gave every socket operation ten seconds.
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		ErrorLog:          nil,
+		// Connections are kept open between requests (a page load is about
+		// seven, and every poll another), for at most this long idle.
+		IdleTimeout: idleTimeout,
+		// From the end of the request to the end of the answer, which bounds
+		// a client that never reads it. The slowest handler is /api/latency:
+		// its own probes, then up to probeWait for probes another request
+		// started.
+		WriteTimeout: writeTimeout,
+		ErrorLog:     nil,
 	}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()

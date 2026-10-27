@@ -313,6 +313,10 @@ func dropped() map[string]nordChange {
 				map[string]any{"type": "entry", "ip": map[string]any{"ip": "198.51.100.12", "version": int64(4)}})
 		},
 		"invalid entry ip":       func(server, _ map[string]any) { obj(obj(list(server["ips"])[0])["ip"])["ip"] = "198.51.100.011" },
+		"private entry ip":       nonPublicEntry("10.1.2.3"),
+		"loopback entry ip":      nonPublicEntry("127.0.0.1"),
+		"link-local entry ip":    nonPublicEntry("169.254.169.254"),
+		"shared entry ip":        nonPublicEntry("100.64.0.1"),
 		"version as text":        func(server, _ map[string]any) { obj(obj(list(server["ips"])[0])["ip"])["version"] = "4" },
 		"entry ip not an object": func(server, _ map[string]any) { obj(list(server["ips"])[0])["ip"] = "x" },
 		"ips not a list":         func(server, _ map[string]any) { server["ips"] = map[string]any{} },
@@ -323,6 +327,15 @@ func dropped() map[string]nordChange {
 		"subdomain": hostname("a.us9001.nordvpn.com"), "no digits": hostname("us.nordvpn.com"),
 		"six digits": hostname("us123456.nordvpn.com"), "onion hostname": hostname("ch-onion1.nordvpn.com"),
 		"trailing newline": hostname("us9001.nordvpn.com\n"), "hostname not text": hostname(int64(9001)),
+	}
+}
+
+// nonPublicEntry moves the server's entry address, and its station with it,
+// to a non-public address.
+func nonPublicEntry(address string) nordChange {
+	return func(server, _ map[string]any) {
+		obj(obj(list(server["ips"])[0])["ip"])["ip"] = address
+		server["station"] = address
 	}
 }
 

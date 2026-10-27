@@ -39,6 +39,9 @@ provider than the panel is configured for.
 - `/healthz` on the panel only checks that the panel process is up.
 - `/readyz` returns 200 for a fresh, verified connection and 503 otherwise.
   Point your monitoring at this one.
+- `/metrics` on the panel gives the same verdict, every check's state, the
+  handshake and catalogue ages and the routing repair counters in the
+  Prometheus text format ([metrics](configuration.md#metrics)).
 - `docker compose exec exit molebridge status` prints the verdict from inside
   the exit: the state and label, the reason codes, the egress tier, every
   check's state, the heartbeat's age and the lease. It exits 0 only when the
@@ -316,6 +319,10 @@ Read the [changelog](../CHANGELOG.md) first. Then, for an upgrade from 0.8.0 or 
 `port-sync` role. An existing 0.8.x install needs nothing else: the overlay forms
 and the gluetun sidecar behave as in 0.8.0, and their Compose files change only in
 the image they pin.
+
+0.10.0 removes `/api/status`'s `view` object and the 0.6 fields it derived
+into `result`, deprecated since 0.7.0. A script that reads them should read
+`verdict` instead ([panel endpoints](configuration.md#panel-endpoints)).
 
 To roll back, put the previous bundle's files back and run the same two
 commands. State files have stayed readable across releases so far

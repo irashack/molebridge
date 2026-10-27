@@ -593,7 +593,7 @@ func TestStaleSuccessIsUnknownInAPIHTMLAndReadiness(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	mustWrite(t, h.srv.Single.ResultPath, map[string]any{"server": "se-sto-wg-001", "status": "ok",
 		"checked_at": "2000-01-01T00:00:00Z", "routing_ok": true, "mullvad_exit_ip": true})
-	if view := jsonBody(t, h.get("/api/status", "", nil))["view"].(map[string]any); view["state"] != "unknown" {
+	if view := jsonBody(t, h.get("/api/status", "", nil))["verdict"].(map[string]any); view["state"] != "unknown" {
 		t.Fatalf("view = %v", view)
 	}
 	mustContain(t, h.get("/", "", nil).Body, "status stale")
@@ -748,11 +748,55 @@ func TestStaticETagRevalidates(t *testing.T) {
 
 func TestOtherMethodsAreNotSupported(t *testing.T) {
 	h := newSingleHarness(t, nil)
-	for _, method := range []string{"HEAD", "PUT", "DELETE", "OPTIONS", "PATCH"} {
+	for _, method := range []string{"PUT", "DELETE", "OPTIONS", "PATCH"} {
 		a := h.do(method, "/", nil, nil)
-		if a.Status != 501 || (method != "HEAD" && !strings.Contains(a.Body, "Unsupported method")) {
+		if a.Status != 501 || !strings.Contains(a.Body, "Unsupported method") {
 			t.Errorf("%s: %d %q", method, a.Status, a.Body)
 		}
+	}
+}
+
+// New in 0.10.0: HEAD is GET without the body, where GET only reads (app.py
+// answered 501).
+func TestHeadIsAnsweredAsGetWithoutABody(t *testing.T) {
+	h := newSingleHarness(t, nil)
+	mustWrite(t, h.srv.Single.ResultPath, map[string]any{"server": "se-sto-wg-001", "status": "ok",
+		"checked_at": "2000-01-01T00:00:00Z"})
+	for _, path := range []string{"/", "/embed", "/healthz", "/readyz", "/api/status", "/api/exits",
+		"/manifest.webmanifest", "/static/panel.css", "/static/icon-192.png", "/nowhere"} {
+		// The client would ask GET for gzip on its own, and not HEAD.
+		identity := map[string]string{"Accept-Encoding": "identity"}
+		get := h.get(path, "", identity)
+		head := h.do("HEAD", path, nil, identity)
+		if head.Status != get.Status || head.Body != "" {
+			t.Errorf("HEAD %s: %d with %d bytes, GET %d", path, head.Status, len(head.Body), get.Status)
+		}
+		for _, k := range []string{"Content-Type", "Content-Length", "Cache-Control", "ETag", "Content-Security-Policy"} {
+			if head.Header.Get(k) != get.Header.Get(k) {
+				t.Errorf("HEAD %s: %s %q, GET %q", path, k, head.Header.Get(k), get.Header.Get(k))
+			}
+		}
+	}
+	// The Host check still comes first.
+	if a := h.do("HEAD", "/api/status", nil, map[string]string{"Host": "other.example.test"}); a.Status != 421 {
+		t.Errorf("misdirected HEAD: %d", a.Status)
+	}
+	// Routes that do more than read are not run for HEAD.
+	probed := false
+	h.srv.probe = func(string) *float64 { probed = true; return nil }
+	for _, path := range []string{"/api/latency", "/login", "/auth/callback"} {
+		if a := h.do("HEAD", path, nil, nil); a.Status != 405 || a.Header.Get("Allow") != "GET" {
+			t.Errorf("HEAD %s: %d Allow %q", path, a.Status, a.Header.Get("Allow"))
+		}
+	}
+	if probed {
+		t.Error("HEAD /api/latency probed")
+	}
+	h.log.Reset()
+	h.do("HEAD", "/healthz", nil, nil)
+	h.do("HEAD", "/readyz", nil, nil)
+	if log := h.log.String(); strings.Contains(log, "/healthz") || !strings.Contains(log, "HEAD /readyz 503\n") {
+		t.Errorf("log = %q", log)
 	}
 }
 

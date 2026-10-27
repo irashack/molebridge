@@ -42,8 +42,9 @@ var PIACountryNames = map[string]string{"AU": "Australia", "CA": "Canada", "DE":
 	"US": "United States"}
 
 // ValidatePIAServers checks a region's server list (decoded JSON): one to
-// PIAMaxServers objects with a canonical IPv4 address and a TLS name. It
-// returns nil for anything else.
+// PIAMaxServers objects with a canonical public IPv4 address
+// (validate.ValidPublicIPv4) and a TLS name. It returns nil for anything
+// else, so a region naming one private address is dropped whole.
 func ValidatePIAServers(servers any) []Server {
 	list, ok := servers.([]any)
 	if !ok || len(list) == 0 || len(list) > PIAMaxServers {
@@ -52,7 +53,7 @@ func ValidatePIAServers(servers any) []Server {
 	result := make([]Server, 0, len(list))
 	for _, raw := range list {
 		server, ok := asObject(raw)
-		if !ok || !validate.ValidIPv4(server["ip"]) {
+		if !ok || !validate.ValidPublicIPv4(server["ip"]) {
 			return nil
 		}
 		cn, ok := server["cn"].(string)
@@ -80,7 +81,7 @@ func ValidatePIAEntry(entry any) *Relay {
 			return nil
 		}
 	}
-	if !validate.ValidIPv4(m["ipv4_addr_in"]) {
+	if !validate.ValidPublicIPv4(m["ipv4_addr_in"]) {
 		return nil
 	}
 	servers := ValidatePIAServers(m["servers"])

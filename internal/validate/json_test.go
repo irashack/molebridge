@@ -202,6 +202,30 @@ func TestValidIPv4(t *testing.T) {
 	}
 }
 
+func TestValidPublicIPv4(t *testing.T) {
+	for _, tc := range []struct {
+		in any
+		ok bool
+	}{
+		// Documentation ranges stand in for relays in tests; they pass.
+		{"192.0.2.1", true}, {"198.51.100.1", true}, {"203.0.113.254", true}, {"100.63.255.255", true},
+		{"100.128.0.0", true}, {"1.1.1.1", true}, {"239.255.255.255", false}, {"223.255.255.255", true},
+		// Syntax first, as ValidIPv4.
+		{"198.51.100.01", false}, {"2001:db8::1", false}, {nil, false}, {"", false},
+		// Private, loopback, link-local, multicast, unspecified.
+		{"10.0.0.1", false}, {"172.16.0.1", false}, {"172.31.255.255", false}, {"192.168.1.1", false},
+		{"127.0.0.1", false}, {"127.255.255.254", false}, {"169.254.169.254", false}, {"224.0.0.1", false},
+		{"0.0.0.0", false},
+		// Shared address space, "this network", reserved and broadcast.
+		{"100.64.0.1", false}, {"100.127.255.255", false}, {"0.1.2.3", false}, {"240.0.0.1", false},
+		{"255.255.255.255", false},
+	} {
+		if got := ValidPublicIPv4(tc.in); got != tc.ok {
+			t.Errorf("ValidPublicIPv4(%#v) = %v", tc.in, got)
+		}
+	}
+}
+
 func TestValidText(t *testing.T) {
 	for _, tc := range []struct {
 		in any

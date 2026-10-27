@@ -66,12 +66,12 @@ func TestConfigurationStatusIgnoresPanelAndKeepsStaleLock(t *testing.T) {
 		mustWrite(t, ex.DesiredPath, desire())
 		mustWrite(t, ex.ResultPath, configuredResult(map[string]any{"checked_at": checked}))
 		payload := payloadMap(t, h.srv.statusPayload(ex, h.srv.readStatus(ex)))
-		view := payload["view"].(map[string]any)
+		view := payload["verdict"].(map[string]any)
 		wantState := "ok"
 		if checked == "2000-01-01T00:00:00Z" {
 			wantState = "unknown"
 		}
-		if payload["desired"] != nil || view["selection_mode"] != "configuration" || view["configured_server"] != configuredServer || view["state"] != wantState {
+		if payload["desired"] != nil || view["configured_server"] != configuredServer || view["state"] != wantState {
 			t.Fatalf("checked %s: %v", checked, payload)
 		}
 		// The request file is not even read: the exit has none to show.
@@ -106,8 +106,8 @@ func TestAPIStatusExposesConfiguration(t *testing.T) {
 	mustWrite(t, ex.DesiredPath, desire())
 	mustWrite(t, ex.ResultPath, configuredResult(nil))
 	payload := jsonBody(t, h.get("/api/status?exit=example", "", nil))
-	view := payload["view"].(map[string]any)
-	if payload["desired"] != nil || view["configured_server"] != configuredServer || view["selection_mode"] != "configuration" || view["state"] != "ok" {
+	view := payload["verdict"].(map[string]any)
+	if payload["desired"] != nil || view["configured_server"] != configuredServer || view["state"] != "ok" {
 		t.Fatalf("payload = %v", payload)
 	}
 }
@@ -124,8 +124,8 @@ func TestWithoutSettingSelectionAndStatusKeepOldBehavior(t *testing.T) {
 			t.Fatalf("%d %v", a.Status, readDesired(ex))
 		}
 		payload := payloadMap(t, h.srv.statusPayload(ex, h.srv.readStatus(ex)))
-		view := payload["view"].(map[string]any)
-		if view["selection_mode"] != "panel" || payload["desired"].(map[string]any)["server"] != "se-sto-wg-001" || view["state"] != "applying" {
+		view := payload["verdict"].(map[string]any)
+		if view["configured_server"] != nil || payload["desired"].(map[string]any)["server"] != "se-sto-wg-001" || view["state"] != "applying" {
 			t.Fatalf("payload = %v", payload)
 		}
 	}

@@ -209,7 +209,7 @@ func (h *harness) pageTokens(cookie, exitID, path string) (string, string) {
 	if m == nil {
 		h.t.Fatalf("no CSRF token in the page")
 	}
-	return page.Cookies["csrf_nonce"].Value, m[1]
+	return page.Cookies[h.srv.csrfCookieName()].Value, m[1]
 }
 
 // readDesired reads an exit's request file, nil when there is none.

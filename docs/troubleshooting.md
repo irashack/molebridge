@@ -654,6 +654,10 @@ refused:
   `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
+- `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as
+  exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
+  Write `exit.example.net`, not `https://exit.example.net` or `exit.example.net/`.
+  Releases before 0.10.0 ignored such an entry, and every request then got 421.
 - The sign-in messages in [the next section](#sign-in).
 
 `molebridge panel: cannot listen: <reason>` means the panel could not bind its port
@@ -816,6 +820,22 @@ from the panel." The log has `sign-in failed: <reason>`. Common ones:
   (with `groups` replaced by `PANEL_OIDC_GROUPS_CLAIM`). The provider isn't sending groups.
   Check that `PANEL_OIDC_SCOPES` includes the scope that adds them and that the client is
   allowed to use it.
+
+Anyone who can reach the panel can cause these, so since 0.10.0 each `sign-in
+unavailable: <reason>` and `sign-in failed: <reason>` line is written at most once a
+minute for each reason, as the Host and Origin rejections are
+([above](#the-panel)); the next one says how many it skipped.
+
+**"Too many sign-ins" (429).** The page says "The panel is turning away sign-ins for a
+moment. Try again in a minute." `/login` and `/auth/callback` share one allowance for the
+whole panel, 30 requests at once and then one every 2 seconds, because each sign-in
+attempt can cost a request to the provider's token endpoint and some providers lock a
+client out after enough failed ones. The log has `refused sign-in request: too many
+sign-in requests`. A callback also gets this page, with `refused sign-in callback: too
+many sign-ins are talking to the identity provider`, while four others are waiting on the
+provider; its sign-in stays valid, so reloading the page after a few seconds finishes it.
+People already signed in are not affected. If you see these lines without a crowd signing
+in, something is sending sign-in requests to the panel: check the proxy's access log.
 
 **"Not allowed".** The page says "This account is not allowed to use this panel." The log
 has `sign-in failed: access: this account is not in a group that may use this panel`: the

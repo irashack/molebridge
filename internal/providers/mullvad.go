@@ -40,7 +40,7 @@ func ValidateMullvadEntry(entry any) *Relay {
 	if !ok || !mullvadHostnameRE.MatchString(host) {
 		return nil
 	}
-	if !validate.ValidKey(m["public_key"]) || !validate.ValidIPv4(m["ipv4_addr_in"]) {
+	if !validate.ValidKey(m["public_key"]) || !validate.ValidPublicIPv4(m["ipv4_addr_in"]) {
 		return nil
 	}
 	for _, k := range []string{"city", "country", "location_code"} {

@@ -250,6 +250,12 @@ func gluetunRelay(entry map[string]any) *Relay {
 			found = &ipv6
 		}
 		text := address.String()
+		if address.Is4() && !validate.ValidPublicIPv4(text) {
+			// gluetun connects to any of a server's addresses, so a server
+			// that names a private, loopback or other non-public one is
+			// refused whole rather than kept selectable.
+			return nil
+		}
 		seen := false
 		for _, f := range *found {
 			seen = seen || f == text
@@ -561,7 +567,7 @@ func ValidateGluetunEntry(entry any) *Relay {
 		return nil
 	}
 	first, ok := canonicalAddress(m["ipv4_addr_in"], 4)
-	if !ok {
+	if !ok || !validate.ValidPublicIPv4(first) {
 		return nil
 	}
 	relay := &Relay{Shape: ShapeGluetun, Hostname: m["hostname"].(string), ID: m["id"].(string),
@@ -573,6 +579,9 @@ func ValidateGluetunEntry(entry any) *Relay {
 		}
 		unique := map[string]bool{}
 		for _, a := range v4 {
+			if !validate.ValidPublicIPv4(a) {
+				return nil
+			}
 			unique[a] = true
 		}
 		if len(unique) != len(v4) {

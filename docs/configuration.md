@@ -18,7 +18,7 @@ default in the binary and appears here as an [override](#overrides).
 | `PIA_PORT_FORWARD` | `off` | PIA only. `on` forwards one PIA port to `PIA_PORT_FORWARD_TARGET` (in a [native sidecar](#native-sidecar), to the namespace itself) and lists only regions that offer it. Opens a port to the Internet; see [port forwarding](providers.md#port-forwarding). The exit also reads `1`, `true` and `yes` as on and `0`, `false` and `no` as off, in any case; any other value stops it with `PIA_PORT_FORWARD must be on or off`. |
 | `PIA_PORT_FORWARD_TARGET` | empty | PIA only. The overlay IPv4 address of the one device that receives the forwarded port; it must lie inside `OVERLAY_CIDR`. Required when forwarding is on; refused otherwise. A native sidecar refuses it in every case: its forwarded port reaches the namespace itself. |
 | `PANEL_PORT` | `8095` | Host loopback port for the panel. Compose reads it; the panel listens on 8080 inside its container. |
-| `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Unlisted names get 421, except on `/healthz`; loopback names are accepted. Form posts require an allowed origin. |
+| `PANEL_PUBLIC_HOSTS` | empty | Comma-separated names the panel is served under, with the port when it is not 80/443: the public hostname and, if your proxy rewrites the upstream `Host`, that name too (for example `host.docker.internal:8095`). Unlisted names get 421, except on `/healthz`; loopback names are accepted. Form posts require an allowed origin. Since 0.10.0 an entry that is not a host name with an optional port (`https://exit.example.net`, `exit.example.net/`) stops the panel at start with `molebridge panel: PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`; earlier releases ignored it. |
 | `PANEL_EXITS` | empty | Several exits in one Switchyard, as `id=provider[/kind][:label]`, where `kind` is `overlay` (the default) or `sidecar`, and the provider is a native one (`mullvad`, `pia`, `nordvpn`: with `sidecar`, a [native sidecar](#native-sidecar)) or a `gluetun-*` one (a [gluetun sidecar](#gluetun-sidecar)). Empty means this one exit. `compose.yaml` passes it to the bundled panel; each exit's state must then be mounted under `/state/<id>` in a `compose.override.yaml`. See [several exits in one panel](switchyard.md#several-exits-in-one-panel). |
 | `PANEL_OIDC_ISSUER`, `PANEL_OIDC_CLIENT_ID`, `PANEL_PUBLIC_URL`, `PANEL_ADMIN_GROUPS` | empty | Optional sign-in, off while the issuer is empty. See [panel sign-in](#panel-sign-in). |
 | `GATUS_URL` | empty | Gatus base URL for health pushes, starting `http://` or `https://`; empty disables them. The token (`GATUS_TOKEN`) goes in `secrets/applier.env`; with no token nothing is pushed. Over `http://` the token crosses the network unencrypted; use `https://`. The exit warns at start about an `http://` URL whose host isn't `localhost` or a loopback address ([Gatus](operations.md#gatus)). |
@@ -522,7 +522,7 @@ records](architecture.md#example-records).
 
 | File | Writer | Reader | Contents |
 |---|---|---|---|
-| `applier/relays.json` | exit | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. A snapshot for another provider is ignored. |
+| `applier/relays.json` | exit | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. Every IPv4 address in it is public: a relay naming a private, loopback, link-local, multicast, unspecified, shared (100.64.0.0/10) or reserved address is dropped. A snapshot for another provider is ignored. |
 | `applier/gluetun-selection.json` | exit | exit | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
 | `applier/attempt.json` | exit | exit | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
 | `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
@@ -640,24 +640,31 @@ ignores the exit parameter. With [sign-in](access.md#sign-in-with-openid-connect
 on, the cookie and the first exit are chosen among the exits the person is
 granted.
 
+Since 0.10.0, `HEAD` is answered as `GET` with the same status and headers and
+no body, so `curl -I` and uptime monitors work; earlier releases answered 501.
+`/api/latency`, `/login` and `/auth/callback`, which do more than read, answer
+`HEAD` with 405 and `Allow: GET`. `HEAD /healthz`, like `GET /healthz`, writes
+no access log line. Other methods than `GET`, `HEAD` and `POST` get 501.
+
 | Path | Purpose |
 |---|---|
 | `/`, `/?exit=<id>` | Full panel for the exit |
 | `/embed`, `/embed?exit=<id>` | Compact view for iframes |
 | `POST /select` | Refused with 403 `Exit is set in configuration; change SERVER to choose another server.` for an exit set in configuration, then with 409 `A switch is in progress; wait for it to finish.` while the exit's state is switching. Otherwise choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode. A stale or unreadable status doesn't block a switch |
 | `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
-| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. Deprecated, still sent in 0.8.0: `view` (`state`, `label`, `tier`, `selection_mode`, `configured_server`), and in `result` for a schema-2 record `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback`, derived from the verdict and null where unknown or not applicable |
+| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. `result` is the record as the exit wrote it. 0.10.0 removed `view` and the 0.6 fields the panel derived into `result` (`routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s`, `unreachable_fallback`), deprecated since 0.7.0; read `verdict` instead |
 | `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>` (up to 128 servers, a fixed sample beyond that; the answer's `country` gives `probed` and `total`), or `hosts=<a,b>` (64 at most); 256 servers per request in all; `fresh=1` ignores the cache. 429 with `Retry-After` while that exit already has a request running or four are running panel-wide |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |
 | `/readyz`, `/readyz?exit=<id>` | 200 only when all exits, or the named exit, have a fresh verified connected state; 503 otherwise. An unknown ID in multi-exit mode returns 404 |
+| `/metrics` | Prometheus text format, since 0.10.0: [metrics](#metrics) |
 
 With sign-in on, these are added, and they answer 404 when it is off:
 
 | Path | Purpose |
 |---|---|
-| `/login?next=<path>` | Starts sign-in and redirects to the issuer. Only `/` and `/embed`, each with an optional `?exit=<id>`, are accepted as `next`; anything else lands on `/`. Someone who already has a session is redirected to `next` |
-| `/auth/callback` | Where the issuer sends the browser back. Sets the session cookie and redirects to `next`, or shows "Not allowed" (403), "Sign-in failed" (400) |
+| `/login?next=<path>` | Starts sign-in and redirects to the issuer. Only `/` and `/embed`, each with an optional `?exit=<id>`, are accepted as `next`; anything else lands on `/`. Someone who already has a session is redirected to `next`. 429 "Too many sign-ins" with `Retry-After` beyond 30 requests at once and one every 2 seconds, shared with `/auth/callback` across the panel |
+| `/auth/callback` | Where the issuer sends the browser back. Sets the session cookie and redirects to `next`, or shows "Not allowed" (403), "Sign-in failed" (400), or "Too many sign-ins" (429 with `Retry-After`) beyond the allowance it shares with `/login` or while four other callbacks are waiting on the issuer |
 | `POST /logout` | Ends the session. Requires the CSRF token. Redirects to `/signed-out` |
 | `/signed-out` | A page confirming the sign-out, with a sign-in link |
 
@@ -670,9 +677,63 @@ Without a session:
 | `/api/status`, `/api/exits`, `/api/latency` | 401 with `{"error": "sign in required"}` |
 | `POST /select` | 401 `sign in required` |
 | `/healthz`, `/static/*`, `/manifest.webmanifest`, `/readyz` without `?exit=` | As without sign-in |
+| `/metrics` | Only `molebridge_ready` |
 
 `/readyz?exit=<id>` needs a session granted that exit. For anyone else it
 answers 404 `unknown exit`, as for an exit that doesn't exist. The same holds
 for an exit the person isn't granted on the page, the embed, `/api/status` and
 `/api/latency` (404 `unknown exit`) and on `POST /select` (400 `unknown exit`).
 The Host check comes first for all of these except `/healthz`.
+
+### Metrics
+
+`GET /metrics` answers in the Prometheus text format (version 0.0.4) with
+what the panel already reads for `/readyz` and `/api/status`. Each scrape reads
+the exits' records and catalogues again; the panel keeps no history. It is
+exposed as `/readyz` is: `molebridge_ready` to anyone who passes the Host
+check, and the per-exit series for the exits `/readyz?exit=<id>` would answer
+for. Without sign-in that is every exit. With sign-in on it is the exits the
+caller's session is granted, so a scraper without a session gets only
+`molebridge_ready`; the panel has no separate token for metrics.
+
+| Metric | Type | Labels | Value |
+|---|---|---|---|
+| `molebridge_ready` | gauge | | 1 when every exit has a fresh verified connected state (`/readyz` answers 200), else 0 |
+| `molebridge_exit_info` | gauge | `exit`, `provider`, `kind` | 1 for each exit |
+| `molebridge_exit_state` | gauge | `exit`, `state` | 1 for the verdict's state (`ok`, `failed`, `applying`, `unknown`), 0 for the other three |
+| `molebridge_exit_check` | gauge | `exit`, `check`, `state` | 1 for each check's state as `/api/status` gives it (`pass`, `fail`, `unknown`, `n/a`, `not-checked`, `legacy`), 0 for the others |
+| `molebridge_exit_checked_timestamp_seconds` | gauge | `exit` | The record's `checked_at`, as Unix time; absent without a record |
+| `molebridge_exit_handshake_age_seconds` | gauge | `exit` | The record's handshake `age_s`, as of `checked_at`; only while the verdict says the handshake was measured (`pass` or `fail`) |
+| `molebridge_exit_catalog_fetched_timestamp_seconds` | gauge | `exit` | The relay catalogue's `fetched_at`, as Unix time |
+| `molebridge_exit_catalog_relays` | gauge | `exit` | Relays in the catalogue that passed validation |
+| `molebridge_exit_routing_repairs_total` | counter | `exit` | `routing_activity.repairs`: repair passes that changed the kernel |
+| `molebridge_exit_routing_last_repair_timestamp_seconds` | gauge | `exit` | `routing_activity.last_repair_at`, as Unix time; absent before the first repair |
+| `molebridge_exit_routing_kernel_events_total` | counter | `exit` | `routing_activity.events` |
+| `molebridge_exit_routing_relevant_events_total` | counter | `exit` | `routing_activity.relevant_events` |
+| `molebridge_exit_routing_events_lost_total` | counter | `exit` | `routing_activity.events_lost` |
+| `molebridge_exit_routing_periodic_passes_total` | counter | `exit` | `routing_activity.periodic_passes` |
+
+`exit` is the id from `PANEL_EXITS`, and empty for a single-exit panel. The
+routing counters come from the record's
+[`routing_activity`](architecture.md#the-status-record): they are as old as
+`checked_at`, start again from zero when the exit's worker restarts (which
+Prometheus's `rate()` and `increase()` allow for), and are absent for a
+gluetun sidecar, an exit older than 0.9.3, or a member that doesn't read as
+the exit writes it.
+
+A scrape from Prometheus on the same host, where the Compose file publishes
+the panel on `127.0.0.1:8095`:
+
+```yaml
+scrape_configs:
+  - job_name: molebridge
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["127.0.0.1:8095"]
+```
+
+`curl -s http://127.0.0.1:8095/metrics` shows the same text. A Prometheus
+in a container reaches the panel under another name, which the Host check
+answers 421 until you add it to `PANEL_PUBLIC_HOSTS`. An alert on a
+switched-off or failing exit could be `molebridge_exit_state{state="ok"} == 0`
+held for a few minutes, since a switch passes through `applying`.

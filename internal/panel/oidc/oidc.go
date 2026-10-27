@@ -86,13 +86,24 @@ type Limits struct {
 	MaxSessions           int
 	MaxSessionsPerSubject int
 	MaxConsumedLogins     int
+	// MaxTokenExchanges bounds the callbacks talking to the issuer's token
+	// (and userinfo) endpoint at once. Anyone can start a sign-in and send
+	// its callback a junk code, and each such pair is a POST to the issuer as
+	// this panel's client, with its secret for a confidential client; some
+	// issuers lock a client out after enough failures.
+	MaxTokenExchanges int
 }
 
 // DefaultLimits are oidc.py's MAX_SESSIONS, MAX_SESSIONS_PER_SUBJECT and
-// MAX_CONSUMED_LOGINS.
+// MAX_CONSUMED_LOGINS, and four token exchanges at once.
 func DefaultLimits() Limits {
-	return Limits{MaxSessions: 4096, MaxSessionsPerSubject: 16, MaxConsumedLogins: 65536}
+	return Limits{MaxSessions: 4096, MaxSessionsPerSubject: 16, MaxConsumedLogins: 65536, MaxTokenExchanges: 4}
 }
+
+// ErrBusy is Finish's answer while MaxTokenExchanges callbacks are already
+// talking to the issuer. The pending sign-in is not used up: the same
+// callback may be tried again.
+var ErrBusy = &AuthError{Msg: "callback: too many sign-ins are in progress"}
 
 // AuthError is a sign-in that cannot complete. The message is fixed text,
 // safe to show and to log; it never carries a token or an issuer response
@@ -845,6 +856,14 @@ type discovered struct {
 	at        float64
 }
 
+// discovery is a fetch of the discovery document in progress; whoever finds
+// one waits for it and takes its answer instead of fetching again.
+type discovery struct {
+	done      chan struct{}
+	endpoints Endpoints
+	err       error
+}
+
 // Authenticator holds the discovery cache, pending sign-ins and sessions for
 // one panel process.
 type Authenticator struct {
@@ -867,6 +886,8 @@ type Authenticator struct {
 	consumed      *list.List
 	consumedIndex map[string]*list.Element
 	endpoints     *discovered
+	discovering   *discovery // nil when no fetch is running
+	exchanges     int        // callbacks inside the token exchange
 }
 
 type consumedItem struct {
@@ -904,33 +925,48 @@ func (a *Authenticator) now() float64 {
 
 // -- discovery ---------------------------------------------------------------
 
+// discover is the issuer's endpoints, from the cache while it is fresh. One
+// fetch runs at a time: when the cache expires, the requests that arrive
+// while it is being refreshed wait for that fetch and share its answer.
 func (a *Authenticator) discover() (Endpoints, error) {
 	now := a.now()
 	a.mu.Lock()
 	cached := a.endpoints
-	a.mu.Unlock()
 	if cached != nil && cached.endpoints != nil && now-cached.at < DiscoveryTTL {
+		a.mu.Unlock()
 		return *cached.endpoints, nil
 	}
 	if cached != nil && cached.endpoints == nil && now-cached.at < DiscoveryRetryS {
 		// A recent failure: don't let every anonymous /login wait on it.
+		a.mu.Unlock()
 		return Endpoints{}, authErr("discovery: the issuer could not be reached recently; retrying shortly")
 	}
+	if running := a.discovering; running != nil {
+		a.mu.Unlock()
+		<-running.done
+		return running.endpoints, running.err
+	}
+	fetch := &discovery{done: make(chan struct{})}
+	a.discovering = fetch
+	a.mu.Unlock()
+
 	doc, err := httpJSON(a.client, strings.TrimRight(a.config.Issuer, "/")+"/.well-known/openid-configuration", nil, nil, "discovery")
 	var endpoints Endpoints
 	if err == nil {
 		endpoints, err = ParseDiscovery(doc, a.config.Issuer)
 	}
-	if err != nil {
-		a.mu.Lock()
-		a.endpoints = &discovered{nil, now}
-		a.mu.Unlock()
-		return Endpoints{}, err
-	}
 	a.mu.Lock()
-	a.endpoints = &discovered{&endpoints, now}
+	if err != nil {
+		a.endpoints = &discovered{nil, now}
+		fetch.err = err
+	} else {
+		a.endpoints = &discovered{&endpoints, now}
+		fetch.endpoints = endpoints
+	}
+	a.discovering = nil
 	a.mu.Unlock()
-	return endpoints, nil
+	close(fetch.done)
+	return fetch.endpoints, fetch.err
 }
 
 // -- sign-in -------------------------------------------------------------------
@@ -1049,8 +1085,13 @@ func (a *Authenticator) open(value string) (PendingLogin, error) {
 }
 
 // Finish completes a sign-in: the session id, the session and the path to
-// land on. The pending sign-in is used up whatever the outcome.
+// land on. The pending sign-in is used up whatever the outcome, except
+// ErrBusy, which is answered before the cookie is opened.
 func (a *Authenticator) Finish(loginCookie, state, code string) (string, *Session, string, error) {
+	if !a.enterExchange() {
+		return "", nil, "", ErrBusy
+	}
+	defer a.leaveExchange()
 	pending, err := a.open(loginCookie)
 	if err != nil {
 		return "", nil, "", err
@@ -1137,6 +1178,25 @@ func (a *Authenticator) Finish(loginCookie, state, code string) (string, *Sessio
 	a.seq++
 	a.sessions[sessionID] = &sessionEntry{session, a.seq}
 	return sessionID, session, pending.NextPath, nil
+}
+
+// enterExchange takes one of the MaxTokenExchanges places, without waiting:
+// a callback that finds none answers at once rather than holding a goroutine
+// and a connection for as long as the issuer takes.
+func (a *Authenticator) enterExchange() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.exchanges >= a.Limits.MaxTokenExchanges {
+		return false
+	}
+	a.exchanges++
+	return true
+}
+
+func (a *Authenticator) leaveExchange() {
+	a.mu.Lock()
+	a.exchanges--
+	a.mu.Unlock()
 }
 
 // older orders sessions by expiry, then by when they were made. The caller

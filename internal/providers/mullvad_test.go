@@ -44,6 +44,9 @@ func TestRemoteRelayValidation(t *testing.T) {
 		"key with newline": {"public_key": mullvadKey + "\n"}, "bad address": {"ipv4_addr_in": "198.51.100.999"},
 		"location is a list": {"location": []any{}}, "location absent": {"location": "\x00absent"},
 		"hostname with newline": {"hostname": mullvadHost + "\n"},
+		"private address":       {"ipv4_addr_in": "192.168.1.10"}, "loopback address": {"ipv4_addr_in": "127.0.0.1"},
+		"link-local address": {"ipv4_addr_in": "169.254.1.1"}, "multicast address": {"ipv4_addr_in": "224.0.0.1"},
+		"unspecified address": {"ipv4_addr_in": "0.0.0.0"}, "shared address": {"ipv4_addr_in": "100.100.0.1"},
 	} {
 		got, err := ParseMullvadResponse(mullvadPayload(t, changes))
 		if err != nil || got.Len() != 0 {

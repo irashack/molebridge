@@ -1,10 +1,12 @@
 package panel
 
 import (
-	"github.com/irashack/molebridge/internal/panel/pystr"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/irashack/molebridge/internal/panel/pystr"
 )
 
 // Host and Origin checks, ported from app.py. The allowlist never derives
@@ -67,22 +69,27 @@ func hostAllowed(hosts []hostPort, h hostPort, defaultPort int) bool {
 }
 
 // parsePublicHosts is the list allowed_hosts builds from PANEL_PUBLIC_HOSTS
-// (comma-separated Host-style values; a malformed entry is ignored), plus
-// the sign-in public URL's host when one is configured.
-func parsePublicHosts(raw string, signIn *hostPort) []hostPort {
+// (comma-separated Host-style values), plus the sign-in public URL's host
+// when one is configured. A malformed entry stops the panel at start:
+// app.py ignored one, and every request then got 421 with nothing at start
+// to say why.
+func parsePublicHosts(raw string, signIn *hostPort) ([]hostPort, error) {
 	var hosts []hostPort
 	for _, entry := range strings.Split(raw, ",") {
 		if pystr.Strip(entry) == "" {
 			continue
 		}
-		if h, ok := splitHost(entry); ok {
-			hosts = append(hosts, h)
+		h, ok := splitHost(entry)
+		if !ok {
+			return nil, fmt.Errorf("PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, "+
+				"such as exit.example.net or host.docker.internal:8095 (no scheme or path), in %s", pystr.Repr(pystr.Strip(entry)))
 		}
+		hosts = append(hosts, h)
 	}
 	if signIn != nil {
 		hosts = append(hosts, *signIn)
 	}
-	return hosts
+	return hosts, nil
 }
 
 // HostAllowed rejects requests for names the panel is not published under.

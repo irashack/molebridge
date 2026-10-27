@@ -2,8 +2,7 @@ package panel
 
 // Ported from panel/test_status.py: the panel's status consumers, all from
 // one verdict (internal/verdict, whose own judgments its tests cover): the
-// page, /api/status with its deprecated `view` and diagnostic fields,
-// /api/exits, /readyz, and the switch gate (D8). Also the exit kind in
+// page, /api/status, /api/exits, /readyz, and the switch gate (D8). Also the exit kind in
 // PANEL_EXITS and EXIT_KIND.
 
 import (
@@ -19,8 +18,6 @@ import (
 	"github.com/irashack/molebridge/internal/validate"
 	"github.com/irashack/molebridge/internal/verdict"
 )
-
-var projectionFields = []string{"routing_ok", "netbird_native", "exit_confirmed", "egress_tier", "handshake_age_s", "unreachable_fallback"}
 
 // setupExit starts a panel with one named exit `x` of the given provider and
 // kind, with its result and request on disk.
@@ -44,7 +41,7 @@ func TestEveryConsumerShowsTheOneVerdict(t *testing.T) {
 				configured = result["configured_server"]
 			}
 
-			// /api/status: the verdict, and the old view kept whole.
+			// /api/status: the request, the record and the verdict.
 			a := h.get("/api/status?exit=x", "", nil)
 			payload := jsonBody(t, a)
 			if a.Status != 200 {
@@ -67,31 +64,16 @@ func TestEveryConsumerShowsTheOneVerdict(t *testing.T) {
 					t.Fatalf("check %s missing", n)
 				}
 			}
-			mode := "panel"
-			if configured != nil {
-				mode = "configuration"
+			if v["configured_server"] != configured {
+				t.Fatalf("configured_server = %v, want %v", v["configured_server"], configured)
 			}
-			wantView := map[string]any{"state": c.state, "label": c.label, "tier": tier, "selection_mode": mode, "configured_server": configured}
-			if !reflect.DeepEqual(payload["view"], wantView) {
-				t.Fatalf("view = %v, want %v", payload["view"], wantView)
+			// 0.10.0 removed the deprecated `view` and the 0.6 fields derived
+			// into `result`: the record goes out exactly as the exit wrote it.
+			if _, present := payload["view"]; present || len(payload) != 3 {
+				t.Fatalf("members = %v", payload)
 			}
-
-			// The deprecated diagnostic fields: derived for schema 2 only, and
-			// a record's own fields are never overwritten.
-			if got, _ := payload["result"].(map[string]any); result != nil {
-				if result["schema"] == 2 {
-					for _, f := range projectionFields {
-						if _, ok := got[f]; !ok {
-							t.Errorf("projection field %s missing", f)
-						}
-					}
-				} else {
-					for _, f := range projectionFields {
-						if !reflect.DeepEqual(got[f], jsonRoundTrip(t, result[f])) {
-							t.Errorf("%s = %v, record has %v", f, got[f], result[f])
-						}
-					}
-				}
+			if result != nil && !reflect.DeepEqual(payload["result"], jsonRoundTrip(t, result)) {
+				t.Errorf("result = %v, record is %v", payload["result"], result)
 			}
 
 			// The page, from the same verdict.

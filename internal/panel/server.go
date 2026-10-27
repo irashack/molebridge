@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,9 +30,7 @@ import (
 )
 
 const (
-	maxBodyBytes   = 4096
-	csrfCookieName = "csrf_nonce"
-	exitCookieName = "molebridge_exit"
+	maxBodyBytes = 4096
 	// ListenAddr is where the panel listens: all interfaces in its own
 	// container, published on loopback only by the Compose file.
 	ListenAddr = "0.0.0.0:8080"
@@ -83,6 +80,9 @@ type Server struct {
 
 	limitMu sync.Mutex
 	limited map[string]*limitedLine
+
+	// signInLimit is the one bucket /login and /auth/callback draw from.
+	signInLimit *tokenBucket
 }
 
 // relayCacheEntry is one exit's validated catalogue and the snapshot's other
@@ -112,7 +112,7 @@ func NewServer(cfg *Config, opt Options) *Server {
 		Settings: cfg.Settings, Exits: cfg.Exits, Single: cfg.Single,
 		Log: opt.Log, now: opt.Now, mono: opt.Mono, dial: opt.Dial, files: opt.Files,
 		latency: newLatencyState(), selectLocks: map[string]*sync.Mutex{}, relayCache: map[string]relayCacheEntry{},
-		limited: map[string]*limitedLine{},
+		limited: map[string]*limitedLine{}, signInLimit: newTokenBucket(signInBurst, signInEvery),
 	}
 	if s.Log == nil {
 		s.Log = os.Stderr
@@ -341,58 +341,19 @@ func (s *Server) verdictJSON(ex Exit, v verdict.Verdict) validate.Obj {
 	return v.AsJSON().Set("checks", checks).Set("not_checked_by", by)
 }
 
-// legacyView is /api/status's `view`, deprecated: kept whole for one release
-// because a 0.6 page still open in a browser reads it until it reloads.
-func legacyView(v verdict.Verdict) validate.Obj {
-	var tier, configured any
-	if v.Tier != "" {
-		tier = v.Tier
-	}
-	mode := "panel"
-	if v.ConfiguredServer != "" {
-		mode, configured = "configuration", v.ConfiguredServer
-	}
-	return validate.Members("state", v.State, "label", v.Label, "tier", tier, "selection_mode", mode,
-		"configured_server", configured)
-}
-
-// statusPayload is /api/status's body.
+// statusPayload is /api/status's body: the request, the record as the exit
+// wrote it, and the verdict. 0.10.0 removed the `view` object and the 0.6
+// diagnostic fields derived into `result`, deprecated since 0.7.0.
 func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 	var result any
 	if status.Result != nil {
 		result = status.Result
-		if projection, ok := verdict.LegacyProjection(status.Result, status.Verdict); ok {
-			// Deprecated, one release: the 0.6 diagnostic fields a cached 0.6
-			// script reads, derived from the verdict for a schema-2 record
-			// (null where unknown or not applicable). A record's own fields
-			// win.
-			merged := validate.Obj{}
-			for _, p := range projection.JSONObject() {
-				if own, present := status.Result[p.Key]; present {
-					merged = append(merged, validate.Pair{Key: p.Key, Value: own})
-				} else {
-					merged = append(merged, p)
-				}
-			}
-			rest := make([]string, 0, len(status.Result))
-			for k := range status.Result {
-				if !projectionHas(projection.JSONObject(), k) {
-					rest = append(rest, k)
-				}
-			}
-			sort.Strings(rest)
-			for _, k := range rest {
-				merged = append(merged, validate.Pair{Key: k, Value: status.Result[k]})
-			}
-			result = merged
-		}
 	}
 	var desired any
 	if status.Desired != nil {
 		desired = status.Desired
 	}
-	return validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict),
-		"view", legacyView(status.Verdict))
+	return validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict))
 }
 
 // cachedSnapshot is the exit's catalogue and the snapshot's other members
@@ -487,6 +448,29 @@ func summaryJSON(x ExitSummary) validate.Obj {
 
 // -- CSRF ----------------------------------------------------------------------
 
+// The page's own cookies: the CSRF nonce and the exit this browser last
+// opened. With sign-in on the panel is served over https, and since 0.10.0
+// they take the __Host- prefix like the sign-in cookies, so a sibling
+// subdomain cannot plant a second csrf_nonce that would make every POST 403
+// (getCookieStrict refuses a repeated name) until it expired. A cookie under
+// the old name is simply not read: the CSRF nonce is replaced on the next
+// page load, as after any restart, and the remembered exit is forgotten
+// once. Without sign-in the names are unchanged, as the page may be served
+// over plain http, where a __Host- cookie cannot be set.
+func (s *Server) csrfCookieName() string {
+	if s.Auth != nil {
+		return "__Host-csrf_nonce"
+	}
+	return "csrf_nonce"
+}
+
+func (s *Server) exitCookieName() string {
+	if s.Auth != nil {
+		return "__Host-molebridge_exit"
+	}
+	return "molebridge_exit"
+}
+
 func newCSRFNonce() string {
 	raw := make([]byte, 24)
 	if _, err := rand.Read(raw); err != nil {
@@ -560,12 +544,15 @@ func htmlReply(code int, body string, extra ...[2]string) reply {
 var knownRoutes = map[string]bool{
 	"/": true, "/embed": true, "/healthz": true, "/readyz": true, "/api/status": true, "/api/exits": true,
 	"/api/latency": true, "/select": true, "/manifest.webmanifest": true, "/login": true,
-	"/auth/callback": true, "/logout": true, "/signed-out": true,
+	"/auth/callback": true, "/logout": true, "/signed-out": true, "/metrics": true,
 }
 
+// headRefused are the GET routes HEAD may not stand in for.
+var headRefused = map[string]bool{"/api/latency": true, "/login": true, "/auth/callback": true}
+
 // logRequest writes one access line: method, fixed route and status, with no
-// addresses or user-controlled text. GET /healthz, which the container's
-// health check polls, is left out.
+// addresses or user-controlled text. GET and HEAD /healthz, which the
+// container's health check and uptime monitors poll, are left out.
 func (s *Server) logRequest(r *http.Request, code int) {
 	path, _, _ := strings.Cut(r.RequestURI, "?")
 	route := "(unknown route)"
@@ -579,7 +566,7 @@ func (s *Server) logRequest(r *http.Request, code int) {
 	case http.MethodGet, http.MethodPost, http.MethodHead:
 		method = r.Method
 	}
-	if method == http.MethodGet && route == "/healthz" {
+	if (method == http.MethodGet || method == http.MethodHead) && route == "/healthz" {
 		return
 	}
 	s.logEvent(fmt.Sprintf("%s %s %d", method, route, code))
@@ -639,7 +626,6 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request, rep reply) {
 	for _, c := range rep.cookies {
 		h.Add("Set-Cookie", c)
 	}
-	h.Set("Connection", "close")
 	for k, v := range s.secHeaders {
 		h.Set(k, v)
 	}
@@ -732,10 +718,12 @@ func authCookie(name, value string, maxAge int) string {
 	return fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; Secure; HttpOnly; SameSite=Lax", name, value, maxAge)
 }
 
-// ServeHTTP is the panel.
+// ServeHTTP is the panel. HEAD is answered as GET, headers only (net/http
+// drops the body and keeps the Content-Length): uptime monitors and
+// `curl -I` use it. app.py answered it 501.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		s.doGET(w, r)
 	case http.MethodPost:
 		s.doPOST(w, r)
@@ -762,6 +750,13 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.misdirected(w, r) {
+		return
+	}
+	if r.Method == http.MethodHead && headRefused[path] {
+		// These do something beyond reading: probing relays, starting or
+		// finishing a sign-in.
+		s.send(w, r, reply{code: 405, contentType: "text/plain; charset=utf-8", body: []byte("method not allowed"),
+			headers: [][2]string{{"Allow", "GET"}}})
 		return
 	}
 	session := s.session(r)
@@ -804,7 +799,7 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			ex := visible[0]
-			if remembered, have := s.cookie(r, exitCookieName); have {
+			if remembered, have := s.cookie(r, s.exitCookieName()); have {
 				if e, ok := s.authorizedExit(remembered, session); ok {
 					ex = e
 				}
@@ -817,6 +812,10 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleIndex(w, r, query, session, embed)
+	case path == "/metrics":
+		// Exposed like /readyz: the aggregate to anyone, the exits only as
+		// /readyz?exit= would answer for them.
+		s.handleMetrics(w, r, session)
 	case path == "/manifest.webmanifest":
 		s.send(w, r, reply{code: 200, contentType: "application/manifest+json", body: s.manifest,
 			headers: [][2]string{{"Cache-Control", "public, max-age=86400"}}})
@@ -846,9 +845,13 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 		}
 		s.handleLatency(w, r, query, ex)
 	case path == "/login" && s.Auth != nil:
-		s.handleLogin(w, r, query, session)
+		if s.signInAdmitted(w, r, safeNext(first(query, "next"))) {
+			s.handleLogin(w, r, query, session)
+		}
 	case path == "/auth/callback" && s.Auth != nil:
-		s.handleCallback(w, r, query)
+		if s.signInAdmitted(w, r, "/") {
+			s.handleCallback(w, r, query)
+		}
 	case path == "/signed-out" && s.Auth != nil:
 		body := s.RenderMessage("Signed out", "You have signed out of this panel.", &[2]string{s.loginURL("/"), "Sign in"}, false)
 		s.send(w, r, htmlReply(200, body))
@@ -966,7 +969,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, query map[s
 	}
 	cookie, authorizeURL, err := s.Auth.Begin(nextPath)
 	if err != nil {
-		s.logEvent("sign-in unavailable: " + err.Error())
+		s.logLimited("sign-in unavailable: " + err.Error())
 		body := s.RenderMessage("Sign-in unavailable", "The identity provider could not be reached. Try again in a minute.",
 			&[2]string{s.loginURL(nextPath), "Try again"}, false)
 		s.send(w, r, htmlReply(503, body))
@@ -989,8 +992,17 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request, query ma
 	} else {
 		sessionID, session, nextPath, err = s.Auth.Finish(loginID, first(query, "state"), first(query, "code"))
 	}
+	if err == oidc.ErrBusy {
+		// The pending sign-in is still good, and its cookie is kept: the same
+		// callback works once a place is free.
+		s.logLimited("refused sign-in callback: too many sign-ins are talking to the identity provider")
+		s.sendTooManySignIns(w, r, "/", busyRetryAfter)
+		return
+	}
 	if err != nil {
-		s.logEvent("sign-in failed: " + err.Error())
+		// Logged at most once a minute per message, like the Host and Origin
+		// rejections: anyone can cause these.
+		s.logLimited("sign-in failed: " + err.Error())
 		refused := strings.HasPrefix(err.Error(), "access:")
 		heading, message, code := "Sign-in failed", "The sign-in could not be completed. Start it again from the panel.", 400
 		if refused {
@@ -1019,7 +1031,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 	if !ok {
 		return
 	}
-	nonce, have := s.cookie(r, csrfCookieName)
+	nonce, have := s.cookie(r, s.csrfCookieName())
 	if !have || !csrfNonceRE.MatchString(nonce) {
 		nonce = newCSRFNonce()
 	}
@@ -1053,9 +1065,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 	if s.Auth != nil {
 		secure = "; Secure"
 	}
-	cookies := []string{fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Strict%s", csrfCookieName, nonce, secure)}
+	cookies := []string{fmt.Sprintf("%s=%s; Path=/; HttpOnly; SameSite=Strict%s", s.csrfCookieName(), nonce, secure)}
 	if ex.ID != "" {
-		cookies = append(cookies, fmt.Sprintf("%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict%s", exitCookieName, ex.ID, secure))
+		cookies = append(cookies, fmt.Sprintf("%s=%s; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict%s", s.exitCookieName(), ex.ID, secure))
 	}
 	rep := htmlReply(200, body)
 	rep.cookies = cookies
@@ -1168,7 +1180,7 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 	session := s.session(r)
 	if path == "/logout" {
 		// A missing session is fine: signing out twice lands on the same page.
-		nonce, haveNonce := s.cookie(r, csrfCookieName)
+		nonce, haveNonce := s.cookie(r, s.csrfCookieName())
 		if session != nil && !s.verifyCSRF(nonce, haveNonce, fields["csrf_token"], session.CSRFKey) {
 			s.send(w, r, plain(403, "invalid or missing csrf token"))
 			return
@@ -1184,7 +1196,7 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 	if s.signedOut(w, r, session, false) {
 		return
 	}
-	nonce, haveNonce := s.cookie(r, csrfCookieName)
+	nonce, haveNonce := s.cookie(r, s.csrfCookieName())
 	if !s.verifyCSRF(nonce, haveNonce, fields["csrf_token"], s.csrfBinding(session)) {
 		s.send(w, r, plain(403, "invalid or missing csrf token"))
 		return
@@ -1236,13 +1248,4 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.send(w, r, plain(code, message))
-}
-
-func projectionHas(o validate.Obj, key string) bool {
-	for _, p := range o {
-		if p.Key == key {
-			return true
-		}
-	}
-	return false
 }

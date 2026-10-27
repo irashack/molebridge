@@ -2016,7 +2016,7 @@ starts with a UTC timestamp to the second. A request's line is the method,
 the route and the status, such as `2026-01-02T15:04:05Z GET /api/status 200`
 (an unknown path is `(unknown route)`, a method other than GET, POST and
 HEAD `(other method)`); `GET /healthz`, which the Compose health check polls
-every 30 seconds, is not logged. Lines written before the panel listens,
+every 30 seconds, is not logged, nor is `HEAD /healthz`. Lines written before the panel listens,
 such as a refused setting, start `molebridge panel: ` instead.
 
 One panel can serve several exits on the same host (`PANEL_EXITS`; see
@@ -2045,6 +2045,11 @@ host-to-relay path, not end-to-end client latency. One request names at most
 more). The panel runs one latency request per exit and four in all, answering
 429 beyond that before it loads anything; no lock is held while probing, and
 a server already being probed is waited for rather than probed again.
+Every catalogue (Mullvad's, PIA's, NordVPN's and gluetun's) drops a relay
+whose IPv4 address is private, loopback, link-local, multicast,
+unspecified, in 0.0.0.0/8, 100.64.0.0/10 or 240.0.0.0/4, both when the list
+is fetched and when the snapshot is read back, so the panel never probes such
+an address and a switch never names one. The documentation ranges pass.
 
 ### Sign-in
 
@@ -2066,6 +2071,18 @@ and the state, remembers that state as used so the same callback cannot be
 replayed, then sends the code and the PKCE verifier to the token endpoint. A
 code intercepted on its way to the browser is useless without the verifier,
 which never leaves the panel except to the token endpoint.
+
+**Bounds on anonymous sign-in traffic.** Anyone who reaches the panel can
+start a sign-in and send its callback a junk code, and each such pair is a
+request to the token endpoint as the panel's client. `/login` and
+`/auth/callback` therefore draw from one token bucket for the whole process (30
+at once, one more every 2 seconds), and at most four callbacks talk to the
+token and userinfo endpoints at a time. A request over either bound gets 429
+with `Retry-After`; a callback turned away for the second keeps its sign-in.
+A flood can keep people from signing in while it lasts, but it cannot get the
+panel's client locked out at the provider, and sessions already open are not
+affected. When the discovery cache expires, one request fetches the document
+and the others wait for its answer.
 
 **Discovery.** The `issuer` in the document must equal `PANEL_OIDC_ISSUER`
 exactly. The authorization and token endpoints must be https (http only for a
@@ -2114,7 +2131,13 @@ prefix, so a sibling subdomain can't set or overwrite them. They are
 `SameSite=Lax` because the browser comes back from the provider by a
 cross-site redirect and must bring them. The CSRF token that protects `POST
 /select` and `POST /logout` is also bound to the session, and with sign-in on
-the CSRF and last-exit cookies are `Secure` too. A `/login` request whose
+the CSRF and last-exit cookies are `Secure` too and, since 0.10.0, named
+`__Host-csrf_nonce` and `__Host-molebridge_exit`. Under their old names a
+`csrf_nonce` planted from a sibling subdomain made the strict reader below
+refuse the repeated name, and every switch 403, until it expired. Cookies left
+under the old names are not read: the CSRF nonce is replaced on the next page
+load, and the remembered exit is forgotten once. Without sign-in the names stay
+`csrf_nonce` and `molebridge_exit`. A `/login` request whose
 `X-Forwarded-Proto` says it arrived over plain http is sent to the canonical
 https address once (marked `canonical=1`, so a proxy that always says http
 cannot loop); the header only steers that redirect.

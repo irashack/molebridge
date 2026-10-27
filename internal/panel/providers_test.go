@@ -181,7 +181,7 @@ func TestRememberedExitIsTheDefault(t *testing.T) {
 
 func TestStatusReadinessAndSummaries(t *testing.T) {
 	m := newMulti(t)
-	if view := jsonBody(t, m.get("/api/status?exit=away", "", nil))["view"].(map[string]any); view["state"] != "ok" {
+	if view := jsonBody(t, m.get("/api/status?exit=away", "", nil))["verdict"].(map[string]any); view["state"] != "ok" {
 		t.Fatalf("view = %v", view)
 	}
 	if m.get("/readyz?exit=away", "", nil).Status != 200 || m.get("/readyz", "", nil).Status != 503 {
@@ -232,15 +232,17 @@ func (h *harness) writeResult(changes map[string]any) {
 	mustWrite(h.t, h.srv.Single.ResultPath, result)
 }
 
+// viewOf is the part of /api/status's verdict these tests judge.
 func viewOf(t *testing.T, h *harness) map[string]any {
 	t.Helper()
-	return jsonBody(t, h.get("/api/status", "", nil))["view"].(map[string]any)
+	v := jsonBody(t, h.get("/api/status", "", nil))["verdict"].(map[string]any)
+	return map[string]any{"state": v["state"], "label": v["label"], "tier": v["tier"], "configured_server": v["configured_server"]}
 }
 
 func TestProviderConfirmedExitHasNoTunnelLabel(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	h.writeResult(map[string]any{"exit_confirmed": true, "egress_tier": "provider"})
-	want := map[string]any{"state": "ok", "label": "connected", "tier": "provider", "selection_mode": "panel", "configured_server": nil}
+	want := map[string]any{"state": "ok", "label": "connected", "tier": "provider", "configured_server": nil}
 	if got := viewOf(t, h); !reflect.DeepEqual(got, want) {
 		t.Fatalf("view = %v", got)
 	}
@@ -255,7 +257,7 @@ func TestTunnelVerifiedExitIsConnectedWithALabel(t *testing.T) {
 	tunnelProvider(t)
 	h := newHarness(t, map[string]string{"PROVIDER": "tunnelvpn"}, nil)
 	h.writeResult(map[string]any{"exit_confirmed": false, "egress_tier": "tunnel"})
-	want := map[string]any{"state": "ok", "label": "connected", "tier": "tunnel", "selection_mode": "panel", "configured_server": nil}
+	want := map[string]any{"state": "ok", "label": "connected", "tier": "tunnel", "configured_server": nil}
 	if got := viewOf(t, h); !reflect.DeepEqual(got, want) {
 		t.Fatalf("view = %v", got)
 	}
@@ -269,7 +271,7 @@ func TestTunnelVerifiedExitIsConnectedWithALabel(t *testing.T) {
 func TestTunnelTierIsRefusedForAProviderWithItsOwnCheck(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	h.writeResult(map[string]any{"exit_confirmed": false, "egress_tier": "tunnel"})
-	want := map[string]any{"state": "failed", "label": "verification failed", "tier": nil, "selection_mode": "panel", "configured_server": nil}
+	want := map[string]any{"state": "failed", "label": "verification failed", "tier": nil, "configured_server": nil}
 	if got := viewOf(t, h); !reflect.DeepEqual(got, want) {
 		t.Fatalf("view = %v", got)
 	}
