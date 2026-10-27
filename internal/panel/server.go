@@ -526,9 +526,12 @@ var knownRoutes = map[string]bool{
 	"/auth/callback": true, "/logout": true, "/signed-out": true,
 }
 
+// headRefused are the GET routes HEAD may not stand in for.
+var headRefused = map[string]bool{"/api/latency": true, "/login": true, "/auth/callback": true}
+
 // logRequest writes one access line: method, fixed route and status, with no
-// addresses or user-controlled text. GET /healthz, which the container's
-// health check polls, is left out.
+// addresses or user-controlled text. GET and HEAD /healthz, which the
+// container's health check and uptime monitors poll, are left out.
 func (s *Server) logRequest(r *http.Request, code int) {
 	path, _, _ := strings.Cut(r.RequestURI, "?")
 	route := "(unknown route)"
@@ -542,7 +545,7 @@ func (s *Server) logRequest(r *http.Request, code int) {
 	case http.MethodGet, http.MethodPost, http.MethodHead:
 		method = r.Method
 	}
-	if method == http.MethodGet && route == "/healthz" {
+	if (method == http.MethodGet || method == http.MethodHead) && route == "/healthz" {
 		return
 	}
 	s.logEvent(fmt.Sprintf("%s %s %d", method, route, code))
@@ -694,10 +697,12 @@ func authCookie(name, value string, maxAge int) string {
 	return fmt.Sprintf("%s=%s; Path=/; Max-Age=%d; Secure; HttpOnly; SameSite=Lax", name, value, maxAge)
 }
 
-// ServeHTTP is the panel.
+// ServeHTTP is the panel. HEAD is answered as GET, headers only (net/http
+// drops the body and keeps the Content-Length): uptime monitors and
+// `curl -I` use it. app.py answered it 501.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		s.doGET(w, r)
 	case http.MethodPost:
 		s.doPOST(w, r)
@@ -724,6 +729,13 @@ func (s *Server) doGET(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.misdirected(w, r) {
+		return
+	}
+	if r.Method == http.MethodHead && headRefused[path] {
+		// These do something beyond reading: probing relays, starting or
+		// finishing a sign-in.
+		s.send(w, r, reply{code: 405, contentType: "text/plain; charset=utf-8", body: []byte("method not allowed"),
+			headers: [][2]string{{"Allow", "GET"}}})
 		return
 	}
 	session := s.session(r)

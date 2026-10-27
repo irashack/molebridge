@@ -1962,7 +1962,7 @@ starts with a UTC timestamp to the second. A request's line is the method,
 the route and the status, such as `2026-01-02T15:04:05Z GET /api/status 200`
 (an unknown path is `(unknown route)`, a method other than GET, POST and
 HEAD `(other method)`); `GET /healthz`, which the Compose health check polls
-every 30 seconds, is not logged. Lines written before the panel listens,
+every 30 seconds, is not logged, nor is `HEAD /healthz`. Lines written before the panel listens,
 such as a refused setting, start `molebridge panel: ` instead.
 
 One panel can serve several exits on the same host (`PANEL_EXITS`; see

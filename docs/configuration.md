@@ -633,6 +633,12 @@ ignores the exit parameter. With [sign-in](access.md#sign-in-with-openid-connect
 on, the cookie and the first exit are chosen among the exits the person is
 granted.
 
+Since 0.10.0, `HEAD` is answered as `GET` with the same status and headers and
+no body, so `curl -I` and uptime monitors work; earlier releases answered 501.
+`/api/latency`, `/login` and `/auth/callback`, which do more than read, answer
+`HEAD` with 405 and `Allow: GET`. `HEAD /healthz`, like `GET /healthz`, writes
+no access log line. Other methods than `GET`, `HEAD` and `POST` get 501.
+
 | Path | Purpose |
 |---|---|
 | `/`, `/?exit=<id>` | Full panel for the exit |
