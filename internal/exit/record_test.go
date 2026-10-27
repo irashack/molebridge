@@ -251,6 +251,31 @@ func TestStartingRecord(t *testing.T) {
 	}
 }
 
+func TestProfileRefusedRecordFailsNamingTheRefusal(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	refusal := "the stored NetBird profile /var/lib/netbird/default.json does not exclude the tunnel interface wg0 " +
+		"from NetBird's connection candidates; example"
+	for _, b := range branches()[:2] {
+		t.Run(b.name, func(t *testing.T) {
+			rec := ProfileRefusedRecord(b.s, now, refusal)
+			if rec["status"] != "failed" || rec["message"] != refusal {
+				t.Fatalf("%v %q", rec["status"], rec["message"])
+			}
+			v := assess(t, b.s, rec, verdict.Target{}, now.Add(time.Second))
+			if v.State != "failed" || v.Message == nil || *v.Message != refusal ||
+				len(v.Reasons) != 1 || v.Reasons[0] != "netbird-failed" {
+				t.Errorf("%+v", v)
+			}
+		})
+	}
+	// Bounded, and valid text whatever the error carried.
+	s := settingsFor("overlay", "wireguard", "mullvad")
+	rec := ProfileRefusedRecord(s, now, strings.Repeat("é", 1000)+"\xff")
+	if m := rec["message"].(string); len([]rune(m)) != 900 || !strings.HasPrefix(m, "éé") {
+		t.Errorf("%d runes", len([]rune(m)))
+	}
+}
+
 func TestOwnerCheckAndOrdering(t *testing.T) {
 	now := time.Date(2026, 10, 12, 12, 0, 0, 900_000_000, time.UTC)
 	exp := now.Add(5*time.Second + 500*time.Millisecond) // 12:00:06.4

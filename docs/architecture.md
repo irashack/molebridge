@@ -822,7 +822,10 @@ itself:
   entry is in effect, because `netbird up` in daemon mode can return at once when
   the daemon is already connected, before a configuration change applies. If the
   profile isn't right, the pipeline does not run and the exit tells the
-  supervisor to stop NetBird.
+  supervisor to stop NetBird. Until the container restarts, the exit publishes
+  a `failed` record every 5 seconds whose message is the refusal and whose
+  `netbird` check fails, so the panel, `/readyz` and `molebridge status` name
+  the cause.
 
 Only the tunnel interface is required, never the host interface: the blacklist
 filters NetBird's connection candidates, and excluding the host interface would

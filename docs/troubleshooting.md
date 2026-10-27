@@ -467,7 +467,9 @@ requirements. The reasons:
   cannot be verified`. After `netbird up` the exit read the profile again and found
   none. NetBird failed to enroll or to write its state; see NetBird's output above
   the line. The exit admits no traffic and stops NetBird; the refusal holds until
-  the container restarts, so fix the cause and restart the exit.
+  the container restarts, so fix the cause and restart the exit. A refusal after
+  `netbird up`, this one or the blacklist one above, is also the message of the
+  exit's record, which shows `failed` in the panel and in `molebridge status`.
 - With gluetun only: `<name> is set; the gluetun backend needs NetBird to mark its
   control traffic`, for `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` or
   `NB_DISABLE_CUSTOM_ROUTING` (remove the variable); `CONTROL_MARK must be
