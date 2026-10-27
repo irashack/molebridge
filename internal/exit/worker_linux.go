@@ -377,9 +377,11 @@ func (w *worker) run() int {
 		w.watcher = wt
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
 		go func() {
+			// Run returns nil once the worker stops; an error is the event
+			// socket failing, and without the watcher nothing repairs the
+			// contract: the worker ends with a failure.
 			if err := wt.Run(w.ctx); err != nil {
-				w.logf("%v", err)
-				w.cancel()
+				w.fatal(err.Error())
 			}
 		}()
 	}
