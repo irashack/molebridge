@@ -34,7 +34,8 @@ object is gone from `/api/status`. Not yet run live
 - **A malformed `PANEL_PUBLIC_HOSTS` entry stops the panel at start**, such
   as `https://exit.example.net` or `exit.example.net/`, with
   `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
-  It used to be ignored, and every request then got 421.
+  It used to be ignored, and every request then got 421. An IPv6 address
+  goes in brackets (`[2001:db8::1]:8095`).
 
 **Fail-closed and routing**:
 - **Every native overlay exit installs the ingress guard** `inet
@@ -157,8 +158,10 @@ had no production callers.
 
 **Release process**: live acceptance runs `main`'s tooling and refuses a
 candidate that isn't on `main`; CI checks that `vendor/` matches `go mod
-vendor`; a weekly scan runs govulncheck on `main` and grype on the latest
-release image and keeps findings in one issue. The acceptance policy
+vendor`; a weekly scan runs govulncheck on `main` (a finding fails the run
+and is handled privately through [SECURITY.md](SECURITY.md)) and grype on
+the latest release image, keeping known CVEs in bundled packages in one
+issue. The acceptance policy
 (version 7) drills the upgrade from 0.9.4.
 
 ## 0.9.4 — 2026-10-23
