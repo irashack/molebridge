@@ -280,6 +280,7 @@ func TestAReplyThatDoesNotDecodeResetsTheConnection(t *testing.T) {
 func TestConfigureAndDeviceRoundTripTheWireGuardAttributes(t *testing.T) {
 	key := wgtypes.Key{1, 2, 3}
 	peerKey := wgtypes.Key{9, 9}
+	psk := wgtypes.Key{7}
 	mark := 0x1bd00
 	port := 51820
 	keepalive := 25 * time.Second
@@ -292,7 +293,7 @@ func TestConfigureAndDeviceRoundTripTheWireGuardAttributes(t *testing.T) {
 	}
 	c := connected(t, s)
 	cfg := wgtypes.Config{PrivateKey: &key, ListenPort: &port, FirewallMark: &mark, ReplacePeers: true,
-		Peers: []wgtypes.PeerConfig{{PublicKey: peerKey, ReplaceAllowedIPs: true, PersistentKeepaliveInterval: &keepalive,
+		Peers: []wgtypes.PeerConfig{{PublicKey: peerKey, PresharedKey: &psk, ReplaceAllowedIPs: true, PersistentKeepaliveInterval: &keepalive,
 			Endpoint:   &net.UDPAddr{IP: net.ParseIP("198.51.100.10"), Port: 51820},
 			AllowedIPs: []net.IPNet{{IP: net.ParseIP("0.0.0.0").To4(), Mask: net.CIDRMask(0, 32)}, {IP: net.ParseIP("::"), Mask: net.CIDRMask(0, 128)}}}}}
 	if err := c.Configure(context.Background(), "wg0", cfg); err != nil {
@@ -310,11 +311,12 @@ func TestConfigureAndDeviceRoundTripTheWireGuardAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Name != "wg0" || d.PrivateKey != key || d.ListenPort != port || d.FirewallMark != mark || len(d.Peers) != 1 {
+	// The keys are sent but never read back.
+	if d.Name != "wg0" || d.PrivateKey != (wgtypes.Key{}) || d.ListenPort != port || d.FirewallMark != mark || len(d.Peers) != 1 {
 		t.Fatalf("%+v", d)
 	}
 	p := d.Peers[0]
-	if p.PublicKey != peerKey || p.PersistentKeepaliveInterval != keepalive || p.Endpoint.String() != "198.51.100.10:51820" || len(p.AllowedIPs) != 2 {
+	if p.PublicKey != peerKey || p.PresharedKey != (wgtypes.Key{}) || p.PersistentKeepaliveInterval != keepalive || p.Endpoint.String() != "198.51.100.10:51820" || len(p.AllowedIPs) != 2 {
 		t.Fatalf("%+v", p)
 	}
 }
