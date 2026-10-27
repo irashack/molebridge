@@ -170,6 +170,9 @@ func TestMalformedGluetunEntriesAreSkipped(t *testing.T) {
 		{"categories", repeat("Standard", 65)}, {"ips", []any{"2001:db8::1"}},
 		{"ips", "198.51.100.1"}, {"ips", []any{nil, int64(4), "198.51.100.01"}},
 		{"ips", repeat("198.51.100.1", 65)},
+		// A server naming one non-public IPv4 address is refused whole.
+		{"ips", []any{"10.0.0.1"}}, {"ips", []any{"198.51.100.1", "192.168.0.1"}}, {"ips", []any{"127.0.0.1"}},
+		{"ips", []any{"169.254.169.254", "198.51.100.1"}}, {"ips", []any{"100.64.0.1"}},
 	} {
 		storage := gluetunStorage(t)
 		servers := list(obj(storage["mullvad"])["servers"])[:2]
@@ -494,7 +497,8 @@ func TestSnapshotEntriesKeepEveryAddress(t *testing.T) {
 	if entry == nil || strings.Join(entry.IPv4Addrs, ",") != "198.51.100.5,198.51.100.50" || !sameJSON(t, entry, relay) {
 		t.Fatalf("snapshot entry: %+v", entry)
 	}
-	for _, bad := range [][]any{{"198.51.100.50", "198.51.100.5"}, {}, {"198.51.100.5", "198.51.100.5"}, {"198.51.100.5", "x"}} {
+	for _, bad := range [][]any{{"198.51.100.50", "198.51.100.5"}, {}, {"198.51.100.5", "198.51.100.5"}, {"198.51.100.5", "x"},
+		{"198.51.100.5", "10.0.0.5"}} {
 		changed := obj(clone(t, stored))
 		changed["ipv4_addrs"] = bad
 		if ValidateGluetunEntry(changed) != nil {
@@ -529,6 +533,7 @@ func TestValidateGluetunEntry(t *testing.T) {
 		"id differs": func(m map[string]any) { m["id"] = "b.example.test" }, "bad key": func(m map[string]any) { m["public_key"] = "AAAA" },
 		"bad hostname": func(m map[string]any) { m["hostname"] = "A.example.test"; m["id"] = "A.example.test" },
 		"ipv6 in v4":   func(m map[string]any) { m["ipv4_addr_in"] = "2001:db8::1" }, "no ipv6 list": func(m map[string]any) { delete(m, "ipv6_addrs") },
+		"private v4": func(m map[string]any) { m["ipv4_addr_in"] = "172.20.0.5" }, "loopback v4": func(m map[string]any) { m["ipv4_addr_in"] = "127.0.0.1" },
 		"v4 in v6 list":   func(m map[string]any) { m["ipv6_addrs"] = []any{"198.51.100.1"} },
 		"noncanonical v6": func(m map[string]any) { m["ipv6_addrs"] = []any{"2001:DB8::1"} },
 		"too many v6": func(m map[string]any) {

@@ -1991,6 +1991,11 @@ host-to-relay path, not end-to-end client latency. One request names at most
 more). The panel runs one latency request per exit and four in all, answering
 429 beyond that before it loads anything; no lock is held while probing, and
 a server already being probed is waited for rather than probed again.
+Every catalogue (Mullvad's, PIA's, NordVPN's and gluetun's) drops a relay
+whose IPv4 address is private, loopback, link-local, multicast,
+unspecified, in 0.0.0.0/8, 100.64.0.0/10 or 240.0.0.0/4, both when the list
+is fetched and when the snapshot is read back, so the panel never probes such
+an address and a switch never names one. The documentation ranges pass.
 
 ### Sign-in
 

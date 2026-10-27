@@ -120,6 +120,10 @@ func TestInvalidRegionsAreDropped(t *testing.T) {
 		"name with newline": {"name": "x\n"}, "port_forward string": {"port_forward": "yes"}, "geo null": {"geo": nil},
 		"no servers": wg([]any{}), "bad ip": wg([]any{map[string]any{"ip": "198.51.100.999", "cn": "example401"}}),
 		"bad cn": wg([]any{map[string]any{"ip": "198.51.100.20", "cn": "bad name"}}), "too many": wg(many),
+		"private ip":  wg([]any{map[string]any{"ip": "10.0.0.1", "cn": "example401"}}),
+		"loopback ip": wg([]any{map[string]any{"ip": "127.0.0.1", "cn": "example401"}}),
+		"one private ip of two": wg([]any{map[string]any{"ip": "198.51.100.20", "cn": "example401"},
+			map[string]any{"ip": "172.16.0.1", "cn": "example402"}}),
 		"servers is a list": {"servers": []any{}}, "long name": {"name": strings.Repeat("x", 65)},
 		"prefix only": {"name": "EX "},
 	} {
@@ -210,6 +214,27 @@ func TestValidatePIAEntryNeedsEveryField(t *testing.T) {
 	}
 	if ValidatePIAEntry(nil) != nil || ValidatePIAEntry([]any{}) != nil {
 		t.Error("non-objects accepted")
+	}
+	// A snapshot is re-read with the same address screen as the list.
+	for _, address := range []string{"10.0.0.1", "127.0.0.1", "169.254.169.254"} {
+		bad := decoded(t, good).(map[string]any)
+		bad["ipv4_addr_in"] = address
+		if ValidatePIAEntry(bad) != nil {
+			t.Errorf("accepted latency target %s", address)
+		}
+	}
+}
+
+func TestAPrivateMetaServerLeavesTheWireGuardServerAsTheLatencyTarget(t *testing.T) {
+	region := testRegionJSON(nil)
+	servers := region["servers"].(map[string]any)
+	servers["meta"] = []any{map[string]any{"ip": "192.168.0.1", "cn": "example401"}}
+	got, err := ParsePIACatalog(serverlist(t, region), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := got.Get(testRegion); r == nil || r.IPv4AddrIn != "198.51.100.20" {
+		t.Errorf("got %+v", r)
 	}
 }
 

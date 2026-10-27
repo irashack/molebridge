@@ -156,6 +156,39 @@ func ValidIPv4(value any) bool {
 	return err == nil && a.Is4() && a.String() == s
 }
 
+// nonPublicIPv4 are the IPv4 ranges netip's predicates leave out that no
+// relay is ever reached at: "this network" (0.0.0.0/8), shared address
+// space for carrier-grade NAT (100.64.0.0/10, which NetBird's overlay also
+// uses), and the reserved 240.0.0.0/4 with the limited broadcast address.
+var nonPublicIPv4 = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+}
+
+// ValidPublicIPv4 is ValidIPv4 for an address taken from a provider's list
+// and dialled (a relay's latency target or WireGuard endpoint): it also
+// refuses private, loopback, link-local, multicast, unspecified, shared
+// (100.64.0.0/10) and reserved addresses, so a hostile or tampered list
+// cannot point the panel's prober or a switch at the host's own networks.
+// The documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
+// pass: they reach nothing, and the tests use them as fictitious relays.
+func ValidPublicIPv4(value any) bool {
+	if !ValidIPv4(value) {
+		return false
+	}
+	a := netip.MustParseAddr(value.(string))
+	if a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() {
+		return false
+	}
+	for _, p := range nonPublicIPv4 {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidText reports whether value is a string of 1 to 256 code points, none
 // of them a control character below U+0020.
 func ValidText(value any) bool {

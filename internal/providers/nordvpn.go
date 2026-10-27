@@ -188,8 +188,8 @@ func slug(text string) string {
 	return strings.Trim(nordSlugRE.ReplaceAllString(pyLower(text), "-"), "-")
 }
 
-// entryAddress is the server's single IPv4 entry address. IPv6 rows are
-// ignored.
+// entryAddress is the server's single IPv4 entry address, which must be
+// public (validate.ValidPublicIPv4). IPv6 rows are ignored.
 func entryAddress(ips any) (string, bool) {
 	list, ok := ips.([]any)
 	if !ok {
@@ -212,7 +212,7 @@ func entryAddress(ips any) (string, bool) {
 		if version != 4 {
 			continue
 		}
-		if !validate.ValidIPv4(address["ip"]) {
+		if !validate.ValidPublicIPv4(address["ip"]) {
 			return "", false
 		}
 		found = append(found, address["ip"].(string))
@@ -541,7 +541,7 @@ func ValidateNordEntry(entry any) *Relay {
 	if !ok || !nordHostnameRE.MatchString(host) {
 		return nil
 	}
-	if !validate.ValidKey(m["public_key"]) || !validate.ValidIPv4(m["ipv4_addr_in"]) {
+	if !validate.ValidKey(m["public_key"]) || !validate.ValidPublicIPv4(m["ipv4_addr_in"]) {
 		return nil
 	}
 	if !cleanText(m["city"]) || !cleanText(m["country"]) {
