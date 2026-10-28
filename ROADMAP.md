@@ -63,6 +63,51 @@ live. A schema 2 reader that doesn't know the new file would see a check that
 stopped moving, so the change probably needs a schema 3, or `result.json` would
 have to keep carrying the check for old readers, which saves nothing.
 
+### Exchanging requests and status over the network
+
+The panel and an exit talk through files: the panel writes
+`state/panel/desired.json`, the exit writes `state/applier/` (`result.json`,
+`relays.json`), and each mounts the other's directory. That ties them to one
+filesystem. On Kubernetes it means a volume shared between the exit's pod and
+the panel's, often in different namespaces, so one panel serving several
+exits mounts every exit's state. A node-local volume pins all of them to one
+node. A network filesystem with root squashing (most NFS exports) can't hold
+the exit's root-owned 0600 files, and user-namespaced pods
+(`hostUsers: false`) may not be able to mount NFS at all, because it lacks
+the ID-mapped mounts they need (not yet checked).
+
+Over the network, each exit would keep only its own state (the NetBird
+profile, the applier directory) on a volume of its own, which any
+single-writer block volume can hold. The panel would keep its requests on
+another. Neither would mount the other's, so each could be scheduled
+independently. Moving an exit would mean moving one private volume.
+
+What it would take, keeping the [privilege split](AGENTS.md#preserve-the-properties):
+
+- The exit fetches its request from the panel: an outbound, bounded HTTP GET
+  answered by one server name and a request ID. It validates the answer as
+  untrusted input, exactly as it treats `desired.json` today. The panel still
+  can't change routing, and the exit opens no port the panel can drive.
+- The panel reads each exit's status record and relay catalog from a small
+  read-only endpoint on the exit, with the same schema and verdict rules as
+  `result.json`. Or the exit posts them to the panel, which then stores them
+  without authority. Choose whichever keeps the exit's listening surface
+  smaller, and say how the panel authenticates the exit it reads (a per-exit
+  token from a mounted file, never in the request URL).
+- A rule for a stale or unreachable peer, matching today's file rules: an
+  unreachable panel is the same as no new request; an unreachable exit is
+  shown as unknown, never as connected, and a lapsed lease is never shown as
+  live.
+- The file exchange stays the default for Compose and single-host setups, and
+  `molebridge status` keeps reading the record locally. The network exchange
+  is opt-in per exit.
+- An exit that starts with an empty applier directory recovers from the
+  panel's request alone, so a move carries only the NetBird profile (and the
+  tunnel credentials, already mounted from files).
+- The isolation check and the host checks updated for the new mounts, and a
+  live pass on Kubernetes with an exit and the panel on different nodes,
+  including the switch, tunnel-loss and repair drills.
+
 ### Smaller memory with large server catalogs
 
 Measured at 0.8.0, a Mullvad or PIA exit idled at 67–78 MB, but a NordVPN exit
