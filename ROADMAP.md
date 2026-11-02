@@ -1,33 +1,43 @@
 # Roadmap
 
-Ideas that are not scheduled. Nothing in the backlog is built; each entry
-says what it would take as far as we know today.
+Where Molebridge is going, and ideas that are not scheduled. Nothing in the
+backlog is built; each entry says what it would take as far as we know today.
 
 ## Direction
 
-A proposal, not yet a decision. Molebridge began as a NetBird exit node, but
-most of it isn't about NetBird: the provider tunnels, the server catalogs, the
-admission pipeline, the routing contract, the status record and its verdict,
-and Switchyard. The sidecars already use that core with no NetBird at all.
-Read that way, Molebridge is a commercial VPN tunnel run as a self-hosted
-service, with several ways in, each with its own guarantee:
+Molebridge runs a commercial VPN tunnel as a self-hosted service, reached in
+more than one way. It began as a NetBird exit node, and that stays the main
+way in, but most of what it is doesn't depend on NetBird: the provider
+tunnels, the server catalogs, the admission pipeline, the routing contract,
+the status record and its verdict, and Switchyard. The sidecars already use
+that core with no NetBird at all.
+
+Each way in is defined by what it guarantees, not by its protocol:
 
 | Way in | What uses the tunnel | Guarantee |
 |---|---|---|
 | NetBird exit | whole devices | fail-closed for the traffic the exit receives |
-| Sidecar (gluetun or native) | whole containers | fail-closed, by gluetun's firewall or by the native sidecar's contract and firewall |
-| Proxy ([below](#a-proxy-on-the-exit)) | single applications or connections that opt in | none beyond the application's own settings |
+| Sidecar (gluetun or native) | whole containers | fail-closed, by gluetun's firewall or by the native sidecar's routing contract and firewall |
+| Proxy ([backlog](#a-proxy-on-the-exit)) | applications or connections that opt in | the proxy's own connections leave only through the tunnel; nothing about traffic not sent to it |
 
-The guarantee comes first wherever a way in is described or shown, so that
-adding one can't weaken what fail-closed means for the others. The
-"[exits only](AGENTS.md#preserve-the-properties)" rule would then name each
-way in and the property it keeps, instead of the native sidecar as its one
-exception.
+Three rules follow, and the project's
+[properties](AGENTS.md#preserve-the-properties) carry them:
 
-Likely order: [exchanging requests and status over the
-network](#exchanging-requests-and-status-over-the-network), so that more ways
-in don't mean more shared directories; a status record that can describe a
-way in using many servers at once; then the proxy.
+- **The guarantee comes first.** Wherever a way in is described, configured
+  or shown in Switchyard, its guarantee is stated before anything else.
+- **No way in weakens another.** A new way in brings its own checks and live
+  passes. A best-effort way in is never offered as a sidecar mode or an exit
+  setting, so that "fail-closed" keeps meaning what it means today.
+- **The core stays shared.** A way in reuses the provider tunnels, the
+  admission pipeline and the verdict rather than growing its own.
+
+The order of work: [exchanging requests and status over the
+network](#exchanging-requests-and-status-over-the-network) first, so that more
+ways in don't mean more shared directories; then a status record that can
+describe a way in using many servers at once; then [the
+proxy](#a-proxy-on-the-exit). Meanwhile a device on a Mullvad exit can already
+reach Mullvad's own per-server proxies ([Mullvad's SOCKS5
+proxies](docs/mullvad-socks5.md)).
 
 ## Done
 
