@@ -33,9 +33,14 @@ never in a public issue or commit message.
 ## Preserve the properties
 
 - **Fail-closed:** forwarded client traffic must never egress anywhere but the
-  tunnel. Changes to routing, the tunnel config, compose networking or the
-  exit need the checks in `docs/verification.md`, run on a real host, before
-  a claim that they work.
+  tunnel. Connections a Molebridge proxy opens must leave only through the
+  tunnel too, and fail rather than fall back to another path. A connection the
+  exit's namespace opens itself follows the main table unless it is bound to
+  the tunnel interface
+  ([testing](docs/testing.md#mullvads-socks5-proxies-through-an-exit)), so a
+  proxy there has to bind its connections to it. Changes to routing, the
+  tunnel config, compose networking or the exit need the checks in
+  `docs/verification.md`, run on a real host, before a claim that they work.
 - **Privilege split:** the panel is its own container, holds no capabilities,
   never runs `wg`, `ip` or subprocesses, and only writes the desired server
   name; it checks its own isolation at start and refuses to run otherwise.
@@ -49,12 +54,21 @@ never in a public issue or commit message.
   desired-state files and form posts are untrusted. Validate before use
   (bounded reads, strict UTF-8, duplicate JSON keys refused); escape before
   rendering.
-- **Exits only:** Molebridge ships its own tunnel for other containers' traffic
-  only in the native sidecar (for providers gluetun can't drive over WireGuard
-  with Molebridge, PIA first), and that sidecar owns its fail-closed guarantee
-  with the routing contract and the firewall; everything else stays gluetun's
-  job. The image holds no credentials: keys, logins and tokens come from files
-  you mount.
+- **Ways in, each with its guarantee:** each way into the tunnel is defined by
+  what it guarantees. The NetBird exit is fail-closed for the traffic it
+  receives. The sidecars are fail-closed, by gluetun's firewall or by the
+  native sidecar's routing contract and firewall. A proxy on the exit is
+  planned, not built ([roadmap](ROADMAP.md#a-proxy-on-the-exit)): its own
+  connections would leave only through the tunnel, with no promise about
+  traffic not sent to it. Wherever a way in is described or shown, its
+  guarantee comes first. No way in weakens another, and a best-effort way in
+  is never a sidecar mode or an exit setting. The core stays shared: a way in
+  reuses the provider tunnels, the admission pipeline and the verdict rather
+  than growing its own. Molebridge ships its own tunnel for other containers'
+  traffic only in the native sidecar, for providers gluetun can't drive over
+  WireGuard with Molebridge, PIA first; other containers' tunnels stay
+  gluetun's job. The image holds no credentials: keys, logins and tokens come
+  from files you mount.
 - **Honest status:** state what was tested and where. Untested platforms, and
   behavior described but not verified, say so.
 
