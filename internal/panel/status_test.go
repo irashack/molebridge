@@ -23,7 +23,27 @@ import (
 // kind, with its result and request on disk.
 func setupExit(t *testing.T, provider, kind string, result, desired map[string]any) *harness {
 	t.Helper()
-	h := newHarness(t, map[string]string{"PANEL_EXITS": "x=" + provider + "/" + kind + ":Example"}, nil)
+	return setupExitEnv(t, provider, kind, result, desired, nil)
+}
+
+// setupCase is setupExit for a consumer case: a network case's exit is in
+// PANEL_NETWORK_EXITS, with no link state.
+func setupCase(t *testing.T, name string, c consumerCase) *harness {
+	t.Helper()
+	var extra map[string]string
+	if networkCases[name] {
+		extra = map[string]string{"PANEL_NETWORK_EXITS": "x"}
+	}
+	return setupExitEnv(t, c.provider, c.kind, c.record(), c.request(), extra)
+}
+
+func setupExitEnv(t *testing.T, provider, kind string, result, desired map[string]any, extra map[string]string) *harness {
+	t.Helper()
+	env := map[string]string{"PANEL_EXITS": "x=" + provider + "/" + kind + ":Example"}
+	for k, v := range extra {
+		env[k] = v
+	}
+	h := newHarness(t, env, nil)
 	ex := h.exit("x")
 	mustWrite(t, ex.ResultPath, result)
 	mustWrite(t, ex.DesiredPath, desired)
@@ -35,7 +55,7 @@ func TestEveryConsumerShowsTheOneVerdict(t *testing.T) {
 		c := consumerCases[name]
 		t.Run(name, func(t *testing.T) {
 			result := c.record()
-			h := setupExit(t, c.provider, c.kind, result, c.request())
+			h := setupCase(t, name, c)
 			var configured any
 			if result != nil {
 				configured = result["configured_server"]

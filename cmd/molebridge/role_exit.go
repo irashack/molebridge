@@ -9,13 +9,14 @@ import (
 )
 
 func init() {
-	register("exit", "the exit node: supervisor (PID 1), routing worker, NetBird (internal flags: --worker, --cleanup)",
+	register("exit", "the exit node: supervisor (PID 1), routing worker, NetBird (internal flags: --worker, --cleanup, --exchange)",
 		func(args []string) int { return exitMain(args, os.Environ(), os.Stderr) })
 }
 
 // exitMain is `molebridge exit`. Without arguments it is the supervisor; the
-// supervisor starts itself again with --worker (the routing worker) and
-// --cleanup (the independent cleanup child). Settings come from the
+// supervisor starts itself again with --worker (the routing worker),
+// --cleanup (the independent cleanup child) and, with EXCHANGE_URL set,
+// --exchange (the network exchange's client). Settings come from the
 // environment; a refusal prints one fixed line and exits 1 before anything
 // changes.
 func exitMain(args []string, environ []string, stderr io.Writer) int {
@@ -35,7 +36,9 @@ func exitMain(args []string, environ []string, stderr io.Writer) int {
 		return exit.RunWorker(environ, stderr)
 	case args[0] == "--cleanup":
 		return exit.RunCleanup(args[1:], env, stderr)
+	case args[0] == "--exchange" && len(args) == 1:
+		return exit.RunExchange(environ, stderr)
 	}
-	fmt.Fprintln(stderr, "molebridge-exit: the only arguments are the internal --worker and --cleanup")
+	fmt.Fprintln(stderr, "molebridge-exit: the only arguments are the internal --worker, --cleanup and --exchange")
 	return 2
 }

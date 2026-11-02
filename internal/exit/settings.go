@@ -87,6 +87,8 @@ type Settings struct {
 	OtherConfs int
 	// WatchLog is the NetBird log file the gluetun log monitor reads.
 	WatchLog string
+	// Exchange is the network exchange's settings; nil means files only.
+	Exchange *ExchangeSettings
 	// Env is the environment the settings were read from. It holds secrets
 	// (NB_SETUP_KEY and the pipeline's): it is never printed or logged.
 	Env map[string]string
@@ -337,6 +339,9 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 			s.FwmarkGrace = nb.FwmarkGrace
 			s.WatchLog = nb.WatchLog
 		}
+	}
+	if s.Exchange, err = loadExchange(env); err != nil {
+		return nil, err
 	}
 	if err := checkStateDir(filepath.Join(s.StateDir, "applier"), 0o755, o.WriteChecks); err != nil {
 		return nil, err

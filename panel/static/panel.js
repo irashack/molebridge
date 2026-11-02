@@ -38,7 +38,7 @@
     let note = '';
     if (state === 'failed') note = message || TEXT.failed;
     else if (state === 'unknown') {
-      const stale = reasons.includes('status-stale') || reasons.includes('no-status');
+      const stale = ['status-stale', 'no-status', 'exit-unreachable'].some((r) => reasons.includes(r));
       note = message || (stale ? TEXT.stale : TEXT.unverified);
     }
     let next = '';

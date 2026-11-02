@@ -40,6 +40,8 @@ type Config struct {
 	Self        string
 	WorkerArgs  []string
 	CleanupArgs []string
+	// ExchangeArgs are the exchange child's arguments.
+	ExchangeArgs []string
 	// ExtraWorkerEnv is appended to the worker's environment (tests).
 	ExtraWorkerEnv []string
 	// NetBirdBin is the NetBird client ("netbird", found in PATH).
@@ -72,14 +74,16 @@ type (
 
 // Supervisor is `molebridge exit`.
 type Supervisor struct {
-	c      Config
-	s      *Settings
-	reap   *proc.Reaper
-	lease  *Lease
-	pub    *publisher
-	nb     *nbManager
-	stderr io.Writer // never blocks: see boundedLog
-	log    *boundedLog
+	c     Config
+	s     *Settings
+	reap  *proc.Reaper
+	lease *Lease
+	pub   *publisher
+	nb    *nbManager
+	// exchange keeps the exchange child running when EXCHANGE_URL is set.
+	exchange *exchangeRunner
+	stderr   io.Writer // never blocks: see boundedLog
+	log      *boundedLog
 	// leaseOut writes the lease file off the deadline path.
 	leaseOut *coalescer
 
@@ -120,6 +124,9 @@ func New(c Config) *Supervisor {
 	}
 	if c.WorkerArgs == nil {
 		c.WorkerArgs = []string{"exit", "--worker"}
+	}
+	if c.ExchangeArgs == nil {
+		c.ExchangeArgs = []string{"exit", "--exchange"}
 	}
 	if c.NetBirdBin == "" {
 		c.NetBirdBin = "netbird"
@@ -222,6 +229,7 @@ func (s *Supervisor) run() int {
 		return s.stopSequence(ReasonWorker, false)
 	}
 	s.writeLeaseFile()
+	s.startExchange()
 	tick := time.NewTicker(s.c.Timing.Tick)
 	defer tick.Stop()
 	for {
@@ -303,6 +311,24 @@ func (s *Supervisor) startWorker() error {
 		s.push(evWorkerGone{})
 	}()
 	return nil
+}
+
+// startExchange starts the exchange child's runner when EXCHANGE_URL is set.
+// The child is outside the lease: it never stops NetBird or the worker.
+func (s *Supervisor) startExchange() {
+	if s.s.Exchange == nil {
+		return
+	}
+	for _, w := range exchangeWarnings(s.s.Exchange) {
+		s.logf("%s", w)
+	}
+	env := ExchangeEnv(s.s)
+	args := append([]string{"molebridge"}, s.c.ExchangeArgs...)
+	s.exchange = newExchangeRunner(func() (*proc.Process, error) {
+		return s.reap.Start(proc.Spec{Path: s.c.Self, Args: args, Env: env,
+			Stderr: osStderr(s.c.Stderr), Stdout: osStderr(s.c.Stderr)})
+	}, s.logf)
+	go s.exchange.Run()
 }
 
 // osStderr returns the *os.File behind w when it is one, else the null device.
@@ -531,6 +557,9 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	}
 	if s.worker != nil {
 		s.send(Msg{Type: TypeStop})
+	}
+	if s.exchange != nil {
+		s.exchange.Close()
 	}
 	if requested {
 		s.pub.Close()

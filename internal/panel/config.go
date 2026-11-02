@@ -3,10 +3,12 @@ package panel
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/irashack/molebridge/internal/exchange"
 	"github.com/irashack/molebridge/internal/panel/oidc"
 	"github.com/irashack/molebridge/internal/panel/pystr"
 	"github.com/irashack/molebridge/internal/providers"
@@ -129,5 +131,31 @@ func ConfigFromEnv(env map[string]string) (*Config, error) {
 	if len(exits) == 0 && single.Provider == "" {
 		return nil, errors.New("panel: no provider")
 	}
+	if err := markNetworkExits(env["PANEL_NETWORK_EXITS"], exits, stateDir); err != nil {
+		return nil, err
+	}
 	return &Config{Settings: settings, StateDir: stateDir, Exits: exits, Single: single}, nil
+}
+
+// markNetworkExits reads PANEL_NETWORK_EXITS, the comma-separated ids of the
+// exits reached through the network exchange; each must be in PANEL_EXITS.
+func markNetworkExits(raw string, exits []Exit, stateDir string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	for _, id := range strings.Split(raw, ",") {
+		id = strings.TrimSpace(id)
+		found := false
+		for i := range exits {
+			if exits[i].ID == id {
+				exits[i].Network = true
+				exits[i].LinkPath = filepath.Join(stateDir, id, exchange.LinkFile)
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("PANEL_NETWORK_EXITS: %s is not an exit in PANEL_EXITS", pystr.Repr(id))
+		}
+	}
+	return nil
 }

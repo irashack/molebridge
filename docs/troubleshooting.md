@@ -231,7 +231,7 @@ example a Compose override that removed the tmpfs; the container exits with stat
 **Running the image by hand.** The image's role is its first argument and is never guessed:
 `usage: molebridge <role> [arguments]` followed by the list of roles, with exit status 2, or
 `molebridge: unknown role "<name>"`. `molebridge exit` takes no arguments of its own;
-`molebridge-exit: the only arguments are the internal --worker and --cleanup` and
+`molebridge-exit: the only arguments are the internal --worker, --cleanup and --exchange` and
 `molebridge-exit: the worker is started by the supervisor only` mean a role was started by hand
 that only the supervisor starts.
 
@@ -710,6 +710,15 @@ result from the exit: none in the last 150 seconds, or one that is malformed or 
 in the future. Check that the `exit` container is running and healthy, and that the
 host's clock is right. After the exit stops on purpose, the last record goes stale
 after 150 seconds, as it did in 0.7.
+
+**The status says "exit unreachable" or "clocks differ".** Only for an exit in
+`PANEL_NETWORK_EXITS` ([the network exchange](configuration.md#the-network-exchange)).
+"exit unreachable": the exchange has heard nothing from the exit for 15 seconds.
+Look for `molebridge-exit: exchange: round failed: <reason>` in the exit's log; a
+401 is a wrong `EXCHANGE_TOKEN` or `EXCHANGE_EXIT_ID`, a timeout means the exit can't
+reach `EXCHANGE_URL`. Check that the `exchange` container runs and shares the panel's
+state directory. "clocks differ": the exit's clock and the exchange's are more than
+10 seconds apart; fix the hosts' time sync.
 
 **Other states the panel shows as unknown or failed.** Each is the
 [verdict](architecture.md#the-verdict) on the exit's last record:

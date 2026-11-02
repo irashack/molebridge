@@ -10,9 +10,22 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 ingress guard on every native overlay exit, a readiness precondition for the
 ICMP source sysctl, recovery from a switch stuck in `attempting`, a version
 the binary knows, `/metrics` and `HEAD` on the panel, bounded sign-in
-traffic, and a draft compatibility contract for 1.x. The deprecated `view`
-object is gone from `/api/status`. Not yet run live
+traffic, a draft compatibility contract for 1.x, and the experimental network
+exchange. The deprecated `view` object is gone from `/api/status`. Not yet run live
 ([testing](docs/testing.md#0100)).
+
+**New, experimental**:
+- **The network exchange**, for an exit and a panel that share no
+  filesystem, such as two Kubernetes pods on different nodes
+  ([configuration](docs/configuration.md#the-network-exchange),
+  [architecture](docs/architecture.md#the-network-exchange)). With
+  `EXCHANGE_URL` set, the exit's supervisor starts `molebridge exit
+  --exchange`, outside the lease, which copies the panel's request into the
+  exit's `desired.json` and sends its published files; the exit still serves
+  no HTTP. A new role, `exchange`, runs on the panel's side, and
+  `PANEL_NETWORK_EXITS` makes the panel judge those exits by the link: two
+  new reason codes, `exit-unreachable` and `clock-skew`. Nothing changes
+  without these settings. Unit and in-process tests only; not run live.
 
 **Breaking**:
 - **`/api/status` no longer sends `view`** or the 0.6 fields it derived into

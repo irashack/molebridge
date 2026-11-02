@@ -289,7 +289,14 @@ var consumerCases = map[string]consumerCase{
 	}, func() map[string]any { return request("se-got-wg-001", strings.Repeat("b", 32)) }, "ok", "connected", "provider"},
 	"no-status": {"mullvad", "overlay", func() map[string]any { return nil }, func() map[string]any { return nil },
 		"unknown", "awaiting status", ""},
+	// An exit reached through the network exchange that the exchange hasn't
+	// heard from: its copy says ok, and is not believed.
+	"exit-unreachable": {"mullvad", "overlay", func() map[string]any { return schema2(recOpts{}) },
+		func() map[string]any { return request(serverOf("mullvad")) }, "unknown", "exit unreachable", ""},
 }
+
+// networkCases are the consumer cases whose exit is in PANEL_NETWORK_EXITS.
+var networkCases = map[string]bool{"exit-unreachable": true}
 
 func caseNames() []string {
 	names := make([]string, 0, len(consumerCases))

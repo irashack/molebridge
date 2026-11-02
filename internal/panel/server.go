@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/irashack/molebridge/internal/exchange"
 	"github.com/irashack/molebridge/internal/panel/oidc"
 	"github.com/irashack/molebridge/internal/panel/pystr"
 	"github.com/irashack/molebridge/internal/providers"
@@ -289,7 +290,19 @@ func (s *Server) readStatus(ex Exit) ExitStatus {
 	if _, configured := state.ConfiguredServer(result); !configured {
 		desired = state.ReadJSON(ex.DesiredPath, 4096)
 	}
-	return s.judge(ex, desired, result)
+	st := s.judge(ex, desired, result)
+	if ex.Network {
+		// The files are copies: judged only while the exchange hears from the
+		// exit, so a link failure never shows as the exit's, and an old record
+		// never as live.
+		link, ok := exchange.ReadLink(ex.LinkPath)
+		if reason, label := exchange.Judge(link, ok, s.now()); reason != "" {
+			v := st.Verdict
+			st.Verdict = verdict.Verdict{State: "unknown", Label: label, Reasons: []string{reason},
+				Schema: v.Schema, Kind: v.Kind, ConfiguredServer: v.ConfiguredServer}
+		}
+	}
+	return st
 }
 
 // exitView is the verdict as describe reads it: complete checks, and who

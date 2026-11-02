@@ -395,6 +395,104 @@ namespace of the application whose port it sets
 | `PORT_SYNC_INTERVAL` | `30` | Seconds between passes: a whole number from 10 to 300. |
 | `STATE_DIR` | `/state` | Where the role finds `applier/result.json`; mount the exit's `state/applier` read-only. |
 
+## The network exchange
+
+**Experimental, and not yet run live** ([testing](testing.md#0100)). By
+default the panel and an exit share files: the panel reads the exit's
+`state/applier/` through a read-only mount, and the exit reads the panel's
+`state/panel/`. When they can't share a filesystem (on Kubernetes, an exit and
+a panel in different pods or on different nodes), the network exchange
+carries the same files over HTTP instead, and neither mounts the other's
+directory ([architecture](architecture.md#the-network-exchange)).
+
+It takes three pieces:
+
+- **On the exit**, `EXCHANGE_URL` and its settings below. The exit's
+  supervisor then starts `molebridge exit --exchange`, which every 2 seconds
+  fetches the panel's request into the exit's own `state/panel/desired.json`
+  and sends `result.json`, `relay-error.json` and `relays.json` when they
+  changed. The exit makes outbound requests only; it still serves no HTTP.
+- **On the panel's side**, a container running the `exchange` role, which
+  receives the files and writes them to `state/<id>/applier/`, and hands out
+  `state/<id>/panel/desired.json`. It shares the panel's state directory, in
+  the panel's pod or on the panel's host.
+- **In the panel**, `PANEL_NETWORK_EXITS`, so that the panel judges each of
+  those exits by the link as well as by its record.
+
+The file exchange stays the default, and nothing changes for an exit without
+`EXCHANGE_URL`.
+
+### On the exit
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `EXCHANGE_URL` | empty | The exchange's base URL, `https://` or `http://`, with a host and no credentials, query or fragment. Empty: files only. |
+| `EXCHANGE_EXIT_ID` | empty | The exit's id at the exchange: its id in the panel's `PANEL_EXITS`. Required with `EXCHANGE_URL`. |
+| `EXCHANGE_TOKEN` | empty | In `secrets/applier.env`, beside `GATUS_TOKEN`: the exit's token, at least 32 printable characters with no spaces. Required with `EXCHANGE_URL`. |
+| `EXCHANGE_CA_FILE` | empty | A PEM file of the authority the exchange's certificate must chain to, instead of the system's. |
+| `EXCHANGE_TLS_NAME` | empty | The name the exchange's certificate must carry, when it isn't the URL's host. |
+
+A bad value stops the exit at start with one line, before anything changes.
+With an `http://` URL whose host isn't `localhost` or a loopback address, the
+exit logs at start `molebridge-exit: exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)`.
+The client's connections carry the control mark (`CONTROL_MARK`), so they
+take the exit's host path in every form, as the provider downloads do. It
+gets only its own settings, the state directory, the provider and the mark:
+never the tunnel key, the provider's login, the setup key or the Gatus token.
+When it ends, the supervisor starts it again after a second, doubling to a
+minute; nothing else stops. A failed round is logged as
+`molebridge-exit: exchange: round failed: <reason>` when it starts, when the
+reason changes and every 10 minutes, and `molebridge-exit: exchange: works again`
+follows once a round succeeds. A 401 means a wrong `EXCHANGE_TOKEN` or
+`EXCHANGE_EXIT_ID`.
+
+The client writes `desired.json` only when the panel's request differs from
+the one there, after checking it as the exit itself does, and never deletes
+it. An exchange that can't be reached, or has no request, leaves the exit on
+its last one.
+
+So the exit's `state/panel/` is the exit's own here, not the panel's: keep it
+on the exit's volume, writable by the exit, beside `state/applier/`. The
+exit's whole `state/` then belongs to it, and moving the exit means moving
+that one volume (with `netbird-data` and the mounted secrets).
+
+### The exchange role
+
+`molebridge exchange` runs with no capabilities, not as root (as
+`PANEL_USER`, so it can read the panel's `desired.json`; `PANEL_ALLOW_ROOT`
+works as for the panel), and refuses to start otherwise, with
+`molebridge exchange: refusing to start: <reason>`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PANEL_EXITS` | empty | The panel's list. The exchange serves each exit in it, by id; it can't be empty. |
+| `STATE_DIR` | `/state` | The panel's state directory, shared with the panel. The exchange writes `<id>/applier/` and `<id>/exchange.json` and reads `<id>/panel/desired.json`. |
+| `EXCHANGE_LISTEN` | `0.0.0.0:8097` | Address and port, with a host. Publish it to the exits only, never through the panel's proxy or sign-in. |
+| `EXCHANGE_TOKENS_DIR` | `/run/secrets/exchange` | One file per exit, named by its id, holding that exit's token. It is read on every request, so a new token takes effect at once. |
+| `EXCHANGE_CERT_FILE`, `EXCHANGE_KEY_FILE` | empty | A certificate and key to serve HTTPS; both or neither. |
+
+Make a token with `head -c 32 /dev/urandom | base64 | tr -d '=+/'`, put it in
+`secrets/applier.env` on the exit as `EXCHANGE_TOKEN=…` and in the tokens
+directory as the exit's file, mode 0600 for the exchange's user. The
+exchange answers an unknown exit and a wrong token alike, with 401. It refuses
+a file over its limit (the status record 16 KiB, the refresh error 4 KiB, the
+catalog its provider's), invalid UTF-8, duplicate keys or anything but a JSON
+object, and writes what it accepts with mode 0644. At start it warns
+`molebridge exchange: warning: no usable token for exit <id>; its requests are refused`
+for each exit without a usable token file.
+
+### In the panel
+
+`PANEL_NETWORK_EXITS` lists, comma-separated, the ids of the exits in
+`PANEL_EXITS` that are reached through the exchange. For each, the panel
+reads `state/<id>/exchange.json`, which the exchange writes after each
+request: with none, or none in the last 15 seconds, the verdict is `unknown`
+with the reason `exit-unreachable` and the label "exit unreachable", whatever
+the copy of the record says; with the two clocks more than 10 seconds apart,
+`unknown` with `clock-skew` ("clocks differ"). Keep the exit's and the
+panel's hosts on time sync. An id not in `PANEL_EXITS` stops the panel at
+start with `molebridge panel: PANEL_NETWORK_EXITS: '<id>' is not an exit in PANEL_EXITS`.
+
 ## The tunnel config
 
 The exit reads one file, `tunnel/wg_confs/<EXIT_IF>.conf`
@@ -487,7 +585,8 @@ contents anywhere.
 | `tunnel/wg_confs/nordvpn.conf` | NordLynx private key and the address `10.5.0.2/32`; no peer | With NordVPN |
 | `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file; each a regular file, not a symbolic link | With PIA |
 | `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
-| `secrets/applier.env` | `GATUS_TOKEN` | Only with `GATUS_URL` |
+| `secrets/applier.env` | `GATUS_TOKEN`; `EXCHANGE_TOKEN` | `GATUS_TOKEN` only with `GATUS_URL`, `EXCHANGE_TOKEN` only with `EXCHANGE_URL` |
+| `EXCHANGE_TOKENS_DIR/<id>` | One exit's exchange token, on the panel's side | With the [network exchange](#the-network-exchange) |
 | `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
 | `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `gluetun-auth` | With the gluetun backend |
 | `secrets/gluetun/api_key` | The same API key, for the exit. It is full gluetun administration | With the gluetun backend |
@@ -499,7 +598,7 @@ through `env_file`, so their permissions are a host check
 ([operations](operations.md#host-checks)). The supervisor hands `NB_SETUP_KEY`
 only to `netbird up`, the command that enrolls, not to NetBird's daemon, its
 liveness probes or the worker, and hands NetBird only its own `NB_*` and
-`WT_*` settings, so `GATUS_TOKEN` and PIA's files never reach NetBird. The
+`WT_*` settings, so `GATUS_TOKEN`, `EXCHANGE_TOKEN` and PIA's files never reach NetBird. The
 supervisor itself, PID 1, keeps both in its environment for the life of the
 container, so root in the container (and on the host) can read them in
 `/proc/1/environ`, and the engine keeps them in the container's configuration
@@ -529,6 +628,7 @@ records](architecture.md#example-records).
 | `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
+| `<id>/exchange.json` | exchange | panel | With the [network exchange](#the-network-exchange), on the panel's side: `schema` (1), `exit`, `last_contact_at` (the exchange's clock), `clock_offset_s` (the exit's clock minus the exchange's, or null) and `files`, each file name to its `received_at` and `sha256`. The panel's `<id>/applier/` files are then the exchange's copies of the exit's. |
 
 **`owner_record`.** The check means "the exit's owner is live", and since
 0.8.0 carries one more member on a native exit: `expires_at`, the lease

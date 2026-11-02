@@ -54,7 +54,7 @@ func roleEnv(t *testing.T) (map[string]string, string) {
 
 func TestExitRoleRefusesUnknownArguments(t *testing.T) {
 	var stderr bytes.Buffer
-	if code := exitMain([]string{"--bogus"}, nil, &stderr); code != 2 || !strings.Contains(stderr.String(), "--worker and --cleanup") {
+	if code := exitMain([]string{"--bogus"}, nil, &stderr); code != 2 || !strings.Contains(stderr.String(), "--worker, --cleanup and --exchange") {
 		t.Fatalf("%d %q", code, stderr.String())
 	}
 }

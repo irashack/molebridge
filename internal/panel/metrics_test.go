@@ -69,7 +69,7 @@ func TestMetricsFollowTheOneVerdict(t *testing.T) {
 	for _, name := range caseNames() {
 		c := consumerCases[name]
 		t.Run(name, func(t *testing.T) {
-			h := setupExit(t, c.provider, c.kind, c.record(), c.request())
+			h := setupCase(t, name, c)
 			got := scrape(t, h, "")
 			want := map[string]string{`molebridge_ready`: "0",
 				`molebridge_exit_info{exit="x",provider="` + c.provider + `",kind="` + c.kind + `"}`: "1"}

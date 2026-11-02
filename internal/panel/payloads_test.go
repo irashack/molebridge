@@ -26,6 +26,9 @@ func TestWritePayloads(t *testing.T) {
 	for _, name := range caseNames() {
 		c := consumerCases[name]
 		ex := ExitUnder(name, c.provider, "Example", filepath.Join(h.dir, name), c.kind)
+		if networkCases[name] {
+			ex.Network, ex.LinkPath = true, filepath.Join(h.dir, name, "exchange.json")
+		}
 		result, request := c.record(), c.request()
 		mustWrite(t, ex.ResultPath, result)
 		mustWrite(t, ex.DesiredPath, request)

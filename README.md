@@ -60,7 +60,8 @@ You pull one signed image and run it.
   holds one Go binary, `molebridge`, and the pinned NetBird client. The first
   argument picks the role: `exit`, `panel`, `health`, `status`,
   `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
-  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist` and `port-sync`.
+  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`, `port-sync` and
+  `exchange` (the experimental [network exchange](docs/configuration.md#the-network-exchange)).
   GitHub Actions builds and signs
   the image with cosign, with build provenance and SBOMs, and promotes a
   release only after a maintainer's live-acceptance run attested that the

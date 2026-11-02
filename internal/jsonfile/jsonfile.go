@@ -4,7 +4,7 @@
 // relay catalogue in internal/providers uses it directly, because state
 // imports providers and the reverse would be a cycle.
 //
-// It offers Read, ReadObject, ReadBytes, Write (atomic, 0600 or 0644,
+// It offers Read, ReadObject, ReadBytes, Write and WriteBytes (atomic, 0600 or 0644,
 // size-bounded) and ErrSizeLimit.
 package jsonfile
 
@@ -133,7 +133,27 @@ func (l *limitWriter) Write(p []byte) (int, error) {
 // memory stays bounded by the chunk size whatever the document's size; the
 // file is synced (unless opts.NoSync) and renamed over path. On any error the temporary file is
 // removed and the old file stays in place. The directory is created if needed.
-func Write(path string, v any, opts Options) (err error) {
+func Write(path string, v any, opts Options) error {
+	return writeFile(path, opts, func(w io.Writer) error {
+		return validate.EncodeJSON(&limitWriter{w: w, max: opts.MaxBytes}, v)
+	})
+}
+
+// WriteBytes is Write for a document already encoded: data is written as it
+// is, under the same rules (atomic, 0600 or 0644, MaxBytes, NoSync). The
+// network exchange stores the bytes it received, so their hash is the
+// sender's.
+func WriteBytes(path string, data []byte, opts Options) error {
+	if opts.MaxBytes > 0 && int64(len(data)) > opts.MaxBytes {
+		return ErrSizeLimit
+	}
+	return writeFile(path, opts, func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	})
+}
+
+func writeFile(path string, opts Options, fill func(io.Writer) error) (err error) {
 	dir := filepath.Dir(path)
 	if err = os.MkdirAll(dir, 0o777); err != nil {
 		return err
@@ -156,7 +176,7 @@ func Write(path string, v any, opts Options) (err error) {
 	if err = f.Chmod(mode); err != nil {
 		return err
 	}
-	if err = validate.EncodeJSON(&limitWriter{w: f, max: opts.MaxBytes}, v); err != nil {
+	if err = fill(f); err != nil {
 		return err
 	}
 	if !opts.NoSync {

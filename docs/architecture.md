@@ -2195,6 +2195,81 @@ secret either; with `PANEL_OIDC_CLIENT_SECRET_FILE` it holds that one file.
 Sign-in has been tried live with Pocket ID v2.16.0, as an admin only; see
 [testing](testing.md#sign-in-pass-at-62a0170).
 
+## The network exchange
+
+**Experimental, not yet run live.** The panel and an exit normally share
+files ([components and trust](#components-and-trust)), which ties them to one
+filesystem. The network exchange carries the same files over HTTP, so neither
+mounts the other's directory and each can run on its own node; the settings
+are in [configuration](configuration.md#the-network-exchange). Its point is
+that no reader changes: the worker still reads `state/panel/desired.json`
+from its own disk, the supervisor still writes `result.json`, and the panel
+still reads the same four files per exit through a read-only mount, so its
+[isolation check](configuration.md#the-panels-isolation-check) is the same.
+`molebridge status`, the health checks and `port-sync` read the exit's own
+files, as before.
+
+```mermaid
+sequenceDiagram
+    participant P as Panel
+    participant X as Exchange (panel side)
+    participant C as Exchange child (in the exit)
+    participant W as Exit (worker, supervisor)
+    P->>X: writes the request into desired.json (shared volume)
+    loop every 2 s
+        C->>X: GET the request (bearer token)
+        X-->>C: the request, and the hashes of the copies it holds
+        C->>W: writes desired.json when the request is new
+        C->>X: PUT each published file whose hash differs
+        X->>P: writes the copy (read-only for the panel)
+    end
+```
+
+- **The exit only makes outbound requests.** It still serves no HTTP. The
+  exchange is the one listener, for every exit.
+- **The client is a child of the supervisor**, `molebridge exit --exchange`,
+  not a container of its own: in the gluetun form and the native sidecar,
+  only the exit's marked sockets reach the host's network, and a container
+  in the namespace would send its traffic into the tunnel or nowhere
+  ([rules 102–104](#the-exits-own-traffic-rules-102104),
+  [the native sidecar](native-sidecar.md#the-exits-own-traffic)). It is
+  outside the worker, so a slow or hostile exchange can't delay the routing
+  loops, and outside the lease, so its failure stops nothing: the supervisor
+  starts it again, and the exit keeps routing on its last request. Its
+  environment holds its own settings and nothing else. The stop sequence
+  signals it with NetBird and the worker, without waiting for it.
+- **The panel's side is its own container**, the `exchange` role, so the
+  exits' tokens and the writer of the copies stay out of the panel. It runs
+  with no capabilities and not as root, and writes only the copies and the
+  link state.
+- **The protocol.** `GET /v1/exits/<id>` answers `{"schema": 1, "desired":
+  <the request or null>, "have": {<file>: <sha256>}}`; `PUT
+  /v1/exits/<id>/files/<file>` delivers one file's bytes, for each whose hash
+  differs. Each request carries the exit's bearer token, never in the URL,
+  and the exit's wall clock in `X-Molebridge-Sent-At`. A restarted exchange
+  with an empty directory has no hashes, so the next round sends
+  everything. On a native exit `result.json` changes every 2 seconds (the
+  lease), so that's one small `PUT` each round; the catalog, up to 16 MiB,
+  goes after each refresh.
+- **Each side validates the other's bytes.** The client checks the request as
+  the exit does before writing it, and never deletes `desired.json`, so an
+  unreachable panel is the same as no new request. The exchange bounds every
+  file by its readers' limit and refuses invalid UTF-8, duplicate keys and
+  anything but a JSON object; the panel validates each copy again when it
+  reads it.
+- **The link has its own state.** A copy that stops arriving would be judged
+  stale after 150 seconds, and failed once its `owner_record` expiry passes:
+  a link failure shown as the exit's. So the exchange writes
+  `state/<id>/exchange.json` after every request, on its own clock, and the
+  panel judges an exit in `PANEL_NETWORK_EXITS` `unknown`, `exit-unreachable`,
+  when it has heard nothing for 15 seconds, ahead of every judgment of the
+  copy; and `unknown`, `clock-skew`, when the exit's clock is more than
+  10 seconds from the exchange's, because the record's times are the exit's.
+  Schema 2 is unchanged.
+- **What a stolen token allows:** reading that exit's requests and writing
+  that exit's copies, which the panel shows. Not routing: the exit still
+  resolves every request through its own catalog.
+
 ## Recovery and verification
 
 There is no recovery helper. The exit recovers itself from what it can: it

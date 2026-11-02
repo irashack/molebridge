@@ -170,7 +170,7 @@ func describe(v exitView, result map[string]any) View {
 		if note == "" {
 			stale := false
 			for _, r := range v.Reasons {
-				if r == "status-stale" || r == "no-status" {
+				if r == "status-stale" || r == "no-status" || r == "exit-unreachable" {
 					stale = true
 				}
 			}

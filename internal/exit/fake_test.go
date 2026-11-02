@@ -3,6 +3,7 @@ package exit
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ func TestMain(m *testing.M) {
 		case "fake-cleanup":
 			fakeCleanup(os.Args[2])
 			os.Exit(0)
+		case "fake-exchange":
+			fakeExchange(os.Args[2], os.Args[3])
 		}
 	}
 	os.Exit(m.Run())
@@ -211,4 +214,26 @@ func fakeWorker(mode string) {
 			status()
 		}
 	}
+}
+
+// fakeExchange is the exchange child (`fake-exchange <mode> <trace>`): it
+// traces "exchange started" with its environment's names, then exits at once
+// ("exit") or waits for SIGTERM ("wait"). The trace file is an argument: the
+// child's environment holds only the exchange's own settings.
+func fakeExchange(mode, path string) {
+	names := []string{}
+	for _, kv := range os.Environ() {
+		names = append(names, strings.SplitN(kv, "=", 2)[0])
+	}
+	sort.Strings(names)
+	os.Setenv("MB_TRACE_FILE", path)
+	trace("exchange started env=%s", strings.Join(names, ","))
+	if mode == "exit" {
+		os.Exit(3)
+	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM)
+	<-sig
+	trace("exchange terminated")
+	os.Exit(0)
 }

@@ -47,7 +47,8 @@ never in a public issue or commit message.
   The exit container holds `NET_ADMIN`, the tunnel key and the provider
   credentials (with the gluetun backend gluetun also holds `NET_ADMIN` and its
   key). The exit's binary starts no shell: the only programs it runs are the
-  pinned NetBird client and its own worker and cleanup roles.
+  pinned NetBird client and its own worker, cleanup and exchange roles. The
+  exchange role is outside the lease and gets only its own settings.
 - **Untrusted input:** Mullvad's relay list, PIA's region list and API
   responses, NordVPN's server list, gluetun's `servers.json` and control
   server answers, the tunnel config, the stored NetBird profile,

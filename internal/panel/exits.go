@@ -19,6 +19,12 @@ type Exit struct {
 	// other containers share): the operator's configuration, never the
 	// record's.
 	Kind string
+
+	// Network is whether the exit is reached through the network exchange
+	// (PANEL_NETWORK_EXITS): its files are the exchange's copies, and LinkPath,
+	// the exchange's link state, decides whether they may be judged at all.
+	Network  bool
+	LinkPath string
 }
 
 // ExitUnder is Exit.under: the exit whose state is stateDir/panel and

@@ -39,6 +39,17 @@ panel's script tests, `go mod verify`, `tools/gen-third-party.sh --check`,
 kernel has no dummy links, no WireGuard and no IPv6. CI runs them on every
 push.
 
+**The network exchange** ([architecture](architecture.md#the-network-exchange))
+has unit tests and in-process tests only: the exchange's handlers and the
+client's round against them, directly and over a loopback connection with the
+production HTTP client; the supervisor starting the exchange child, starting
+it again when it ends without stopping anything else, and stopping it; and
+the panel's verdict for a network exit across `/api/status`, `/readyz`, the
+metrics and the page script. Nothing of it has run on a real host: not the
+socket mark on the exchange child's connections, not the gluetun form or the
+native sidecar, and not Kubernetes. The live pass it needs is in the
+[roadmap](../ROADMAP.md#done).
+
 ## 0.9.4
 
 The acceptance policy for 0.9.4 (`tools/acceptance-policy.json`, version 6)
