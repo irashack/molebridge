@@ -155,6 +155,11 @@ the setup key reaches only `netbird up` but stays readable in the exit's
 `/proc/1/environ` until the exit is recreated; rule 1 keeps unicast overlay
 traffic from local delivery, not multicast or broadcast; a host suspended
 longer than `GUARD_GRACE` restarts the exit by design.
+Added: [Mullvad's SOCKS5 proxies](docs/mullvad-socks5.md) through a native
+Mullvad exit, which need no change to Molebridge (checked live at 0.9.4,
+[testing](docs/testing.md#mullvads-socks5-proxies-through-an-exit)); a
+[direction](ROADMAP.md#direction) and a [proxy on the exit](ROADMAP.md#a-proxy-on-the-exit)
+in the roadmap.
 
 **Dependencies**: `mdlayher/netlink` 1.9.0 to 1.11.2 (a panic on unaligned
 messages, `Receive` blocking `Send`). `vishvananda/netlink` and

@@ -311,6 +311,7 @@ Podman details, is in [requirements](docs/prerequisites.md).
 - [Switchyard](docs/switchyard.md): switching, embedding in a dashboard, phones, several exits.
 - [Operations](docs/operations.md): health, upgrades, recovery, backups, rootless Podman, removal.
 - [Troubleshooting](docs/troubleshooting.md): symptoms and fixes.
+- [Mullvad's SOCKS5 proxies](docs/mullvad-socks5.md): one application on another Mullvad server, through the same exit.
 
 **Reference**
 - [Configuration](docs/configuration.md): every setting, file and endpoint.

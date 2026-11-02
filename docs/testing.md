@@ -161,6 +161,45 @@ it. Attested by acceptance run 39876247409.
   place" at 35.5 s, the container restarted in the same pod, and the exit
   reported `ok` 80 s after the freeze.
 
+### Mullvad's SOCKS5 proxies through an exit
+
+On 2026-11-02, a read-only check of whether a device on a native Mullvad exit
+can use [Mullvad's SOCKS5 proxies](mullvad-socks5.md), with no change to
+Molebridge. The exit was a native overlay exit at v0.9.4
+(`ghcr.io/irashack/molebridge@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835`)
+on Kubernetes. The client was a throwaway Linux peer in its own network
+namespace (NetBird 0.82.0, kernel WireGuard, NetBird DNS off, resolver
+1.1.1.1), enrolled with an ephemeral setup key, with only the Mullvad exit
+selected. The peer and its key were deleted afterwards.
+
+- **The peer's routes.** With the exit selected, `ip route get` for
+  `10.64.0.1` and for a `10.124.0.0/16` proxy address showed NetBird's
+  interface and its exit table. Before selecting it, `10.64.0.1` used the
+  namespace's own default route. Its main table held no route covering
+  `10.0.0.0/8`.
+- **The exit's own proxy.** `curl` through `10.64.0.1:1080` reported the
+  exit's server's proxy ("SOCKS through WireGuard"); TCP connect took 29 ms.
+- **Another server's proxy.** A Frankfurt server's proxy name resolved
+  through the peer's resolver (carried by the exit) and through `10.64.0.1`
+  to the same address. `curl` through it, by address and by name, reported
+  that Frankfurt server while the exit stayed on a server in the United
+  States; TCP connect took 304 ms. The exit server's own per-server name
+  reported the exit's server.
+- **The path at the exit.** NetBird's forward accept and its masquerade each
+  counted 0 packets before the tests and 6 after, and NetBird's interface
+  0 bytes before and 14.9 kB received after: the traffic came in from NetBird,
+  went to the exit table and left through the tunnel from the tunnel address.
+- **The exit's own namespace.** A connection the exit's namespace opens
+  itself to `10.64.0.1` follows the namespace's main table, not the tunnel:
+  the routing contract sends only traffic arriving from NetBird, or bound to
+  the tunnel interface, to the exit table. Unbound, it timed out; bound to the
+  tunnel interface, it worked. A proxy run in the exit's namespace would need that
+  binding ([roadmap](../ROADMAP.md#a-proxy-on-the-exit)).
+
+Not tested: clients on macOS, iOS, Android or Windows; the gluetun backend
+with Mullvad (no gluetun Mullvad exit was available); the native sidecar;
+Docker or Podman hosts; UDP; throughput; and behavior across a server switch.
+
 ## 0.9.3
 
 The acceptance policy for 0.9.3 (`tools/acceptance-policy.json`, version 5)

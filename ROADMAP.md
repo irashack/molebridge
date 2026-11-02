@@ -3,6 +3,32 @@
 Ideas that are not scheduled. Nothing in the backlog is built; each entry
 says what it would take as far as we know today.
 
+## Direction
+
+A proposal, not yet a decision. Molebridge began as a NetBird exit node, but
+most of it isn't about NetBird: the provider tunnels, the server catalogs, the
+admission pipeline, the routing contract, the status record and its verdict,
+and Switchyard. The sidecars already use that core with no NetBird at all.
+Read that way, Molebridge is a commercial VPN tunnel run as a self-hosted
+service, with several ways in, each with its own guarantee:
+
+| Way in | What uses the tunnel | Guarantee |
+|---|---|---|
+| NetBird exit | whole devices | fail-closed for the traffic the exit receives |
+| Sidecar (gluetun or native) | whole containers | fail-closed, by gluetun's firewall or by the native sidecar's contract and firewall |
+| Proxy ([below](#a-proxy-on-the-exit)) | single applications or connections that opt in | none beyond the application's own settings |
+
+The guarantee comes first wherever a way in is described or shown, so that
+adding one can't weaken what fail-closed means for the others. The
+"[exits only](AGENTS.md#preserve-the-properties)" rule would then name each
+way in and the property it keeps, instead of the native sidecar as its one
+exception.
+
+Likely order: [exchanging requests and status over the
+network](#exchanging-requests-and-status-over-the-network), so that more ways
+in don't mean more shared directories; a status record that can describe a
+way in using many servers at once; then the proxy.
+
 ## Done
 
 - **One status record and one verdict** (0.7.0): every reader judges the
@@ -198,3 +224,44 @@ switched, never verified, because nothing in plain gluetun's namespace can
 measure the host's own address. The panel could measure it instead, as an
 opt-in, if it can show that it and gluetun leave the host by the same path,
 with fresh bounded measurements, and still work without a panel.
+
+### A proxy on the exit
+
+A device on a Mullvad exit can already use [Mullvad's SOCKS5
+proxies](docs/mullvad-socks5.md) to send one application out through another
+server, but only by naming that server's proxy, and only from a NetBird
+device. A proxy run by Molebridge would let an application ask for a country,
+a city or a server in the proxy username (`de`, `us-nyc`, `se-sto-wg-001`),
+keep one server per named session, and skip servers that fail, as
+[mullpod](https://github.com/SkanaviLabs/mullpod) does with its own
+in-process tunnel. The users this fits are mostly programs: agents, scrapers,
+browser tests and CI jobs that want a stable or changing location per task.
+
+It guarantees nothing about traffic that isn't sent to it, so it would be a
+way in of its own ([direction](#direction)), never a sidecar mode. What it
+would take:
+
+- Its own container with no capabilities, keys or credentials, so the exit's
+  listening surface doesn't grow. If it shares the exit's namespace, every
+  connection it opens must be bound to the tunnel interface: the routing
+  contract sends only traffic from NetBird, or bound to the tunnel, to the
+  exit table, and an unbound connection from the namespace leaves by the host
+  ([testing](docs/testing.md#mullvads-socks5-proxies-through-an-exit)). A
+  failed or missing binding has to fail the connection, never fall back.
+- Listening on NetBird's interface or loopback only, with a password from a
+  mounted file, because Mullvad's proxies take none and anyone who reaches the
+  port reaches every server.
+- The proxy names derived from the relay list (`relays.json` has no field for
+  them), validated like the rest of the catalog.
+- A status record that can say "the tunnel is up, these servers answered,
+  these are benched" without a reader taking it for a verified fail-closed
+  exit, and a Switchyard view of sessions and benched servers instead of a
+  server switch.
+- The standard library only: SOCKS5, HTTP `CONNECT`, sessions and the
+  benching are small enough not to need a module.
+- For PIA and NordVPN, a proxy for the exit's current server only: they offer
+  no proxy per server that Molebridge knows of.
+- A live pass: clients selecting servers by every kind of name, a session
+  kept and moved, a benched server, a server switch of the exit, tunnel loss,
+  and an nftables counter on every interface but the tunnel showing no
+  packet from the proxy.
