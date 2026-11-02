@@ -343,3 +343,16 @@ func TestLinkJudgment(t *testing.T) {
 		t.Fatal("a malformed link state was read")
 	}
 }
+
+func TestPathLikeExitIDsAreRefused(t *testing.T) {
+	r := newRig(t)
+	for _, id := range []string{"..", "../tokens", "%2e%2e", "MULLVAD", ""} {
+		hr := httptest.NewRequest("GET", "/v1/exits/"+id, nil)
+		hr.Header.Set("Authorization", "Bearer "+testToken)
+		rec := httptest.NewRecorder()
+		r.server.ServeHTTP(rec, hr)
+		if rec.Code != http.StatusUnauthorized && rec.Code != http.StatusNotFound {
+			t.Errorf("id %q: status %d", id, rec.Code)
+		}
+	}
+}

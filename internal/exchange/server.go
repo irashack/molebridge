@@ -98,8 +98,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := parts[0]
 	// An unknown exit and a wrong token answer the same, so the answer doesn't
 	// tell which ids exist.
+	// The token file's path is built from the configured exit's id, never
+	// from the URL's.
 	ex, known := s.Exits[id]
-	if !known || !s.authorized(id, r.Header.Get("Authorization")) {
+	if !ValidExitID(id) || !known || !s.authorized(ex, r.Header.Get("Authorization")) {
 		reply(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
@@ -132,12 +134,15 @@ func reply(w http.ResponseWriter, status int, message string) {
 // authorized compares the bearer token with the exit's token file in
 // constant time. A missing, unsafe, short or unreadable file refuses every
 // request for that exit.
-func (s *Server) authorized(id, header string) bool {
+func (s *Server) authorized(ex Exit, header string) bool {
 	given, ok := strings.CutPrefix(header, "Bearer ")
 	if !ok || given == "" {
 		return false
 	}
-	want, ok := ReadToken(filepath.Join(s.TokensDir, id))
+	if !ValidExitID(ex.ID) {
+		return false
+	}
+	want, ok := ReadToken(filepath.Join(s.TokensDir, ex.ID))
 	if !ok {
 		return false
 	}
