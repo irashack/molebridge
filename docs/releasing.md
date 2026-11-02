@@ -86,11 +86,20 @@ candidate's digest. Then run what the policy names:
 - **platforms**, **providers** and **kinds**: an exit of each listed kind
   (`native`, `gluetun`, `sidecar`, `native-sidecar`), each listed provider, on
   each listed platform, comes back `ok` on the candidate;
-- **drills**: the upgrade from the previous release with no setting changed,
-  rule drift repaired (`live-drift-repair`), the tunnel deleted and recovered
-  (`tunnel-loss`), the worker frozen until the lease lapses and the exit
-  restarts (`lease-lapse`), and CI's namespace drills on the tag. The
-  procedures are in [verification](verification.md).
+- **drills**: the upgrade from the previous release, changing only what the
+  changelog's **Breaking** items for this release ask for
+  (`upgrade-from-0.9.4`; for 0.10.0, `net.ipv4.icmp_errors_use_inbound_ifaddr`
+  on Kubernetes, and check that a native exit without it doesn't start
+  NetBird); rule drift repaired (`live-drift-repair`); the tunnel deleted and
+  recovered (`tunnel-loss`); the worker frozen until the lease lapses and the
+  exit restarts (`lease-lapse`); a client on the exit while the panel switches
+  its server ([from a client](verification.md#from-a-client), `client-switch`);
+  the [status drills](verification.md#status-drills) (`status-drills`); the
+  [network exchange](verification.md#the-network-exchange) between an exit and
+  a panel on different nodes (`network-exchange`); and CI's namespace drills on
+  the tag. The procedures are in [verification](verification.md). The policy
+  is a list, not a matrix: say in the record which exits each drill ran on,
+  and in which address families.
 
 Write down what ran, where and with which results as you go. The record goes
 into [testing](testing.md) afterwards, in the form of the earlier candidates'
@@ -122,7 +131,10 @@ For the policy above, the coverage is:
            {"id":"live-drift-repair","result":"passed"},
            {"id":"lease-lapse","result":"passed"},
            {"id":"tunnel-loss","result":"passed"},
-           {"id":"upgrade-from-0.9.4","result":"passed"}]}
+           {"id":"upgrade-from-0.9.4","result":"passed"},
+           {"id":"client-switch","result":"passed"},
+           {"id":"status-drills","result":"passed"},
+           {"id":"network-exchange","result":"passed"}]}
 ```
 
 Dispatch the workflow on `main`: the attestation is signed with the identity

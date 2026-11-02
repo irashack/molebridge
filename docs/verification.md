@@ -457,6 +457,34 @@ With the exit selected on a device in `exit-users`:
   shown are acceptable to you. If it flags a resolver, see
   [when a leak test flags DNS](operations.md#when-a-leak-test-flags-dns).
 
+## The network exchange
+
+For an exit and a panel on different nodes, joined by the [network
+exchange](configuration.md#the-network-exchange), with a client on the exit.
+The acceptance drill `network-exchange` is all of these, on Kubernetes:
+
+- **A switch** in the panel: the exit applies it, the client's egress
+  follows, and the panel shows connected, all without a shared volume.
+- **The switch, tunnel-loss and repair drills** above, through the exchange:
+  the panel's view follows the exit's within a few seconds of each change.
+- **The exchange restarted with an empty volume:** within one round the
+  copies are back and the panel shows the exit as before; the exit's server
+  doesn't change.
+- **The panel's side unreachable for a minute** (stop the `exchange`
+  container, or block its port): the exit keeps its server and logs
+  `molebridge-exit: exchange: round failed: <reason>`; the panel shows
+  "exit unreachable" within 15 seconds, never connected; both recover on
+  their own, with `molebridge-exit: exchange: works again`.
+- **The exit recreated with an empty `applier/`:** it fetches the panel's
+  request on its first round and returns to that server.
+- **A wrong token:** the exit logs the 401 line, the panel shows the exit as
+  unreachable, and nothing is written on the panel's side.
+- **In the gluetun form and a native sidecar,** if you run them this way:
+  the exchange child reaches the exchange by the host path, and an
+  application in the namespace can't use that path: its connections to the
+  exchange's address go into the tunnel or fail, unless the address is in
+  the LAN prefixes you allowed it.
+
 ## Optional PIA port forwarding
 
 These are acceptance checks for [port forwarding](providers.md#port-forwarding). Live forwarding against PIA remains

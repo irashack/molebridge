@@ -1,7 +1,7 @@
 {
-  "version": "7",
+  "version": "8",
   "platforms": ["podman-rootless-quadlet", "kubernetes"],
   "providers": ["mullvad", "pia", "nordvpn"],
   "kinds": ["native", "gluetun", "sidecar", "native-sidecar"],
-  "drills": ["ci-namespace-drills", "live-drift-repair", "lease-lapse", "tunnel-loss", "upgrade-from-0.9.4"]
+  "drills": ["ci-namespace-drills", "live-drift-repair", "lease-lapse", "tunnel-loss", "upgrade-from-0.9.4", "client-switch", "status-drills", "network-exchange"]
 }

@@ -85,12 +85,8 @@ proxies](docs/mullvad-socks5.md)).
   same files over HTTP; the exit makes outbound requests only, and an exit the
   exchange hasn't heard from shows as `exit-unreachable`, never as connected
   ([the network exchange](docs/architecture.md#the-network-exchange)). What
-  remains is the live pass: on Kubernetes with the exit and the panel on
-  different nodes, a switch, the switch, tunnel-loss and repair drills, the
-  exchange restarted with an empty volume, the panel unreachable for a minute,
-  the exit recreated with an empty `applier/`, a wrong token, and in the
-  gluetun form and a native sidecar, that the exchange child reaches the
-  exchange and nothing else in the namespace can use its path.
+  remains is the live pass, the acceptance drill `network-exchange`
+  ([verification](docs/verification.md#the-network-exchange)).
 
 ## Backlog
 

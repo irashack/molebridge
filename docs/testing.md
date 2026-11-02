@@ -18,9 +18,13 @@ tested, not instructions; the current commands are in the other pages.
 ## 0.10.0
 
 Not yet run live. The acceptance policy for 0.10.0
-(`tools/acceptance-policy.json`, version 7) drills the upgrade from the
-release before it, `upgrade-from-0.9.4`; the platforms, providers, kinds and
-other drills are 0.9.4's.
+(`tools/acceptance-policy.json`, version 8) drills the upgrade from the
+release before it, `upgrade-from-0.9.4`, now with only the changes the
+changelog's **Breaking** items ask for; the platforms, providers and kinds are
+0.9.4's. Version 8 adds three drills: `client-switch` (a client on the exit
+while the panel switches its server), `status-drills` (the [status
+drills](verification.md#status-drills)) and `network-exchange` (the
+[network exchange](verification.md#the-network-exchange) across nodes).
 
 0.10.0 fixes the findings of an outside review of 0.9.4 (see the
 [changelog](../CHANGELOG.md)). The changes that touch fail-closed behavior
@@ -28,7 +32,10 @@ are the ingress guard on every native overlay exit, the readiness
 precondition on `net.ipv4.icmp_errors_use_inbound_ifaddr`, the removal of
 strays at PIA's skipped priorities 94 and 98, and the cleanup of a gluetun
 repair's copy at 101. Each has a new namespace drill; none has run on a
-real host yet.
+real host yet. The ingress guard and most of PIA's stray cases can't be
+driven live, because they start from the VPN server's side or from a
+transient kernel state, so for them the namespace drills on the tag
+(`ci-namespace-drills`) are the acceptance.
 
 **The checks.** Run in a Linux container (kernel 6.18, amd64) with Go
 1.27.0: `gofmt -l`, `go vet ./...` with and without `-tags drill`,
@@ -47,8 +54,8 @@ it again when it ends without stopping anything else, and stopping it; and
 the panel's verdict for a network exit across `/api/status`, `/readyz`, the
 metrics and the page script. Nothing of it has run on a real host: not the
 socket mark on the exchange child's connections, not the gluetun form or the
-native sidecar, and not Kubernetes. The live pass it needs is in the
-[roadmap](../ROADMAP.md#done).
+native sidecar, and not Kubernetes. The live pass it needs is the
+`network-exchange` drill in [verification](verification.md#the-network-exchange).
 
 ## 0.9.4
 

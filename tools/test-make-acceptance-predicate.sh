@@ -15,7 +15,7 @@ commit=1234567890abcdef1234567890abcdef12345678
 cat > "$work/coverage.json" <<'EOM'
 {"platforms":["podman-rootless-quadlet","kubernetes"],
  "providers":["mullvad","pia","nordvpn"],"kinds":["native","gluetun","sidecar","native-sidecar"],
- "drills":[{"id":"ci-namespace-drills","result":"passed"},{"id":"live-drift-repair","result":"passed","note":"13-23 ms"},{"id":"lease-lapse","result":"passed"},{"id":"tunnel-loss","result":"passed"},{"id":"upgrade-from-0.9.4","result":"passed"}]}
+ "drills":[{"id":"ci-namespace-drills","result":"passed"},{"id":"live-drift-repair","result":"passed","note":"13-23 ms"},{"id":"lease-lapse","result":"passed"},{"id":"tunnel-loss","result":"passed"},{"id":"upgrade-from-0.9.4","result":"passed"},{"id":"client-switch","result":"passed"},{"id":"status-drills","result":"passed"},{"id":"network-exchange","result":"passed"}]}
 EOM
 echo '["https://example.net/evidence/1","run 42 notes"]' > "$work/evidence.json"
 
@@ -34,8 +34,8 @@ refuses() {
 }
 
 gen > "$work/predicate.json"
-jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "7"
-       and (.drills | length == 5) and (.drills[0] | keys == ["id","result"]) and (.evidence | length == 2)' "$work/predicate.json" >/dev/null ||
+jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "8"
+       and (.drills | length == 8) and (.drills[0] | keys == ["id","result"]) and (.evidence | length == 2)' "$work/predicate.json" >/dev/null ||
     fail "predicate content"
 pass "writes the predicate"
 
