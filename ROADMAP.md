@@ -108,6 +108,8 @@ single-writer block volume can hold. The panel would keep its requests on
 another. Neither would mount the other's, so each could be scheduled
 independently. Moving an exit would mean moving one private volume.
 
+A design is under review: [network exchange design](docs/network-exchange-design.md).
+
 What it would take, keeping the [privilege split](AGENTS.md#preserve-the-properties):
 
 - The exit fetches its request from the panel: an outbound, bounded HTTP GET
