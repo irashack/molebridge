@@ -19,13 +19,16 @@ tested, not instructions; the current commands are in the other pages.
 
 The first candidate's live acceptance is below; it was not released. The
 acceptance policy for 0.10.0
-(`tools/acceptance-policy.json`, version 8) drills the upgrade from the
+(`tools/acceptance-policy.json`, version 9) drills the upgrade from the
 release before it, `upgrade-from-0.9.4`, now with only the changes the
 changelog's **Breaking** items ask for; the platforms, providers and kinds are
-0.9.4's. Version 8 adds three drills: `client-switch` (a client on the exit
+0.9.4's. Version 8 added three drills: `client-switch` (a client on the exit
 while the panel switches its server), `status-drills` (the [status
 drills](verification.md#status-drills)) and `network-exchange` (the
 [network exchange](verification.md#the-network-exchange) across nodes).
+Version 9, after `rc.1`, narrows `status-drills` to the stopped exit, the
+egress-check recheck, the 409 and **Retry**; the rest of the status drills
+are recorded when they run.
 
 0.10.0 fixes the findings of an outside review of 0.9.4 (see the
 [changelog](../CHANGELOG.md)). The changes that touch fail-closed behavior
@@ -123,7 +126,8 @@ version 8.
 **Why it was not released.** The lease-lapse finding: `rc.2` brings a
 Mullvad or NordVPN tunnel up on the selected server
 ([architecture](architecture.md#the-tunnel)). And `status-drills` was only
-partly run, so the coverage did not meet the policy; nothing was attested.
+partly run, so the coverage did not meet policy 8; nothing was attested.
+Policy 9 narrows that drill to the four status items that passed here.
 
 ## 0.9.4
 

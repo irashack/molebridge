@@ -401,6 +401,15 @@ from `molebridge status` with the same label, followed by a `reasons:` line with
 
 ### Status drills
 
+The acceptance drill `status-drills` is four of the checks below: the
+stopped exit (stale, `/readyz` 503, `/healthz` 200, and fresh status once it
+starts again), a failed switch followed by **Retry**, the 409 for a second
+switch, and the egress-check failure with its recheck. The others (the
+browser disconnect, the "Retrying at" wording, the peer identity across a
+recreation and a reboot, gluetun recreated alone, a non-default `OVERLAY_IF`,
+and the catalog outage) are recorded when they run, not required for a
+release ([releasing](releasing.md#3-run-the-live-acceptance)).
+
 Stop the exit (`docker compose stop exit`). Within 150 seconds plus one browser poll, the panel must show
 stale/unknown and `/readyz` must return 503; `/healthz` remains 200. Start it again and confirm fresh status
 returns. Disconnect an open browser from the panel and confirm its next failed poll clears connected status.

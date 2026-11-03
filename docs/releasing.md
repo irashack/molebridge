@@ -94,7 +94,11 @@ candidate's digest. Then run what the policy names:
   recovered (`tunnel-loss`); the worker frozen until the lease lapses and the
   exit restarts (`lease-lapse`); a client on the exit while the panel switches
   its server ([from a client](verification.md#from-a-client), `client-switch`);
-  the [status drills](verification.md#status-drills) (`status-drills`); the
+  the required [status drills](verification.md#status-drills)
+  (`status-drills`: a stopped exit showing stale with `/readyz` 503, the
+  egress-check failure and recheck, the 409 for a second switch, and a
+  failed switch retried; the rest of that section is recorded when it runs,
+  not required); the
   [network exchange](verification.md#the-network-exchange) between an exit and
   a panel on different nodes (`network-exchange`); and CI's namespace drills on
   the tag. The procedures are in [verification](verification.md). The policy

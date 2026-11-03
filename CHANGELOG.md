@@ -193,11 +193,11 @@ candidate that isn't on `main`; CI checks that `vendor/` matches `go mod
 vendor`; a weekly scan runs govulncheck on `main` (a finding fails the run
 and is handled privately through [SECURITY.md](SECURITY.md)) and grype on
 the latest release image, keeping known CVEs in bundled packages in one
-issue. The acceptance policy (version 8) drills the upgrade from 0.9.4,
+issue. The acceptance policy (version 9) drills the upgrade from 0.9.4,
 changing only what the **Breaking** items ask for, and adds three drills: a
-client while the panel switches (`client-switch`), the status drills
-(`status-drills`) and the network exchange across nodes
-(`network-exchange`).
+client while the panel switches (`client-switch`), four of the status drills
+(`status-drills`: the stopped exit, the egress-check recheck, the 409 and
+Retry) and the network exchange across nodes (`network-exchange`).
 
 ## 0.9.4 — 2026-10-23
 

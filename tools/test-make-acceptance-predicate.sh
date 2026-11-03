@@ -34,7 +34,7 @@ refuses() {
 }
 
 gen > "$work/predicate.json"
-jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "8"
+jq -e '.result == "passed" and .commit == "'"$commit"'" and .candidate.digest == "sha256:'"$hex"'" and .policy_version == "9"
        and (.drills | length == 8) and (.drills[0] | keys == ["id","result"]) and (.evidence | length == 2)' "$work/predicate.json" >/dev/null ||
     fail "predicate content"
 pass "writes the predicate"
