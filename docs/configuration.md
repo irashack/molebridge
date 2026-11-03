@@ -397,7 +397,8 @@ namespace of the application whose port it sets
 
 ## The network exchange
 
-**Experimental, and not yet run live** ([testing](testing.md#0100)). By
+**Experimental; run live on Kubernetes with a NordVPN exit only**
+([testing](testing.md#v0100-rc2-2026-11-03-released)). By
 default the panel and an exit share files: the panel reads the exit's
 `state/applier/` through a read-only mount, and the exit reads the panel's
 `state/panel/`. When they can't share a filesystem (on Kubernetes, an exit and

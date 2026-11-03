@@ -2210,7 +2210,8 @@ Sign-in has been tried live with Pocket ID v2.16.0, as an admin only; see
 
 ## The network exchange
 
-**Experimental, not yet run live.** The panel and an exit normally share
+**Experimental; run live on Kubernetes with a NordVPN exit only**
+([testing](testing.md#v0100-rc2-2026-11-03-released)). The panel and an exit normally share
 files ([components and trust](#components-and-trust)), which ties them to one
 filesystem. The network exchange carries the same files over HTTP, so neither
 mounts the other's directory and each can run on its own node; the settings

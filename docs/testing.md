@@ -17,8 +17,8 @@ tested, not instructions; the current commands are in the other pages.
 
 ## 0.10.0
 
-The first candidate's live acceptance is below; it was not released. The
-acceptance policy for 0.10.0
+Released from `v0.10.0-rc.2`; both candidates' live acceptances are below.
+The acceptance policy for 0.10.0
 (`tools/acceptance-policy.json`, version 9) drills the upgrade from the
 release before it, `upgrade-from-0.9.4`, now with only the changes the
 changelog's **Breaking** items ask for; the platforms, providers and kinds are
@@ -56,10 +56,78 @@ client's round against them, directly and over a loopback connection with the
 production HTTP client; the supervisor starting the exchange child, starting
 it again when it ends without stopping anything else, and stopping it; and
 the panel's verdict for a network exit across `/api/status`, `/readyz`, the
-metrics and the page script. Nothing of it has run on a real host: not the
-socket mark on the exchange child's connections, not the gluetun form or the
-native sidecar, and not Kubernetes. The live pass it needs is the
-`network-exchange` drill in [verification](verification.md#the-network-exchange).
+metrics and the page script. It ran live in both candidates' acceptance
+(below), with a NordVPN exit on Kubernetes; the gluetun form and the native
+sidecar have not run it.
+
+### v0.10.0-rc.2, 2026-11-03: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.10.0-rc.2`, index digest
+`sha256:6397e27c7df6c8841e2a93819243e878f6d934f467950f6d7afe48bf25c450f8`
+(commit `2c67bf1`; image signature, build provenance and the bundle's
+signature verified against the release workflow at the tag), CI's five jobs
+passing on the tag, namespace drills included
+([run 41569536008](https://github.com/irashack/molebridge/actions/runs/41569536008)).
+Policy version 9; attested by [run
+41626061041](https://github.com/irashack/molebridge/actions/runs/41626061041)
+and promoted as `v0.10.0`. The same Kubernetes cluster as `rc.1` (k0s with
+Cilium, amd64) and a rootless Podman Quadlet unit; a throwaway NetBird peer
+held each exit under test.
+
+- **Every form on the candidate:** eleven workloads on Kubernetes (the native
+  Mullvad, PIA and NordVPN exits, three more native Mullvad exits, the gluetun
+  overlay exit, the gluetun sidecar and two PIA native sidecars) `ok` and
+  verified with no restart, and the gluetun sidecar (NordVPN) as a rootless
+  Podman Quadlet unit.
+- **Upgrade from 0.9.4:** the Podman unit from 0.9.4 to the candidate by its
+  image alone, `ok` on the same server, with its application's traffic
+  leaving through the VPN; the Kubernetes workloads from `rc.1`, each on its
+  server. The ICMP sysctl set to 0 on the native NordVPN exit: NetBird was not
+  started, with the line every 30 seconds, and started a second after the
+  value was 1 again. With the startup probe's threshold of three, the pod
+  stayed ready through the two failures before the restore.
+- **The fix, lease lapse on Mullvad (IPv4 and IPv6):** the restarted exit
+  logged `the tunnel starts on <server>, the selected server` 13 ms after it
+  started and NetBird half a second later. The client failed closed until its
+  first answer about 5 s after that line, from the selected server, and every
+  probe afterwards came from it; none from the tunnel config's own server.
+  Lapse to restart 38 s, to `ok` 47 s.
+- **The fix, tunnel loss on NordVPN:** three seconds after a switch, the
+  tunnel deleted. The interface was back in 233 ms with the switch's peer at
+  242 ms and traffic at 666 ms (with `rc.1`, no peer until the 90-second
+  re-apply guard, traffic at 22 s); the client lost one probe.
+- **Tunnel loss** on Mullvad (back on the selected server: interface 585 and
+  617 ms, traffic 1035 and 1118 ms in two runs, verified 13.2 s) and PIA
+  (interface 92 ms, traffic 4.6 s, verified 4.6 s).
+- **Drift** on Mullvad (IPv4 and IPv6), PIA and NordVPN (IPv4), frozen and
+  unfrozen as with `rc.1`: each repaired in 5 to 24 ms. During the frozen
+  hold of a `lookup main` at 50, one IPv4 probe left from the host's address,
+  as with `rc.1` ([verification](verification.md#fail-closed-drills)).
+- **Client switch** on Mullvad, IPv4 and IPv6: verified in 5.8 and 8.4 s, no
+  failed probe out of 21.
+- **Status drills** (the four policy 9 requires): stale at 120 s with
+  `/readyz` 503 and `/healthz` 200, connected 5 s after the restart (the
+  Podman unit with a panel of its own); the egress-check failure on Mullvad,
+  `applied-unverified` and `recheck` after 81 s, `ok` 60 s after the drop
+  went; the 409 for a second switch on NordVPN, the first completing; a
+  switch to a blocked NordVPN server failed (handshake and egress), showing
+  "Re-checking at", and **Retry** after the unblock was admitted as
+  `operator-retry` and verified in 3.2 s.
+- **The network exchange,** the NordVPN exit and a trial panel and exchange
+  on different nodes over plain HTTP inside an encrypted backbone (the exit
+  warned about `http://` at start, as documented): a switch; the tunnel-loss
+  and drift drills through it (the tunnel back in 691 ms, traffic at 1140
+  ms); the exchange restarted with an empty volume (working again in 9 s, the
+  server kept); the panel's side cut off for 60 s ("exit unreachable" at
+  14.3 s, never connected, recovered within 2 s); the exit recreated with an
+  empty `applier/` (the panel's request admitted and verified); a wrong token
+  (401 at once, unreachable at 13.6 s, nothing written on the panel's side).
+
+Not run: the six status items policy 9 doesn't require (the browser
+disconnect, the "Retrying at" wording, the peer identity across a recreation
+and a reboot, gluetun recreated alone, a non-default `OVERLAY_IF`, the catalog
+outage), Docker, IPv6 on PIA and NordVPN (their tunnels refuse it), and the
+network exchange in the gluetun form or a native sidecar.
 
 ### v0.10.0-rc.1, 2026-11-03: not released
 

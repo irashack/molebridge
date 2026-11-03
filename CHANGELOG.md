@@ -4,15 +4,16 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.10.0 — unreleased
+## 0.10.0 — 2026-11-03
 
 **Experimental.** Fixes and hardening from an outside review of 0.9.4: the
 ingress guard on every native overlay exit, a readiness precondition for the
 ICMP source sysctl, recovery from a switch stuck in `attempting`, a version
 the binary knows, `/metrics` and `HEAD` on the panel, bounded sign-in
 traffic, a draft compatibility contract for 1.x, and the experimental network
-exchange. The deprecated `view` object is gone from `/api/status`. Not yet run live
-([testing](docs/testing.md#0100)).
+exchange. The deprecated `view` object is gone from `/api/status`. Released
+from `v0.10.0-rc.2` after its live acceptance on Kubernetes and rootless
+Podman ([testing](docs/testing.md#0100)).
 
 **New, experimental**:
 - **The network exchange**, for an exit and a panel that share no
@@ -25,7 +26,9 @@ exchange. The deprecated `view` object is gone from `/api/status`. Not yet run l
   no HTTP. A new role, `exchange`, runs on the panel's side, and
   `PANEL_NETWORK_EXITS` makes the panel judge those exits by the link: two
   new reason codes, `exit-unreachable` and `clock-skew`. Nothing changes
-  without these settings. Unit and in-process tests only; not run live.
+  without these settings. Run live once, on Kubernetes with a NordVPN exit
+  and the panel on different nodes ([testing](docs/testing.md#v0100-rc2-2026-11-03-released));
+  not with the gluetun form or a native sidecar.
 
 **Breaking**:
 - **`/api/status` no longer sends `view`** or the 0.6 fields it derived into

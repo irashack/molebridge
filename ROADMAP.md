@@ -80,13 +80,14 @@ proxies](docs/mullvad-socks5.md)).
   `molebridge status` reads the verdict from inside it
   ([health](docs/operations.md#health)). The Compose files still define the
   panel, and an exit with `SERVER` set has not been run this way on a live host.
-- **Exchanging requests and status over the network** (0.10.0, experimental,
-  not run live): an exit and its panel that share no filesystem exchange the
-  same files over HTTP; the exit makes outbound requests only, and an exit the
-  exchange hasn't heard from shows as `exit-unreachable`, never as connected
-  ([the network exchange](docs/architecture.md#the-network-exchange)). What
-  remains is the live pass, the acceptance drill `network-exchange`
-  ([verification](docs/verification.md#the-network-exchange)).
+- **Exchanging requests and status over the network** (0.10.0, experimental):
+  an exit and its panel that share no filesystem exchange the same files over
+  HTTP; the exit makes outbound requests only, and an exit the exchange
+  hasn't heard from shows as `exit-unreachable`, never as connected
+  ([the network exchange](docs/architecture.md#the-network-exchange)). Run
+  live on Kubernetes with a NordVPN exit and the panel on different nodes
+  ([testing](docs/testing.md#v0100-rc2-2026-11-03-released)); the gluetun
+  form and the native sidecar have not run it.
 
 ## Backlog
 
