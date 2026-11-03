@@ -81,8 +81,13 @@ func NordServerFor(ctx context.Context, a *Applier, keys []string) (string, erro
 // with the new server's key, which another server in the same location may
 // hold; a failed removal aborts before the new peer is added. IPv4 only.
 func (nordProvider) ApplyRelay(ctx context.Context, a *Applier, relay *providers.Relay, keys []string) error {
-	return a.sys.ReplacePeer(ctx, keys, PeerConfig{PublicKey: relay.PublicKey,
-		Endpoint: relay.IPv4AddrIn + ":" + strconv.Itoa(providers.NordPort), AllowedIPs: []string{"0.0.0.0/0"}, KeepaliveSec: 25})
+	return a.sys.ReplacePeer(ctx, keys, nordPeer(relay))
+}
+
+// nordPeer is the peer a NordVPN server is reached by: IPv4 only.
+func nordPeer(relay *providers.Relay) PeerConfig {
+	return PeerConfig{PublicKey: relay.PublicKey, Endpoint: relay.IPv4AddrIn + ":" + strconv.Itoa(providers.NordPort),
+		AllowedIPs: []string{"0.0.0.0/0"}, KeepaliveSec: 25}
 }
 
 // NordInsights asks NordVPN whether the tunnel's address is protected.

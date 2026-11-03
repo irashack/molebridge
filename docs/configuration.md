@@ -468,7 +468,7 @@ works as for the panel), and refuses to start otherwise, with
 | `PANEL_EXITS` | empty | The panel's list. The exchange serves each exit in it, by id; it can't be empty. |
 | `STATE_DIR` | `/state` | The panel's state directory, shared with the panel. The exchange writes `<id>/applier/` and `<id>/exchange.json` and reads `<id>/panel/desired.json`. |
 | `EXCHANGE_LISTEN` | `0.0.0.0:8097` | Address and port, with a host. Publish it to the exits only, never through the panel's proxy or sign-in. |
-| `EXCHANGE_TOKENS_DIR` | `/run/secrets/exchange` | One file per exit, named by its id, holding that exit's token. It is read on every request, so a new token takes effect at once. |
+| `EXCHANGE_TOKENS_DIR` | `/run/secrets/exchange` | One file per exit, named by its id, holding that exit's token: a regular file, not a symbolic link. It is read on every request, so a changed file takes effect at once. |
 | `EXCHANGE_CERT_FILE`, `EXCHANGE_KEY_FILE` | empty | A certificate and key to serve HTTPS; both or neither. |
 
 Make a token with `head -c 32 /dev/urandom | base64 | tr -d '=+/'`, put it in
@@ -480,6 +480,13 @@ catalog its provider's), invalid UTF-8, duplicate keys or anything but a JSON
 object, and writes what it accepts with mode 0644. At start it warns
 `molebridge exchange: warning: no usable token for exit <id>; its requests are refused`
 for each exit without a usable token file.
+
+On Kubernetes, mount each token with `subPath`: a Secret volume presents its
+files as symbolic links, which the exchange refuses, as the exit refuses them
+for its own key and token files. The exchange then warns about the token at
+start and answers that exit with 401. A file mounted with `subPath` doesn't
+follow later changes to the Secret, so after you rotate a token, restart the
+exchange (and the exit, whose `EXCHANGE_TOKEN` comes from its environment).
 
 ### In the panel
 

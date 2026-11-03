@@ -445,6 +445,15 @@ func (w *worker) run() int {
 		return 1
 	}
 	w.pipe = pipe
+	if s.NativeTunnel() && w.rememberedPeerApplies() {
+		if sp, ok := pipe.(startPeerer); ok {
+			if server, peer, ok := sp.StartPeer(); ok {
+				if err := w.sys.SetStartPeer(peer); err == nil {
+					w.logf("the tunnel starts on %s, the selected server", server)
+				}
+			}
+		}
+	}
 
 	var wg sync.WaitGroup
 	spawn := func(f func()) {
@@ -526,12 +535,30 @@ func (w *worker) publish(r validate.ObjectMarshaler) error {
 
 func (w *worker) tunnelParams() tunnel.Params {
 	p := tunnel.Params{ExitIf: w.s.Routing.ExitIf, Conf: w.s.Conf}
+	// The tunnel comes up on the last peer set, the selected server's, when
+	// there is one: at start (StartPeer) and after a tunnel loss. Otherwise a
+	// Mullvad tunnel would leave through its config's starting server, and a
+	// NordVPN one pass nothing, until the next switch.
+	if w.rememberedPeerApplies() {
+		if peer := w.sys.lastPeer(); peer != nil {
+			conf := *w.s.Conf
+			conf.Peer = peer
+			p.Conf = &conf
+		}
+	}
 	if w.s.Routing.IsNativeSidecar() {
 		// Rule 93 sends the device's own UDP to the host by this mark;
 		// everything else the namespace sends goes to the exit table.
 		p.FirewallMark = w.s.Routing.TunnelMark()
 	}
 	return p
+}
+
+// rememberedPeerApplies is whether the tunnel is brought up on the last peer
+// set: for Mullvad and NordVPN, whose one key reaches every server. PIA's peer
+// belongs to a registration with its own address, which PIA restores itself.
+func (w *worker) rememberedPeerApplies() bool {
+	return w.s.Conf != nil && (w.s.Provider == "mullvad" || w.s.Provider == "nordvpn")
 }
 
 // writeGuarded renews the native sidecar's guard heartbeat while the firewall

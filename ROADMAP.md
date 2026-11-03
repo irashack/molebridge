@@ -156,7 +156,7 @@ it would take:
 - Replacing the tunnel's whole configuration (key, addresses, MTU, routes)
   through the mutation owner, and making the tunnel-recovery loop rebuild the
   current provider's tunnel. Today recovery recreates the tunnel from the
-  configuration the exit started with.
+  configuration the exit started with, on the last peer set.
 - A target that names a provider and a server, through the same admission
   pipeline, with each provider's own registration, key handling and egress
   check. Attempt records would need the provider as well as the server, and

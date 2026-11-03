@@ -23,6 +23,7 @@ import (
 	"github.com/irashack/molebridge/internal/nft"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnel"
+	"github.com/irashack/molebridge/internal/tunnelconf"
 )
 
 // Observer is the read side of the kernel the System uses: *rtnl.Conn, or a
@@ -59,6 +60,12 @@ type KernelSystem struct {
 
 	snapMu sync.Mutex
 	snap   *rtnl.Snapshot
+
+	// peer is the last peer set (by StartPeer at start, then by every
+	// switch): what a Mullvad tunnel is brought up with again, so a recreated
+	// tunnel stays on the server it was on. nil: the tunnel config's peer.
+	peerMu sync.Mutex
+	peer   *tunnelconf.Peer
 	snapAt time.Time
 
 	// fwMu guards fwPort, the forwarded port a native sidecar's firewall
@@ -296,6 +303,75 @@ func (k *KernelSystem) PublicKey(ctx context.Context) (string, error) {
 // An empty public key in add means remove only.
 func (k *KernelSystem) ReplacePeer(ctx context.Context, remove []string, add applier.PeerConfig) error {
 	defer k.invalidate()
+	err := k.replacePeer(ctx, remove, add)
+	if err == nil {
+		// Remembered only once the kernel took it.
+		k.rememberPeer(add)
+	}
+	return err
+}
+
+// SetStartPeer is the peer the tunnel is first brought up with (applier.StartPeer).
+func (k *KernelSystem) SetStartPeer(add applier.PeerConfig) error {
+	peer, err := tunnelPeer(add)
+	if err != nil {
+		return err
+	}
+	k.peerMu.Lock()
+	k.peer = peer
+	k.peerMu.Unlock()
+	return nil
+}
+
+// rememberPeer keeps the peer a switch set; a change that only removed peers
+// forgets it.
+func (k *KernelSystem) rememberPeer(add applier.PeerConfig) {
+	peer, err := tunnelPeer(add)
+	if err != nil {
+		peer = nil
+	}
+	k.peerMu.Lock()
+	k.peer = peer
+	k.peerMu.Unlock()
+}
+
+// lastPeer is a copy of the remembered peer, or nil.
+func (k *KernelSystem) lastPeer() *tunnelconf.Peer {
+	k.peerMu.Lock()
+	defer k.peerMu.Unlock()
+	if k.peer == nil {
+		return nil
+	}
+	p := *k.peer
+	p.AllowedIPs = append([]netip.Prefix(nil), k.peer.AllowedIPs...)
+	return &p
+}
+
+// tunnelPeer is add as the tunnel package takes it; an empty add is an error.
+func tunnelPeer(add applier.PeerConfig) (*tunnelconf.Peer, error) {
+	if add.PublicKey == "" {
+		return nil, errors.New("no peer")
+	}
+	key, err := wgtypes.ParseKey(add.PublicKey)
+	if err != nil {
+		return nil, errors.New("invalid peer key")
+	}
+	ap, err := netip.ParseAddrPort(add.Endpoint)
+	if err != nil {
+		return nil, errors.New("invalid peer endpoint")
+	}
+	peer := &tunnelconf.Peer{PublicKey: key, Endpoint: ap, Keepalive: add.KeepaliveSec}
+	for _, c := range add.AllowedIPs {
+		prefix, err := netip.ParsePrefix(c)
+		if err != nil {
+			return nil, errors.New("invalid allowed IPs")
+		}
+		peer.AllowedIPs = append(peer.AllowedIPs, prefix)
+	}
+	return peer, nil
+}
+
+func (k *KernelSystem) replacePeer(ctx context.Context, remove []string, add applier.PeerConfig) error {
 	return k.Mut.Do(ctx, "change the tunnel peer", func(tx *mutator.Tx) error {
 		configure := func(cfg wgtypes.Config) error {
 			return k.Tun.Configure(tx.Context(), k.exitIf(), cfg)

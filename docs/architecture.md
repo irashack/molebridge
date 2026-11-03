@@ -245,8 +245,7 @@ meanwhile.
 A native exit creates the tunnel itself (`internal/tunnel`, run as an operation
 of the mutation owner). It removes a leftover link of the same name, creates a
 link of kind `wireguard` through rtnetlink, sets the private key through
-WireGuard's generic netlink (and the peer, for a config that carries one: a
-Mullvad config does, PIA's and NordVPN's don't), assigns the addresses, sets the
+WireGuard's generic netlink (and a peer, below), assigns the addresses, sets the
 MTU from the tunnel config, brings the link up and puts the default route into
 the exit table. `PostUp` and `PreDown` are read as the route operations they
 stand for and are never executed. A failed attempt removes the half-built link.
@@ -256,6 +255,20 @@ seconds. Meanwhile the exit isn't ready, the namespace NetBird shares isn't
 replaced, and forwarded traffic hits the exit table's fallback. The log says
 `molebridge-exit: tunnel bring-up failed (<reason>); retrying in <n> s`, with
 the failing step and the kernel's error as the reason.
+
+**The peer it comes up with.** With Mullvad and NordVPN, whose one key reaches
+every server, the tunnel comes up on the last peer the exit set: at start, the
+target's (`SERVER`, else the panel's accepted request) when the cached server
+list is fresh and lists it, and the log says `molebridge-exit: the tunnel
+starts on <server>, the selected server`; after a tunnel loss, the one the
+last switch set. Otherwise it comes up as the tunnel config says: a Mullvad
+config's own starting server, or no peer for NordVPN. This matters because an
+overlay exit can switch only once NetBird runs: before 0.10.0, a restarted
+Mullvad exit forwarded through its config's server for the seconds until the
+switch back, and a NordVPN exit passed nothing after a tunnel loss until its
+re-apply. The first inspection verifies the server like any live one. PIA's
+peer belongs to a registration with its own tunnel address, which the PIA
+code restores itself, so a PIA tunnel still comes up with no peer.
 
 ### nftables
 

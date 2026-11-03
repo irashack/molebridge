@@ -457,8 +457,40 @@ func (a *Applier) DefaultApplyRelay(ctx context.Context, relay *providers.Relay,
 			remove = append(remove, key)
 		}
 	}
-	return a.sys.ReplacePeer(ctx, remove, PeerConfig{PublicKey: relay.PublicKey, Endpoint: relay.IPv4AddrIn + ":51820",
-		AllowedIPs: []string{"0.0.0.0/0", "::/0"}, KeepaliveSec: 25})
+	return a.sys.ReplacePeer(ctx, remove, relayPeer(relay))
+}
+
+// relayPeer is the peer a Mullvad relay is reached by.
+func relayPeer(relay *providers.Relay) PeerConfig {
+	return PeerConfig{PublicKey: relay.PublicKey, Endpoint: relay.IPv4AddrIn + ":51820",
+		AllowedIPs: []string{"0.0.0.0/0", "::/0"}, KeepaliveSec: 25}
+}
+
+// StartPeer is the peer a native Mullvad or NordVPN tunnel is brought up with
+// when the exit starts, and the server it belongs to: the relay of the target
+// (SERVER, else the panel's accepted request) when a fresh catalog lists it.
+// Without it a Mullvad tunnel starts on its config's server, and clients
+// would leave through that server until the first switch, which an overlay
+// exit can make only once NetBird runs; a NordVPN tunnel starts with no peer
+// and passes nothing until then. false when there is no target, no fresh
+// catalog, the target isn't in it, or the provider is another (PIA's peer
+// belongs to a registration): the tunnel then starts as its config says. The
+// first pass verifies the server as it would any live one. Call it before the
+// pipeline's loop runs.
+func (a *Applier) StartPeer() (string, PeerConfig, bool) {
+	peerOf := map[string]func(*providers.Relay) PeerConfig{"mullvad": relayPeer, "nordvpn": nordPeer}[a.hooks.ID()]
+	if peerOf == nil || a.backend() != providers.BackendNative {
+		return "", PeerConfig{}, false
+	}
+	target := a.resolve(true)
+	if target == nil || !a.catalog.Usable() {
+		return "", PeerConfig{}, false
+	}
+	relay, ok := a.catalog.Relays().Get(target.Server)
+	if !ok || relay.PublicKey == "" || relay.IPv4AddrIn == "" {
+		return "", PeerConfig{}, false
+	}
+	return target.Server, peerOf(relay), true
 }
 
 // -- the status record (schema 2, internal/verdict) -------------------------------------

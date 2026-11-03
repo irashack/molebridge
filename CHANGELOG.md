@@ -89,6 +89,15 @@ exchange. The deprecated `view` object is gone from `/api/status`. Not yet run l
   supported by protocol` ([prerequisites](docs/prerequisites.md)).
 
 **Exit and applier**:
+- **A Mullvad or NordVPN tunnel comes up on the selected server.** At start
+  the tunnel uses the target's peer (`SERVER`, else the panel's request) when
+  the cached server list is fresh and lists it, and after a tunnel loss the
+  peer the last switch set. A restarted Mullvad exit used to forward through
+  its tunnel config's starting server for the seconds before it switched
+  back (found in `v0.10.0-rc.1`'s lease-lapse drill; still inside the
+  tunnel), and a NordVPN exit passed nothing after a tunnel loss until its
+  re-apply ([architecture](docs/architecture.md#the-tunnel)). PIA is
+  unchanged.
 - **A switch stopped by the exit's own file error recovers.** A missing PIA
   credential file or a full state volume left the attempt in `attempting`
   until the container restarted. The next pass, 5 seconds later, now

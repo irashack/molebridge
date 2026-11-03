@@ -17,7 +17,8 @@ tested, not instructions; the current commands are in the other pages.
 
 ## 0.10.0
 
-Not yet run live. The acceptance policy for 0.10.0
+The first candidate's live acceptance is below; it was not released. The
+acceptance policy for 0.10.0
 (`tools/acceptance-policy.json`, version 8) drills the upgrade from the
 release before it, `upgrade-from-0.9.4`, now with only the changes the
 changelog's **Breaking** items ask for; the platforms, providers and kinds are
@@ -56,6 +57,73 @@ metrics and the page script. Nothing of it has run on a real host: not the
 socket mark on the exchange child's connections, not the gluetun form or the
 native sidecar, and not Kubernetes. The live pass it needs is the
 `network-exchange` drill in [verification](verification.md#the-network-exchange).
+
+### v0.10.0-rc.1, 2026-11-03: not released
+
+The candidate `ghcr.io/irashack/molebridge:v0.10.0-rc.1`, index digest
+`sha256:fe88a352331b14d6a3ed7b10360ea88dce51007eafb166cc4ad3abef1f1a3360`
+(commit `ccfa153`, signature and provenance verified against the release
+workflow at the tag), CI's five jobs passing on the tag, namespace drills
+included. Run on Kubernetes (k0s with Cilium, amd64) and, for the gluetun
+sidecar, as a rootless Podman Quadlet unit. A throwaway NetBird peer held each
+exit, probing the provider's status endpoint about every 1.4 seconds. Policy
+version 8.
+
+- **Upgrade from 0.9.4:** ten projects (the native Mullvad, PIA and NordVPN
+  exits, three more native Mullvad exits, the gluetun overlay exit, the
+  gluetun sidecar and two PIA native sidecars) and Switchyard, with sign-in
+  on, came back `ok` on their previous servers with no restart. Without sign-in,
+  `/metrics` showed only `molebridge_ready`.
+- **The ICMP sysctl** (NordVPN, set to 0 in the pod's namespace and the
+  container restarted): NetBird was not started, the line repeated every 30
+  seconds, the startup probe failed; NetBird started 22 s after the value was
+  1 again.
+- **Drift** on Mullvad (IPv4 and IPv6), PIA and NordVPN (IPv4; NordVPN's
+  tunnel refuses IPv6): with the worker frozen, the tunnel routes, rules 95,
+  97 and 94, the fallback, a `lookup main` at 50 and a wrong action at 97, each
+  repaired 5 to 25 ms after it continued; unfrozen, rules 97, 95 and 1 and
+  IPv6 97 deleted and a `lookup main` added at 96, repaired in 5 to 30 ms. A
+  counter of the peer's packets leaving by any interface but the tunnel
+  stayed at 0, except during the frozen hold of the `lookup main` at 50, when
+  the client left from the host's address for the whole 6-second hold on each
+  exit: nothing is promised while the repairer is frozen
+  ([verification](verification.md#fail-closed-drills)).
+- **Tunnel loss** on Mullvad, PIA and NordVPN: on Mullvad the interface was
+  back in 0.74 s and traffic in 1.27 s. On NordVPN the tunnel came back with
+  no peer until the re-apply guard (90 s) admitted the server again; the
+  client failed closed throughout, and the panel showed the last record,
+  `ok`, until the next inspection.
+- **Lease lapse** on Mullvad: lapsed at 29 s, exit 1 at 35 s, restarted at
+  36 s, `ok` at 49 s. NetBird started about 5 s before the exit switched back to
+  the selected server, and the client left through the tunnel config's own
+  starting server meanwhile: inside the tunnel, but not the selected one.
+- **Client switch** on Mullvad, IPv4 and IPv6: two switches, verified in 7.4
+  and 10.1 s, the client following with no failed probe.
+- **Status drills, in part:** a frozen exit made `/readyz` 503 at 111 s with
+  `/healthz` 200 and `molebridge_ready` 0; the egress-check drill showed
+  `failed`, `applied-unverified` and `recheck` with the server kept and the
+  client's traffic flowing; a second switch got the 409; a failed switch
+  followed by **Retry** was admitted as `operator-retry`. Not run: the
+  browser disconnect, the "Retrying at" wording (the failed switch was
+  `applied-unverified`, which shows "Re-checking at"), the peer identity
+  across a recreation and a host reboot, gluetun recreated alone, a
+  non-default `OVERLAY_IF`, and an expired catalog with the relay API down.
+- **The network exchange,** with the NordVPN exit and a trial panel and
+  exchange on different nodes and no shared volume: a switch verified in
+  about 11.5 s with the request id matching end to end and the client
+  following; the tunnel-loss and drift drills through it; the exchange
+  restarted with an empty volume (the copies back on its first round, the
+  server kept); the panel's side cut off for 60 s ("exit unreachable" within
+  15 s, the exit on its server, recovered within a second); the exit recreated
+  with an empty `applier/` and no `desired.json` (the panel's request
+  re-admitted under the same id); and a wrong token (401, unreachable, nothing
+  written on the panel's side). The tokens had to be mounted with `subPath`
+  ([the exchange role](configuration.md#the-exchange-role)).
+
+**Why it was not released.** The lease-lapse finding: `rc.2` brings a
+Mullvad or NordVPN tunnel up on the selected server
+([architecture](architecture.md#the-tunnel)). And `status-drills` was only
+partly run, so the coverage did not meet the policy; nothing was attested.
 
 ## 0.9.4
 

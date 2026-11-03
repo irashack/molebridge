@@ -40,6 +40,15 @@ func (p applierPipeline) Tick(ctx context.Context) error {
 //lint:ignore U1000 linux-only: see applierPipeline
 func (p applierPipeline) Healthy(ctx context.Context) bool { return p.a.Healthy(ctx) }
 
+// startPeerer is a pipeline that names the peer a native Mullvad tunnel starts
+// with (applier.StartPeer).
+type startPeerer interface {
+	StartPeer() (string, applier.PeerConfig, bool)
+}
+
+//lint:ignore U1000 linux-only: see applierPipeline
+func (p applierPipeline) StartPeer() (string, applier.PeerConfig, bool) { return p.a.StartPeer() }
+
 // pipelineEnv is what a pipeline is built from.
 //
 //lint:ignore U1000 linux-only: built by newPipeline, called from worker_linux.go
