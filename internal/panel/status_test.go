@@ -198,7 +198,7 @@ func TestThePageCarriesTheWordingAndKindForItsScript(t *testing.T) {
 func TestTheWordingTableMatchesTheWordsTheServerUses(t *testing.T) {
 	// textJSON is what json.dumps(TEXT) wrote; the parsed table drives the page.
 	if text.Connection["overlay"]["applying"] != "Switching route" || text.Connection["sidecar"]["applying"] != "Switching server" ||
-		text.Drop["sidecar"] != "Open connections through the tunnel will drop." || len(text.Reason) != 10 || len(text.Checks) != len(verdict.CheckNames) {
+		text.Drop["sidecar"] != "Open connections through the tunnel will drop." || len(text.Reason) != 11 || len(text.Checks) != len(verdict.CheckNames) {
 		t.Fatalf("wording = %+v", text)
 	}
 	for _, name := range verdict.CheckNames {

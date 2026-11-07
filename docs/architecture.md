@@ -1681,8 +1681,21 @@ What happens next, in precedence order on each pass:
    none 180 seconds after the last change. The same server is registered
    again, after a fresh inspection confirms it, while the attempt is idle or
    unverified and the current backoff step has passed since the last
-   change; each one advances the backoff. An egress-check failure alone
-   never triggers it.
+   change; each one advances the backoff. Since 0.10.1 a **silent tunnel**
+   triggers it too, without waiting for the handshake to go stale: the
+   periodic check's egress request got no answer, the peer's transmit
+   counter rose while it ran and its receive counter didn't, and the
+   recorded server's registration API (`https://<cn>:1337/`, outside the
+   tunnel, any HTTP answer) answers within 5 seconds. The server is up and
+   the host's network works, but the server no longer answers this tunnel:
+   it forgot the registration. Without that answer (the host's uplink is
+   down) the check is asked once more as before, and the stale handshake
+   stays the trigger. A repair removes the peer
+   and sets it again, so WireGuard starts a new handshake at once instead
+   of when the old session comes up for renewal; traffic stays in the
+   tunnel, with no peer to leave by, meanwhile. An egress-check failure
+   while the tunnel still receives (the provider's check service not
+   answering) never triggers it.
 6. **Drift**: the live server is identifiable and isn't the target. It is
    put back only from `idle` or `unverified`, never while a failed attempt
    waits on its backoff, and never within 90 seconds of the last change.
@@ -1804,7 +1817,14 @@ otherwise `verified`, `applied-unverified`, `pending`, `rejected` or
 `mutation-failed`), the number of changes made for this target, the target,
 and the next automatic action (`recheck` or `reapply`) with its time.
 Provider fields come on top: PIA's `port_forward`, `forwarded_port` and
-`port_forward_error`, and gluetun's `server_list_update`. Since 0.9.3 every
+`port_forward_error`, and gluetun's `server_list_update`. Since 0.10.1 an
+`applying` record published while a lapsed PIA registration is registered
+again carries `repair`: `reason` (`tunnel-silent` or `handshake-stale`) and
+`since`, when the repair started. It says the server is the same one, the
+change is a repair rather than a switch, and the firewall and routing hold
+traffic in the tunnel meanwhile. Records without a repair in progress have
+no `repair` member, and the record the repair ends with, `ok` or `failed`,
+has none either. No reader judges it. Since 0.9.3 every
 exit with a routing contract (all but a gluetun sidecar) adds
 `routing_activity`, counters kept since its worker last started:
 `repairs` (repair passes that changed the kernel) with `last_repair_at`
@@ -1992,7 +2012,13 @@ handshake fails the check after the first attempt. Until the check finishes,
 the previous record stays in `result.json`, and readers still treat one older
 than 150 seconds as unknown. The exit logs `molebridge-exit: applier: egress
 check got no answer; asking once more`, and `molebridge-exit: applier: egress
-check got no answer twice` when the second attempt fails too. A failed egress
+check got no answer twice` when the second attempt fails too. With PIA, a
+first attempt during which the tunnel sent but received nothing, while the
+registration's server answers outside the tunnel, is not asked again:
+the check's `reason` is `tunnel-silent` instead of `unanswered`, the exit logs
+`molebridge-exit: applier: egress check got no answer, and the tunnel received
+nothing while it ran`, and the registration may be repaired at once
+([triggers](#requests-and-switching), 5). A failed egress
 check on the live target leaves the attempt `unverified`: re-checked, not
 switched again.
 

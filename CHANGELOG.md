@@ -4,6 +4,37 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.10.1 — unreleased
+
+**Experimental.** A PIA registration that its server forgets is registered
+again within about a minute instead of about three, and the record says it is
+a repair rather than a failure. Tested with the unit tests' fake kernel and
+PIA API only; not yet run live ([testing](docs/testing.md)).
+
+**Changed**:
+- **A silent PIA tunnel is a lapsed registration.** When the periodic check's
+  egress request gets no answer, the exit now compares the WireGuard peer's
+  byte counters across it. If the peer sent but received nothing, and the
+  recorded server's registration API answers outside the tunnel, the server
+  has forgotten the registration: the exit registers the same server again in
+  the same pass, without the second egress request and without waiting for the
+  handshake to be 180 seconds stale. It removes the peer and sets it again, so
+  WireGuard starts a new handshake at once. If the registration API doesn't
+  answer either (the host's own network is down), the check is asked once
+  more after 10 seconds, nothing is registered, and the stale handshake stays
+  the trigger, as before. Repairs keep the backoff
+  ([architecture](docs/architecture.md#requests-and-switching), trigger 5).
+- **The record shows the repair.** While it runs, the exit publishes
+  `applying` with a new member, `repair` (`reason`: `tunnel-silent` or
+  `handshake-stale`, and `since`), and a message saying PIA stopped answering
+  and traffic stays held in the tunnel. A silent egress check's `reason` is
+  `tunnel-silent` instead of `unanswered`. Records without a repair in
+  progress have no `repair` member, so a reader that doesn't know it sees no
+  change ([the status record](docs/architecture.md#the-status-record)).
+- An egress check that gets no answer while the tunnel still receives (the
+  provider's check service not answering) behaves as before: asked once more
+  after 10 seconds, and never a reason to register again.
+
 ## 0.10.0 — 2026-11-03
 
 **Experimental.** Fixes and hardening from an outside review of 0.9.4: the

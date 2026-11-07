@@ -222,6 +222,10 @@ type Finding struct {
 	Age *int
 	// At is the boot clock when the inspection started.
 	At float64
+	// Silent: the egress check got no answer, the tunnel received nothing
+	// while it ran, and the registration's server answers outside it
+	// (checkedEgress).
+	Silent bool
 }
 
 // EgressResult is a provider's egress answer.

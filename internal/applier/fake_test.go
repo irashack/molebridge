@@ -80,11 +80,15 @@ type kernel struct {
 	forwardedPorts     []int
 
 	// WireGuard
-	keys             []string
-	endpoints        map[string]string
-	endpointsErr     error
-	age              int
-	noHandshake      bool
+	keys         []string
+	endpoints    map[string]string
+	endpointsErr error
+	age          int
+	noHandshake  bool
+	// silent: the peer sends but receives nothing (a server that forgot the
+	// registration); transfers counts the Transfers calls.
+	silent           bool
+	transfers        int64
 	failSet          bool
 	peersErr         error
 	mutations        []string
@@ -285,6 +289,20 @@ func (k *kernel) Peers(context.Context) ([]string, error) {
 		return nil, k.peersErr
 	}
 	return append([]string(nil), k.keys...), nil
+}
+
+func (k *kernel) Transfers(context.Context) (map[string]Transfer, error) {
+	k.record("Transfers")
+	k.transfers++
+	out := map[string]Transfer{}
+	for _, key := range k.keys {
+		received := k.transfers
+		if k.silent {
+			received = 0
+		}
+		out[key] = Transfer{Received: received, Sent: k.transfers}
+	}
+	return out, nil
 }
 
 func (k *kernel) LatestHandshakes(context.Context) (map[string]int64, error) {

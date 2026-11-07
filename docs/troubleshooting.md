@@ -954,7 +954,11 @@ selected server live and passing every check, or a retry succeeds; the refused l
 for changed credential files or Retry. With PIA, a handshake that has been stale for 180
 seconds while the selected region is live makes the exit register the same region again,
 on the same backoff, and log `molebridge-exit: applier: the registration lapsed;
-registering the same server again`; an egress-check failure alone doesn't.
+registering the same server again`. Since 0.10.1 it does so as soon as a check finds the
+tunnel silent (it sent but received nothing, while PIA's registration server answers outside
+the tunnel), usually within a minute of the lapse; the record is `applying` with a `repair`
+member meanwhile, not `failed`. An egress-check failure while the tunnel still receives
+doesn't trigger it.
 
 **`molebridge-exit: applier: repairing the tunnel's address and return-path rules failed:
 <reason>`, `applier: installing the ingress guard failed: <reason>`, `applier: clearing a

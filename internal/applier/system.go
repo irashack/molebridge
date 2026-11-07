@@ -37,6 +37,7 @@ import (
 //	wg show <exit> peers                        Peers
 //	wg show <exit> latest-handshakes            LatestHandshakes
 //	wg show <exit> endpoints                    Endpoints
+//	wg show <exit> transfer                     Transfers
 //	wg show <exit> public-key                   PublicKey
 //	wg set <exit> peer ... remove / endpoint    ReplacePeer
 //	ip -j -4 address show (every interface)     NamespaceIPv4Prefixes
@@ -85,6 +86,9 @@ type System interface {
 	// LatestHandshakes are the peers' last handshake times in Unix seconds, 0
 	// for none yet. A peer absent from the map is unknown.
 	LatestHandshakes(ctx context.Context) (map[string]int64, error)
+	// Transfers are the peers' byte counters since each was set. A peer
+	// absent from the map is unknown.
+	Transfers(ctx context.Context) (map[string]Transfer, error)
 	// Endpoints are the peers' endpoints as "ip:port" (or "(none)"). A listing
 	// with an invalid key, a duplicate key or a malformed line is an error.
 	Endpoints(ctx context.Context) (map[string]string, error)
@@ -129,6 +133,9 @@ type System interface {
 	// Fetch sends one HTTP request (netx.Client satisfies it).
 	Fetch(ctx context.Context, req netx.Request) (netx.Response, error)
 }
+
+// Transfer is one peer's byte counters.
+type Transfer struct{ Received, Sent int64 }
 
 // PeerConfig is the peer ReplacePeer sets.
 type PeerConfig struct {

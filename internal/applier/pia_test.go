@@ -54,17 +54,19 @@ const (
 
 // piaAPI is PIA's HTTPS API.
 type piaAPI struct {
-	t         testing.TB
-	k         *kernel
-	addkey    map[string]any
-	addkeyBad bool // answers with an HTTP error
-	tokenFail bool
-	status    int // the login endpoint's HTTP status
-	port      int
-	bindFail  bool
-	connected bool
-	server    *httptest.Server
-	pool      *x509.CertPool
+	t          testing.TB
+	k          *kernel
+	addkey     map[string]any
+	addkeyBad  bool // answers with an HTTP error
+	tokenFail  bool
+	status     int // the login endpoint's HTTP status
+	port       int
+	bindFail   bool
+	connected  bool
+	statusDown bool // the status check gets no answer
+	probeDown  bool // the registration server's probe gets no answer
+	server     *httptest.Server
+	pool       *x509.CertPool
 }
 
 func throwawayAuthority(t testing.TB, name string) (*x509.CertPool, tls.Certificate) {
@@ -170,6 +172,9 @@ func (api *piaAPI) fetch(req netx.Request) (netx.Response, error) {
 		if req.BindInterface != "pia" || req.Family != 4 {
 			t.Errorf("status request %+v", req)
 		}
+		if api.statusDown {
+			return netx.Response{}, errInjected
+		}
 		return jsonBody(map[string]any{"connected": api.connected, "ip": "203.0.113.30"}), nil
 	}
 	if req.ConnectAddr == "" {
@@ -183,6 +188,14 @@ func (api *piaAPI) fetch(req netx.Request) (netx.Response, error) {
 	case strings.HasPrefix(req.URL, "https://example401:1337/addKey?"):
 		if req.ConnectAddr != "198.51.100.20:1337" || req.BindInterface != "" {
 			t.Errorf("addKey connects to %s via %q", req.ConnectAddr, req.BindInterface)
+		}
+	case req.URL == "https://example401:1337/":
+		// The registration server's reach probe, outside the tunnel.
+		if req.ConnectAddr != "198.51.100.20:1337" || req.BindInterface != "" || !req.AnyStatus {
+			t.Errorf("probe %+v", req)
+		}
+		if api.probeDown {
+			return netx.Response{}, errInjected
 		}
 	case strings.HasPrefix(req.URL, "https://example401:19999/"):
 		if req.ConnectAddr != "10.0.0.1:19999" || req.BindInterface != "pia" {
@@ -1119,4 +1132,161 @@ func parseTable(s string) (int, error) {
 	var n int
 	_, err := fmt.Sscanf(s, "%d", &n)
 	return n, err
+}
+
+// piaRecords collects every record the applier publishes.
+func piaRecords(a *Applier) *[]*Record {
+	var records []*Record
+	a.publish = func(r *Record) error {
+		records = append(records, r)
+		return nil
+	}
+	return &records
+}
+
+func TestPIASilentTunnelReregistersAtOnce(t *testing.T) {
+	// The server forgets the registration: the status check gets no answer
+	// and the tunnel receives nothing, while the registration server answers
+	// outside it. Registered again in the same pass, with the peer set afresh
+	// (a new handshake at once), and no failed record on the way.
+	a, k, api, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	if r := mustTick(t, a); status(r) != "ok" || k.addKeys() != 1 {
+		t.Fatalf("%s %d", status(r), k.addKeys())
+	}
+	records := piaRecords(a)
+	k.silent, api.statusDown = true, true
+	k.afterReplacePeer = func() { k.silent, api.statusDown = false, false }
+	k.mutations = nil
+	k.now += 300
+	a.nextHealth = 0
+	r := mustTick(t, a)
+	// Verified: the backoff starts over.
+	if status(r) != "ok" || k.addKeys() != 2 || a.attempt.BackoffStep != 0 {
+		t.Fatalf("%s %s addKeys %d step %d", status(r), message(r), k.addKeys(), a.attempt.BackoffStep)
+	}
+	if !same(k.mutations[:2], []string{"remove " + piaServerKey,
+		"set " + piaServerKey + " endpoint 198.51.100.20:1337 allowed-ips 0.0.0.0/0 keepalive 25"}) {
+		t.Fatalf("%v", k.mutations)
+	}
+	sawRepair := false
+	for _, rec := range *records {
+		if status(rec) == "failed" {
+			t.Fatalf("published failed: %s", message(rec))
+		}
+		repair, _ := rec.Get("repair").(validate.Obj)
+		if status(rec) == "applying" && repair != nil {
+			sawRepair = true
+			if repair[0].Value != "tunnel-silent" || !strings.Contains(message(rec), "stopped answering") &&
+				!strings.Contains(message(rec), "Verifying") {
+				t.Errorf("repair %v %s", repair, message(rec))
+			}
+		}
+	}
+	if !sawRepair {
+		t.Fatal("no applying record with a repair")
+	}
+	if r.Get("repair") != nil {
+		t.Fatalf("repair still on the record: %v", r.Get("repair"))
+	}
+	logs := strings.Join(k.logs, "\n")
+	for _, line := range []string{"applier: egress check got no answer, and the tunnel received nothing while it ran",
+		"applier: the registration lapsed; registering the same server again"} {
+		if !strings.Contains(logs, line) {
+			t.Errorf("missing log %q in\n%s", line, logs)
+		}
+	}
+	if strings.Contains(logs, "asking once more") {
+		t.Error("a silent tunnel was asked again")
+	}
+}
+
+func TestPIASilentTunnelWithTheUplinkDownWaitsForTheStaleHandshake(t *testing.T) {
+	// The registration server doesn't answer either: the host's own network
+	// is down, and registering again would do nothing. Asked once more like
+	// any unanswered check, so a short blip passes; the stale handshake is
+	// still the fallback (D15).
+	a, k, api, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	mustTick(t, a)
+	k.silent, api.statusDown, api.probeDown = true, true, true
+	k.now += 300
+	a.nextHealth = 0
+	r := mustTick(t, a)
+	if status(r) != "failed" || k.addKeys() != 1 {
+		t.Fatalf("%s addKeys %d", status(r), k.addKeys())
+	}
+	checks := r.Get("checks").(validate.Obj)
+	for _, pair := range checks {
+		if pair.Key == "egress" {
+			var reason any
+			for _, m := range pair.Value.(validate.Obj) {
+				if m.Key == "reason" {
+					reason = m.Value
+				}
+			}
+			if reason != "unanswered" {
+				t.Fatalf("egress reason %v", reason)
+			}
+		}
+	}
+	logs := strings.Join(k.logs, "\n")
+	if !strings.Contains(logs, "applier: egress check got no answer twice") || strings.Contains(logs, "received nothing") {
+		t.Fatalf("logs:\n%s", logs)
+	}
+	for i := 0; i < 5; i++ {
+		k.now += 5
+		mustTick(t, a)
+	}
+	if k.addKeys() != 1 {
+		t.Fatalf("re-registered without an answer outside the tunnel: %d", k.addKeys())
+	}
+}
+
+func TestPIAUnansweredStatusCheckWithTrafficNeverReregisters(t *testing.T) {
+	// PIA's status API not answering while the tunnel receives is not a
+	// lapse: asked once more, as before, and never registered again.
+	a, k, api, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	mustTick(t, a)
+	api.statusDown = true
+	for i := 0; i < 10; i++ {
+		k.now += 60
+		mustTick(t, a)
+	}
+	if k.addKeys() != 1 {
+		t.Fatalf("%d", k.addKeys())
+	}
+	if !strings.Contains(strings.Join(k.logs, "\n"), "applier: egress check got no answer twice") {
+		t.Fatal("not asked twice")
+	}
+}
+
+func TestPIASilentTunnelRepairsPaceThemselvesOnTheBackoff(t *testing.T) {
+	// A server that keeps forgetting, or a silence registering doesn't cure:
+	// one repair, then none until the backoff has passed.
+	a, k, api, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	mustTick(t, a)
+	k.silent, api.statusDown = true, true
+	k.now += 300
+	a.nextHealth = 0
+	mustTick(t, a)
+	if k.addKeys() != 2 {
+		t.Fatalf("%d", k.addKeys())
+	}
+	mutated := *a.attempt.LastMutationAt
+	for k.now < mutated+119 {
+		k.now = min(k.now+10, mutated+119)
+		mustTick(t, a)
+	}
+	if k.addKeys() != 2 {
+		t.Fatalf("repaired inside the backoff: %d", k.addKeys())
+	}
+	k.now = mutated + 121
+	a.nextHealth = 0
+	mustTick(t, a)
+	if k.addKeys() != 3 {
+		t.Fatalf("%d", k.addKeys())
+	}
 }

@@ -107,6 +107,11 @@ type Provider interface {
 	// ControlAnswers is whether the provider's control plane answers (the
 	// sidecar's health).
 	ControlAnswers(ctx context.Context, a *Applier) bool
+	// RegistrationAnswers is whether the server the live registration names
+	// answers outside the tunnel: when it does and the tunnel is silent, the
+	// server has forgotten the registration. False where registrations can't
+	// lapse.
+	RegistrationAnswers(ctx context.Context, a *Applier) bool
 	// ReleaseSignature is what a rejection waits for; ok is false when the
 	// provider has no signature of its own for this reason (the core's applies).
 	ReleaseSignature(a *Applier, why string) (signature string, ok bool)
@@ -225,6 +230,9 @@ func (BaseProvider) OnVerified(*Applier, string) error { return nil }
 
 // ControlAnswers implements Provider.
 func (BaseProvider) ControlAnswers(context.Context, *Applier) bool { return true }
+
+// RegistrationAnswers implements Provider.
+func (BaseProvider) RegistrationAnswers(context.Context, *Applier) bool { return false }
 
 // ReleaseSignature implements Provider.
 func (BaseProvider) ReleaseSignature(*Applier, string) (string, bool) { return "", false }
