@@ -4,15 +4,17 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.10.1 — unreleased
+## 0.10.1 — 2026-11-07
 
 **Experimental.** A PIA registration that its server forgets is registered
 again within about 25 seconds on a tunnel carrying traffic, instead of about
 three minutes, and the record says it is a repair rather than a failure.
-`v0.10.1-rc.1` repaired a simulated lapse live (the server's WireGuard
-packets dropped, its registration API reachable) after 78 seconds without
-egress; `rc.2` adds the stall watch and drops the second inspection, tested
-with the unit tests' fake kernel and PIA API ([testing](docs/testing.md)).
+Released from `v0.10.1-rc.2` after its live acceptance on Kubernetes and
+rootless Podman: a simulated lapse (the server's WireGuard packets dropped,
+its registration API reachable) was checked 10.7 seconds after the drop and
+registered again at 20.8 seconds, the client about 22 seconds without
+egress and never on the host's address. `rc.1`, without the stall watch,
+took 78 seconds ([testing](docs/testing.md#0101)).
 
 **Changed**:
 - **A silent PIA tunnel is a lapsed registration.** When the periodic check's

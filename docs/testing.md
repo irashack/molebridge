@@ -15,6 +15,107 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.10.1
+
+Released from `v0.10.1-rc.2`. The acceptance policy for 0.10.1
+(`tools/acceptance-policy.json`, version 10) is 0.10.0's with the upgrade
+drilled from the release before it, `upgrade-from-0.10.0`; the platforms,
+providers, kinds and other drills are unchanged.
+
+0.10.1 changes one thing: how a PIA exit notices that its server forgot the
+registration (see the [changelog](../CHANGELOG.md)). The fail-closed rules
+are untouched; the repair removes and sets the same peer again, so the
+tunnel's routes and rules stay in place and traffic stays held in it. The
+unit tests drive it with a fake kernel whose byte counters can stop
+receiving and a fake PIA API whose registration and status services fail
+separately: a silent tunnel registered again at once, a silent tunnel with
+the host's own network down waiting for the stale handshake, an unanswered
+check with the tunnel still receiving never registering, repairs pacing
+themselves on the backoff, and the stall watch checking a busy tunnel early
+but never an idle one.
+
+**The lapse drill.** A native PIA exit with a client on it probing about
+every second. The server's WireGuard packets were dropped on the host's
+underlay by endpoint address and port; its registration API stayed
+reachable, as when the server forgets a registration.
+
+### v0.10.1-rc.2, 2026-11-07: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.10.1-rc.2`, index digest
+`sha256:aa7a43377193cbcc3a24b4da9c5c5e1968da6f8084e84447012816eaa9828f7b`
+(commit `c962556`; image signature, build provenance and the bundle's
+signature verified against the release workflow at the tag), CI's five jobs
+passing on the tag, namespace drills included
+([run 42377298828](https://github.com/irashack/molebridge/actions/runs/42377298828)).
+Policy version 10; attested by [run
+42387913450](https://github.com/irashack/molebridge/actions/runs/42387913450)
+and promoted as `v0.10.1`. Two earlier attestation runs failed only at the
+transparency log, during an outage of the public Sigstore log. The same
+Kubernetes cluster as for 0.10.0 and a rootless Podman Quadlet unit; a
+throwaway NetBird peer held each exit under test.
+
+- **Upgrade from 0.10.0:** every workload on Kubernetes (the native Mullvad,
+  PIA and NordVPN exits, three more native Mullvad exits, the gluetun overlay
+  exit, the gluetun sidecar, two native sidecars and Switchyard) first ran
+  and was ready on `v0.10.0`, then moved to the candidate by its image alone:
+  the nine exits `ok`, verified, with no restart, within four minutes. The
+  gluetun sidecar (NordVPN) as a rootless Podman Quadlet unit, `ok` on
+  `v0.10.0` with its application's traffic leaving through the VPN: the
+  `Image=` changed and the exit's unit restarted, back `ok` in 7 s, the
+  application and gluetun not restarted and still leaving through the VPN.
+  The network exchange's trial panel and exchange went from `rc.1` instead.
+- **The lapse drill:** 10.7 s after the drop the exit logged that the tunnel
+  had sent 1344 bytes and received nothing for 10 seconds, and checked at
+  once; the check got no answer with the tunnel receiving nothing (one such
+  line), and at 20.8 s the exit registered the same server again, verified
+  0.3 s later. The client failed closed from 2.5 s to 20.2 s after the drop
+  and was back at 22 s: about 22 s without egress, never from the host's
+  address. The `applying` record with `repair`, about 300 ms long, was not
+  caught by the 1-second poll.
+- **Drift** on Mullvad (IPv4 and IPv6), PIA and NordVPN (IPv4), frozen and
+  unfrozen as with 0.10.0: each repaired in 5 to 20 ms. During the frozen
+  hold of a `lookup main` at 50, the client left from the host's address for
+  3 to 5 seconds, as with 0.10.0
+  ([verification](verification.md#fail-closed-drills)); no IPv6 leak.
+- **Tunnel loss:** Mullvad (interface 954 ms, traffic 1422 ms), PIA
+  (interface 1250 ms, routing reported not intact and converged again,
+  traffic 5.7 s) and NordVPN (interface 359 ms, peer 379 ms, traffic 820 ms;
+  the client lost one probe).
+- **Lease lapse** on Mullvad and PIA, the worker frozen: the exit stopped
+  with the routing guards in place and restarted after 37 s, `ok` 45 and 43 s
+  after the freeze. The client failed closed throughout.
+- **Client switch** on Mullvad, IPv4 and IPv6: verified in 8.1 and 8.6 s, no
+  failed probe out of 13.
+- **Status drills** (the four policy 10 requires): the egress-check failure
+  on Mullvad and PIA, `failed`, `applied-unverified` and `recheck` with the
+  server kept and the client's traffic flowing, `ok` at the next check; the
+  stopped exit (the Podman unit with a panel of its own) stale at 124 s with
+  `/readyz` 503 and `/healthz` 200, connected 5 s after the start; the 409 for
+  a second switch on NordVPN, both ways round, the first completing; a switch
+  to a blocked NordVPN server failed (handshake and egress), and **Retry**
+  after the unblock was admitted as `operator-retry` and verified in 7.2 s.
+- **The network exchange,** the NordVPN exit and the trial panel and
+  exchange on nodes of different clusters: the 409 and Retry drills and
+  every switch above ran through it, with no clock offset.
+
+Not run: the six status items policy 10 doesn't require (as for 0.10.0),
+Docker, IPv6 on PIA and NordVPN, and the network exchange in the gluetun form
+or a native sidecar.
+
+### v0.10.1-rc.1, 2026-11-07: not released
+
+The candidate `ghcr.io/irashack/molebridge:v0.10.1-rc.1`, index digest
+`sha256:3dd8f38cb82b201ee6bd063148d33cd4da91c497171a1744521117949e9b0e00`
+(commit `872e4bd`), CI passing on the tag. Only the lapse drill ran, as a dry
+run before acceptance: the exit found the lapse at its next periodic check,
+inspected the tunnel a second time, and registered the same server again; the
+client failed closed for 78 s.
+
+**Why it was not released.** Most of the 78 seconds was waiting for the
+minute's check. `rc.2` adds the stall watch, which checks a tunnel that sends but
+receives nothing within about 10 seconds, and drops the second
+inspection.
+
 ## 0.10.0
 
 Released from `v0.10.0-rc.2`; both candidates' live acceptances are below.
