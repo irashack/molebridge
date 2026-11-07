@@ -1693,9 +1693,17 @@ What happens next, in precedence order on each pass:
    stays the trigger. A repair removes the peer
    and sets it again, so WireGuard starts a new handshake at once instead
    of when the old session comes up for renewal; traffic stays in the
-   tunnel, with no peer to leave by, meanwhile. An egress-check failure
-   while the tunnel still receives (the provider's check service not
-   answering) never triggers it.
+   tunnel, with no peer to leave by, meanwhile. The silent check is the
+   repair's inspection; it isn't measured again. Between periodic checks,
+   every pass (5 seconds) reads the peer's counters: once the tunnel has
+   sent 1024 bytes or more and received nothing for 10 seconds, the
+   periodic check runs at once, a single time per stall, and the exit logs
+   `molebridge-exit: applier: the tunnel sent <n> bytes and received
+   nothing for <s> seconds; checking now`. An idle tunnel sends only
+   keepalives and handshake initiations, far less than that, so it is
+   checked on schedule. An egress-check failure while the tunnel still
+   receives (the provider's check service not answering) never triggers
+   a repair.
 6. **Drift**: the live server is identifiable and isn't the target. It is
    put back only from `idle` or `unverified`, never while a failed attempt
    waits on its backoff, and never within 90 seconds of the last change.

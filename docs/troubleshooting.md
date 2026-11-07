@@ -956,7 +956,9 @@ seconds while the selected region is live makes the exit register the same regio
 on the same backoff, and log `molebridge-exit: applier: the registration lapsed;
 registering the same server again`. Since 0.10.1 it does so as soon as a check finds the
 tunnel silent (it sent but received nothing, while PIA's registration server answers outside
-the tunnel), usually within a minute of the lapse; the record is `applying` with a `repair`
+the tunnel). A tunnel carrying traffic is checked about 10 seconds after answers stop rather
+than at the next minute's check, so the lapse is usually repaired within about 25 seconds;
+an idle one waits for the periodic check. The record is `applying` with a `repair`
 member meanwhile, not `failed`. An egress-check failure while the tunnel still receives
 doesn't trigger it.
 

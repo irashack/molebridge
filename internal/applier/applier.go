@@ -127,7 +127,9 @@ type Applier struct {
 	retryDeadline  *float64
 	// repair is, while a lapsed registration is registered again, why and
 	// since when (the record's repair member); nil otherwise.
-	repair  *repairState
+	repair *repairState
+	// stall watches the one peer's counters between checks (watchStall).
+	stall   stallWatch
 	started bool
 	// ioFailure is the applier's own file I/O failure that ended the last
 	// pass, "" after a pass that completed. A pass that stops on one after
@@ -1203,6 +1205,9 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 			return nil, err
 		}
 	}
+	if result == nil {
+		a.watchStall(ctx)
+	}
 	if result == nil && a.clock() >= a.nextHealth {
 		if result, err = a.check(ctx); err != nil {
 			return nil, err
@@ -1447,6 +1452,43 @@ func (a *Applier) lapseRepairDue(live string, now float64) bool {
 		isRestState(at.State) && (at.LastMutationAt == nil || now >= *at.LastMutationAt+float64(attempt.Backoff(at.BackoffStep)))
 }
 
+// stallWatch is the peer's receive counter when it last changed, with the
+// transmit counter and the boot clock then; checked is set once a stall has
+// pulled the periodic check forward, until the counter changes again.
+type stallWatch struct {
+	key      string
+	rx, txAt int64
+	rxAt     float64
+	checked  bool
+}
+
+// watchStall pulls the periodic check forward, once per stall, when the
+// tunnel has sent at least StallBytes without receiving anything for
+// StallSec: traffic that gets no answer, as when the server forgot the
+// registration. Where registrations can't lapse, or away from rest, it does
+// nothing. An idle tunnel sends only keepalives and handshake initiations,
+// well under StallBytes in that time, so it never counts.
+func (a *Applier) watchStall(ctx context.Context) {
+	if !a.spec.RegistrationLapses || a.target == nil || !isRestState(a.attempt.State) {
+		return
+	}
+	key, t, ok := a.peerTransfer(ctx)
+	now := a.clock()
+	w := &a.stall
+	if !ok || key != w.key || t.Received != w.rx || t.Sent < w.txAt {
+		*w = stallWatch{key: key, rx: t.Received, txAt: t.Sent, rxAt: now}
+		return
+	}
+	if !w.checked && now-w.rxAt >= StallSec && t.Sent-w.txAt >= StallBytes {
+		w.checked = true
+		if a.nextHealth > now {
+			a.log(fmt.Sprintf("applier: the tunnel sent %d bytes and received nothing for %d seconds; checking now",
+				t.Sent-w.txAt, int(now-w.rxAt)))
+			a.nextHealth = now
+		}
+	}
+}
+
 // repairState is a repair in progress: why ("tunnel-silent" or
 // "handshake-stale") and since when (wall clock, ISO).
 type repairState struct{ reason, since string }
@@ -1606,8 +1648,13 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 	}
 	at.Extra = attempt.Extra{}
 	if reinspect || repair {
-		f := a.measure(ctx, false)
-		a.measurement = f
+		// A silent check from this pass is the inspection: measuring again
+		// would only wait out the same silence (the egress timeout).
+		f := a.measurement
+		if !(repair && f != nil && f.Silent && a.clock()-f.At <= SilentReuseSec) {
+			f = a.measure(ctx, false)
+			a.measurement = f
+		}
 		if f.Server == target.Server {
 			if f.Status == "ok" {
 				at.Settle()
