@@ -262,6 +262,11 @@ func (g *glKernel) Endpoints(context.Context) (map[string]string, error) {
 	return map[string]string{g.key(): endpoint}, nil
 }
 
+func (g *glKernel) Transfers(context.Context) (map[string]Transfer, error) {
+	g.record("Transfers")
+	return map[string]Transfer{g.key(): {}}, nil
+}
+
 func (g *glKernel) LatestHandshakes(context.Context) (map[string]int64, error) {
 	g.record("LatestHandshakes")
 	if err := g.wgRead(); err != nil {

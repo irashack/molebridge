@@ -273,6 +273,19 @@ func (k *KernelSystem) LatestHandshakes(ctx context.Context) (map[string]int64, 
 	return out, nil
 }
 
+// Transfers are the peers' byte counters.
+func (k *KernelSystem) Transfers(ctx context.Context) (map[string]applier.Transfer, error) {
+	d, err := k.device(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]applier.Transfer{}
+	for _, p := range d.Peers {
+		out[p.PublicKey.String()] = applier.Transfer{Received: p.ReceiveBytes, Sent: p.TransmitBytes}
+	}
+	return out, nil
+}
+
 // Endpoints are the peers' endpoints, "(none)" for a peer without one.
 func (k *KernelSystem) Endpoints(ctx context.Context) (map[string]string, error) {
 	d, err := k.device(ctx)

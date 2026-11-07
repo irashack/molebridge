@@ -616,7 +616,10 @@ func (p *piaProvider) ApplyRelay(ctx context.Context, a *Applier, relay *provide
 	}
 	var remove []string
 	for _, key := range keys {
-		if key != reg.ServerKey {
+		// A repair removes the same server's peer too: the server forgot the
+		// session, and a peer set afresh starts a new handshake at once
+		// instead of when the old session's keys come up for renewal.
+		if key != reg.ServerKey || a.Repairing() {
 			remove = append(remove, key)
 		}
 	}
@@ -672,6 +675,27 @@ func (p *piaProvider) recordedRegistration(ctx context.Context, a *Applier, keys
 		return data, nil
 	}
 	return nil, nil
+}
+
+// RegistrationAnswers asks the recorded server's registration API, outside
+// the tunnel, for any answer at all. An answer means the uplink and the
+// server work, so a silent tunnel is a registration the server forgot; no
+// answer (the host's own network down) leaves the lapse to the stale
+// handshake.
+func (p *piaProvider) RegistrationAnswers(ctx context.Context, a *Applier) bool {
+	data, err := p.recordedRegistration(ctx, a, nil, false)
+	if err != nil || data == nil {
+		return false
+	}
+	cn, _ := data["cn"].(string)
+	address, _ := data["server_ip"].(string)
+	if !piaCNRE.MatchString(cn) || !validate.ValidIPv4(address) {
+		return false
+	}
+	port := strconv.Itoa(addKeyPort)
+	_, err = a.sys.Fetch(ctx, netx.Request{URL: "https://" + cn + ":" + port + "/", RootCAs: p.cfg.RootCAs,
+		ConnectAddr: address + ":" + port, MaxBytes: piaAnswerMaxSize, Timeout: 5 * time.Second, AnyStatus: true})
+	return err == nil
 }
 
 // ServerFor is the recorded region, while the registration matches the live

@@ -125,7 +125,10 @@ type Applier struct {
 	// time after which it starts no further request.
 	switchDeadline *float64
 	retryDeadline  *float64
-	started        bool
+	// repair is, while a lapsed registration is registered again, why and
+	// since when (the record's repair member); nil otherwise.
+	repair  *repairState
+	started bool
 	// ioFailure is the applier's own file I/O failure that ended the last
 	// pass, "" after a pass that completed. A pass that stops on one after
 	// saving an attempt as attempting leaves it so; the next pass inspects it
@@ -596,6 +599,13 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 	for _, pair := range all {
 		members = members.Set(pair.Key, pair.Value)
 	}
+	if a.repair != nil && status == "applying" {
+		// Only on the records published while it lasts, read by people and
+		// tools, judged by no reader: an applying record with a repair is a
+		// lapsed registration being registered again, the kill switch holding
+		// traffic meanwhile. Its outcome is published without one.
+		members = members.Set("repair", validate.Members("reason", a.repair.reason, "since", a.repair.since))
+	}
 	if a.activity != nil {
 		// Counters only, for people and tools reading the record; no reader
 		// judges them (docs/architecture.md#the-status-record).
@@ -771,10 +781,15 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 		expected = append(expected, strconv.Itoa(family))
 		expectedAny = append(expectedAny, strconv.Itoa(family))
 	}
-	egress, err := a.checkedEgress(ctx, server, age, applying)
+	egress, silent, err := a.checkedEgress(ctx, server, age, applying)
 	if err != nil {
+		reason := "unanswered"
+		if silent {
+			reason = "tunnel-silent"
+		}
+		f.Silent = silent
 		f.Checks = f.Checks.Set("egress", validate.Members("state", "fail", "at", a.nowISO(), "server", orNull(server),
-			"reason", "unanswered", "tier", nil, "expected_families", expectedAny, "families", validate.Obj{}))
+			"reason", reason, "tier", nil, "expected_families", expectedAny, "families", validate.Obj{}))
 		f.Message = EgressFailedMessage
 		return f
 	}
@@ -919,21 +934,37 @@ func (a *Applier) withinRetryBudget() error {
 // EgressRetryWithinSec; the second starts no request after
 // EgressRetryBudgetSec. The previous result stays published until this
 // check's own result replaces it.
-func (a *Applier) checkedEgress(ctx context.Context, server string, age *int, applying bool) (EgressResult, error) {
+//
+// silent is true, outside a switch's verification, when the check got no
+// answer, the provider's registration can lapse, the tunnel's peer sent while
+// the check ran but received nothing, and the server the registration names
+// answers outside the tunnel: the server forgot the registration. A silent
+// check is not asked again, since a second one would wait out the same
+// silence. A tunnel silent while that server doesn't answer either (the
+// host's own network down) is asked again like any unanswered check.
+func (a *Applier) checkedEgress(ctx context.Context, server string, age *int, applying bool) (EgressResult, bool, error) {
 	started := a.clock()
+	key, before, watched := a.peerTransfer(ctx)
 	result, err := a.hooks.EgressFor(ctx, a, server, age)
 	if err == nil {
-		return result, nil
+		return result, false, nil
 	}
 	if ctx.Err() != nil {
-		return EgressResult{}, ctx.Err()
+		return EgressResult{}, false, ctx.Err()
+	}
+	if watched && !applying && a.switchDeadline == nil {
+		after, ok := a.transferOf(ctx, key)
+		if ok && after.Sent > before.Sent && after.Received == before.Received && a.hooks.RegistrationAnswers(ctx, a) {
+			a.log("applier: egress check got no answer, and the tunnel received nothing while it ran")
+			return EgressResult{}, true, err
+		}
 	}
 	fresh := age != nil && 0 <= *age && *age < HandshakeFreshSec
 	doomed := !fresh || a.attempt.State == "pending" || a.attempt.State == "rejected" || a.requestRejected() ||
 		server == "" || !a.catalog.Usable()
 	slow := a.clock()-started > EgressRetryWithinSec
 	if applying || a.switchDeadline != nil || doomed || slow {
-		return EgressResult{}, err
+		return EgressResult{}, false, err
 	}
 	a.log("applier: egress check got no answer; asking once more")
 	a.sleep(ctx, EgressRetrySec)
@@ -943,9 +974,32 @@ func (a *Applier) checkedEgress(ctx context.Context, server string, age *int, ap
 	result, err = a.hooks.EgressFor(ctx, a, server, age)
 	if err != nil {
 		a.log("applier: egress check got no answer twice")
-		return EgressResult{}, err
+		return EgressResult{}, false, err
 	}
-	return result, nil
+	return result, false, nil
+}
+
+// peerTransfer is the one peer's byte counters, watched only where the
+// provider's registration can lapse.
+func (a *Applier) peerTransfer(ctx context.Context) (string, Transfer, bool) {
+	if !a.spec.RegistrationLapses {
+		return "", Transfer{}, false
+	}
+	keys, err := a.peers(ctx)
+	if err != nil || len(keys) != 1 {
+		return "", Transfer{}, false
+	}
+	transfer, ok := a.transferOf(ctx, keys[0])
+	return keys[0], transfer, ok
+}
+
+func (a *Applier) transferOf(ctx context.Context, key string) (Transfer, bool) {
+	transfers, err := a.sys.Transfers(ctx)
+	if err != nil {
+		return Transfer{}, false
+	}
+	transfer, ok := transfers[key]
+	return transfer, ok
 }
 
 // DefaultEgressFor is the egress fields for the current server. A provider
@@ -965,6 +1019,12 @@ func (a *Applier) check(ctx context.Context) (*Record, error) {
 	f := a.measure(ctx, false)
 	a.measurement = f
 	at, target := a.attempt, a.target
+	if f.Silent && a.lapseRepairDue(f.Server, a.clock()) {
+		// The server answers outside the tunnel but not through it: it
+		// forgot the registration. Registered again now, not after the
+		// handshake goes stale.
+		return a.runPipeline(ctx, target, "retry", false, true)
+	}
 	if target != nil && at.State != "pending" && at.State != "rejected" && at.State != "attempting" {
 		onTarget := f.Server == target.Server
 		switch {
@@ -1338,8 +1398,7 @@ func (a *Applier) admit(ctx context.Context, target *Selection) (*Record, error)
 		if err != nil {
 			return nil, nil
 		}
-		if a.spec.RegistrationLapses && live == target.Server && isRestState(at.State) && a.registrationLapsed(now) &&
-			(at.LastMutationAt == nil || now >= *at.LastMutationAt+float64(attempt.Backoff(at.BackoffStep))) {
+		if a.lapseRepairDue(live, now) && a.registrationLapsed(now) {
 			return a.runPipeline(ctx, target, "retry", false, true)
 		}
 	case len(keys) > 0:
@@ -1378,6 +1437,23 @@ func (a *Applier) registrationLapsed(now float64) bool {
 	}
 	return f.Server == a.target.Server && a.handshakeStale(f, &now)
 }
+
+// lapseRepairDue: a lapse of live's registration may be repaired now. The
+// provider's registrations can lapse, live is the target, the attempt is at
+// rest, and the backoff since the last mutation has passed (D15).
+func (a *Applier) lapseRepairDue(live string, now float64) bool {
+	at := a.attempt
+	return a.spec.RegistrationLapses && a.target != nil && live != "" && live == a.target.Server &&
+		isRestState(at.State) && (at.LastMutationAt == nil || now >= *at.LastMutationAt+float64(attempt.Backoff(at.BackoffStep)))
+}
+
+// repairState is a repair in progress: why ("tunnel-silent" or
+// "handshake-stale") and since when (wall clock, ISO).
+type repairState struct{ reason, since string }
+
+// Repairing is true while a lapsed registration is registered again: the
+// provider starts the tunnel's session afresh then.
+func (a *Applier) Repairing() bool { return a.repair != nil }
 
 func (a *Applier) handshakeStale(f *Finding, now *float64) bool {
 	if f.Peers != 1 {
@@ -1544,7 +1620,9 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 				a.nextHealth = a.clock() + RefreshSec
 				return a.emit(f, false)
 			}
-			if !(repair && a.handshakeStale(f, nil)) {
+			stale := repair && a.handshakeStale(f, nil)
+			silent := repair && f.Silent
+			if !stale && !silent {
 				a.markUnverified()
 				if err := a.saveAttempt(); err != nil {
 					return nil, err
@@ -1555,6 +1633,12 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 			a.log("applier: the registration lapsed; registering the same server again")
 			// Repairs pace themselves on the backoff too (D15).
 			at.BackoffStep++
+			reason := "handshake-stale"
+			if !stale {
+				reason = "tunnel-silent"
+			}
+			a.repair = &repairState{reason: reason, since: a.nowISO()}
+			defer func() { a.repair = nil }()
 		}
 	}
 	return a.mutate(ctx, target)
@@ -1592,7 +1676,11 @@ func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error
 	if err := a.saveAttempt(); err != nil {
 		return nil, err
 	}
-	if _, err := a.publishRecord("applying", "Applying the requested server.", current, nil, nil); err != nil {
+	message := "Applying the requested server."
+	if a.repair != nil {
+		message = a.spec.Label + " stopped answering this tunnel; registering again. Traffic stays held in the tunnel meanwhile."
+	}
+	if _, err := a.publishRecord("applying", message, current, nil, nil); err != nil {
 		return nil, err
 	}
 	err = a.hooks.ApplyRelay(ctx, a, relay, keys)
