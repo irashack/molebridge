@@ -31,6 +31,14 @@ const (
 	EgressRetryBudgetSec = 30
 	// RefreshSec is how often a settled selection is re-checked.
 	RefreshSec = 60
+	// StallSec and StallBytes: a tunnel that sent at least StallBytes and
+	// received nothing for StallSec is checked at once (watchStall), where
+	// registrations can lapse.
+	StallSec   = 10
+	StallBytes = 1024
+	// SilentReuseSec: a silent check at most this old is the repair's
+	// inspection.
+	SilentReuseSec = 30
 	// A failed catalogue refresh is retried after CatalogRetrySec, and each
 	// further failure doubles the wait up to CatalogRetryMaxSec; a success
 	// starts over. While the catalogue is fresh, a retry is never put off past

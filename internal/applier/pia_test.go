@@ -1199,6 +1199,9 @@ func TestPIASilentTunnelReregistersAtOnce(t *testing.T) {
 	if strings.Contains(logs, "asking once more") {
 		t.Error("a silent tunnel was asked again")
 	}
+	if n := strings.Count(logs, "the tunnel received nothing while it ran"); n != 1 {
+		t.Errorf("the repair measured the silence %d times, not once", n)
+	}
 }
 
 func TestPIASilentTunnelWithTheUplinkDownWaitsForTheStaleHandshake(t *testing.T) {
@@ -1289,4 +1292,63 @@ func TestPIASilentTunnelRepairsPaceThemselvesOnTheBackoff(t *testing.T) {
 	if k.addKeys() != 3 {
 		t.Fatalf("%d", k.addKeys())
 	}
+}
+
+func TestPIAStalledTunnelIsCheckedWithoutWaitingForThePeriodicCheck(t *testing.T) {
+	// Traffic goes out and nothing comes back: the next pass after StallSec
+	// checks at once, finds the tunnel silent and registers again, long
+	// before the periodic check was due.
+	a, k, api, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	mustTick(t, a)
+	// Past the backoff since the first registration, just after a check.
+	k.now += 300
+	a.nextHealth = 0
+	if r := mustTick(t, a); status(r) != "ok" {
+		t.Fatalf("%s", status(r))
+	}
+	due := a.nextHealth
+	k.silent, api.statusDown = true, true
+	k.afterReplacePeer = func() { k.silent, api.statusDown = false, false }
+	start := k.now
+	for k.addKeys() == 1 && k.now < due {
+		k.now += PollSec
+		mustTick(t, a)
+	}
+	if k.addKeys() != 2 || k.now-start > StallSec+2*PollSec {
+		t.Fatalf("addKeys %d after %v s (periodic check due after %v s) state %s\n%s", k.addKeys(), k.now-start, due-start, a.attempt.State, strings.Join(k.logs, "\n"))
+	}
+	logs := strings.Join(k.logs, "\n")
+	if !strings.Contains(logs, "received nothing for") || strings.Count(logs, "the tunnel received nothing while it ran") != 1 {
+		t.Fatalf("logs:\n%s", logs)
+	}
+}
+
+func TestPIAIdleTunnelIsNotCheckedEarly(t *testing.T) {
+	// Nothing sent, nothing received: no stall, the periodic check keeps
+	// its time.
+	a, k, _, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	mustTick(t, a)
+	due := a.nextHealth
+	idle := &idleTransfers{kernel: k}
+	a.sys = idle
+	for k.now+PollSec < due {
+		k.now += PollSec
+		mustTick(t, a)
+		if a.nextHealth != due {
+			t.Fatalf("checked early at %v", k.now)
+		}
+	}
+}
+
+// idleTransfers is a kernel whose peer's counters don't move.
+type idleTransfers struct{ *kernel }
+
+func (i *idleTransfers) Transfers(context.Context) (map[string]Transfer, error) {
+	out := map[string]Transfer{}
+	for _, key := range i.keys {
+		out[key] = Transfer{Received: 4096, Sent: 8192}
+	}
+	return out, nil
 }

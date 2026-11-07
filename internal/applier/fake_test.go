@@ -296,11 +296,12 @@ func (k *kernel) Transfers(context.Context) (map[string]Transfer, error) {
 	k.transfers++
 	out := map[string]Transfer{}
 	for _, key := range k.keys {
-		received := k.transfers
+		// A data packet's worth each call.
+		received := k.transfers * 1500
 		if k.silent {
 			received = 0
 		}
-		out[key] = Transfer{Received: received, Sent: k.transfers}
+		out[key] = Transfer{Received: received, Sent: k.transfers * 1500}
 	}
 	return out, nil
 }

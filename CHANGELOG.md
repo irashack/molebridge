@@ -7,9 +7,12 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 ## 0.10.1 — unreleased
 
 **Experimental.** A PIA registration that its server forgets is registered
-again within about a minute instead of about three, and the record says it is
-a repair rather than a failure. Tested with the unit tests' fake kernel and
-PIA API only; not yet run live ([testing](docs/testing.md)).
+again within about 25 seconds on a tunnel carrying traffic, instead of about
+three minutes, and the record says it is a repair rather than a failure.
+`v0.10.1-rc.1` repaired a simulated lapse live (the server's WireGuard
+packets dropped, its registration API reachable) after 78 seconds without
+egress; `rc.2` adds the stall watch and drops the second inspection, tested
+with the unit tests' fake kernel and PIA API ([testing](docs/testing.md)).
 
 **Changed**:
 - **A silent PIA tunnel is a lapsed registration.** When the periodic check's
@@ -17,8 +20,11 @@ PIA API only; not yet run live ([testing](docs/testing.md)).
   byte counters across it. If the peer sent but received nothing, and the
   recorded server's registration API answers outside the tunnel, the server
   has forgotten the registration: the exit registers the same server again in
-  the same pass, without the second egress request and without waiting for the
-  handshake to be 180 seconds stale. It removes the peer and sets it again, so
+  the same pass, without asking or inspecting again and without waiting for
+  the handshake to be 180 seconds stale. Between checks, every pass reads the
+  counters, and a tunnel that sent 1024 bytes or more and received nothing for
+  10 seconds is checked at once instead of at the next minute's check; an idle
+  tunnel never counts. It removes the peer and sets it again, so
   WireGuard starts a new handshake at once. If the registration API doesn't
   answer either (the host's own network is down), the check is asked once
   more after 10 seconds, nothing is registered, and the stale handshake stays
