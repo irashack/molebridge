@@ -194,7 +194,7 @@ traffic out: rules 1, 95 and 97 hold forwarded traffic throughout.
   are the same as for Molebridge; follow the [NetBird section of the requirements](prerequisites.md#netbird)
   and [setup step 9](setup.md#9-create-the-route-and-try-a-device), and do not skip the group rules: the
   exit peer is never in `exit-users`, and the exit route is never distributed to `All`. The image
-  carries the NetBird client; its version is pinned in the `Dockerfile` (0.80.0 at this writing).
+  carries the NetBird client; its version is pinned in the `Dockerfile` (0.82.1 at this writing).
 - **A WireGuard account at one of the six providers**, with the private key (and the tunnel address, if
   the provider assigns one) that gluetun's documentation for that provider asks for. Only NordVPN has
   been tried.

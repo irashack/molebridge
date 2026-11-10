@@ -4,6 +4,22 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.10.2 — unreleased
+
+**Experimental.** The image carries NetBird 0.82.1 (0.80.0 before) on
+Alpine 3.24.3. Molebridge's own behavior is unchanged.
+
+**Changed**:
+- **NetBird 0.82.1 in the image.** The startup checks that are written
+  against NetBird's source (the profile and environment gate, the interface
+  blacklist, the log lines that mean unmarked control traffic, the entrypoint
+  sequence) were read again in 0.82.1 and hold as they are; only the source
+  references moved. NetBird 0.81 and later carry relayed peers through a
+  WireGuard proxy on loopback (`127.128.0.0/9`) instead of an eBPF program,
+  and 0.82.1 drops a packet that would leave by the overlay interface it
+  arrived on.
+- **Alpine 3.24.3** as the image base (3.24.2 before).
+
 ## 0.10.1 — 2026-11-07
 
 **Experimental.** A PIA registration that its server forgets is registered

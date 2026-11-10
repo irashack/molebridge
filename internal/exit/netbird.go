@@ -69,7 +69,7 @@ type nbEvent struct {
 	at time.Duration
 }
 
-// nbManager runs NetBird's 0.80.0 entrypoint sequence itself: `netbird service
+// nbManager runs NetBird's 0.82.1 entrypoint sequence itself: `netbird service
 // run` as a daemon in a process group of its own, `netbird status --check
 // live` once a second until the daemon answers, then `netbird up`. Every wait
 // is bounded and every process is reaped by the reaper.

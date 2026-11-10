@@ -212,7 +212,7 @@ func FixProfileWith(p Paths, tunnelIF string, r FixRequest, o FixOptions) (FixRe
 		}
 	}
 	// Already excluded as NetBird's filter reads the list (an entry that is a
-	// prefix of the name, filter.go:13-35) needs nothing.
+	// prefix of the name, filter.go:11-27) needs nothing.
 	var add []string
 	for _, name := range append([]string{tunnelIF}, r.Add...) {
 		if !covers(st.entries, name) && !contains(add, name) {

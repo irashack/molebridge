@@ -17,7 +17,7 @@ const maxFileSize = 1 << 20
 // (default /var/lib/netbird, profilemanager/service.go:65-87) and copies a
 // legacy default profile in when its own is absent
 // (service.go:142-172); the CLI first migrates /etc/wiretrustee to
-// /etc/netbird (client/cmd/root.go:128-148,343-350).
+// /etc/netbird (client/cmd/root.go:129-151,387-393).
 const (
 	DefaultStateDir = "/var/lib/netbird"
 	// DefaultSocket is the daemon's gRPC socket (client/cmd/root.go, the
@@ -159,7 +159,7 @@ func load(path string, dupAny bool) loaded {
 // that is not one valid JSON object, a root field name outside printable
 // ASCII, a checked field repeated in any case, Rosenpass present and not
 // false, an interface other than the guarded one. Absent or empty WgIface
-// means wt0 (profilemanager/config.go:397-405, iface/configurer/name.go:6).
+// means wt0 (profilemanager/config.go:525-533, iface/configurer/name.go:6).
 func profileVerdict(l loaded, overlayIF string) verdict {
 	if l.verdict != vOK && l.verdict != vDuplicate {
 		return l.verdict

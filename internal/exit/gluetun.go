@@ -113,7 +113,7 @@ func readProcNet() (tcp4, tcp6 string, err error) {
 
 // -- NetBird's log (the fallback from advanced routing) --------------------------
 
-// The two lines NetBird 0.80.0 logs when it will not mark its sockets
+// The two lines NetBird 0.82.1 logs when it will not mark its sockets
 // (client/net/env_linux.go:61,66), so its control traffic would be unmarked.
 var fallbackStrings = [][]byte{
 	[]byte("falling back to legacy routing"),

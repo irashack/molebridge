@@ -2,7 +2,7 @@
 // in 0.7.x): the settings NetBird must not run with, the stored profile the
 // daemon will load, and the interface blacklist (D25) with its repair tool.
 //
-// NetBird source references are to the pinned release, 0.80.0.
+// NetBird source references are to the pinned release, 0.82.1.
 package nbprofile
 
 // Refusal is a start-time refusal. Its text is a fixed message: it never

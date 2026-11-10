@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-// DefaultInterfaceBlacklist is NetBird 0.80.0's default list
+// DefaultInterfaceBlacklist is NetBird 0.82.1's default list
 // (client/internal/profilemanager/config.go:56-59, with
 // iface.WgInterfaceDefault = "wt0" from client/iface/configurer/name.go:6).
 // NetBird fills it into an empty list at config load
-// (config.go:468-473, `len(config.IFaceBlackList) == 0`), so a list holding
+// (config.go:594-599, `len(config.IFaceBlackList) == 0`), so a list holding
 // only the tunnel interface would suppress every one of these.
 func DefaultInterfaceBlacklist() []string {
 	return []string{
@@ -112,7 +112,7 @@ func contains(list []string, name string) bool {
 
 // covers reports whether NetBird's ICE candidate filter excludes the
 // interface: it drops an interface when strings.HasPrefix(iface, entry) holds
-// for any entry of IFaceBlackList (client/internal/stdnet/filter.go:13-35),
+// for any entry of IFaceBlackList (client/internal/stdnet/filter.go:11-27),
 // so the default "wg" covers wg0. An empty entry is ignored here (the filter
 // would treat it as matching every interface; a profile holding one is not
 // taken as proof that the tunnel interface was deliberately excluded).
@@ -162,7 +162,7 @@ func checkListFile(path string) (loaded, listState, error) {
 //
 // The tunnel interface counts as excluded when any non-empty entry is a
 // prefix of its name, which is how NetBird's candidate filter applies the list
-// (client/internal/stdnet/filter.go:13-35, strings.HasPrefix(iface, entry)):
+// (client/internal/stdnet/filter.go:11-27, strings.HasPrefix(iface, entry)):
 // the default entry "wg" covers wg0.
 //
 // A missing entry is refused with a fixed message naming the repair tool;

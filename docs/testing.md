@@ -1601,7 +1601,7 @@ shared with the panel), NetBird 0.80.0 102.3 MB, gluetun v3.41.3 67.9 MB.
 - The NetBird gate's other refusals (forced userspace modes, Rosenpass,
   foreground mode, other profiles and config paths) on a running peer. Unit
   tests and `tools/check-routing.sh` cover them; the NetBird settings were
-  checked against the 0.79.0 source and re-checked unchanged in 0.80.0. On
+  checked against the 0.79.0 source and re-checked unchanged in 0.80.0 and 0.82.1. On
   rootless Podman the gate accepted the live configuration of Mullvad, PIA
   and NordVPN exits at `0086fac`; its refusals have not run on a live peer.
 - The [gluetun backend](architecture.md#gluetun-backend) beyond the passes
