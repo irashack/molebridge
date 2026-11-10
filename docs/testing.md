@@ -15,6 +15,102 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.10.2
+
+Released from `v0.10.2-rc.1`. The acceptance policy for 0.10.2
+(`tools/acceptance-policy.json`, version 11) is 0.10.1's with the upgrade
+drilled from the release before it, `upgrade-from-0.10.1`; the platforms,
+providers, kinds and other drills are unchanged.
+
+0.10.2 changes the image, not Molebridge: NetBird 0.82.1 instead of 0.80.0,
+on Alpine 3.24.3 (see the [changelog](../CHANGELOG.md)). The checks written
+against NetBird's source were read again at v0.82.1 before the candidate.
+Three things could only be settled on live exits, and the acceptance ran
+them besides the policy's drills: a client that reaches the exit through a
+NetBird relay, which 0.81 and later carry through a WireGuard proxy on
+loopback; a gluetun reconnect under 0.82's network monitor; and the NetBird
+gate accepting each exit's stored profile after the upgrade.
+
+### v0.10.2-rc.1, 2026-11-10: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.10.2-rc.1`, index digest
+`sha256:bb2e54a23ecc849da5f7adfae67eecd19f1bff1126ebf5feaa40524cbaca90d7`
+(commit `03bf058`; image signature, build provenance and the bundle's
+signature verified against the release workflow at the tag), CI's five jobs
+passing on the tag, namespace drills included
+([run 42900854589](https://github.com/irashack/molebridge/actions/runs/42900854589)).
+Policy version 11; attested by [run
+42912070991](https://github.com/irashack/molebridge/actions/runs/42912070991)
+and promoted as `v0.10.2`. The same Kubernetes cluster as for 0.10.1 and a
+rootless Podman Quadlet unit (Podman 5.8.9); a throwaway NetBird 0.82.1 peer
+held each exit under test.
+
+- **Upgrade from 0.10.1:** every workload on Kubernetes (the native Mullvad,
+  PIA and NordVPN exits, three more native Mullvad exits, the gluetun overlay
+  exit, the gluetun sidecar, two native sidecars, Switchyard, and the network
+  exchange's trial panel and exchange) first ran and was ready on `v0.10.1`,
+  then moved to the candidate by its image alone: the nine exits `ok`,
+  verified, with no restart, within four minutes. The gluetun sidecar's first
+  read failed once while gluetun refreshed its server list; it reconverged
+  and verified. The gluetun sidecar (NordVPN) as a rootless Podman Quadlet
+  unit, `ok` on `v0.10.1` with its application's traffic leaving through the
+  VPN: the `Image=` changed and the exit's unit restarted, back `ok` in 5 s,
+  the application and gluetun not restarted and still leaving through the
+  VPN. NetBird in the exits reported 0.82.1.
+- **Client egress** through each exit on the candidate: Mullvad over IPv4 and
+  IPv6, PIA, NordVPN and gluetun over IPv4, each from the provider's address.
+- **A relayed client:** the test peer was restarted with
+  `NB_FORCE_RELAY=true` and showed `Relayed` to each exit, with fresh
+  handshakes. Egress through the Mullvad (IPv4 and IPv6), PIA, NordVPN and
+  gluetun exits was the provider's address each time. On each of the four
+  exits the overlay interface had one peer endpoint at `127.128.x.x:3128`,
+  NetBird's loopback proxy. `NB_DISABLE_KERNEL_WG_PROXY` was not set.
+- **A gluetun reconnect:** the tunnel interface was deleted in the gluetun
+  overlay exit's pod with a client on it. The exit reported not operational;
+  gluetun's health check restarted its VPN 45 s later, traffic returned at
+  46.0 s on the same endpoint, and the exit wrote a fresh `ok` record 58 s
+  after the deletion, on its own. No container restarted, and the client
+  failed closed throughout, never on the host's address. NetBird's engine
+  did not restart: in the exit it logs `Network monitor is disabled, not
+  starting`.
+- **The NetBird gate:** all seven exits that run NetBird started it on the
+  candidate with no refusal, and the Mullvad and PIA exits again after their
+  lease-lapse restarts.
+- **Drift** on Mullvad (IPv4 and IPv6), PIA and NordVPN (IPv4), frozen and
+  unfrozen as with 0.10.1: frozen drifts repaired in 5 to 23 ms, unfrozen in
+  11 to 16 ms. During the frozen hold of a `lookup main` at 50, the client
+  left from the host's address for 3 to 5 seconds (68, 107 and 77 packets
+  counted), as with 0.10.1; no IPv6 leak.
+- **Tunnel loss** (the interface deleted in the exit), native: Mullvad's
+  interface back after 159 ms and traffic after 621 ms; PIA's interface back
+  after 126 ms, a reconverge, and traffic after 4.6 s, the client failing
+  for about 3 s; NordVPN's interface back after 583 ms and traffic after
+  1.1 s, the client losing one probe.
+- **Lease lapse** on the native Mullvad and PIA exits: the worker frozen, the
+  exit stopped with the routing guards in place and restarted after 37 s on
+  both, `ok` again 45 s and 43 s after the freeze. The client failed closed
+  while it restarted, never on the host's address.
+- **Client switch** on the Mullvad exit, IPv4 and IPv6: one server to
+  another in 10.2 s and back in 8.0 s, the client reporting the new server
+  on both families each time, 0 of 20 probes failed.
+- **Status drills:** the exit's own egress check dropped on the Mullvad and
+  PIA exits (asked once more, then failed and `applied-unverified` with a
+  recheck time, the live server unchanged and the client unaffected; `ok`
+  61 s after the drop was removed); a stopped exit on Podman shown stale with
+  `/readyz` 503 within 98 s and connected 5 s after its start; a second
+  switch refused with 409 while the first completed, in both orders; a
+  switch that failed (handshake and egress) offered Retry, and the retry
+  verified in 6.2 s, before the exit's own recheck. The "Retrying at" text
+  was read from the page's template and the JSON, not rendered in a browser.
+- **Network exchange:** the panel and exchange on one node and the NordVPN
+  exit on another, contact one second old with a clock offset of 0.0 s; the
+  409 and failed-switch drills ran through it.
+
+Not run for this release: the PIA lapse drill of 0.10.1 (not in policy 11),
+and the optional status checks (browser disconnect, peer identity across
+recreation and reboot, the gluetun container recreated alone, a non-default
+`OVERLAY_IF`, a catalog outage).
+
 ## 0.10.1
 
 Released from `v0.10.1-rc.2`. The acceptance policy for 0.10.1

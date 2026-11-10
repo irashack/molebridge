@@ -4,10 +4,13 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.10.2 — unreleased
+## 0.10.2 — 2026-11-10
 
 **Experimental.** The image carries NetBird 0.82.1 (0.80.0 before) on
-Alpine 3.24.3. Molebridge's own behavior is unchanged.
+Alpine 3.24.3. Molebridge's own behavior is unchanged. Released from
+`v0.10.2-rc.1` after its live acceptance on Kubernetes and rootless Podman,
+which also put a relayed client through each exit and reconnected gluetun
+under the new NetBird ([testing](docs/testing.md#0102)).
 
 **Changed**:
 - **NetBird 0.82.1 in the image.** The startup checks that are written
