@@ -167,7 +167,7 @@ people. Some forbid it.
 
 - **A NetBird account**, either NetBird Cloud or self-hosted. The image
   carries the NetBird client at the version pinned in its `Dockerfile`
-  (0.80.0 at this writing); NetBird updates arrive as Molebridge patch
+  (0.82.1 at this writing); NetBird updates arrive as Molebridge patch
   releases. Only self-hosted servers have been tried: 0.78 and 0.79 with 0.79
   clients in earlier passes, and since then a self-hosted server with the
   image's client. NetBird Cloud has not. The account needs admin access, because

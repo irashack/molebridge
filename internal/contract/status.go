@@ -274,7 +274,7 @@ type NftChain struct {
 	Name   string
 }
 
-// NetBird's own netfilter objects in the pinned release (0.80.0): the
+// NetBird's own netfilter objects in the pinned release (0.82.1): the
 // nftables backend creates table `netbird`; the iptables backend creates
 // chains such as NETBIRD-RT-FWD-IN. NetBird picks iptables whenever its
 // iptables lists filter chains. The chains are visible here when that

@@ -9,7 +9,7 @@
 set -eu
 image=${1:?usage: sh tools/check-image.sh <image> [platform]}
 platform=${2:-}
-netbird_version=${NETBIRD_VERSION:-0.80.0}
+netbird_version=${NETBIRD_VERSION:-0.82.1}
 # 80 MB unpacked, as `du -sk` counts it (1 MB = 1000 * 1000 bytes).
 limit_kib=78125
 fail() { echo "FAIL $1" >&2; exit 1; }

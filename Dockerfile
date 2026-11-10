@@ -31,14 +31,14 @@ RUN set -eu; \
 
 # Stage 2: the NetBird client release archive, checked against the hashes
 # committed here. The hashes are the linux_amd64 and linux_arm64 lines of
-#   https://github.com/netbirdio/netbird/releases/download/v0.80.0/netbird_0.80.0_checksums.txt
+#   https://github.com/netbirdio/netbird/releases/download/v0.82.1/netbird_0.82.1_checksums.txt
 # Update the version and both hashes together.
-# Alpine 3.24.2, as before: https://hub.docker.com/_/alpine
+# Alpine 3.24.3, as before: https://hub.docker.com/_/alpine
 FROM --platform=$BUILDPLATFORM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS netbird
 ARG TARGETARCH
-ARG NETBIRD_VERSION=0.80.0
-ARG NETBIRD_SHA256_AMD64=47ffaba4fc3929f31795bd6c5232d6c29744d3169e2c93e6d9c84624f0ef6405
-ARG NETBIRD_SHA256_ARM64=8cbd99fa068a7b0f3968b2d31dc341acc17dd1e97c3053e61ed5905dbdae7341
+ARG NETBIRD_VERSION=0.82.1
+ARG NETBIRD_SHA256_AMD64=c8f10b89dfa01b8bcad5ec25b666a83e351be4e22eb784b822478b9326a35423
+ARG NETBIRD_SHA256_ARM64=8c6a4d4084e1746a3c9b86f0ce8be1ca05544ba08d7dbb78609c5c9d6b009e0e
 RUN apk add --no-cache ca-certificates
 WORKDIR /netbird
 RUN set -eu; \

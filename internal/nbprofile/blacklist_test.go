@@ -20,8 +20,8 @@ func refusalFor(path, tunnel string) string {
 		" (docs/operations.md#netbird-interface-blacklist) (see docs/troubleshooting.md)"
 }
 
-func TestDefaultInterfaceBlacklistIsNetBird0800s(t *testing.T) {
-	// client/internal/profilemanager/config.go:56-59 at v0.80.0.
+func TestDefaultInterfaceBlacklistIsNetBird0821s(t *testing.T) {
+	// client/internal/profilemanager/config.go:56-59 at v0.82.1.
 	want := []string{"wt0", "wt", "utun", "tun0", "zt", "ZeroTier", "wg", "ts", "Tailscale", "tailscale", "docker", "veth", "br-", "lo"}
 	got := DefaultInterfaceBlacklist()
 	if strings.Join(got, ",") != strings.Join(want, ",") {

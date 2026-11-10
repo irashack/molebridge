@@ -304,7 +304,7 @@ when the caller gives none).
 
 The supervisor starts NetBird when, and only when, the worker has reported the
 contract verified (and, natively, the tunnel up) and the lease is held. It runs
-the sequence of NetBird 0.80.0's own container entrypoint, as three steps
+the sequence of NetBird 0.82.1's own container entrypoint, as three steps
 rather than one command: `netbird service run` as a daemon in a process group
 of its own; `netbird status --check live`, polled once a second for up to 30
 seconds; then `netbird up`, for up to 120 seconds (a first enrollment with a
@@ -858,7 +858,7 @@ one fixed line that prints nothing from the file, which holds the peer's
 private key ([troubleshooting](troubleshooting.md#startup)).
 
 These checks are written against the source of the NetBird release Molebridge
-pins, 0.80.0; a NetBird upgrade needs them read again.
+pins, 0.82.1; a NetBird upgrade needs them read again.
 
 **The identity.** When the exit finds no stored profile, it says so before it
 starts NetBird: `molebridge-exit: no NetBird identity found in the state directory or the legacy profile paths; NetBird will enroll a new peer`.
@@ -930,7 +930,7 @@ for what they covered and what they didn't. Since then a gluetun exit with
 NordVPN has been upgraded to each release, on rootless Podman and on
 Kubernetes, and reported healthy and connected; the live drills run on the
 native exits, not on this backend ([testing](testing.md)). The gluetun behaviors below were read in the
-source of the pinned releases (gluetun v3.41.3, NetBird 0.80.0) and exercised
+source of the pinned releases (gluetun v3.41.3, NetBird 0.82.1) and exercised
 in isolated namespaces by the drills in `internal/drill`. The 0.7 form without
 the provider logic and the panel, three containers with only a routing guard,
 no longer exists: the exit container always runs the provider logic, and so
@@ -1111,7 +1111,7 @@ exit also:
 
 - refuses to start NetBird when `NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK`
   or `NB_DISABLE_CUSTOM_ROUTING` is true, or when `NB_FWMARK_BASE` differs
-  from `CONTROL_MARK` (NetBird 0.80.0, the pinned release, honors that variable;
+  from `CONTROL_MARK` (NetBird 0.82.1, the pinned release, honors that variable;
   `compose.gluetun.yaml` sets both from `CONTROL_MARK`);
 - starts NetBird only when the whole contract holds, judged by the same
   definitions as the repairer, in both families: every rule in the table below

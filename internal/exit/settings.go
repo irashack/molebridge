@@ -355,7 +355,7 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 }
 
 // netbirdExtraBlacklist is the list `netbird up` ends up with for
-// --extra-iface-blacklist when the environment sets it, read as NetBird 0.80.0
+// --extra-iface-blacklist when the environment sets it, read as NetBird 0.82.1
 // reads it (client/cmd/root.go SetFlagsFromEnvVars, spf13/pflag's
 // StringSliceVar): for the old WT_ name and then the NB_ name, a variable that
 // is present (even empty) is given to the flag, whose value is Go's

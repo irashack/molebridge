@@ -38,7 +38,7 @@ type Settings struct {
 }
 
 // Go's strconv.ParseBool true values, used by the switches NetBird parses
-// that way (client/firewall/create_linux.go:231-239,
+// that way (client/firewall/create_linux.go:227-241,
 // client/firewall/uspfilter/filter.go:512-519, and pflag for `netbird up`).
 func truthy(s string) bool {
 	switch s {
@@ -136,24 +136,24 @@ func checkCommon(e envView, backend string) (Settings, error) {
 	}
 	// Rosenpass is not supported on the exit: its key exchange needs local
 	// delivery from the overlay. `netbird up` reads NB_ENABLE_ROSENPASS and
-	// the older WT_ name (client/cmd/root.go:220,245-267;
-	// client/cmd/up.go:99-100).
+	// the older WT_ name (client/cmd/root.go:223,251-272;
+	// client/cmd/up.go:93-94).
 	for _, name := range []string{"NB_ENABLE_ROSENPASS", "WT_ENABLE_ROSENPASS"} {
 		if err := mustBeOff(e, name, "Rosenpass cannot work on this exit"); err != nil {
 			return s, err
 		}
 	}
 	// Foreground mode runs NetBird inside `netbird up`, with the profile
-	// chosen there instead of the daemon's (client/cmd/up.go:72,99-100,
-	// 143-150,203-240).
+	// chosen there instead of the daemon's (client/cmd/up.go:66,93-94,
+	// 143-146,197-273).
 	for _, name := range []string{"NB_FOREGROUND_MODE", "WT_FOREGROUND_MODE"} {
 		if err := mustBeOff(e, name, "Molebridge supports only NetBird's daemon mode"); err != nil {
 			return s, err
 		}
 	}
 	// `netbird up` takes the interface name from NB_INTERFACE_NAME, and from
-	// WT_INTERFACE_NAME when NB_ is unset (client/cmd/up.go:73,
-	// client/cmd/root.go:245-267). Both must name the guarded interface.
+	// WT_INTERFACE_NAME when NB_ is unset (client/cmd/up.go:67,
+	// client/cmd/root.go:251-272). Both must name the guarded interface.
 	if e.isSet("NB_INTERFACE_NAME") && e.get("NB_INTERFACE_NAME") == "" {
 		return s, refuse("NB_INTERFACE_NAME is empty")
 	}
@@ -161,9 +161,9 @@ func checkCommon(e envView, backend string) (Settings, error) {
 		return s, refuse(fmt.Sprintf("WT_INTERFACE_NAME is set and differs from the guarded interface %s", s.OverlayIF))
 	}
 	// Only NetBird's default profile, at its default location, is supported:
-	// NB_CONFIG and WT_CONFIG move it (client/cmd/root.go:168,245-267);
+	// NB_CONFIG and WT_CONFIG move it (client/cmd/root.go:171,251-272);
 	// NB_PROFILE and WT_PROFILE make `netbird up` switch to another
-	// (client/cmd/up.go:93,99-100,136-141).
+	// (client/cmd/up.go:87,93-94,130-134).
 	for _, name := range []string{"NB_CONFIG", "WT_CONFIG", "NB_PROFILE", "WT_PROFILE"} {
 		if e.isSet(name) {
 			return s, refuse(name + " is set; Molebridge supports only NetBird's default profile")
