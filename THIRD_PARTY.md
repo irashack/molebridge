@@ -111,7 +111,7 @@ module's license text is reproduced as vendored.
 | `golang.org/x/crypto` | v0.57.0 | LICENSE, PATENTS |
 | `golang.org/x/net` | v0.60.0 | LICENSE, PATENTS |
 | `golang.org/x/sync` | v0.20.0 | LICENSE, PATENTS |
-| `golang.org/x/sys` | v0.49.0 | LICENSE, PATENTS |
+| `golang.org/x/sys` | v0.50.0 | LICENSE, PATENTS |
 | `golang.zx2c4.com/wireguard/wgctrl` | v0.0.0-20241231184526-a9ab2273dd10 | LICENSE.md |
 
 ### github.com/google/go-cmp v0.7.0
@@ -805,7 +805,7 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 ~~~~
 
-### golang.org/x/sys v0.49.0
+### golang.org/x/sys v0.50.0
 
 Packages: golang.org/x/sys/unix
 
