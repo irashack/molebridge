@@ -34,7 +34,7 @@ RUN set -eu; \
 #   https://github.com/netbirdio/netbird/releases/download/v0.82.1/netbird_0.82.1_checksums.txt
 # Update the version and both hashes together.
 # Alpine 3.24.3, as before: https://hub.docker.com/_/alpine
-FROM --platform=$BUILDPLATFORM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS netbird
+FROM --platform=$BUILDPLATFORM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS netbird
 ARG TARGETARCH
 ARG NETBIRD_VERSION=0.82.1
 ARG NETBIRD_SHA256_AMD64=c8f10b89dfa01b8bcad5ec25b666a83e351be4e22eb784b822478b9326a35423
@@ -57,7 +57,7 @@ RUN set -eu; \
     find LICENSE LICENSES -type f -exec chmod 0644 '{}' +
 
 # Stage 3: the image. Alpine, the CA bundle, the binary and the client.
-FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 LABEL org.opencontainers.image.title="Molebridge" \
       org.opencontainers.image.description="Exit-node supervisor, routing contract and Switchyard panel for a NetBird overlay" \
       org.opencontainers.image.source="https://github.com/irashack/molebridge" \
