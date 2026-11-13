@@ -22,7 +22,8 @@ V=0.10.3; RC=v$V-rc.1; PREV=0.10.2
 
 - CHANGELOG.md has the release's entry, headed `unreleased`.
 - `tools/acceptance-policy.json`: `version` raised by one, the upgrade drill renamed to
-  `upgrade-from-$PREV`; the same drill in `tools/test-make-acceptance-predicate.sh`.
+  `upgrade-from-$PREV`; the same drill, and the `policy_version` it expects, in
+  `tools/test-make-acceptance-predicate.sh`.
   `sh tools/test-make-acceptance-predicate.sh` passes.
 - If `release.yml` or an action it uses changed: `gh workflow run release.yml --ref main`
   (the signing rehearsal, against the throwaway package) and wait for it.
