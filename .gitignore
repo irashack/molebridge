@@ -11,3 +11,4 @@ tunnel/gluetun/
 
 # Compiled test binaries (go test -c)
 *.test
+.claude/worktrees/
