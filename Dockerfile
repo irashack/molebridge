@@ -9,8 +9,8 @@
 
 # Stage 1: the binary. The build runs on the builder's own architecture and
 # cross-compiles for the target, so the arm64 image needs no emulation.
-# golang:1.27.3-alpine, index digest read with `docker buildx imagetools inspect`.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build
+# golang:1.27.4-alpine, index digest read with `docker buildx imagetools inspect`.
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 ARG TARGETOS=linux
 ARG TARGETARCH
 # The release the binary reports (`molebridge version`, `status`, the first log

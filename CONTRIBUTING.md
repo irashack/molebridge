@@ -21,7 +21,7 @@ names, the routing contract's priorities, the exit codes, `/api/status` and
 ## Where things are
 
 Molebridge is one Go module, `github.com/irashack/molebridge`, Go 1.27 (the
-Dockerfile and CI build with Go 1.27.3). It uses the standard library
+Dockerfile and CI build with Go 1.27.4). It uses the standard library
 wherever it reaches, plus the short list in `vendor/modules.txt` (netlink,
 WireGuard control, nftables), which is vendored and committed. A new module needs
 a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
