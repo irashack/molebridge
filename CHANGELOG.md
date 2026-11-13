@@ -4,10 +4,11 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.10.3 — unreleased
+## 0.10.3 — 2026-11-13
 
 **Experimental.** Built with Go 1.27.4, on Alpine 3.24.4. Molebridge's own
-behavior is unchanged.
+behavior is unchanged. Released from `v0.10.3-rc.1` after its live acceptance
+on Kubernetes and rootless Podman ([testing](docs/testing.md#0103)).
 
 **Changed**:
 - **Go toolchain**: 1.27.3 to 1.27.4 for the image, the drill image and CI.
