@@ -6,12 +6,13 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## 0.10.3 — unreleased
 
-**Experimental.** Built with Go 1.27.4. Molebridge's own behavior is
-unchanged.
+**Experimental.** Built with Go 1.27.4, on Alpine 3.24.4. Molebridge's own
+behavior is unchanged.
 
 **Changed**:
 - **Go toolchain**: 1.27.3 to 1.27.4 for the image, the drill image and CI.
   1.27.4 fixes GO-2026-6859 in net/http, which govulncheck reports for 1.27.3.
+- **Alpine 3.24.4** as the image base (3.24.3 before).
 
 ## 0.10.2 — 2026-11-10
 
