@@ -48,8 +48,8 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # The toolchain the Dockerfile builds with (golang:1.27.3-alpine).
-          go-version: "1.27.3"
+          # The toolchain the Dockerfile builds with (golang:1.27.4-alpine).
+          go-version: "1.27.4"
           cache: false
       - name: Scan
         # Exit status 3 means vulnerabilities were found. The report stays in
