@@ -573,6 +573,9 @@ func (s *Server) renderIndex(p IndexPage) string {
 		}
 		notes = `<p class="note note-negative">` + esc(view.Note) + retry + upcoming + `</p>`
 	}
+	if view.Moved != "" {
+		notes += `<p class="note" data-moved>` + esc(view.Moved) + `</p>`
+	}
 
 	token := esc(p.CSRFToken)
 	var locationsHTML, locationsCount, placeholder string

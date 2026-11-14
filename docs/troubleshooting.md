@@ -877,6 +877,16 @@ server in quotes:
 - `applier: switch to "<server>" rejected: <message>`
 - `applier: switch to "<server>" failed: <message> (next try in <n> s)`
 
+Two more lines are about a server the provider removed from its list
+([a server the provider retires](architecture.md#a-server-the-provider-retires)):
+
+- `applier: the requested server left the catalogue; moving to another server in the same city`
+- `applier: the requested server is in the catalogue again; returning to it`
+
+The panel then shows "<server> is no longer in the provider's server list.
+Connected through <server>, in the same city, instead." Nothing needs doing;
+pick a server yourself if you want a particular one.
+
 `<source>` is what asked for the switch, as in
 [requests and switching](architecture.md#requests-and-switching), and `<message>` is the
 panel's message, explained below. A check that changes nothing logs nothing.

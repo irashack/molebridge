@@ -1559,8 +1559,9 @@ Automatic retries run as `retry`, drift corrections as `reconverge`, and a
 new panel request for the server the previous attempt was on, after it
 failed, was refused, waited or stayed unverified, as `operator-retry`. The
 source is recorded in `result.json`'s `selection`
-([the status record](#the-status-record)). Molebridge never chooses another
-server by itself.
+([the status record](#the-status-record)). Molebridge chooses another
+server by itself in one case only, [a server the provider
+retires](#a-server-the-provider-retires).
 
 When `SERVER` is set, the exit ignores `desired.json`. It validates the
 name and fresh-catalog membership through the same gates.
@@ -1630,6 +1631,48 @@ sequenceDiagram
    At the timeout, a target that is live but not verified is **applied but
    unverified**; any other server live is a failed attempt, "Switch
    verification timed out; retrying automatically."
+
+### A server the provider retires
+
+Providers remove servers from their lists. A request for a server that isn't
+in a fresh catalog is refused, so until 0.11.0 an exit whose server was
+retired stayed failed until someone picked another. Since 0.11.0 the exit
+moves to another server in the same city by itself (`internal/applier/moved.go`):
+
+- Each time a server is verified while the catalog lists it, the exit writes
+  its name, city and country (and, for PIA, whether the region forwards
+  ports) to `state/applier/location.json`.
+- When the target (`SERVER`, the panel's request or gluetun's server to
+  restore) names that server and a fresh catalog no longer lists it, the exit
+  takes the servers the catalog lists with the same city and country (and,
+  if the retired one forwarded ports, that forward ports too), sorts their
+  names and picks the first one after the retired server's name, wrapping to
+  the first. The choice is the same on every pass and after a restart, and it
+  is kept in `location.json` until that server leaves the catalog too.
+- The replacement goes through the admission pipeline like any other target:
+  the same gates, the same verification, the same retries. The log has
+  `applier: the requested server left the catalogue; moving to another server in the same city`.
+- The request is not rewritten. `requested_server` (or `configured_server`)
+  still names the retired server, `server` names the replacement, and the
+  record carries `moved`: `{"from": "<retired>", "to": "<replacement>",
+  "reason": "left-catalogue"}`. The [verdict](#the-verdict) accepts exactly
+  that as agreement with the target.
+- When a fresh catalog lists the retired server again, the exit returns to it
+  (`applier: the requested server is in the catalogue again; returning to it`).
+  Picking any server in the panel ends the move: the picked server is then
+  the remembered one.
+
+With gluetun and no panel request or `SERVER`, the neighbour simply becomes
+the server to restore; the record has no `moved`, because nothing asked for
+the retired server by name.
+
+What is not moved: a server the exit never verified with 0.11.0 or later
+(there is no recorded city: a mistyped name, or an exit already refused when
+it was upgraded), and a server whose city has no other server in the catalog
+(the log has
+`applier: the requested server left the catalogue and its city has no other server; the request is refused`).
+Those behave as before. Without a fresh catalog nothing is decided: an
+earlier choice stands and the gates hold every change.
 
 ### The admission pipeline
 
@@ -1905,6 +1948,11 @@ never as passed. They count as connected only with `status: ok`,
 the target, and `provider` absent or the configured one. Under a sidecar
 configuration such a record is a kind mismatch.
 
+A record whose server stands in for a retired one also has `moved`, with
+`from`, `to` and `reason` ([a server the provider
+retires](#a-server-the-provider-retires)); other records don't have the
+member.
+
 ### The verdict
 
 `internal/verdict` judges a record for one exit, against the
@@ -1954,6 +2002,10 @@ at that moment, then the restore target.
 - For a panel request: `server` and `requested_server` are both the
   requested server. A 0.6 panel could show an acknowledged `ok` on another
   server as connected.
+- In both cases a record whose `moved.from` is that server and whose
+  `moved.to` is its own `server` agrees too
+  ([a server the provider retires](#a-server-the-provider-retires)); a
+  connected verdict then carries the reason code `server-moved`.
 - For any other target: `server` is the target.
 - With no target, the record's own `selection.target` must match for a
   `restore`, `reconverge`, `retry` or `operator-retry` record; an observed

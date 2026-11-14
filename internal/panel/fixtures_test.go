@@ -287,6 +287,12 @@ var consumerCases = map[string]consumerCase{
 		return schema2(recOpts{Configured: serverOf("mullvad"), Source: "configured",
 			Extra: map[string]any{"request_id": nil, "requested_server": nil}})
 	}, func() map[string]any { return request("se-got-wg-001", strings.Repeat("b", 32)) }, "ok", "connected", "provider"},
+	// The requested server left the provider's list; the exit moved to another
+	// in the same city and says so (0.11.0).
+	"moved": {"mullvad", "overlay", func() map[string]any {
+		return schema2(recOpts{Extra: map[string]any{"requested_server": "se-sto-wg-009",
+			"moved": map[string]any{"from": "se-sto-wg-009", "to": serverOf("mullvad"), "reason": "left-catalogue"}}})
+	}, func() map[string]any { return request("se-sto-wg-009") }, "ok", "connected", "provider"},
 	"no-status": {"mullvad", "overlay", func() map[string]any { return nil }, func() map[string]any { return nil },
 		"unknown", "awaiting status", ""},
 	// An exit reached through the network exchange that the exchange hasn't

@@ -628,6 +628,48 @@ func TestTargetAgreementForTheConfiguredServer(t *testing.T) {
 	}
 }
 
+// A record whose server stands in for a retired one says so in "moved"; only a
+// move from the reader's own target, to the record's own server, is believed.
+func TestAMoveAgreesWithTheTargetItStandsInFor(t *testing.T) {
+	moved := func(from, to string) map[string]any {
+		return map[string]any{"from": from, "to": to, "reason": "left-catalogue"}
+	}
+	v := pm(t, record(t, opts{server: other}, map[string]any{"requested_server": host, "moved": moved(host, other)}))
+	if v.State != "ok" || reasonsOf(v) != "server-moved" {
+		t.Errorf("%+v", v)
+	}
+	if from, to, ok := Moved(settle(t, record(t, opts{server: other}, map[string]any{"moved": moved(host, other)})).(map[string]any)); !ok || from != host || to != other {
+		t.Errorf("Moved = %q %q %v", from, to, ok)
+	}
+	v = pm(t, record(t, opts{server: other}, map[string]any{"configured_server": host, "request_id": nil, "moved": moved(host, other)}))
+	if v.State != "ok" || reasonsOf(v) != "server-moved" {
+		t.Errorf("configured: %+v", v)
+	}
+	for name, member := range map[string]any{
+		"from another request": moved("se-got-wg-001", other),
+		"to another server":    moved(host, "se-got-wg-001"),
+		"empty":                map[string]any{},
+		"not an object":        "se-sto-wg-001",
+		"to missing":           map[string]any{"from": host},
+	} {
+		v := pm(t, record(t, opts{server: other}, map[string]any{"requested_server": host, "moved": member}))
+		if v.State != "failed" || reasonsOf(v) != "not-requested-server" {
+			t.Errorf("%s: %+v", name, v)
+		}
+	}
+	// The record must still be for the reader's request.
+	v = pm(t, record(t, opts{server: other}, map[string]any{"requested_server": "se-got-wg-001", "moved": moved("se-got-wg-001", other)}))
+	if reasonsOf(v) != "not-requested-server" {
+		t.Errorf("another request: %+v", v)
+	}
+	// A move says nothing about health: a failure beside it is a failure.
+	failed := withCheck(record(t, opts{server: other}, map[string]any{"status": "failed", "requested_server": host, "moved": moved(host, other)}),
+		"egress", map[string]any{"state": "fail", "reason": "not-confirmed"})
+	if v := pm(t, failed); v.State != "failed" || strings.Contains(reasonsOf(v), "server-moved") {
+		t.Errorf("failed: %+v", v)
+	}
+}
+
 func assess(t testing.TB, exit ExitConfig, result any, target Target) Verdict {
 	return Assess(exit, settle(t, result), target, now)
 }

@@ -196,19 +196,34 @@ type Selection struct {
 	Server  string
 	Source  string
 	Request *state.Request
+	// Replaces is the requested server when Server stands in for it: the
+	// request named a server the provider retired (moved.go).
+	Replaces string
 }
 
-// Key identifies the selection.
+// Key identifies the selection. A replacement is another target than the
+// request it serves, so moving to it and returning from it are new targets.
 func (s *Selection) Key() string {
+	key := s.Source + ":" + s.Server
 	if s.Source == "panel" && s.Request != nil {
-		return state.RequestToken(*s.Request)
+		key = state.RequestToken(*s.Request)
+	} else if s.Replaces != "" {
+		key = s.Source + ":" + s.Replaces
 	}
-	return s.Source + ":" + s.Server
+	if s.Replaces != "" {
+		key += "|moved:" + s.Server
+	}
+	return key
 }
 
 func (s *Selection) target() verdict.Target {
 	if s == nil {
 		return verdict.Target{}
+	}
+	if s.Replaces != "" {
+		// A reader's target is what was asked for; the record says what
+		// stands in for it.
+		return verdict.Target{Server: s.Replaces, Source: s.Source, Request: s.Request}
 	}
 	return verdict.Target{Server: s.Server, Source: s.Source, Request: s.Request}
 }

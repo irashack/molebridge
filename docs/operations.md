@@ -109,7 +109,8 @@ The reason codes in `status` and in `/api/status` come from the
 `<check>-unmeasured`, `rejected`, `status-failed`, `status-unknown`, and for a
 connection on the wrong server `not-configured-server`, `not-requested-server`
 or `not-target-server`. A connected exit may carry `no-selection`: nothing has
-been selected yet. An exit reached through the [network
+been selected yet, or `server-moved`: its server stands in for one the
+provider retired ([a server the provider retires](architecture.md#a-server-the-provider-retires)). An exit reached through the [network
 exchange](configuration.md#the-network-exchange) may also be `unknown` with
 `exit-unreachable` or `clock-skew`, in the panel only. [Troubleshooting](troubleshooting.md#the-panel) explains the
 labels the panel shows for them.

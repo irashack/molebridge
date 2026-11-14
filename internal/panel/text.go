@@ -14,7 +14,7 @@ import (
 // table in the page (data-text) and has no wording of its own. Only fixed
 // text: nothing from a record. The bytes are what json.dumps(TEXT,
 // separators=(',', ':')) wrote, and are embedded in the page as they are.
-const textJSON = `{"connection":{"overlay":{"ok":"Secure connection","applying":"Switching route","failed":"Connection needs attention","unknown":"Connection unverified"},"sidecar":{"ok":"Secure connection","applying":"Switching server","failed":"Connection needs attention","unknown":"Connection unverified"}},"tier":{"provider":"provider-confirmed","tunnel":"tunnel checks only","none":"not confirmed"},"failed":"Tunnel verification failed.","stale":"Status is stale or unavailable. Details are from the last check.","unverified":"The connection can't be confirmed. Details are from the last check.","unreachable":"Cannot reach the panel. Connection status is unknown.","drop":{"overlay":"Open connections through the exit will drop.","sidecar":"Open connections through the tunnel will drop."},"gives_up":"Verification gives up after {s} seconds.","next":{"recheck":"Re-checking at {at} UTC.","reapply":"Retrying at {at} UTC."},"checks":{"routing":"Routing protection","netbird":"NetBird kernel mode","owner_record":"Owner record","peer":"Tunnel peer","handshake":"Handshake","egress":"Egress check","traffic_protection":"Traffic protection","app_attachment":"App attachment"},"check_state":{"pass":"passed","fail":"failed","unknown":"unknown","n/a":"not applicable","legacy":"not reported individually"},"not_checked":"not checked by Molebridge ({by})","handshake_age":", {age} s old","reason":{"no-peer":"no tunnel peer","multiple-peers":"more than one tunnel peer","catalogue-stale":"no fresh server list","unidentified":"peer not in the server list","not-target":"not the selected server","unanswered":"the check got no answer","tunnel-silent":"the tunnel received nothing back","not-confirmed":"not confirmed by the provider","tunnel-checks-failed":"tunnel checks failed","host-address-not-measurable":"this host's address can't be measured","reconnecting":"gluetun is reconnecting"},"reason_format":"{text}: {reason}"}`
+const textJSON = `{"connection":{"overlay":{"ok":"Secure connection","applying":"Switching route","failed":"Connection needs attention","unknown":"Connection unverified"},"sidecar":{"ok":"Secure connection","applying":"Switching server","failed":"Connection needs attention","unknown":"Connection unverified"}},"tier":{"provider":"provider-confirmed","tunnel":"tunnel checks only","none":"not confirmed"},"failed":"Tunnel verification failed.","stale":"Status is stale or unavailable. Details are from the last check.","unverified":"The connection can't be confirmed. Details are from the last check.","unreachable":"Cannot reach the panel. Connection status is unknown.","drop":{"overlay":"Open connections through the exit will drop.","sidecar":"Open connections through the tunnel will drop."},"gives_up":"Verification gives up after {s} seconds.","next":{"recheck":"Re-checking at {at} UTC.","reapply":"Retrying at {at} UTC."},"checks":{"routing":"Routing protection","netbird":"NetBird kernel mode","owner_record":"Owner record","peer":"Tunnel peer","handshake":"Handshake","egress":"Egress check","traffic_protection":"Traffic protection","app_attachment":"App attachment"},"check_state":{"pass":"passed","fail":"failed","unknown":"unknown","n/a":"not applicable","legacy":"not reported individually"},"not_checked":"not checked by Molebridge ({by})","handshake_age":", {age} s old","reason":{"no-peer":"no tunnel peer","multiple-peers":"more than one tunnel peer","catalogue-stale":"no fresh server list","unidentified":"peer not in the server list","not-target":"not the selected server","unanswered":"the check got no answer","tunnel-silent":"the tunnel received nothing back","not-confirmed":"not confirmed by the provider","tunnel-checks-failed":"tunnel checks failed","host-address-not-measurable":"this host's address can't be measured","reconnecting":"gluetun is reconnecting"},"reason_format":"{text}: {reason}","moved":"{from} is no longer in the provider's server list. Connected through {to}, in the same city, instead."}`
 
 // wording is textJSON, read once.
 type wording struct {
@@ -33,6 +33,7 @@ type wording struct {
 	HandshakeAge string                       `json:"handshake_age"`
 	Reason       map[string]string            `json:"reason"`
 	ReasonFormat string                       `json:"reason_format"`
+	Moved        string                       `json:"moved"`
 }
 
 // text is the parsed wording table; it never changes after start.
@@ -79,6 +80,9 @@ type View struct {
 	IP         string
 	Note       string
 	Next       string
+	// Moved says the requested server left the provider's list and which
+	// one the exit runs instead; "" when it runs the requested one.
+	Moved      string
 	Status     string
 	Message    string
 	Egress     string
@@ -101,7 +105,7 @@ func (v View) JSONObject() validate.Obj {
 	}
 	return validate.Members(
 		"state", v.State, "label", v.Label, "kind", v.Kind, "connection", v.Connection,
-		"tier", tier, "tunnel_only", v.TunnelOnly, "ip", v.IP, "note", v.Note, "next", v.Next,
+		"tier", tier, "tunnel_only", v.TunnelOnly, "ip", v.IP, "note", v.Note, "next", v.Next, "moved", v.Moved,
 		"fields", validate.Members("status", v.Status, "message", v.Message, "egress", v.Egress,
 			"egress_tier", v.EgressTier, "forwarded_port", v.Forwarded, "checked_at", v.CheckedAt),
 		"checks", checks)
@@ -187,6 +191,10 @@ func describe(v exitView, result map[string]any) View {
 			upcoming = strings.ReplaceAll(pattern, "{at}", runeSlice(v.NextActionAt, 11, 19))
 		}
 	}
+	moved := ""
+	if from, to, ok := verdict.Moved(result); ok && state == "ok" {
+		moved = strings.ReplaceAll(strings.ReplaceAll(text.Moved, "{from}", from), "{to}", to)
+	}
 	forwarded := "none"
 	if port, ok := validate.IsInt(result["forwarded_port"]); ok {
 		forwarded = strconv.FormatInt(port, 10)
@@ -202,7 +210,7 @@ func describe(v exitView, result map[string]any) View {
 	view := View{
 		State: state, Label: v.Label, Kind: kind, Connection: text.Connection[kind][state],
 		Tier: tier, TunnelOnly: tier == "tunnel",
-		IP: ip, Note: note, Next: upcoming,
+		IP: ip, Note: note, Next: upcoming, Moved: moved,
 		Status:     textOr(result["status"], "(unknown)"),
 		Message:    textOr(result["message"], ""),
 		Egress:     textOr(result["egress_city"], "(unknown)") + ", " + textOr(result["egress_country"], "(unknown)"),

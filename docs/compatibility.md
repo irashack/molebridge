@@ -30,7 +30,10 @@ before 2.0.
   `request_id`, `selection`, `checks` and the egress fields) and the provider
   members (PIA's `port_forward`, `forwarded_port` and `port_forward_error`,
   gluetun's `server_list_update`) keep their meaning. `routing_activity`
-  (since 0.9.3) is on the list too, but no reader judges it.
+  (since 0.9.3) is on the list too, but no reader judges it. `moved` (since
+  0.11.0) is present only while the exit's server stands in for a retired
+  one; a reader older than 0.11.0 judges such a record "verification failed",
+  because `server` isn't the requested server.
 - The eight checks (`routing`, `traffic_protection`, `netbird`,
   `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`), their five
   states (`pass`, `fail`, `unknown`, `n/a`, `not-checked`), and which of them
@@ -49,9 +52,9 @@ read `status` and the checks, not the text.
 
 The names, paths and fields in [state files](configuration.md#state-files):
 `applier/result.json`, `applier/relays.json`, `applier/relay-error.json`,
-`applier/attempt.json`, `applier/tunnel.json` (PIA),
+`applier/attempt.json`, `applier/location.json`, `applier/tunnel.json` (PIA),
 `applier/gluetun-selection.json` (gluetun backend) and `panel/desired.json`,
-and which component writes and reads each. The three private files may live
+and which component writes and reads each. The four private files may live
 under `PRIVATE_STATE_DIR` instead
 ([keeping the published files in memory](configuration.md#keeping-the-published-files-in-memory)).
 The files under the exit's `/run` tmpfs (the heartbeat, the guard heartbeat
