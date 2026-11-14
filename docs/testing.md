@@ -15,6 +15,109 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.11.0
+
+Released from `v0.11.0-rc.1`. The acceptance policy for 0.11.0
+(`tools/acceptance-policy.json`, version 13) is 0.10.3's with the upgrade
+drilled from the release before it, `upgrade-from-0.10.3`, and one new drill,
+`retired-server-move` ([a retired server](verification.md#a-retired-server)).
+
+0.11.0 moves an exit whose server left the provider's list to another server
+in the same city (see the [changelog](../CHANGELOG.md)). The live drill runs
+on the gluetun backend, where the server list is a file. **Not tested live:**
+the move on Mullvad's, PIA's and NordVPN's own tunnels, which has no live
+procedure (the list comes from the provider) and is covered by `go test`
+against the fake kernel only: a panel request, `SERVER`, a restart, the
+return, a never-verified name, a city with no other server and the
+port-forwarding filter.
+
+### v0.11.0-rc.1, 2026-11-14: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.11.0-rc.1`, index digest
+`sha256:21bdb633f0d9d2c8d4491da29f3567e1194eed2364641dfb0cdf7055481aca43`
+(commit `8777d36`; the bundle's signature and attestation, the image
+signature, its build provenance and both SBOM attestations verified against
+the release workflow at the tag), CI's five jobs passing on the tag,
+namespace drills included
+([run 43534398641](https://github.com/irashack/molebridge/actions/runs/43534398641)).
+Policy version 13; attested by [run
+43540340940](https://github.com/irashack/molebridge/actions/runs/43540340940)
+and promoted as `v0.11.0`. The same Kubernetes cluster and rootless Podman
+Quadlet unit (Podman 5.8.9) as for 0.10.3, with a throwaway NetBird peer on
+each exit under test.
+
+- **A retired server**, on the gluetun overlay exit on Kubernetes (NordVPN,
+  IPv4) with a client probing through it: the selected server, verified on
+  the candidate, was removed from gluetun's `servers.json` without restarting
+  gluetun. 24 s later the log had
+  `applier: the requested server left the catalogue; moving to another server in the same city`,
+  and the exit was `ok` and verified on the next server of that city 28 s
+  after the removal, with `requested_server` unchanged and `moved` naming
+  both; `location.json` held the server and its replacement. With the
+  original file back, the log had
+  `applier: the requested server is in the catalogue again; returning to it`
+  60 s later and the exit was `ok` on the selected server, with no `moved`,
+  64 s after the file returned. The client failed one probe at each switch
+  and otherwise left from the VPN's address in that city, not once from the
+  host's. No container restarted. The panel's reason code and note were not
+  read on this exit.
+- **A retired server**, on the gluetun sidecar (NordVPN) as a rootless Podman
+  Quadlet unit with a panel over its state: `ok` on the next server of the
+  city 34 s after the removal; `/api/status` gave `ok`, "connected" with the
+  reason `server-moved`, and the page showed "<server> is no longer in the
+  provider's server list. Connected through <server>, in the same city,
+  instead." with the two hostnames. `ok` on the selected server 60 s after
+  the file returned, with no `moved`, no reason and no note. The
+  application's traffic left through the VPN throughout.
+- **Upgrade from 0.10.3:** every counted workload on Kubernetes (the native
+  Mullvad, PIA and NordVPN exits, two more native Mullvad exits, the gluetun
+  overlay exit, the gluetun sidecar, two native sidecars, Switchyard, and the
+  network exchange's trial panel and exchange) was ready on `v0.10.3`, `ok`
+  and verified with no restart, then moved to the candidate by its image
+  alone: all `ok`, verified, with no restart. The gluetun sidecar (NordVPN)
+  as a rootless Podman Quadlet unit, `ok` on `v0.10.3` with its application's
+  traffic leaving through the VPN: the `Image=` changed and the exit's unit
+  restarted, back `ok` in 4 s, the application and gluetun not restarted and
+  still leaving through the VPN.
+- **Client egress** through each exit on the candidate: Mullvad over IPv4 and
+  IPv6, PIA, NordVPN and gluetun over IPv4 with IPv6 blocked, each from the
+  provider's address, as on `v0.10.3` before the upgrade.
+- **Drift** on Mullvad (IPv4 and IPv6), PIA and NordVPN (IPv4), frozen:
+  repaired in 5 to 20 ms. During the frozen hold of a `lookup main` at 50,
+  the client left from the host's address for 4 to 5 seconds (85, 108 and
+  100 packets counted), as with 0.10.3; no IPv6 leak.
+- **Tunnel loss** (the interface deleted in the exit), native: Mullvad's
+  interface back after 621 ms and traffic after 1.1 s; PIA's interface back
+  after 1.39 s and traffic after 5.8 s; NordVPN's interface back after
+  327 ms, traffic after 935 ms and a fresh verified record after 59.9 s. The
+  client only failed, and was on the same server afterwards. On the gluetun
+  overlay exit, gluetun's own health check restarted its VPN: interface back
+  after 52.5 s, traffic after 52.9 s, a fresh `ok` record 58 s after the
+  deletion, no container restarted.
+- **Lease lapse** on the Mullvad and PIA exits (the worker frozen): the exit
+  stopped itself with "stopped (lease lapsed, exit 1); the routing guards
+  stay in place", restarted after 38 s and 36 s, and was `ok` again 46 s and
+  42 s after the freeze. The client never left from the host's address.
+- **Client switch** on the Mullvad exit, IPv4 and IPv6: to another server in
+  6.4 s and back in 8.5 s, the client's two families on the new server each
+  time; 1 of 11 probes failed, at a switch, none from the host's address.
+- **Status drills:** a stopped exit (the Podman copy) shown "status stale"
+  with `/readyz` 503 and `/healthz` 200 at 132 s, connected 5 s after it
+  started; the egress-check failure on the Mullvad and PIA exits, failed and
+  `applied-unverified` with a recheck after 71 s and 70 s, `ok` again 60 s
+  and 61 s after the drop was removed; the 409 "A switch is in progress; wait
+  for it to finish." for a second switch, both ways, the first switch
+  completing; a failed switch on the NordVPN exit, then **Retry**: applying
+  after 3.6 s and verified after 7.7 s, before the exit's own retry.
+- **The network exchange** between a panel and exchange on one cluster and
+  the NordVPN exit on another: contact within the second, clock offset 0.0 s,
+  the exit `ok`; the 409 and the failed-switch drills ran through it.
+
+**Not tested** on this candidate: the native providers' move, as above; one
+native Mullvad exit that was already refused before the candidate, because
+its server left the provider's list before 0.11.0 could record its city, and
+was not counted; tunnel-silent and the optional status checks.
+
 ## 0.10.3
 
 Released from `v0.10.3-rc.1`. The acceptance policy for 0.10.3

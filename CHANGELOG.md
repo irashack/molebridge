@@ -4,12 +4,14 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.11.0 — unreleased
+## 0.11.0 — 2026-11-14
 
 **Experimental.** An exit whose server the provider retires moves to another
 server in the same city instead of staying failed until someone picks one.
-Tested against the fake kernel and gluetun control server in `go test`; not
-yet run on a real host ([testing](docs/testing.md)).
+Released from `v0.11.0-rc.1` after its live acceptance on Kubernetes and
+rootless Podman, where the move and the return ran on gluetun-backend exits;
+on the native providers the move is covered by `go test` only
+([testing](docs/testing.md#0110)).
 
 **Added**:
 - **A retired server is replaced by one in the same city.** When the server

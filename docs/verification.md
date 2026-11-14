@@ -453,12 +453,15 @@ server list is a file you can edit; the native providers' lists come from the
 provider's API at start and every six hours, and their move is covered only
 by `go test` ([testing](testing.md)).
 
-1. In the panel pick a server whose city has at least one other WireGuard
-   server in gluetun's list, and wait for "connected". The exit must be
+1. In the panel pick a standard server (not a dedicated-IP, Onion or other
+   special one, which the exit's catalog leaves out) whose city has at least
+   one other standard WireGuard server in gluetun's list, and wait for
+   "connected". The exit must be
    running the version under test when it verifies the server: that is when
    it records the city.
 2. Copy gluetun's `servers.json` out of its volume, keep the original, and
-   write it back without that server (`<provider>` is gluetun's name for the
+   write it back without that server, through gluetun's own mount of the
+   volume (the exit's is read-only) (`<provider>` is gluetun's name for the
    provider, `<server>` the hostname you picked):
 
    ```sh
