@@ -35,7 +35,7 @@ name: molebridge
 
 services:
   exit:
-    image: ghcr.io/irashack/molebridge:v0.10.3@sha256:777e974e4f320dfdf5590d200dc6972aee6e16d6a08f62638b86f8bcbd89b687
+    image: ghcr.io/irashack/molebridge:v0.11.0@sha256:21bdb633f0d9d2c8d4491da29f3567e1194eed2364641dfb0cdf7055481aca43
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
     # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
@@ -179,7 +179,7 @@ services:
           pids: 512
 
   switchyard:
-    image: ghcr.io/irashack/molebridge:v0.10.3@sha256:777e974e4f320dfdf5590d200dc6972aee6e16d6a08f62638b86f8bcbd89b687
+    image: ghcr.io/irashack/molebridge:v0.11.0@sha256:21bdb633f0d9d2c8d4491da29f3567e1194eed2364641dfb0cdf7055481aca43
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
     restart: unless-stopped
