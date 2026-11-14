@@ -46,6 +46,13 @@
     if (['failed', 'unknown'].includes(state) && Object.hasOwn(TEXT.next, action ?? '') && isText(verdict.next_action_at)) {
       next = TEXT.next[action].replace('{at}', verdict.next_action_at.slice(11, 19));
     }
+    // The requested server left the provider's list and the exit says which
+    // one it runs instead (the record's `moved`, for its own server only).
+    let moved = '';
+    const move = result.moved && typeof result.moved === 'object' ? result.moved : {};
+    if (state === 'ok' && isText(move.from) && move.from && isText(move.to) && move.to && result.server === move.to) {
+      moved = TEXT.moved.replace('{from}', () => move.from).replace('{to}', () => move.to);
+    }
     const by = verdict.not_checked_by || {};
     const checks = verdict.checks || {};
     const port = result.forwarded_port;
@@ -56,7 +63,7 @@
       tier, tunnel_only: tier === 'tunnel',
       // Only a connected exit's egress address is its own.
       ip: state === 'ok' && isText(ip) && ip ? ip : '—',
-      note, next,
+      note, next, moved,
       fields: {
         status: isText(result.status) ? result.status : '(unknown)',
         message: isText(result.message) ? result.message : '',
@@ -747,7 +754,7 @@
     progress.firstChild.textContent = seconds === null ? route : `${route} · ${seconds} s`;
   }
 
-  function paintNotes(state, message, next = '') {
+  function paintNotes(state, message, next = '', moved = '') {
     if (!notes) return;
     progress = null;
     const children = [];
@@ -784,6 +791,13 @@
         when.textContent = next;
         note.append(document.createElement('br'), when);
       }
+      children.push(note);
+    }
+    if (moved) {
+      const note = document.createElement('p');
+      note.className = 'note';
+      note.dataset.moved = '';
+      note.textContent = moved;
       children.push(note);
     }
     if (armed && notes.contains(armed)) return;
@@ -890,7 +904,7 @@
     const connectionLabel = page.querySelector('[data-connection-label]');
     if (connectionLabel) connectionLabel.textContent = view.connection;
     if (state === 'applying') rememberSwitch(state);
-    paintNotes(state, view.note, view.next);
+    paintNotes(state, view.note, view.next, view.moved);
     paintPin();
     paintCopy();
   }

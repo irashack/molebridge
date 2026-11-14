@@ -176,6 +176,10 @@ Invalid SERVER "--bad"; no change applied.
 Unknown SERVER "absent.example.test"; not in a fresh trusted relay catalogue; no change applied.
 ```
 
+A configured server the exit verified and the provider later retires is not
+"unknown": the exit moves to another server in the same city
+([a server the provider retires](architecture.md#a-server-the-provider-retires)).
+
 These errors do not fall back to a panel request. Fix the setting and apply
 your configuration change with [recovery](operations.md#recovery). A failed
 application of a valid configured server is retried after 1, 2, 4 and 8
@@ -620,7 +624,7 @@ any more.
 Under `state/`, written with temp-file-and-rename. None hold secrets. These
 names, paths, fields and timestamp formats are the same as in 0.7.0, so a
 bridge that reads `result.json` keeps working; what later releases keep is in
-[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the three files only the exit reads
+[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the four files only the exit reads
 (`attempt.json`, `gluetun-selection.json` and `tunnel.json`) are in that
 directory instead of `applier/`
 ([below](#keeping-the-published-files-in-memory)). For a healthy
@@ -632,6 +636,7 @@ records](architecture.md#example-records).
 | `applier/relays.json` | exit | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. Every IPv4 address in it is public: a relay naming a private, loopback, link-local, multicast, unspecified, shared (100.64.0.0/10) or reserved address is dropped. A snapshot for another provider is ignored. |
 | `applier/gluetun-selection.json` | exit | exit | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
 | `applier/attempt.json` | exit | exit | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
+| `applier/location.json` | exit | exit | Since 0.11.0: the last verified `server`, its `city` and `country`, `port_forward` (a PIA region that forwards ports) and `replacement`, the server standing in for it while the catalog doesn't list it, or null ([a server the provider retires](architecture.md#a-server-the-provider-retires)). |
 | `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
@@ -673,8 +678,8 @@ with gluetun the exit warns. See
   the panel and other readers read. The exit rebuilds them. It publishes a
   status record when it starts and again after each inspection, and it
   downloads the server list at start (with gluetun, reads gluetun's file).
-- **Private**: `attempt.json`, `gluetun-selection.json` (gluetun backend)
-  and `tunnel.json` (PIA). Only the exit reads them, and they carry its
+- **Private**: `attempt.json`, `location.json`, `gluetun-selection.json`
+  (gluetun backend) and `tunnel.json` (PIA). Only the exit reads them, and they carry its
   state across a restart ([retries](operations.md#retries),
   [backups](operations.md#backups)).
 
@@ -696,7 +701,7 @@ memory:
          - ./state/exit:/state/exit
    ```
 
-3. Move whichever of the three private files exist from `state/applier/`
+3. Move whichever of the four private files exist from `state/applier/`
    to the new directory (`state/exit/` above).
 4. Mount a tmpfs on `state/applier` on the host, with the owner and mode the
    directory has now (`stat -c '%u:%g %a' state/applier`), mounted before

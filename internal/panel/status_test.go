@@ -216,6 +216,18 @@ func TestAFailedExitShowsNoTierAndNoAddress(t *testing.T) {
 	mustContain(t, page, `data-state="failed"`, `<dd data-f="egress_tier">not confirmed</dd>`, `<span data-current-ip>—</span>`)
 }
 
+func TestAMovedExitSaysWhichServerItStandsInFor(t *testing.T) {
+	c := consumerCases["moved"]
+	h := setupExit(t, c.provider, c.kind, c.record(), c.request())
+	ex := h.exit("x")
+	page := h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.readStatus(ex), CSRFToken: "tok"})
+	mustContain(t, page, `data-state="ok"`,
+		`<p class="note" data-moved>se-sto-wg-009 is no longer in the provider&#x27;s server list. Connected through se-sto-wg-001, in the same city, instead.</p>`)
+	h = setupExit(t, "mullvad", "overlay", schema2(recOpts{}), request(serverOf("mullvad")))
+	ex = h.exit("x")
+	mustNotContain(t, h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.readStatus(ex), CSRFToken: "tok"}), "data-moved")
+}
+
 // -- sidecar wording -------------------------------------------------------------------
 
 func sidecarPage(t *testing.T, result, desired map[string]any) string {

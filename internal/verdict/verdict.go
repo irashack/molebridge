@@ -412,6 +412,9 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 		if target.Server == "" && (src == nil || src == "seed") {
 			note = []string{"no-selection"}
 		}
+		if _, _, moved := Moved(record); moved {
+			note = append(note, "server-moved")
+		}
 		return with(Verdict{State: "ok", Label: "connected", Reasons: note, Tier: tier, Checks: checks})
 	}
 	// 10. Anything else.
@@ -444,13 +447,13 @@ func targetDisagreement(record map[string]any, target Target, selection map[stri
 		if target.Source == "configured" {
 			expected = target.Server
 		}
-		if server == expected {
+		if server == expected || movedFrom(record, expected) {
 			return ""
 		}
 		return "not-configured-server"
 	}
 	if target.Source == "panel" {
-		if server == target.Server && record["requested_server"] == target.Server {
+		if record["requested_server"] == target.Server && (server == target.Server || movedFrom(record, target.Server)) {
 			return ""
 		}
 		return "not-requested-server"
@@ -470,6 +473,33 @@ func targetDisagreement(record map[string]any, target Target, selection map[stri
 		return "not-target-server"
 	}
 	return ""
+}
+
+// movedFrom is true when the record says its server stands in for requested,
+// which left the provider's catalogue: the exit moved to another server in
+// the same city (the record's "moved" member, written only by the exit).
+func movedFrom(record map[string]any, requested string) bool {
+	moved, ok := object(record["moved"])
+	if !ok || requested == "" {
+		return false
+	}
+	to, isString := moved["to"].(string)
+	return isString && to != "" && moved["from"] == requested && record["server"] == to
+}
+
+// Moved is the record's move as (from, to), ok false when it has none or the
+// record's server isn't the replacement.
+func Moved(record map[string]any) (from, to string, ok bool) {
+	moved, isObject := object(record["moved"])
+	if !isObject {
+		return "", "", false
+	}
+	from, _ = moved["from"].(string)
+	to, _ = moved["to"].(string)
+	if from == "" || to == "" || record["server"] != to {
+		return "", "", false
+	}
+	return from, to, true
 }
 
 type issues struct{ failed, expired, unmeasured []string }

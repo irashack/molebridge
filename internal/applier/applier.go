@@ -93,6 +93,8 @@ type Applier struct {
 	// guardInstalled: the ingress guard is in place (ensureIngressGuard).
 	guardInstalled bool
 	attempt        *attempt.Attempt
+	// location is where the last verified server is (moved.go).
+	location location
 	// request is the panel's latest valid request (its acknowledgement), or
 	// the configured one; invalidDesired is whether desired.json is unreadable.
 	request        *state.Request
@@ -201,6 +203,7 @@ func New(cfg Config) (*Applier, error) {
 		a.bootID = attempt.ReadBootID(attempt.BootIDFile)
 	}
 	a.attempt = attempt.Load(a.attemptPath, a.bootID, a.clock())
+	a.location = a.loadLocation()
 	// A restart logs the attempt's next change, not the state it resumes in.
 	a.traced = traceKey(a.attempt)
 	a.warnPlainGatus()
@@ -266,7 +269,7 @@ func (a *Applier) configurationError() string {
 	if a.configuredRequest() == nil {
 		return "Invalid SERVER " + quoted + "; no change applied."
 	}
-	if a.catalog.Usable() && !a.catalog.Relays().Has(a.configuredServer) {
+	if a.catalog.Usable() && !a.catalog.Relays().Has(a.configuredServer) && a.replacementFor(a.configuredServer) == "" {
 		return "Unknown SERVER " + quoted + "; not in a fresh trusted relay catalogue; no change applied."
 	}
 	return ""
@@ -533,6 +536,10 @@ func (a *Applier) requestRejected() bool {
 	if a.configuredServer != "" {
 		return false
 	}
+	if a.target != nil && a.target.Replaces != "" {
+		// Its server left the catalogue and another stands in for it.
+		return false
+	}
 	if a.invalidDesired {
 		return true
 	}
@@ -587,6 +594,12 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 		"configured_server", orNull(truncateChars(a.configuredServer, ServerReportChars)),
 		"request_id", requestID, "selection", a.selectionRecord(), "checks", checks,
 		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)
+	if moved := a.movedRecord(); moved != nil {
+		// The requested server left the provider's catalogue and the exit
+		// runs another in the same city: readers accept that server for the
+		// request (verdict), and people see why.
+		members = members.Set("moved", moved)
+	}
 	members = append(members, a.hooks.ResultDefaults()...)
 	all := append(validate.Obj(nil), fields...)
 	for _, pair := range a.hooks.PublishDefaults() {
@@ -1037,7 +1050,7 @@ func (a *Applier) check(ctx context.Context) (*Record, error) {
 					return nil, err
 				}
 			}
-			if err := a.hooks.OnVerified(a, target.Server); err != nil {
+			if err := a.verified(target.Server); err != nil {
 				return nil, err
 			}
 		case onTarget && at.State == "idle":
@@ -1100,13 +1113,29 @@ func (a *Applier) resolve(peek bool) *Selection {
 		}
 		a.invalidDesired = invalid
 	}
+	if ok {
+		if replacement := a.replacementFor(request.Server); replacement != "" {
+			return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server}
+		}
+	}
 	if ok && !a.refused(request) {
 		return &Selection{Server: request.Server, Source: "panel", Request: &request}
 	}
-	return a.hooks.RestoreTarget(a)
+	restore := a.hooks.RestoreTarget(a)
+	if restore != nil {
+		// Nothing asks for the retired server by name here, so its
+		// neighbour is simply the server to restore.
+		if replacement := a.replacementFor(restore.Server); replacement != "" {
+			return &Selection{Server: replacement, Source: restore.Source}
+		}
+	}
+	return restore
 }
 
 func (a *Applier) configuredSelection() *Selection {
+	if replacement := a.replacementFor(a.configuredServer); replacement != "" {
+		return &Selection{Server: replacement, Source: "configured", Replaces: a.configuredServer}
+	}
 	// An invalid SERVER can't match any server: kept bounded, as reported.
 	return &Selection{Server: truncateChars(a.configuredServer, ServerReportChars), Source: "configured"}
 }
@@ -1310,7 +1339,7 @@ func (a *Applier) resume(ctx context.Context) (*Record, error) {
 	if at.Target != "" && f.Server == at.Target {
 		if f.Status == "ok" {
 			at.Settle()
-			if err := a.hooks.OnVerified(a, at.Target); err != nil {
+			if err := a.verified(at.Target); err != nil {
 				return nil, err
 			}
 		} else {
@@ -1575,6 +1604,9 @@ func (a *Applier) resolveRequest(raw map[string]any) *Selection {
 	if !ok {
 		return nil
 	}
+	if replacement := a.replacementFor(request.Server); replacement != "" {
+		return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server}
+	}
 	return &Selection{Server: request.Server, Source: "panel", Request: &request}
 }
 
@@ -1661,7 +1693,7 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 				if err := a.saveAttempt(); err != nil {
 					return nil, err
 				}
-				if err := a.hooks.OnVerified(a, target.Server); err != nil {
+				if err := a.verified(target.Server); err != nil {
 					return nil, err
 				}
 				a.nextHealth = a.clock() + RefreshSec
@@ -1788,7 +1820,7 @@ func (a *Applier) verify(ctx context.Context, target *Selection) (*Record, error
 				if err := a.hooks.OnApplied(a, target.Server); err != nil {
 					return true, nil, err
 				}
-				if err := a.hooks.OnVerified(a, target.Server); err != nil {
+				if err := a.verified(target.Server); err != nil {
 					return true, nil, err
 				}
 				a.nextHealth = a.clock() + RefreshSec
@@ -1831,7 +1863,7 @@ func (a *Applier) verify(ctx context.Context, target *Selection) (*Record, error
 		}
 		if f.Status == "ok" {
 			at.Settle()
-			if err := a.hooks.OnVerified(a, target.Server); err != nil {
+			if err := a.verified(target.Server); err != nil {
 				return nil, err
 			}
 		} else {

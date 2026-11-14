@@ -77,6 +77,16 @@ test('notes: the failure, the unverified switch, and when the applier acts next'
   assert.equal(describe(cases.stale.payload, TEXT).note, TEXT.stale);
   assert.equal(describe(cases['kind-mismatch'].payload, TEXT).note, TEXT.unverified);
   assert.equal(describe(cases['overlay-ok'].payload, TEXT).note, '');
+  const moved = describe(cases.moved.payload, TEXT);
+  assert.equal(moved.moved, "se-sto-wg-009 is no longer in the provider's server list. Connected through se-sto-wg-001, in the same city, instead.");
+  assert.equal(moved.note, '');
+  assert.equal(describe(cases['overlay-ok'].payload, TEXT).moved, '');
+  const elsewhere = structuredClone(cases.moved.payload);
+  elsewhere.result.moved.to = 'se-got-wg-001';
+  assert.equal(describe(elsewhere, TEXT).moved, '');
+  const odd = structuredClone(cases.moved.payload);
+  odd.result.moved = { from: 7, to: 'se-sto-wg-001' };
+  assert.equal(describe(odd, TEXT).moved, '');
   const switching = structuredClone(cases['request-pending'].payload);
   switching.verdict.kind = 'sidecar';
   assert.equal(describe(switching, TEXT).connection, 'Switching server');

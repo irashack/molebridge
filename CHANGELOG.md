@@ -4,6 +4,41 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.11.0 — unreleased
+
+**Experimental.** An exit whose server the provider retires moves to another
+server in the same city instead of staying failed until someone picks one.
+Tested against the fake kernel and gluetun control server in `go test`; not
+yet run on a real host ([testing](docs/testing.md)).
+
+**Added**:
+- **A retired server is replaced by one in the same city.** When the server
+  an exit is on leaves the provider's server list, the exit moves to another
+  server in the same city and country by itself: the next name in sorted
+  order after the one that left. The request stays as you made it, and the
+  record says what happened in a new member, `moved` (`from`, `to` and
+  `reason`, always `left-catalogue`); the verdict stays `ok` with the reason
+  code `server-moved`, and the panel shows "<server> is no longer in the
+  provider's server list. Connected through <server>, in the same city,
+  instead." If the retired server is listed again, the exit returns to it.
+  This applies to a panel request, to `SERVER` and, with the gluetun backend,
+  to the server it restores
+  ([architecture](docs/architecture.md#a-server-the-provider-retires)).
+- **`applier/location.json`**, a private state file: the last verified
+  server, its city and country, and the server replacing it.
+
+**Limits**:
+- Only a server the exit verified while running 0.11.0 or later is replaced:
+  that is when the exit records where the server is. An exit that was already
+  refused for a retired server when you upgraded still needs one server
+  picked by hand, and a name that was never verified (a typing mistake) is
+  refused as before.
+- With no other server in that city, nothing changes from 0.10: a new request
+  for the server is refused, and an exit left on it reports "Current peer
+  cannot be verified against a fresh relay catalogue.". Most PIA regions are
+  the only one in their city. A PIA region that forwards ports is replaced
+  only by one that does.
+
 ## 0.10.3 — 2026-11-13
 
 **Experimental.** Built with Go 1.27.4, on Alpine 3.24.4. Molebridge's own
