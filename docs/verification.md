@@ -443,6 +443,45 @@ occurs and the result says the request will retry. Restore the API and confirm t
 automatically. An unlisted request is not retried until the server list's names change or you select again, and a
 malformed one until you select again; a failed peer update is retried on its backoff.
 
+### A retired server
+
+The acceptance drill `retired-server-move` (since 0.11.0) checks that an exit
+whose server leaves the provider's list
+[moves to another in the same city](architecture.md#a-server-the-provider-retires)
+and returns. It runs on an exit with the gluetun backend, because there the
+server list is a file you can edit; the native providers' lists come from the
+provider's API at start and every six hours, and their move is covered only
+by `go test` ([testing](testing.md)).
+
+1. In the panel pick a server whose city has at least one other WireGuard
+   server in gluetun's list, and wait for "connected". The exit must be
+   running the version under test when it verifies the server: that is when
+   it records the city.
+2. Copy gluetun's `servers.json` out of its volume, keep the original, and
+   write it back without that server (`<provider>` is gluetun's name for the
+   provider, `<server>` the hostname you picked):
+
+   ```sh
+   jq 'del(."<provider>".servers[] | select(.hostname == "<server>"))' servers.json.orig > servers.json
+   ```
+
+3. Within two minutes the exit's log must have
+   `applier: the requested server left the catalogue; moving to another server in the same city`,
+   the panel must show the exit connected with "<server> is no longer in the
+   provider's server list. Connected through <server>, in the same city,
+   instead.", and `result.json` must have `requested_server` unchanged,
+   `server` naming the other server and `moved` naming both. A client on the
+   exit loses its connections at the switch, as at any switch, and must reach
+   the internet through the new server afterwards; at no point may it leave
+   by the host's own address ([from a client](#from-a-client)).
+4. Write the original file back. Within two minutes the log must have
+   `applier: the requested server is in the catalogue again; returning to it`
+   and the exit must be connected on the server you picked, with no `moved`
+   in `result.json`.
+
+gluetun reads `servers.json` when it starts and its updater may rewrite it;
+don't restart gluetun between steps 2 and 4.
+
 ## From a client
 
 With the exit selected on a device in `exit-users`:

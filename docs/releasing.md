@@ -100,8 +100,10 @@ candidate's digest. Then run what the policy names:
   failed switch retried; the rest of that section is recorded when it runs,
   not required); the
   [network exchange](verification.md#the-network-exchange) between an exit and
-  a panel on different nodes (`network-exchange`); and CI's namespace drills on
-  the tag. The procedures are in [verification](verification.md). The policy
+  a panel on different nodes (`network-exchange`); since 0.11.0, a selected
+  server taken out of gluetun's server list and put back
+  ([a retired server](verification.md#a-retired-server),
+  `retired-server-move`); and CI's namespace drills on the tag. The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
 
