@@ -227,8 +227,11 @@ func (s *Settings) colorScheme() string {
 // themeColorMeta is theme_color_meta.
 func (s *Settings) themeColorMeta(provider string) string {
 	dark, light := themeColor, themeColorLight
-	if spec, ok := providers.Lookup(provider); ok && s.Style == "provider" {
-		dark, light = spec.ThemeColors[0], spec.ThemeColors[1]
+	if s.Style == "provider" {
+		dark, light = providers.BrandThemeDark, providers.BrandThemeLight
+		if spec, ok := providers.Lookup(provider); ok {
+			dark, light = spec.ThemeColors[0], spec.ThemeColors[1]
+		}
 	}
 	if s.Theme == "auto" {
 		return `<meta name="theme-color" content="` + dark + `" media="(prefers-color-scheme: dark)">` + "\n" +
@@ -453,8 +456,16 @@ type ExitSummary struct {
 	Place    string
 }
 
-// exitTabs is the Switchyard's exit picker: one tab per exit, in its
-// provider's colours, with its state and, when connected, where it exits.
+// brandMark is Molebridge's mark for the masthead: the arch, the circuit line
+// with its end nodes, and the mole between them.
+const brandMark = `<svg class="brand-mark" viewBox="0 0 120 90" fill="none" aria-hidden="true">` +
+	`<path class="mark-arch" d="M24 76V54a36 36 0 0 1 72 0v22"/>` +
+	`<path class="mark-mole" d="M38 75c8-5 13-27 33-29 10-1 18 4 22 10l6 3-3 7c-5 3-10 3-14 1M72 55q3-3 6 0M58 76c0-6 8-6 8 0M82 76c0-6 8-6 8 0"/>` +
+	`<path class="mark-line" d="M12.5 76h95"/>` +
+	`<circle class="mark-node" cx="8" cy="76" r="4.5"/><circle class="mark-node" cx="112" cy="76" r="4.5"/></svg>`
+
+// exitTabs is the Switchyard's exit picker: one tab per exit, with its
+// provider's arch, its state and, when connected, where it exits.
 func exitTabs(summaries []ExitSummary, currentID string, embed bool) string {
 	base := "/"
 	if embed {
@@ -471,10 +482,9 @@ func exitTabs(summaries []ExitSummary, currentID string, embed bool) string {
 			`data-exit="` + esc(summary.ID) + `" data-provider="` + esc(providerCSS(summary.Provider)) + `"` + providerAccent(summary.Provider) + ` ` +
 			`title="` + esc(summary.Label) + `"` + current + `>` +
 			`<span class="exit-track" aria-hidden="true">` + esc(fmt.Sprintf("%02d", index+1)) + `</span>` +
-			`<svg class="track-switch" viewBox="0 0 56 48" fill="none" aria-hidden="true">` +
-			`<path class="track-bed" d="M12 44V4M20 44V4M20 32L44 8M14 26L38 2"/>` +
-			`<path class="track-stem" d="M16 44V28"/><path class="track-route" d="M16 28V4"/>` +
-			`<circle cx="16" cy="30" r="3"/></svg>` +
+			`<svg class="exit-arch" viewBox="0 0 40 24" fill="none" aria-hidden="true">` +
+			`<path class="arch-outer" d="M1 24V18a19 19 0 0 1 38 0v6"/>` +
+			`<path class="arch" d="M5 24V18a15 15 0 0 1 30 0v6" pathLength="1"/></svg>` +
 			`<span class="exit-label">` + esc(summary.Label) + providerNote(summary.Provider) + `</span>` + place +
 			`<span class="exit-health">` +
 			`<span class="exit-dot dot-` + esc(summary.State) + `" data-exit-dot aria-hidden="true"></span>` +
@@ -666,9 +676,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 			kicker = "Molebridge / tunnel control"
 		}
 		heading = `<header class="page-header"><div class="brand">` +
-			`<svg class="yard-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true">` +
-			`<path d="M10 34V6M18 34V25L32 11M18 6V14M7 10H21M7 17H15M7 24H15M7 31H21M24 14L30 20"/>` +
-			`</svg><div><span class="brand-kicker">` + esc(kicker) + `</span>` +
+			brandMark + `<div><span class="brand-kicker">` + esc(kicker) + `</span>` +
 			`<h1>` + esc(s.Settings.Title) + `</h1></div></div><div class="header-side">` + account + homeLink + `</div></header>`
 	}
 	tabs := ""

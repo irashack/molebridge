@@ -77,6 +77,13 @@ type Badge struct {
 	Title     string
 }
 
+// BrandThemeDark and BrandThemeLight are Molebridge's page colours (navy and
+// cream), which the provider style uses for every exit but gluetun's.
+const (
+	BrandThemeDark  = "#030c1b"
+	BrandThemeLight = "#f6f3ec"
+)
+
 // Provider is one registry entry.
 type Provider struct {
 	ID    string
@@ -116,7 +123,9 @@ type Provider struct {
 	// Filters are offered only when they narrow the list.
 	Filters []Filter
 	Badges  []Badge
-	// ThemeColors are the (dark, light) browser chrome colours for the style.
+	// ThemeColors are the (dark, light) browser chrome colours for the style:
+	// Molebridge's navy and cream for the native providers, gluetun's slate
+	// for exits gluetun runs.
 	ThemeColors [2]string
 	// ChipLabel is the short name on a server's button, Details a one-line
 	// summary of the server.
@@ -179,7 +188,7 @@ func init() {
 		CatalogMaxBytes: DefaultCatalogBytes, CatalogTimeoutS: 20, SnapshotMaxBytes: DefaultCatalogBytes,
 		Layout:      "tree",
 		Filters:     []Filter{{"owned", "Mullvad-owned"}, {"stboot", "RAM-only"}},
-		ThemeColors: [2]string{"#192e45", "#e9eef3"}, ChipLabel: MullvadChipLabel, Details: MullvadDetails,
+		ThemeColors: [2]string{BrandThemeDark, BrandThemeLight}, ChipLabel: MullvadChipLabel, Details: MullvadDetails,
 		Backend: BackendNative,
 	}
 	pia := &Provider{
@@ -190,7 +199,7 @@ func init() {
 		SecretFiles: []string{"secrets/pia/username", "secrets/pia/password"},
 		Layout:      "regions", Filters: []Filter{{"port_forward", "Port forwarding"}}, RegistrationLapses: true,
 		Badges:      []Badge{{"port_forward", "PF", "Port forwarding"}, {"geo", "virtual", "Virtual location"}},
-		ThemeColors: [2]string{"#1c1e22", "#f2f4f5"}, Details: PIADetails, ChipLabel: defaultText,
+		ThemeColors: [2]string{BrandThemeDark, BrandThemeLight}, Details: PIADetails, ChipLabel: defaultText,
 		Backend: BackendNative,
 	}
 	nord := &Provider{
@@ -202,7 +211,7 @@ func init() {
 		SnapshotMaxBytes: nordSnapshotMaxBytes,
 		Layout:           "tree",
 		Badges:           []Badge{{"virtual", "virtual", "Virtual location"}},
-		ThemeColors:      [2]string{"#161b26", "#eef2f8"}, ChipLabel: NordChipLabel, Details: NordDetails,
+		ThemeColors:      [2]string{BrandThemeDark, BrandThemeLight}, ChipLabel: NordChipLabel, Details: NordDetails,
 		Backend: BackendNative,
 	}
 	for _, p := range []*Provider{mullvad, pia, nord} {

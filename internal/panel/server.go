@@ -155,9 +155,13 @@ func NewServer(cfg *Config, opt Options) *Server {
 }
 
 func (s *Server) buildManifest() []byte {
+	color := themeColor
+	if s.Settings.Style == "provider" {
+		color = providers.BrandThemeDark
+	}
 	manifest := validate.Members(
 		"name", s.Settings.Title, "short_name", s.Settings.ShortTitle, "start_url", "/", "scope", "/",
-		"display", "standalone", "background_color", themeColor, "theme_color", themeColor,
+		"display", "standalone", "background_color", color, "theme_color", color,
 		"icons", []any{
 			validate.Members("src", "/static/icon-192.png", "sizes", "192x192", "type", "image/png"),
 			validate.Members("src", "/static/icon-512.png", "sizes", "512x512", "type", "image/png"),

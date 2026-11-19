@@ -443,7 +443,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 }
 .switchboard, .overview { display: flex; flex-direction: column; gap: var(--widget-gap); min-width: 0; }
 .brand { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.brand-kicker, .yard-mark, .connection-heading { display: none; }
+.brand-kicker, .brand-mark, .connection-heading { display: none; }
 .connection-orbit { display: inline-flex; flex-shrink: 0; }
 .exit-tabs { display: flex; flex-wrap: wrap; gap: 10px; }
 .exit-tab {
@@ -481,7 +481,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 .dot-ok { background: var(--color-positive); }
 .dot-applying { background: var(--color-upcoming); animation: pulse 1.6s ease-in-out infinite; }
 .dot-failed { background: var(--color-negative); }
-.exit-track, .track-switch { display: none; }
+.exit-track, .exit-arch { display: none; }
 .regions { display: flex; flex-direction: column; gap: 6px; }
 .relay.region { width: 100%; align-items: center; text-align: left; padding: 12px; min-height: 52px; }
 .region-place { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -503,7 +503,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --font-size-base: 1.4rem;
   --font-size-h5: 1.3rem;
   --font-size-h6: 1.2rem;
-  --border-radius: 12px;
+  --border-radius: 14px;
   --widget-gap: 26px;
   --pad-v: 20px;
   --pad-h: 22px;
@@ -523,92 +523,81 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --color-negative: #ffb2b7;
   --hero-grid: #ffffff09;
   --hero-glow: var(--p-glow-dark);
-  --accent-ink: #162c42;
+  --accent-ink: #030c1b;
   --color-widget-shadow: transparent;
 }
+/* Molebridge's own surfaces: navy and cream, from the logo. Every native
+   exit shares them, and its provider supplies only the accent, so exits differ
+   by colour where it matters (the tab, the selection, the current relay) while
+   the page stays one product. The logo's teal is kept for the logo and for
+   pages that belong to no exit: it sits too close to Surfshark's and gluetun's
+   accents to mean anything else. Text tokens keep at least 4.5:1 on every
+   surface they sit on, in both themes. */
+:root[data-style="provider"] {
+  --p-bg-dark: #030c1b;
+  --p-card-dark: #111b2d;
+  --p-row-dark: #1b2437;
+  --p-border-dark: #2c3851;
+  --p-ink-dark: #f9f4ec;
+  --p-text-dark: #e4e1db;
+  --p-muted-dark: #a3abbd;
+  --p-accent-dark: #57e5c2;
+  --p-positive-dark: #7fd88a;
+  --p-glow-dark: #57e5c214;
+  --p-bg-light: #f6f3ec;
+  --p-card-light: #ffffff;
+  --p-row-light: #ece8df;
+  --p-border-light: #cfc9bd;
+  --p-ink-light: #030c1b;
+  --p-text-light: #1f2a3d;
+  --p-muted-light: #4d576a;
+  --p-accent-light: #0b6e57;
+  --p-positive-light: #23702b;
+  --p-glow-light: #0b6e571a;
+  --brand-accent: #57e5c2;
+  --signal-positive: #44ad4d;
+  --brand-teal: #57e5c2;
+  --brand-cream: #f9f4ec;
+  --exit-gluetun-card: #192227;
+  --exit-gluetun-border: #384a54;
+}
+:root[data-style="provider"][data-theme="light"] { --brand-teal: #0b6e57; --brand-cream: #030c1b; --exit-gluetun-card: #e7eef1; --exit-gluetun-border: #b4c5cd; }
+@media (prefers-color-scheme: light) {
+  :root[data-style="provider"][data-theme="auto"] { --brand-teal: #0b6e57; --brand-cream: #030c1b; --exit-gluetun-card: #e7eef1; --exit-gluetun-border: #b4c5cd; }
+}
 :root[data-style="provider"][data-provider="mullvad"] {
-  --p-bg-dark: #192e45;
-  --p-card-dark: #203b57;
-  --p-row-dark: #294d73;
-  --p-border-dark: #426080;
-  --p-ink-dark: #ffffff;
-  --p-text-dark: #e0eaf4;
-  --p-muted-dark: #b0c4d9;
   --p-accent-dark: #ffd524;
   --p-positive-dark: #80df88;
-  --p-glow-dark: #448bb522;
-  --p-bg-light: #edf2f7;
-  --p-card-light: #ffffff;
-  --p-row-light: #dfebf7;
-  --p-border-light: #b9cbdc;
-  --p-ink-light: #192e45;
-  --p-text-light: #294660;
-  --p-muted-light: #4c6580;
+  --p-glow-dark: #ffd52414;
   --p-accent-light: #735900;
   --p-positive-light: #24732b;
-  --p-glow-light: #7ba8d32b;
+  --p-glow-light: #7359001a;
   --brand-accent: #ffd524;
-  --signal-positive: #44ad4d;
-  --border-radius: 8px;
 }
 :root[data-style="provider"][data-provider="pia"] {
-  --p-bg-dark: #171c1b;
-  --p-card-dark: #232a28;
-  --p-row-dark: #2b3430;
-  --p-border-dark: #43534a;
-  --p-ink-dark: #f5f9f5;
-  --p-text-dark: #e0e9e2;
-  --p-muted-dark: #adbeb2;
   --p-accent-dark: #78df70;
   --p-positive-dark: #78df70;
   --p-glow-dark: #5ddf5a14;
-  --p-bg-light: #f0f4ef;
-  --p-card-light: #ffffff;
-  --p-row-light: #e9f1e7;
-  --p-border-light: #c0d0bc;
-  --p-ink-light: #203322;
-  --p-text-light: #344e39;
-  --p-muted-light: #526c56;
   --p-accent-light: #276e2c;
   --p-positive-light: #276e2c;
   --p-glow-light: #68b9541c;
   --brand-accent: #5ddf5a;
   --signal-positive: #4bb543;
-  --border-radius: 18px;
 }
-/* NordVPN: a neutral blue, colours only. Text tokens keep at least 4.5:1 on
-   every surface they sit on, in both themes. */
 :root[data-style="provider"][data-provider="nordvpn"] {
-  --p-bg-dark: #161b26;
-  --p-card-dark: #1f2633;
-  --p-row-dark: #283142;
-  --p-border-dark: #3e4a60;
-  --p-ink-dark: #f5f7fb;
-  --p-text-dark: #dfe5ef;
-  --p-muted-dark: #aab5c8;
   --p-accent-dark: #7fb0ff;
   --p-positive-dark: #7fd88a;
   --p-glow-dark: #4f8cff1c;
-  --p-bg-light: #eef2f8;
-  --p-card-light: #ffffff;
-  --p-row-light: #e3e9f3;
-  --p-border-light: #bcc7d9;
-  --p-ink-light: #18213a;
-  --p-text-light: #2d3a55;
-  --p-muted-light: #4e5d78;
   --p-accent-light: #2155c0;
   --p-positive-light: #23702b;
   --p-glow-light: #4f8cff1f;
   --brand-accent: #7fb0ff;
-  --signal-positive: #44ad4d;
-  --border-radius: 12px;
 }
-/* gluetun, and pages that belong to no exit (sign-in, errors): every exit
-   gluetun runs takes gluetun's surfaces, a dark slate
+/* gluetun: every exit gluetun runs keeps gluetun's surfaces, a dark slate
    with a cyan accent, and the provider behind it (data-accent) supplies the
    accent instead: Mullvad's yellow through gluetun on gluetun's slate. Colours
    only. Every accent keeps at least 4.5:1 on each surface, in both themes. */
-:root[data-style="provider"]:is([data-provider="gluetun"], :not([data-provider])) {
+:root[data-style="provider"][data-provider="gluetun"] {
   --p-bg-dark: #11181c;
   --p-card-dark: #192227;
   --p-row-dark: #222e35;
@@ -631,7 +620,6 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   --p-glow-light: #11697a1f;
   --brand-accent: #6fcfe0;
   --signal-positive: #44ad4d;
-  --border-radius: 10px;
 }
 :root[data-style="provider"][data-provider="gluetun"][data-accent="mullvad"] { --p-accent-dark: #ffd524; --p-accent-light: #735900; --brand-accent: #ffd524; --p-glow-dark: #ffd5241c; --p-glow-light: #7359001f; }
 :root[data-style="provider"][data-provider="gluetun"][data-accent="nordvpn"] { --p-accent-dark: #7fb0ff; --p-accent-light: #2155c0; --brand-accent: #7fb0ff; --p-glow-dark: #7fb0ff1c; --p-glow-light: #2155c01f; }
@@ -684,39 +672,66 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .page-header { padding: 0 2px; align-items: center; margin-bottom: 4px; }
 :root[data-style="provider"] .brand-kicker { display: block; text-transform: uppercase; letter-spacing: .17em; font-size: 1rem; font-weight: 700; color: var(--color-text-subdue); }
 :root[data-style="provider"] h1 { font-size: 3.4rem; font-weight: 750; letter-spacing: -.045em; line-height: 1.15; margin-top: 4px; }
-:root[data-style="provider"] .yard-mark { display: block; width: 48px; height: 48px; stroke: var(--color-primary); stroke-width: 2.5; stroke-linecap: round; }
+:root[data-style="provider"] .brand-mark { display: block; width: 64px; height: 48px; flex-shrink: 0; }
+.brand-mark .mark-arch { stroke: var(--brand-teal); stroke-width: 12; }
+.brand-mark :is(.mark-mole, .mark-line, .mark-node) { stroke: var(--brand-cream); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+/* The circuit: one line under the tabs with a node at each end, and from
+   every tab a stem down to a node of its own on the line. The selected exit's
+   stem and node light in its provider's colour; a switch sends a pulse along
+   the line from the exit you left to the one you chose (panel.js). */
 :root[data-style="provider"] .exit-tabs {
   /* An even grid: with three or more exits a short last row keeps tab width. */
+  --wire: var(--color-separator);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 14px;
-  padding-bottom: 16px;
+  padding-bottom: 30px;
   position: relative;
-  background: linear-gradient(var(--color-separator),var(--color-separator)) left bottom 5px / 100% 2px no-repeat,
-              linear-gradient(var(--color-separator),var(--color-separator)) left bottom / 100% 2px no-repeat;
+  background: linear-gradient(var(--wire), var(--wire)) left bottom 9px / 100% 2px no-repeat;
 }
-:root[data-style="provider"] .exit-tab { border-radius: 10px; padding: 18px 22px 16px 78px; gap: 3px 14px; }
-:root[data-style="provider"] .exit-tab::after { content: ''; position: absolute; bottom: -17px; left: 34px; width: 8px; height: 16px; border-inline: 2px solid var(--color-separator); background: var(--color-background); }
-:root[data-style="provider"] .exit-tab.is-selected { box-shadow: inset 0 3px var(--exit-accent); }
-:root[data-style="provider"] .exit-tab.is-selected::after { border-color: var(--exit-accent); }
+:root[data-style="provider"] .exit-tabs::before, :root[data-style="provider"] .exit-tabs::after {
+  content: ''; position: absolute; bottom: 5px; width: 10px; height: 10px; border: 2px solid var(--wire); border-radius: 50%; background: var(--color-background); box-sizing: border-box;
+}
+:root[data-style="provider"] .exit-tabs::before { left: -10px; }
+:root[data-style="provider"] .exit-tabs::after { right: -10px; }
+:root[data-style="provider"] .exit-tab { border-radius: 14px; padding: 16px 20px 14px; gap: 2px 14px; background: var(--color-widget-background); }
+/* The stem and its node: a 2px line and a ring, both from gradients, so one
+   pseudo-element draws them. */
+:root[data-style="provider"] .exit-tab::after {
+  content: ''; position: absolute; left: calc(50% - 7px); bottom: -28px; width: 14px; height: 27px; z-index: 1;
+  --stem: var(--wire, var(--color-separator)); --hub: var(--color-background);
+  background: radial-gradient(circle at 50% calc(100% - 7px), var(--hub) 0 3.5px, var(--stem) 4px 6px, transparent 6.5px),
+              linear-gradient(var(--stem), var(--stem)) center top / 2px calc(100% - 12px) no-repeat;
+}
+:root[data-style="provider"] .exit-tabs.has-rows .exit-tab:not(.on-wire)::after { display: none; }
+:root[data-style="provider"] .exit-tab.is-selected { border-color: var(--exit-accent); box-shadow: 0 0 0 1px var(--exit-accent), 0 12px 32px -16px var(--exit-accent); }
+:root[data-style="provider"] .exit-tab.is-selected::after { --stem: var(--exit-accent); --hub: var(--exit-accent); filter: drop-shadow(0 0 5px var(--exit-accent)); animation: node-light .5s cubic-bezier(.3, 1.4, .5, 1) both; }
 :root[data-style="provider"] .exit-tab:hover { transform: translateY(-2px); }
 :root[data-style="provider"] .exit-label { font-size: 1.9rem; font-weight: 750; letter-spacing: -.025em; }
 :root[data-style="provider"] .exit-track { display: block; position: absolute; right: 18px; top: 11px; font-size: 1rem; font-variant-numeric: tabular-nums; letter-spacing: .12em; color: var(--color-text-subdue); }
-:root[data-style="provider"] .exit-health { grid-column: 1 / -1; grid-row: 3; padding-right: 0; }
-:root[data-style="provider"] .exit-place { min-height: 19px; }
-:root[data-style="provider"] .track-switch { display: block; position: absolute; left: 20px; top: 24px; width: 40px; height: 38px; stroke-linecap: round; stroke-linejoin: round; }
-.track-bed { stroke: var(--color-text-subdue); stroke-width: 1; }
-/* The points: a fixed stem, and a blade that swings from straight on to the
-   diverging track, pivoting where the two meet. Transforms only, so it stays
-   on the compositor. */
-.track-stem, .track-route { stroke: var(--color-text-subdue); stroke-width: 3; }
-.track-route { transform-box: view-box; transform-origin: 16px 28px; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
-.exit-tab:not(.is-selected):hover .track-route { transform: rotate(12deg); }
-.track-switch circle { fill: var(--color-text-subdue); }
-.is-selected :is(.track-stem, .track-route) { stroke: var(--exit-accent); }
-.is-selected .track-route { transform: rotate(45deg) scaleY(1.414214); animation: track-throw .45s cubic-bezier(.3, 1.4, .5, 1) both; }
-.is-selected .track-switch circle { fill: var(--exit-accent); }
-@keyframes track-throw { from { transform: rotate(0deg) scaleY(1); } }
+:root[data-style="provider"] .exit-health { grid-column: 1 / -1; grid-row: 4; padding-right: 0; }
+:root[data-style="provider"] .exit-place { min-height: 19px; grid-row: 3; }
+:root[data-style="provider"] .exit-label { grid-row: 2; }
+/* Each tab's arch, in its provider's colour: drawn in when the tab is
+   selected, lifted on hover. */
+:root[data-style="provider"] .exit-arch { display: block; grid-column: 1 / -1; grid-row: 1; width: 36px; height: 22px; margin: 2px 0 8px -3px; overflow: visible; stroke-linecap: butt; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+.exit-arch .arch { stroke: var(--exit-accent); stroke-width: 5; }
+.exit-arch .arch-outer { display: none; stroke: var(--exit-gluetun); stroke-width: 1.6; stroke-dasharray: 1.6 2.6; stroke-linecap: round; }
+.exit-tab:not(.is-selected) .exit-arch .arch { opacity: .7; }
+.exit-tab:not(.is-selected):hover .exit-arch { transform: translateY(-2px); }
+.is-selected .exit-arch .arch { stroke-dasharray: 1; animation: arch-draw .6s cubic-bezier(.2, .8, .2, 1) both; }
+/* An exit through gluetun keeps gluetun's slate and a dashed edge, and its
+   arch runs inside gluetun's dotted one: the provider's tunnel, in gluetun's. */
+:root[data-style="provider"] .exit-tab[data-provider="gluetun"] { background: var(--exit-gluetun-card); border-style: dashed; border-color: var(--exit-gluetun-border); }
+:root[data-style="provider"] .exit-tab[data-provider="gluetun"].is-selected { border-style: solid; border-color: var(--exit-accent); }
+:root[data-style="provider"] .exit-tab[data-provider="gluetun"] .arch-outer { display: block; }
+/* The pulse: placed and sized by panel.js on the line, from the exit you left
+   to the one you chose. */
+.wire-pulse { position: absolute; bottom: 9px; height: 2px; pointer-events: none; z-index: 2; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--pulse-color) 70%, var(--pulse-color)); box-shadow: 0 0 8px var(--pulse-color); transform-origin: var(--pulse-from, left) center; animation: wire-pulse .7s cubic-bezier(.4, 0, .2, 1) both; }
+.wire-pulse.is-leftward { background: linear-gradient(270deg, transparent, var(--pulse-color) 70%, var(--pulse-color)); }
+@keyframes wire-pulse { from { transform: scaleX(0); opacity: 1; } 70% { transform: scaleX(1); opacity: 1; } to { transform: scaleX(1); opacity: 0; } }
+@keyframes arch-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes node-light { from { filter: drop-shadow(0 0 0 transparent); transform: scale(.6); } }
 :root[data-style="provider"] .widget-header { padding: 0 2px; margin-bottom: 10px; gap: 12px; }
 :root[data-style="provider"] .widget-header h2 { font-size: 1.1rem; letter-spacing: .13em; font-weight: 750; }
 :root[data-style="provider"] .widget-content { box-shadow: none; }
@@ -732,7 +747,8 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .current {
   position: relative;
   overflow: hidden;
-  background: radial-gradient(ellipse at 100% 0%, var(--hero-glow), transparent 75%),
+  background: radial-gradient(circle at calc(100% + 20px) -20px, transparent 0 104px, color-mix(in srgb, var(--color-primary) 11%, transparent) 105px 132px, transparent 133px),
+              radial-gradient(ellipse at 100% 0%, var(--hero-glow), transparent 75%),
               repeating-linear-gradient(0deg, transparent 0 31px, var(--hero-grid) 31px 32px),
               repeating-linear-gradient(90deg, transparent 0 31px, var(--hero-grid) 31px 32px),
               var(--color-widget-background);
@@ -807,15 +823,15 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 
 /* Compact iframe: no masthead, no tall hero, no desktop columns. */
 .embed .exit-tab { flex-basis: 140px; padding: 9px 10px; gap: 1px 8px; }
-.embed .exit-health { grid-column: 1 / -1; grid-row: 3; font-size: 1rem; }
+.embed .exit-health { grid-column: 1 / -1; grid-row: 4; font-size: 1rem; }
 .embed .switchboard, .embed .overview { gap: 16px; }
 :root[data-style="provider"] .embed .page { padding: 12px; gap: 16px; }
-:root[data-style="provider"] .embed .exit-tabs { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 8px; padding-bottom: 12px; }
+:root[data-style="provider"] .embed .exit-tabs { grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr)); gap: 8px; padding-bottom: 24px; }
 :root[data-style="provider"] .embed .exit-tab { padding: 9px 10px; }
 :root[data-style="provider"] .embed .exit-label { font-size: 1.4rem; }
 :root[data-style="provider"] .embed .exit-place { font-size: 1.1rem; }
-:root[data-style="provider"] .embed .exit-tab::after { bottom: -13px; height: 12px; left: 22px; }
-:root[data-style="provider"] .embed :is(.track-switch, .exit-track, .connection-heading) { display: none; }
+:root[data-style="provider"] .embed .exit-tab::after { bottom: -22px; height: 21px; }
+:root[data-style="provider"] .embed :is(.exit-arch, .exit-track, .connection-heading) { display: none; }
 :root[data-style="provider"] .embed .current { padding: 0 0 12px; background: none; border-radius: 0; }
 :root[data-style="provider"] .embed .current-row { display: flex; flex-wrap: wrap; gap: 10px; text-align: left; }
 :root[data-style="provider"] .embed .connection-orbit { width: 40px; height: 40px; margin: 0; border: 1px solid var(--state-color); outline: none; box-shadow: none; }
@@ -844,9 +860,8 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
   :root[data-style="provider"] .exit-tab { flex-basis: 130px; padding: 15px 12px; gap: 4px; }
   :root[data-style="provider"] .exit-label { font-size: 1.6rem; padding-right: 24px; }
   :root[data-style="provider"] .exit-track { top: 17px; right: 10px; }
-  :root[data-style="provider"] .track-switch { display: none; }
-  :root[data-style="provider"] .exit-health { grid-column: 1 / -1; grid-row: 3; font-size: 1.1rem; }
-  :root[data-style="provider"] .exit-tab::after { left: 22px; }
+  :root[data-style="provider"] .exit-arch { width: 30px; height: 18px; margin-bottom: 4px; }
+  :root[data-style="provider"] .exit-health { grid-column: 1 / -1; grid-row: 4; font-size: 1.1rem; }
   :root[data-style="provider"] .country summary { padding-inline: 12px; }
   :root[data-style="provider"] .country .cities { padding-inline: 10px; }
   :root[data-style="provider"] .region { padding: 12px 10px; gap: 8px; flex-wrap: wrap; }

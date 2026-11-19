@@ -51,7 +51,7 @@ they differ the row says so.
 | `PANEL_HOST_LABEL` | switchyard | `this exit` (`this gluetun` in `compose.sidecar.yaml`, `this tunnel` in `compose.native-sidecar.yaml`) | Used in "Fastest from …". |
 | `PANEL_HOME_URL`, `PANEL_HOME_LABEL` | switchyard | empty, `Home` | Optional back link in the page header. |
 | `PANEL_THEME` | switchyard | `auto` | `auto` follows each viewer's light or dark system setting; `dark` or `light` fixes it. Any other value means `auto`. Set `dark` when an always-dark dashboard embeds the panel. |
-| `PANEL_STYLE` | switchyard | `provider` | `provider` uses the provider's colors; `dashboard` uses the neutral Catppuccin palette and JetBrains Mono. Any other value means `provider`. Mullvad's tree and PIA's region list keep their layout in either style. |
+| `PANEL_STYLE` | switchyard | `provider` | `provider` uses Molebridge's colors with each provider's as the accent; `dashboard` uses the neutral Catppuccin palette and JetBrains Mono. Any other value means `provider`. Mullvad's tree and PIA's region list keep their layout in either style. |
 | `PANEL_SESSION_TTL` | switchyard | `3600` | Seconds a sign-in lasts; see [panel sign-in](#panel-sign-in). |
 | `GATUS_ENDPOINT` | exit | `molebridge` | Gatus external endpoint key. |
 | `ROUTING_RECONCILE_INTERVAL` | exit | `30` | Seconds between full repair passes, 2 to 60; see [repair and lease timing](#repair-and-lease-timing). |
