@@ -91,7 +91,7 @@ func newReplaceDrill(t *testing.T, from *tunnelconf.Conf) *replaceDrill {
 	if err := mut.Install(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	d.up(w.tunnelParams())
+	d.up(tunnel.Params{ExitIf: "mullvad", Conf: from})
 	return d
 }
 
