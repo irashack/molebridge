@@ -81,77 +81,13 @@ func TestSystemRigStatus(t *testing.T) {
 	t.Run("SecondSwitch409", func(t *testing.T) {
 		t.Parallel()
 		r := newSystemRig(t)
-		a, b := r.relays[0], r.relays[1]
-		p := r.bringUp()
-		release := r.holdChecks()
-		defer release()
-		id, at := r.panelSwitch(b.host)
-		r.waitFor(30*time.Second, "result.json applying for "+b.host, func() bool {
-			res := r.result()
-			return res["status"] == "applying" && res["request_id"] == id
-		})
-		code, body, _, _ := r.panelPost(a.host)
-		if code != 409 || body != switchInProgress {
-			t.Errorf("a second switch while the first applies: %d %q, want 409 %q", code, body, switchInProgress)
-		}
-		if got := r.requestID(b.host); got != id {
-			t.Errorf("the refused switch replaced the request: %s, want %s", got, id)
-		}
-		release()
-		r.waitVerified(p, b, id, 120*time.Second)
-		t.Logf("409 %q while the first switch applied; the first switch verified %v after its request", body, time.Since(at).Round(time.Millisecond))
+		drillSecondSwitch(r, r.bringUp())
 	})
 
 	t.Run("FailedSwitchRetry", func(t *testing.T) {
 		t.Parallel()
 		r := newSystemRig(t)
-		b := r.relays[1]
-		p := r.bringUp()
-		drop := "table inet drill {\n  chain in {\n    type filter hook input priority 0; policy accept;\n    udp dport 51820 drop\n  }\n}\n"
-		if out, err := b.ns.ExecInput(drop, "nft", "-f", "-"); err != nil {
-			t.Fatalf("nft: %v\n%s", err, out)
-		}
-		id, at := r.panelSwitch(b.host)
-		var v map[string]any
-		r.waitFor(150*time.Second, "the switch to "+b.host+" to fail on the handshake", func() bool {
-			if !p.running() {
-				t.Fatalf("the exit stopped:\n%s", p.out.String())
-			}
-			res := r.result()
-			sel, _ := res["selection"].(map[string]any)
-			checks, _ := res["checks"].(map[string]any)
-			hs, _ := checks["handshake"].(map[string]any)
-			if res["status"] != "failed" || res["server"] != b.host || res["request_id"] != id ||
-				sel["outcome"] != "applied-unverified" || hs["state"] != "fail" {
-				return false
-			}
-			v = r.panelStatus()
-			reasons, _ := v["reasons"].([]any)
-			return v["state"] == "failed" && slices.Contains(reasons, any("handshake-failed"))
-		})
-		failedAfter := time.Since(at)
-		res := r.result()
-		retryButton := `name="server" value="` + b.host + `" class="relay-switch" data-retry>Retry</button>`
-		if _, page, _ := r.panelGet("/"); !strings.Contains(string(page), retryButton) {
-			t.Fatalf("the panel offers no Retry for %s; verdict %s", b.host, jsonText(v))
-		}
-		if out, err := b.ns.Exec("nft", "delete", "table", "inet", "drill"); err != nil {
-			t.Fatalf("nft: %v\n%s", err, out)
-		}
-		// Retry posts the server form with the failed server, as its button does.
-		code, body, retried, _ := r.panelPost(b.host)
-		if code != 303 {
-			t.Fatalf("Retry: %d %s", code, body)
-		}
-		retryID := r.requestID(b.host)
-		r.waitVerified(p, b, retryID, 120*time.Second)
-		verifiedAfter := time.Since(retried)
-		if sel, _ := r.result()["selection"].(map[string]any); sel["source"] != "operator-retry" {
-			t.Errorf("the retry's selection: %s", jsonText(sel))
-		}
-		r.clientVia(b, 30*time.Second)
-		t.Logf("failed switch: failed (verdict %v, message %v, outcome applied-unverified) %v after the request; verified with source operator-retry %v after Retry",
-			v["reasons"], res["message"], failedAfter.Round(time.Millisecond), verifiedAfter.Round(time.Millisecond))
+		drillFailedRetry(r, r.bringUp())
 	})
 
 	t.Run("StoppedExit", func(t *testing.T) {
@@ -227,6 +163,87 @@ func TestSystemRigStatus(t *testing.T) {
 		t.Logf("stopped exit: /readyz 503 %v after the stop (verdict %s at %v), /healthz 200 throughout; /readyz 200 %v after the restart",
 			notReady.Round(time.Millisecond), v["label"], staleAfter.Round(time.Millisecond), readyAgain.Round(time.Millisecond))
 	})
+}
+
+// drillSecondSwitch holds the exit's checks so a switch to relay B stays
+// applying, posts a second switch through the panel and expects the 409, then
+// lets the first complete. The panel's side is read from /api/status, so it
+// runs the same through the network exchange.
+func drillSecondSwitch(r *systemRig, p *exitProc) {
+	t := r.t
+	a, b := r.relays[0], r.relays[1]
+	release := r.holdChecks()
+	defer release()
+	id, at := r.panelSwitch(b.host)
+	r.waitFor(30*time.Second, "the panel to read the record applying for "+b.host, func() bool {
+		res := r.panelResult()
+		return res["status"] == "applying" && res["request_id"] == id && r.panelStatus()["state"] == "applying"
+	})
+	code, body, _, _ := r.panelPost(a.host)
+	if code != 409 || body != switchInProgress {
+		t.Errorf("a second switch while the first applies: %d %q, want 409 %q", code, body, switchInProgress)
+	}
+	if got := r.requestID(b.host); got != id {
+		t.Errorf("the refused switch replaced the request: %s, want %s", got, id)
+	}
+	release()
+	r.waitVerified(p, b, id, 120*time.Second)
+	r.waitPanelVerified(b, id, 30*time.Second)
+	t.Logf("409 %q while the first switch applied; the first switch verified %v after its request, on the panel's side",
+		body, time.Since(at).Round(time.Millisecond))
+}
+
+// drillFailedRetry blocks relay B's WireGuard port, switches to B and expects
+// the handshake failure and the panel's Retry; then lifts the block, posts
+// Retry and expects verified with source operator-retry.
+func drillFailedRetry(r *systemRig, p *exitProc) {
+	t := r.t
+	b := r.relays[1]
+	drop := "table inet drill {\n  chain in {\n    type filter hook input priority 0; policy accept;\n    udp dport 51820 drop\n  }\n}\n"
+	if out, err := b.ns.ExecInput(drop, "nft", "-f", "-"); err != nil {
+		t.Fatalf("nft: %v\n%s", err, out)
+	}
+	id, at := r.panelSwitch(b.host)
+	var v, res map[string]any
+	r.waitFor(150*time.Second, "the switch to "+b.host+" to fail on the handshake", func() bool {
+		if !p.running() {
+			t.Fatalf("the exit stopped:\n%s", p.out.String())
+		}
+		payload := r.panelPayload()
+		res, _ = payload["result"].(map[string]any)
+		v, _ = payload["verdict"].(map[string]any)
+		sel, _ := res["selection"].(map[string]any)
+		checks, _ := res["checks"].(map[string]any)
+		hs, _ := checks["handshake"].(map[string]any)
+		reasons, _ := v["reasons"].([]any)
+		return res["status"] == "failed" && res["server"] == b.host && res["request_id"] == id &&
+			sel["outcome"] == "applied-unverified" && hs["state"] == "fail" &&
+			v["state"] == "failed" && slices.Contains(reasons, any("handshake-failed"))
+	})
+	failedAfter := time.Since(at)
+	retryButton := `name="server" value="` + b.host + `" class="relay-switch" data-retry>Retry</button>`
+	if _, page, _ := r.panelGet("/" + r.panelQS); !strings.Contains(string(page), retryButton) {
+		t.Fatalf("the panel offers no Retry for %s; verdict %s", b.host, jsonText(v))
+	}
+	if out, err := b.ns.Exec("nft", "delete", "table", "inet", "drill"); err != nil {
+		t.Fatalf("nft: %v\n%s", err, out)
+	}
+	// Retry posts the server form with the failed server, as its button does.
+	code, body, retried, _ := r.panelPost(b.host)
+	if code != 303 {
+		t.Fatalf("Retry: %d %s", code, body)
+	}
+	retryID := r.requestID(b.host)
+	r.waitVerified(p, b, retryID, 120*time.Second)
+	verifiedAfter := time.Since(retried)
+	r.waitPanelVerified(b, retryID, 30*time.Second)
+	panelAfter := time.Since(retried)
+	if sel, _ := r.panelResult()["selection"].(map[string]any); sel["source"] != "operator-retry" {
+		t.Errorf("the retry's selection: %s", jsonText(sel))
+	}
+	r.clientVia(b, 30*time.Second)
+	t.Logf("failed switch: failed (verdict %v, message %v, outcome applied-unverified) %v after the request; verified with source operator-retry %v after Retry, on the panel's side at %v",
+		v["reasons"], res["message"], failedAfter.Round(time.Millisecond), verifiedAfter.Round(time.Millisecond), panelAfter.Round(time.Millisecond))
 }
 
 func fmtStatus(res map[string]any) string {

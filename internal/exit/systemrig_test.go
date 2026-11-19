@@ -154,6 +154,18 @@ type systemRig struct {
 
 	panelNS  *nstest.NS
 	panelOut *syncBuf
+	// The panel's settings when they differ from a single exit sharing the
+	// exit's state directory (the network exchange's rig): its environment,
+	// the applier directory it gets read-only, the directory it writes its
+	// request in, the query naming its exit, and the request file.
+	panelEnv                        []string
+	panelApplier, panelOwn, panelQS string
+	desiredPath                     string
+	// exitExtra is added to the exit's environment.
+	exitExtra []string
+	// certPath and keyPath are the rig's server certificate and key as PEM
+	// files, for a server the test doesn't run itself (the exchange).
+	certPath, keyPath string
 
 	mu     sync.Mutex
 	served []string
@@ -453,7 +465,7 @@ func (r *systemRig) makeCerts() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dns := []string{"echo.example.net"}
+	dns := []string{"echo.example.net", rigExchangeName}
 	for name := range rigNames(t) {
 		dns = append(dns, name)
 	}
@@ -469,6 +481,17 @@ func (r *systemRig) makeCerts() {
 		t.Fatal(err)
 	}
 	r.cert = tls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}
+	keyDER, err := x509.MarshalECPrivateKey(leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.certPath, r.keyPath = r.path("server.pem"), r.path("server-key.pem")
+	if err := os.WriteFile(r.certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	r.roots = x509.NewCertPool()
 	r.roots.AddCert(ca)
 	r.caPath = r.path("ca.pem")
@@ -608,6 +631,7 @@ func (r *systemRig) start() *exitProc {
 		}
 	}
 	env = append(env, "PATH="+rigBinDir+":/usr/sbin:/usr/bin:/sbin:/bin")
+	env = append(env, r.exitExtra...)
 	p := r.startEnv(env)
 	r.t.Cleanup(func() {
 		if r.t.Failed() {
@@ -658,14 +682,19 @@ func (r *systemRig) connectOverlay() {
 // itself and the panel directory its own, as Compose mounts them.
 func (r *systemRig) startPanel() {
 	t := r.t
-	panelDir, applierDir := filepath.Join(r.stateDir, "panel"), filepath.Join(r.stateDir, "applier")
+	panelDir, applierDir := r.panelOwn, r.panelApplier
+	if panelDir == "" {
+		panelDir, applierDir = filepath.Join(r.stateDir, "panel"), filepath.Join(r.stateDir, "applier")
+	}
 	if err := os.MkdirAll(panelDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chown(panelDir, rigPanelUID, rigPanelUID); err != nil {
 		t.Fatal(err)
 	}
-	r.panelNS = nstest.New(t, "panel")
+	if r.panelNS == nil {
+		r.panelNS = nstest.New(t, "panel")
+	}
 	// `ip netns exec` runs it in a mount namespace of its own, so the
 	// read-only bind stays the panel's.
 	script := `mount --bind "$1" "$1" && mount -o remount,bind,ro "$1" &&
@@ -673,6 +702,9 @@ exec setpriv --reuid=` + fmt.Sprint(rigPanelUID) + ` --regid=` + fmt.Sprint(rigP
 		` --clear-groups --inh-caps=-all --bounding-set=-all --no-new-privs "$2" panel`
 	cmd := exec.Command("ip", "netns", "exec", r.panelNS.Name, "sh", "-c", script, "sh", applierDir, r.bin)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "STATE_DIR=" + r.stateDir, "PROVIDER=mullvad", "EXIT_KIND=overlay", "TZ=UTC"}
+	if r.panelEnv != nil {
+		cmd.Env = r.panelEnv
+	}
 	r.panelOut = &syncBuf{}
 	cmd.Stdout, cmd.Stderr = r.panelOut, r.panelOut
 	if err := cmd.Start(); err != nil {
@@ -721,16 +753,46 @@ func (r *systemRig) panelGet(path string) (int, []byte, *http.Response) {
 	return resp.StatusCode, body, resp
 }
 
-// panelStatus is the panel's /api/status verdict.
-func (r *systemRig) panelStatus() map[string]any {
+// panelPayload is the panel's /api/status: desired, result and verdict.
+func (r *systemRig) panelPayload() map[string]any {
 	r.t.Helper()
-	code, body, _ := r.panelGet("/api/status")
+	code, body, _ := r.panelGet("/api/status" + r.panelQS)
 	var payload map[string]any
 	if code != 200 || json.Unmarshal(body, &payload) != nil {
 		r.t.Fatalf("/api/status: %d %s", code, body)
 	}
-	v, _ := payload["verdict"].(map[string]any)
+	return payload
+}
+
+// panelStatus is the panel's /api/status verdict.
+func (r *systemRig) panelStatus() map[string]any {
+	r.t.Helper()
+	v, _ := r.panelPayload()["verdict"].(map[string]any)
 	return v
+}
+
+// panelResult is the record the panel reads, as /api/status shows it.
+func (r *systemRig) panelResult() map[string]any {
+	r.t.Helper()
+	res, _ := r.panelPayload()["result"].(map[string]any)
+	return res
+}
+
+// panelVerified is whether the panel shows the exit ok on rl with requestID
+// verified, from the record it reads.
+func (r *systemRig) panelVerified(rl *rigRelay, requestID string) bool {
+	r.t.Helper()
+	payload := r.panelPayload()
+	res, _ := payload["result"].(map[string]any)
+	v, _ := payload["verdict"].(map[string]any)
+	sel, _ := res["selection"].(map[string]any)
+	return v["state"] == "ok" && res["status"] == "ok" && res["server"] == rl.host && res["request_id"] == requestID && sel["outcome"] == "verified"
+}
+
+// waitPanelVerified waits for panelVerified.
+func (r *systemRig) waitPanelVerified(rl *rigRelay, requestID string, d time.Duration) {
+	r.t.Helper()
+	r.waitFor(d, "the panel to show "+rl.host+" verified (request "+requestID+")", func() bool { return r.panelVerified(rl, requestID) })
 }
 
 // panelPost submits the page's server form as a browser would: the page's
@@ -740,7 +802,7 @@ func (r *systemRig) panelStatus() map[string]any {
 // from.
 func (r *systemRig) panelPost(host string) (int, string, time.Time, string) {
 	t := r.t
-	code, page, resp := r.panelGet("/")
+	code, page, resp := r.panelGet("/" + r.panelQS)
 	var nonce string
 	for _, c := range resp.Cookies() {
 		if c.Name == "csrf_nonce" {
@@ -787,7 +849,11 @@ func (r *systemRig) panelSwitch(host string) (string, time.Time) {
 // host.
 func (r *systemRig) requestID(host string) string {
 	t := r.t
-	raw, err := os.ReadFile(filepath.Join(r.stateDir, "panel", "desired.json"))
+	path := r.desiredPath
+	if path == "" {
+		path = filepath.Join(r.stateDir, "panel", "desired.json")
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
