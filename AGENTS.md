@@ -65,7 +65,7 @@ never in a public issue or commit message.
   what it guarantees. The NetBird exit is fail-closed for the traffic it
   receives. The sidecars are fail-closed, by gluetun's firewall or by the
   native sidecar's routing contract and firewall. A proxy on the exit is
-  planned, not built ([roadmap](ROADMAP.md#a-proxy-on-the-exit)): its own
+  being built ([design](docs/design/menu.md)): its own
   connections would leave only through the tunnel, with no promise about
   traffic not sent to it. Wherever a way in is described or shown, its
   guarantee comes first. No way in weakens another, and a best-effort way in
