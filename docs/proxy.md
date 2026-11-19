@@ -12,11 +12,15 @@ the exit's status record, verdict or switching, and the exit doesn't know it
 is there.
 
 **Experimental, and untested on a real tunnel.** The role, its settings and
-its status have unit tests, against fakes and on loopback. The system rig
-drill (fake Mullvad relay proxies, tunnel loss, a packet counter on every
-interface but the tunnel) and the live drill on a real Mullvad exit have not
-run yet, so nothing here has carried traffic through a real tunnel or a real
-Mullvad relay proxy. It is in no release yet: an image from before it exits
+its status have unit tests, against fakes and on loopback. CI's
+[system rig](../CONTRIBUTING.md#the-system-rig) runs the release build's
+proxy, unprivileged and without capabilities, in a native Mullvad overlay
+exit's namespace with kernel WireGuard tunnels to fake relays, against fake
+Mullvad relay proxies and DNS: locations, sessions, benching, refusal while
+the exit switches or its tunnel is stopped, and a packet counter showing
+nothing of the proxy's outside the tunnel. The live drill on a real Mullvad
+exit has not run yet, so nothing here has carried traffic through a real
+Mullvad relay proxy, and the native sidecar's namespace is not on the rig. It is in no release yet: an image from before it exits
 at once with `unknown role "proxy"`.
 
 ## How it keeps the guarantee
