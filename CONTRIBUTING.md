@@ -46,6 +46,9 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   (`state/applier/attempt.json`), `internal/verdict/` judges a status record for every
   reader, `internal/providers/` is the provider registry and the catalog parsers,
   `internal/egress/` the tunnel-tier checks, `internal/countries/` country names to codes.
+- `internal/proxy/` is the core of the proxy way in (SOCKS5 and HTTP `CONNECT`,
+  sessions, the tunnel gate and `proxy.json`), which no role uses yet
+  ([design](docs/design/menu.md)).
 - `internal/nbprofile/` checks NetBird's settings and stored profile and holds the
   `fix-blacklist` repair; `internal/tunnelconf/` validates the tunnel config;
   `internal/gluetunauth/` is gluetun's role file and API key.

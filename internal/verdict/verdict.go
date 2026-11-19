@@ -26,7 +26,9 @@
 //
 // The package offers Assess (with ExitConfig, Target and Verdict), StatusView,
 // LegacyProjection, RequiredChecks, FixedChecks, BackendOf, OrderRecord (the
-// member order the supervisor writes), and the schema's constants.
+// member order the supervisor writes), and the schema's constants; and, in
+// proxy.go, the proxy's own record (proxy.json) with ReadProxy and
+// AssessProxy, which never touch the exit's verdict.
 package verdict
 
 import (
