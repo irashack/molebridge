@@ -1,0 +1,11 @@
+{
+  "schema": 1, "kind": "proxy", "provider": "mullvad",
+  "guarantee": "opt-in",
+  "status": "ok", "message": "Serving.",
+  "checked_at": "2026-11-19T18:00:00Z",
+  "listen": "127.0.0.1:1080",
+  "tunnel": {"verdict": "ok", "server": "se-sto-wg-001", "checked_at": "2026-11-19T17:59:30Z"},
+  "servers": {"known": 512, "benched": [{"server": "de-fra-wg-003", "until": "soon", "reason": "<b>x</b>"}]},
+  "sessions": -1,
+  "connections": {"open": 7, "total": 1204, "failed": 12}
+}

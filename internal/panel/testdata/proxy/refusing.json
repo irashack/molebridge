@@ -1,0 +1,11 @@
+{
+  "schema": 1, "kind": "proxy", "provider": "mullvad",
+  "guarantee": "opt-in",
+  "status": "refusing", "message": "The exit's verdict is failed; new connections are refused.",
+  "checked_at": "2026-11-19T18:00:00Z",
+  "listen": "127.0.0.1:1080",
+  "tunnel": {"verdict": "failed", "server": "se-sto-wg-001", "checked_at": "2026-11-19T17:59:30Z"},
+  "servers": {"known": 512, "benched": []},
+  "sessions": 0,
+  "connections": {"open": 0, "total": 1204, "failed": 15}
+}

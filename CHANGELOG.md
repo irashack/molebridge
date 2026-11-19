@@ -54,6 +54,18 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   (`internal/exit/netbird_worker_linux.go`). No behavior change: settings, the
   status record, log lines, timing and the start order are as before
   ([architecture](docs/architecture.md#netbird-as-a-child)).
+- Switchyard's proxy view, off unless `PANEL_PROXY_STATUS` names a proxy's
+  `proxy.json` (a path for one exit, `id=path` entries with `PANEL_EXITS`):
+  under the exit, on the full page, the proxy's guarantee first, then its
+  state (serving, refusing, listener down, or unknown with the reason), listen
+  address, sessions, connections and benched servers, updated with the
+  status poll. Read-only, and judged on its own: the exit's verdict, label,
+  tabs, `/readyz` and switching are the same with or without it.
+  `/api/status` adds `proxy` for such an exit. The panel refuses the setting
+  for a `gluetun-*` exit or one in `PANEL_NETWORK_EXITS`. Tested with fixture
+  files in Go and Node tests and in a headless browser; no release has a
+  proxy role yet, so it has not shown a running proxy
+  ([Switchyard](docs/switchyard.md#the-proxy-view)).
 
 ## 0.13.0 — unreleased
 

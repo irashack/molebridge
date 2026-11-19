@@ -79,6 +79,57 @@
     };
   }
 
+  // The proxy view: what the page says about the exit's proxy, from
+  // /api/status's `proxy`, in the server's words (TEXT.proxy). The server's
+  // describeProxy (internal/panel/proxy.go) is the same function. It never
+  // touches the exit's own status above.
+  const PROXY_STATES = ['ok', 'refusing', 'failed', 'unknown'];
+  const PROXY_BENCH_SHOWN = 50;
+  const isCount = (value) => Number.isInteger(value);
+
+  function describeProxy(proxy, TEXT) {
+    const P = TEXT.proxy;
+    const p = proxy && typeof proxy === 'object' ? proxy : {};
+    const state = PROXY_STATES.includes(p.state) ? p.state : 'unknown';
+    const reasons = Array.isArray(p.reasons) ? p.reasons : [];
+    const note = reasons.filter((r) => isText(r) && Object.hasOwn(P.reason, r)).map((r) => P.reason[r]).join(' ');
+    const view = {
+      state, label: isText(p.label) ? p.label : '', guarantee: P.guarantee, note,
+      fields: {
+        listen: isText(p.listen) ? p.listen : P.none,
+        sessions: isCount(p.sessions) ? String(p.sessions) : P.none,
+        connections: P.none,
+        servers: P.none,
+        message: isText(p.message) ? p.message : P.none,
+        checked_at: isText(p.checked_at) ? p.checked_at : P.none,
+      },
+      benched: [],
+      more: '',
+    };
+    const c = p.connections && typeof p.connections === 'object' ? p.connections : null;
+    if (c && isCount(c.open) && isCount(c.total) && isCount(c.failed)) {
+      view.fields.connections = P.connections.replace('{open}', String(c.open))
+        .replace('{total}', String(c.total)).replace('{failed}', String(c.failed));
+    }
+    const s = p.servers && typeof p.servers === 'object' ? p.servers : null;
+    if (s && isCount(s.known) && Array.isArray(s.benched)) {
+      view.fields.servers = P.servers.replace('{known}', String(s.known)).replace('{benched}', String(s.benched.length));
+      for (const entry of s.benched.slice(0, PROXY_BENCH_SHOWN)) {
+        const b = entry && typeof entry === 'object' ? entry : {};
+        const until = isText(b.until) ? b.until : '';
+        view.benched.push({
+          server: isText(b.server) ? b.server : P.none,
+          until: P.until.replace('{at}', () => until.slice(11, 19)),
+          reason: isText(b.reason) ? b.reason : '',
+        });
+      }
+      if (s.benched.length > PROXY_BENCH_SHOWN) {
+        view.more = P.more.replace('{n}', String(s.benched.length - PROXY_BENCH_SHOWN));
+      }
+    }
+    return view;
+  }
+
   // A polling loop that rests while the page is hidden. run() answers the
   // delay before the next run, or 0 to stop (the page is reloading). A run
   // that finds the page hidden schedules nothing; resume(), on becoming
@@ -111,7 +162,7 @@
 
   // Under Node (panel/js-tests), only the helpers above load.
   if (typeof module === 'object' && module?.exports) {
-    module.exports = { describe, checkText, makePoller };
+    module.exports = { describe, checkText, describeProxy, makePoller };
     return;
   }
 
@@ -909,6 +960,51 @@
     paintCopy();
   }
 
+  // -- the proxy view: read-only, painted from /api/status's `proxy` -----------
+
+  const proxySection = page.querySelector('[data-proxy]');
+  function paintProxy(proxy) {
+    if (!proxySection) return;
+    const view = describeProxy(proxy, TEXT);
+    const pill = proxySection.querySelector('[data-proxy-pill]');
+    if (pill) {
+      pill.className = `pill pill-${view.state}`;
+      pill.textContent = view.label;
+    }
+    const content = proxySection.querySelector('[data-proxy-state]');
+    if (content) content.dataset.proxyState = view.state;
+    const note = proxySection.querySelector('[data-proxy-note]');
+    if (note) {
+      note.className = view.state === 'refusing' ? 'note' : 'note note-negative';
+      note.textContent = view.note;
+      note.hidden = !view.note;
+    }
+    for (const el of proxySection.querySelectorAll('[data-proxy-f]')) {
+      if (Object.hasOwn(view.fields, el.dataset.proxyF)) el.textContent = view.fields[el.dataset.proxyF];
+    }
+    const list = proxySection.querySelector('[data-proxy-benched]');
+    if (list) {
+      list.replaceChildren(...view.benched.map((b) => {
+        const li = document.createElement('li');
+        for (const [cls, value] of [['bench-server', b.server], ['bench-until subdue', b.until], ['bench-reason', b.reason]]) {
+          const span = document.createElement('span');
+          span.className = cls;
+          span.textContent = value;
+          li.append(span);
+        }
+        return li;
+      }));
+    }
+    const block = proxySection.querySelector('[data-proxy-benched-block]');
+    if (block) block.hidden = view.benched.length === 0;
+    const more = proxySection.querySelector('[data-proxy-more]');
+    if (more) {
+      more.textContent = view.more;
+      more.hidden = !view.more;
+    }
+  }
+  const proxyUnavailable = () => ({ state: 'unknown', label: TEXT.proxy.unavailable, reasons: [] });
+
   let polling = false;
   async function pollStatus() {
     if (polling) return 30000;
@@ -931,6 +1027,7 @@
     } catch {
       paintStatus({ state: 'unknown', label: 'status unavailable', connection: TEXT.connection[kind].unknown,
         note: TEXT.unreachable, next: '' });
+      paintProxy(proxyUnavailable());
       const ip = page.querySelector('[data-current-ip]');
       if (ip) ip.textContent = '—';
       return 30000;
@@ -962,6 +1059,7 @@
     // started elsewhere, gluetun putting a server back) is painted in place.
     const moved = want !== desired || actual !== page.dataset.actual ||
       (state === 'applying') !== (previousState === 'applying');
+    paintProxy(data.proxy && typeof data.proxy === 'object' ? data.proxy : proxyUnavailable());
     page.dataset.checked = result.checked_at || '';
     paintChecked();
     for (const el of page.querySelectorAll('[data-f]')) {

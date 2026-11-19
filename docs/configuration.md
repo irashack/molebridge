@@ -264,6 +264,32 @@ when it is set. Don't set it on a deployed panel: with it off, nothing
 verifies that the panel holds no capabilities and can't write the exit's
 records.
 
+### The proxy view
+
+`PANEL_PROXY_STATUS` turns on Switchyard's [proxy view](switchyard.md#the-proxy-view)
+for exits that have a proxy beside them. It is empty by default, and the
+Compose files don't pass it: set it in a `compose.override.yaml` or in the
+environment of a Switchyard you run yourself, and mount the proxy's state
+directory read-only. The proxy writes `proxy.json` in `$STATE_DIR/proxy`, its
+own state directory.
+
+- **One exit:** the absolute path of `proxy.json` inside the panel container,
+  such as `PANEL_PROXY_STATUS=/state/proxy/proxy.json` with
+  `./state/proxy:/state/proxy:ro` among the panel's volumes.
+- **With `PANEL_EXITS`:** comma-separated `id=path` entries for the exits that
+  have a proxy, such as
+  `PANEL_PROXY_STATUS=mullvad=/state/mullvad/proxy/proxy.json` with
+  `/srv/molebridge-mullvad/state/proxy:/state/mullvad/proxy:ro`.
+
+The panel refuses to start with `molebridge panel: PANEL_PROXY_STATUS: ...` for
+a path that isn't absolute and clean, an id not in `PANEL_EXITS` or given twice,
+a bare path with `PANEL_EXITS` set, an exit of a `gluetun-*` provider (the proxy
+runs only with a native provider), or an exit in `PANEL_NETWORK_EXITS` (the
+exchange doesn't carry `proxy.json`). The file is read with the same bounds and
+strict parsing as the exit's state files (256 KiB at most); a missing,
+unreadable, stale (over 30 seconds) or malformed file shows as unknown, never
+as an error. The exit's verdict never depends on it.
+
 ## gluetun backend
 
 Experimental. Live passes used NordVPN only ([testing](testing.md)). The design is in [architecture](architecture.md#gluetun-backend) and
@@ -765,7 +791,7 @@ no access log line. Other methods than `GET`, `HEAD` and `POST` get 501.
 | `/embed`, `/embed?exit=<id>` | Compact view for iframes |
 | `POST /select` | Refused with 403 `Exit is set in configuration; change SERVER to choose another server.` for an exit set in configuration, then with 409 `A switch is in progress; wait for it to finish.` while the exit's state is switching. Otherwise choose a server; requires a CSRF token and allowed origin, plus the `exit` form field in multi-exit mode. A stale or unreadable status doesn't block a switch |
 | `/api/exits` | Configured exits with status summaries; an empty list in single-exit mode. With sign-in, only the exits the person is granted |
-| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. `result` is the record as the exit wrote it. 0.10.0 removed `view` and the 0.6 fields the panel derived into `result` (`routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s`, `unreachable_fallback`), deprecated since 0.7.0; read `verdict` instead |
+| `/api/status?exit=<id>` | Desired server, the exit's result and `verdict`: `state` (`ok`, `failed`, `applying` or `unknown`), `label`, `reasons`, `message`, `tier`, every check's state in `checks` (`pass`, `fail`, `unknown`, `n/a`, `not-checked` or `legacy`), `not_checked_by`, `schema`, `kind`, `configured_server`, `next_action` and `next_action_at`. With [`PANEL_PROXY_STATUS`](#the-proxy-view) for the exit, also `proxy`: `guarantee` (`opt-in`), `state` (`ok`, `refusing`, `failed` or `unknown`), `label`, `reasons`, and from a valid record only (null otherwise) `message`, `tunnel` (the exit's verdict as the proxy saw it), `checked_at`, `listen`, `sessions`, `connections` (`open`, `total`, `failed`) and `servers` (`known`, `benched` with `server`, `until`, `reason`); it never changes `verdict`. In configuration mode `desired` is null; omit `exit` for a single-exit panel. `result` is the record as the exit wrote it. 0.10.0 removed `view` and the 0.6 fields the panel derived into `result` (`routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s`, `unreachable_fallback`), deprecated since 0.7.0; read `verdict` instead |
 | `/api/latency?exit=<id>` | Latency for the exit; omit `exit` for a single-exit panel. Add `scope=cities`, `country=<name>` (up to 128 servers, a fixed sample beyond that; the answer's `country` gives `probed` and `total`), or `hosts=<a,b>` (64 at most); 256 servers per request in all; `fresh=1` ignores the cache. 429 with `Retry-After` while that exit already has a request running or four are running panel-wide |
 | `/manifest.webmanifest` | Web app manifest |
 | `/healthz` | Panel liveness; returns 200 before the Host check |

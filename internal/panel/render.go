@@ -761,6 +761,11 @@ func (s *Server) renderIndex(p IndexPage) string {
 	if detailsCell == "" {
 		detailsCell = "(unknown)"
 	}
+	// The exit's proxy, on the full page only; it changes nothing above.
+	proxy := ""
+	if ex.ProxyPath != "" && !embed {
+		proxy = renderProxy(s.proxyView(ex))
+	}
 	displayHost := displayServer
 	if displayHost == "" {
 		displayHost = "—"
@@ -786,7 +791,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 		"fChecked", esc(view.CheckedAt), "dtRequested", dtRequested, "relayCount", relayCount,
 		"catalogueAge", catalogueAgeText(p.RelaysData, fetchedAt, s.now()),
 		"serverListUpdate", serverListUpdate[orEmptyString(result["server_list_update"])],
-		"switchingControls", switchingControls, "formClose", formClose)
+		"proxy", proxy, "switchingControls", switchingControls, "formClose", formClose)
 }
 
 func orEmptyString(v any) string {
@@ -915,7 +920,7 @@ const indexTemplate = `<!DOCTYPE html>
     </details>
   </div>
 </section>
-
+«proxy»
 «switchingControls»
 </div>
 «formClose»

@@ -360,7 +360,7 @@ func (s *Server) verdictJSON(ex Exit, v verdict.Verdict) validate.Obj {
 }
 
 // statusPayload is /api/status's body: the request, the record as the exit
-// wrote it, and the verdict. 0.10.0 removed the `view` object and the 0.6
+// wrote it, the verdict, and with PANEL_PROXY_STATUS the proxy's (proxy.go). 0.10.0 removed the `view` object and the 0.6
 // diagnostic fields derived into `result`, deprecated since 0.7.0.
 func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 	var result any
@@ -371,7 +371,12 @@ func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 	if status.Desired != nil {
 		desired = status.Desired
 	}
-	return validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict))
+	payload := validate.Members("desired", desired, "result", result, "verdict", s.verdictJSON(ex, status.Verdict))
+	if ex.ProxyPath != "" {
+		// The proxy's own verdict, beside the exit's and never part of it.
+		payload = append(payload, validate.Pair{Key: "proxy", Value: s.proxyPayload(ex)})
+	}
+	return payload
 }
 
 // cachedSnapshot is the exit's catalogue and the snapshot's other members

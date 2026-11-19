@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/irashack/molebridge/internal/validate"
 )
@@ -52,15 +54,35 @@ func TestWritePayloads(t *testing.T) {
 		view := describe(h.srv.exitView(ex, status.Verdict), merged)
 		cases = append(cases, validate.Pair{Key: name, Value: validate.Members("payload", payload, "describe", view)})
 	}
+	// The proxy view's cases: each testdata/proxy fixture, as /api/status
+	// sends it and as the server describes it.
+	ph := newHarness(t, nil, func(o *Options) { o.Now = func() time.Time { return proxyNow } })
+	proxyCases := validate.Obj{}
+	for _, name := range sortedFixtureNames() {
+		ex := ExitUnder(name, "mullvad", "Example", filepath.Join(ph.dir, name), "overlay")
+		ex.ProxyPath = filepath.Join(ph.dir, name, "proxy", "proxy.json")
+		copyFixture(t, name, ex.ProxyPath)
+		proxyCases = append(proxyCases, validate.Pair{Key: name,
+			Value: validate.Members("payload", ph.srv.proxyPayload(ex), "describe", ph.srv.proxyView(ex))})
+	}
 	var wording any
 	if err := json.Unmarshal([]byte(textJSON), &wording); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := validate.MarshalJSON(validate.Members("text", wording, "cases", cases))
+	raw, err := validate.MarshalJSON(validate.Members("text", wording, "cases", cases, "proxy_cases", proxyCases))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(out, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func sortedFixtureNames() []string {
+	names := make([]string, 0, len(proxyFixtures))
+	for name := range proxyFixtures {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

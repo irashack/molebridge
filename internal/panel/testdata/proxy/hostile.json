@@ -1,0 +1,13 @@
+{
+  "schema": 1, "kind": "proxy", "provider": "mullvad",
+  "guarantee": "opt-in",
+  "status": "failed", "message": "<script>alert(1)</script> & \"quoted\"",
+  "checked_at": "2026-11-19T18:00:00Z",
+  "listen": "127.0.0.1:1080\" onmouseover=\"alert(2)",
+  "tunnel": {"verdict": null, "server": null, "checked_at": null},
+  "servers": {"known": 2, "benched": [
+    {"server": "<img src=x onerror=alert(3)>", "until": "2026-11-19T18:02:00Z", "reason": "</ul><script>alert(4)</script>"}
+  ]},
+  "sessions": 0,
+  "connections": {"open": 0, "total": 0, "failed": 0}
+}
