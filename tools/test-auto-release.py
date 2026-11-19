@@ -205,6 +205,19 @@ class Pins(unittest.TestCase):
                 self.assertNotIn(f"ghcr.io/irashack/molebridge-core:v9.9.9@{D1}", out, path)
             self.assertEqual(text.count("molebridge-core"), out.count("molebridge-core"), path)
 
+    def test_proxy_overlay_is_pinned_and_rewritten(self):
+        # compose.proxy.yaml runs molebridge-core, pinned exactly as the
+        # sidecar forms pin it, and moves with them.
+        path = "compose.proxy.yaml"
+        self.assertIn(path, ar.PIN_FILES)
+        core = ar.compose_pin((ROOT / "compose.sidecar.yaml").read_text(), ar.CORE_IMAGE)
+        self.assertEqual(ar.compose_pin((ROOT / path).read_text(), ar.CORE_IMAGE), core)
+        old, old_d = ar.compose_pin((ROOT / "compose.yaml").read_text())
+        out = ar.rewrite_pins((ROOT / path).read_text(), old, old_d, f"{old}-rc.1", "v9.9.9", D1,
+                              "v9.9.9-rc.2", (core[1], D2))
+        self.assertIn(f"ghcr.io/irashack/molebridge-core:v9.9.9@{D2}", out)
+        self.assertNotIn(core[1], out)
+
     def test_init_templates_are_pinned_and_rewritten(self):
         # molebridge init's service blocks carry both pins, and the release
         # rewrite moves them with the Compose files.

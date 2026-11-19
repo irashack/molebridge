@@ -57,6 +57,8 @@ jobs:
           docker compose --env-file .env.sidecar.example -f compose.sidecar.yaml config --quiet
           docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
           COMPOSE_PROFILES=example,port-sync docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml config --quiet
+          docker compose --env-file .env.example -f compose.yaml -f compose.proxy.yaml config --quiet
+          docker compose --env-file .env.native-sidecar.example -f compose.native-sidecar.yaml -f compose.proxy.yaml config --quiet
           sh tools/check-compose.sh
       - name: gluetun preflight
         # The wrapper runs inside gluetun's Alpine image: test it under the

@@ -5,9 +5,10 @@ Each block is the service as the shipped Compose file in the repository root
 has it, without the `build:` key (init writes no Dockerfile beside it), with
 three deliberate differences: port-sync has no profile (it is written only
 when chosen), compose.gluetun.yaml's switchyard is written out instead of
-extending compose.yaml, and the proxy, which no shipped file has yet, is
-init's own (written only with the proxy switch on, proxyAvailable in
-initmenu.go). TestBlocksMatchShippedFiles fails when a block and its shipped
+extending compose.yaml, and the proxy comes from compose.proxy.yaml, the
+overlay file that adds it to compose.yaml or compose.native-sidecar.yaml:
+the shipped file is the block as the overlay form renders it (written only
+with the proxy switch on, proxyAvailable in initmenu.go). TestBlocksMatchShippedFiles fails when a block and its shipped
 service drift apart in anything but comments, so change the shipped file and
 the block together. The release automation rewrites the image pins here as in
 the shipped files (tools/auto-release.py, PIN_FILES).
@@ -1033,11 +1034,10 @@ the shipped files (tools/auto-release.py, PIN_FILES).
 {{end}}
 {{define "proxy"}}
   proxy:
-    # EXPERIMENTAL, and in no release yet: the proxy role is being built
-    # (docs/design/menu.md#the-proxy). An image without it exits at once
-    # with "unknown role". Its guarantee: every connection the proxy opens
-    # leaves through the tunnel, or fails. It promises nothing about traffic
-    # not sent to it.
+    # EXPERIMENTAL (docs/proxy.md), and untested on a real tunnel. An image
+    # from before the proxy role exits at once with "unknown role". Its
+    # guarantee: every connection the proxy opens leaves through the tunnel,
+    # or fails. It promises nothing about traffic not sent to it.
     # SOCKS5 and HTTP CONNECT on one address in the exit's namespace, for
     # programs you point at it. No capabilities: binding its connections to
     # the tunnel interface needs none. It reads the exit's records, read-only,
@@ -1065,9 +1065,17 @@ the shipped files (tools/auto-release.py, PIN_FILES).
       # refused (there is no NetBird interface here).
 {{- end}}
       PROXY_LISTEN: "${PROXY_LISTEN:-127.0.0.1:1080}"
+{{- if eq .Form "overlay"}}
+      # NetBird's interface, as the exit's OVERLAY_IF: the only interface
+      # whose addresses PROXY_LISTEN may use besides loopback.
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+{{- end}}
       PROXY_MAX_CONNS: "${PROXY_MAX_CONNS:-512}"
       # One line, mode 0600, owned by the user above.
       PROXY_PASSWORD_FILE: /run/secrets/proxy/password
+      # The resolver for the names the proxy resolves itself, asked through
+      # the tunnel; empty is the provider's own (docs/proxy.md).
+      PROXY_DNS: "${PROXY_DNS:-}"
     volumes:
       - ./state/applier:/state/applier:ro
       # Both must exist: Compose then fails instead of creating them owned by
@@ -1088,6 +1096,13 @@ the shipped files (tools/auto-release.py, PIN_FILES).
         # Starts once the tunnel is verified; restarted with the exit.
         condition: service_healthy
         restart: true
+    healthcheck:
+      # Passes while proxy.json is fresh and says the proxy is serving.
+      test: ["CMD", "/usr/local/bin/molebridge", "health", "--proxy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging: *logging
     deploy:
       resources:

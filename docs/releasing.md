@@ -241,7 +241,7 @@ On `main`, in separate commits as before:
    the image reference in `compose.yaml` and `compose.gluetun.yaml` (every
    service that runs the Molebridge image) with
    `ghcr.io/irashack/molebridge:v0.10.0@sha256:<index digest>`, and in
-   `compose.sidecar.yaml` and `compose.native-sidecar.yaml` with
+   `compose.sidecar.yaml`, `compose.native-sidecar.yaml` and `compose.proxy.yaml` with
    `ghcr.io/irashack/molebridge-core:v0.10.0@sha256:<core index digest>`,
    both from the release notes. Update the example tags that follow it: the bundle example
    in the README, `TAG` and `RC` in [setup](setup.md#1-download-and-verify)

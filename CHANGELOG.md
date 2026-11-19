@@ -6,6 +6,28 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- New, experimental, and untested on a real tunnel: the proxy way in,
+  `molebridge proxy` ([the proxy](docs/proxy.md)). Its guarantee: every
+  connection the proxy opens leaves through the tunnel, or fails; it promises
+  nothing about traffic not sent to it. SOCKS5 and HTTP `CONNECT` in a native
+  exit's namespace (Mullvad, PIA or NordVPN, the NetBird exit or the native
+  sidecar), with a password and a username that picks the location: with
+  Mullvad any country, city or server in the exit's catalogue, through that
+  relay's SOCKS5 proxy; with PIA and NordVPN only the exit's current server.
+  It refuses to start as root, with any capability, with another provider or
+  with a setting that doesn't parse (`PROVIDER`, `TUNNEL_INTERFACE`,
+  `PROXY_LISTEN`, `PROXY_MAX_CONNS`, `PROXY_PASSWORD_FILE`, `PROXY_DNS`,
+  `OVERLAY_IF`, `STATE_DIR`). `molebridge status --proxy` prints its status
+  from `state/proxy/proxy.json`, and `molebridge health --proxy` is its
+  container's health check. `compose.proxy.yaml` adds it on top of
+  `compose.yaml` or `compose.native-sidecar.yaml` and ships in the bundle;
+  its service is `molebridge init`'s proxy block, which a test keeps equal
+  (init still doesn't offer the proxy until a release has the role). The
+  proxy judges the exit's record by the kind the record states, so one
+  service serves both forms. Tested by unit tests (settings and refusals,
+  the role end to end on loopback with no tunnel, status and health) and
+  CI's Compose checks; the system rig and live drills have not run, so it
+  has carried no traffic through a real tunnel.
 - Internal: the supervisor reaches NetBird through one boundary, the exit's
   way in (`internal/exit/wayin.go`), with NetBird's supervision in
   `internal/exit/netbird.go` and a way in that does nothing for the sidecars.

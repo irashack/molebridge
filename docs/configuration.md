@@ -425,6 +425,28 @@ namespace of the application whose port it sets
 | `PORT_SYNC_INTERVAL` | `30` | Seconds between passes: a whole number from 10 to 300. |
 | `STATE_DIR` | `/state` | Where the role finds `applier/result.json`; mount the exit's `state/applier` read-only. |
 
+## The proxy
+
+Experimental, and untested on a real tunnel; see [the proxy](proxy.md) for
+its guarantee, setup and limits. `compose.proxy.yaml` adds the `proxy`
+service on top of `compose.yaml` or `compose.native-sidecar.yaml`
+(`COMPOSE_FILE=compose.yaml:compose.proxy.yaml`). It passes the exit's
+`PROVIDER`, `EXIT_IF` (as `TUNNEL_INTERFACE`), `OVERLAY_IF` and
+`PANEL_USER` (the user it runs as), and these of its own from `.env`:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port: loopback, or an address of NetBird's interface (`OVERLAY_IF`). Anything else, `0.0.0.0` included, is refused at start. |
+| `PROXY_MAX_CONNS` | `512` | The most open client connections, 1 to 65535. |
+| `PROXY_DNS` | empty: the provider's | The resolver for the names the proxy resolves itself, an IP address with an optional port, asked through the tunnel. Empty means Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53` or NordVPN `103.86.96.100:53`. |
+
+The password is the one line in `secrets/proxy/password` (mode `0600`, owned
+by `PANEL_USER`), mounted read-only at `/run/secrets/proxy/password`
+(`PROXY_PASSWORD_FILE`). The proxy refuses to start as root, with any
+capability, with a provider other than `mullvad`, `pia` or `nordvpn`, or with
+a setting that doesn't parse; [the proxy](proxy.md#settings) lists every
+setting the role reads.
+
 ## The network exchange
 
 **Experimental; run live on Kubernetes with a NordVPN exit only**
@@ -628,6 +650,7 @@ contents anywhere.
 | `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
 | `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `gluetun-auth` | With the gluetun backend |
 | `secrets/gluetun/api_key` | The same API key, for the exit. It is full gluetun administration | With the gluetun backend |
+| `secrets/proxy/password` | The [proxy](proxy.md)'s password, one line; mode 0600 (0640 or 0440 also accepted), owned by `PANEL_USER` | With the proxy |
 
 Neither NordVPN's downloaded config nor its access token is one of these:
 each is needed only while `prepare-config --nordvpn` or `nordvpn-key` runs.
@@ -667,6 +690,7 @@ records](architecture.md#example-records).
 | `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
+| `proxy/proxy.json` | proxy | `molebridge status --proxy`, `health --proxy` | The [proxy](proxy.md#status)'s own status record, never part of `result.json`: `schema` (1), `kind` (`proxy`), `provider`, `guarantee` (`opt-in`), `status` (`ok`, `refusing` or `failed`), `message`, `checked_at`, `listen`, `tunnel` (the exit's `verdict`, `server` and `checked_at` as the proxy last read them), `servers` (`known`, and `benched` with each `server`, `until` and `reason`), `sessions`, and `connections` (`open`, `total`, `failed`). Rewritten every 10 seconds; over 30 seconds old counts as unknown. |
 | `<id>/exchange.json` | exchange | panel | With the [network exchange](#the-network-exchange), on the panel's side: `schema` (1), `exit`, `last_contact_at` (the exchange's clock), `clock_offset_s` (the exit's clock minus the exchange's, or null) and `files`, each file name to its `received_at` and `sha256`. The panel's `<id>/applier/` files are then the exchange's copies of the exit's. |
 
 **`owner_record`.** The check means "the exit's owner is live", and since

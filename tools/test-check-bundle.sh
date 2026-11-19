@@ -83,6 +83,13 @@ services:
     image: ghcr.io/irashack/molebridge-core:0.8
     network_mode: service:exit
 EOM
+cat > "$src/compose.proxy.yaml" <<'EOM'
+services:
+  proxy:
+    image: ghcr.io/irashack/molebridge-core:0.8
+    command: ["proxy"]
+    network_mode: service:exit
+EOM
 echo 'PROVIDER=mullvad' > "$src/.env.example"
 echo 'GLUETUN_PROVIDER=nordvpn' > "$src/.env.gluetun.example"
 echo 'X=1' > "$src/.env.sidecar.example"
@@ -120,7 +127,14 @@ sed "s#$ref#$core_ref#" "$work/bad/v/molebridge-v0.8.0-rc.1/compose.gluetun.yaml
     cp "$work/bad/c" "$work/bad/v/molebridge-v0.8.0-rc.1/compose.gluetun.yaml"
 tar -czf "$work/bad/wrong2.tar.gz" -C "$work/bad/v" molebridge-v0.8.0-rc.1
 sh "$here/check-bundle.sh" "$work/bad/wrong2.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted the gluetun overlay form on core"
-pass "refuses a sidecar form on the NetBird image and an overlay form on core"
+mkdir -p "$work/bad/p"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/p"
+sed "s#$core_ref#$ref#" "$work/bad/p/molebridge-v0.8.0-rc.1/compose.proxy.yaml" > "$work/bad/c" &&
+    cp "$work/bad/c" "$work/bad/p/molebridge-v0.8.0-rc.1/compose.proxy.yaml"
+tar -czf "$work/bad/wrong3.tar.gz" -C "$work/bad/p" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/wrong3.tar.gz" "$ref" "$core_ref" >"$work/bad/out" 2>&1 && fail "accepted the proxy on the NetBird image"
+grep -q "FAIL compose.proxy.yaml's proxy is not" "$work/bad/out" || { cat "$work/bad/out" >&2; fail "proxy image: wrong message"; }
+pass "refuses a sidecar form on the NetBird image an overlay form on core, and the proxy on the NetBird image"
 
 # An unpinned image slipped past the packer: edit the extracted archive by hand.
 mkdir -p "$work/bad/x"

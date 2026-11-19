@@ -1,0 +1,107 @@
+# The proxy way in (docs/proxy.md). EXPERIMENTAL, and untested on a real
+# tunnel: its unit tests run against fakes, and the system rig and live drills
+# have not run yet.
+#
+# Its guarantee: every connection the proxy opens leaves through the tunnel,
+# or fails. It promises nothing about traffic not sent to it. It is a way in of
+# its own: programs you point at it (SOCKS5 or HTTP CONNECT, with a username
+# that picks the location and a password) get their connections through the
+# exit's tunnel; it changes nothing in the exit's record, verdict or switching.
+#
+# Use it on top of a native exit (Mullvad, PIA or NordVPN), never alone and
+# never with a gluetun form:
+#   COMPOSE_FILE=compose.yaml:compose.proxy.yaml                  (the NetBird exit)
+#   COMPOSE_FILE=compose.native-sidecar.yaml:compose.proxy.yaml   (the native sidecar)
+#
+# Before the first start, create its two directories, owned by PANEL_USER, and
+# its password file (one line, mode 0600):
+#   mkdir -p state/proxy secrets/proxy
+#   (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > secrets/proxy/password)
+#   chown -R 1000:1000 state/proxy secrets/proxy
+#
+# `molebridge init` writes the same service (internal/tools/initmenu,
+# TestBlocksMatchShippedFiles keeps the two equal).
+
+# This file's own copy of the shared log settings: an anchor does not reach
+# across Compose files.
+x-proxy-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+
+services:
+  proxy:
+    # EXPERIMENTAL (docs/proxy.md), and untested on a real tunnel. An image
+    # from before the proxy role exits at once with "unknown role". Its
+    # guarantee: every connection the proxy opens leaves through the tunnel,
+    # or fails. It promises nothing about traffic not sent to it.
+    # SOCKS5 and HTTP CONNECT on one address in the exit's namespace, for
+    # programs you point at it. No capabilities: binding its connections to
+    # the tunnel interface needs none. It reads the exit's records, read-only,
+    # and writes only its own state.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["proxy"]
+    # With compose.native-sidecar.yaml set COMPOSE_PROJECT_NAME in .env if
+    # another stack on this host already runs a molebridge-proxy container.
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-proxy"
+    restart: unless-stopped
+    network_mode: service:exit
+    # The user that owns ./state/proxy and ./secrets/proxy, as the panel's
+    # PANEL_USER (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-mullvad}"
+      TUNNEL_INTERFACE: "${EXIT_IF:-mullvad}"
+      # With compose.yaml: the exit's NetBird address and a port, for
+      # devices on the overlay, or loopback. With compose.native-sidecar.yaml:
+      # loopback, for the containers in the namespace (there is no NetBird
+      # interface there). Anything else is refused.
+      PROXY_LISTEN: "${PROXY_LISTEN:-127.0.0.1:1080}"
+      # NetBird's interface, as the exit's OVERLAY_IF: the only interface
+      # whose addresses PROXY_LISTEN may use besides loopback. Unused in a
+      # native sidecar, which has none.
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      PROXY_MAX_CONNS: "${PROXY_MAX_CONNS:-512}"
+      # One line, mode 0600, owned by the user above.
+      PROXY_PASSWORD_FILE: /run/secrets/proxy/password
+      # The resolver for the names the proxy resolves itself, asked through
+      # the tunnel; empty is the provider's own (docs/proxy.md).
+      PROXY_DNS: "${PROXY_DNS:-}"
+    volumes:
+      - ./state/applier:/state/applier:ro
+      # Both must exist: Compose then fails instead of creating them owned by
+      # root, where this non-root user could not use them.
+      - type: bind
+        source: ./state/proxy
+        target: /state/proxy
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./secrets/proxy
+        target: /run/secrets/proxy
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted with the exit.
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      # Passes while proxy.json is fresh and says the proxy is serving.
+      test: ["CMD", "/usr/local/bin/molebridge", "health", "--proxy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          # One Go process, as the panel.
+          pids: 128

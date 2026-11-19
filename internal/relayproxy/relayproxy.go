@@ -16,7 +16,7 @@
 //
 // Nothing here opens a socket itself: the Dialer and Resolver it is given
 // are the tunnel's (internal/tunneldial), so every connection leaves through
-// the tunnel or fails. The package is not used by any role yet.
+// the tunnel or fails. The role `molebridge proxy` uses it.
 package relayproxy
 
 import (

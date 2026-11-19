@@ -73,6 +73,15 @@ services:
   switchyard:
     image: "${MOLEBRIDGE_IMAGE:-ghcr.io/irashack/molebridge-core:0.8}"
 EOM
+cat > "$src/compose.proxy.yaml" <<'EOM'
+x-proxy-logging: &logging
+  driver: json-file
+services:
+  proxy:
+    image: ghcr.io/irashack/molebridge-core:v0.8.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    command: ["proxy"]
+    logging: *logging
+EOM
 printf 'MOLEBRIDGE_IMAGE=ghcr.io/irashack/molebridge:0.8\nPROVIDER=mullvad\n' > "$src/.env.example"
 printf 'G=1\n' > "$src/.env.gluetun.example"
 printf 'X=1\n' > "$src/.env.sidecar.example"
@@ -94,7 +103,7 @@ mkdir -p "$work/o1"
 archive=$(run v0.8.0 "$digest" "$core" "$work/o1")
 [ "$archive" = "$work/o1/molebridge-v0.8.0.tar.gz" ] || fail "archive path: $archive"
 members=$($tar -tzf "$archive" | tr '\n' ' ')
-want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.native-sidecar.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.native-sidecar.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
+want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.native-sidecar.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.native-sidecar.yaml molebridge-v0.8.0/compose.proxy.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
 [ "$members" = "$want" ] || fail "member list: $members"
 pass "member list"
 
@@ -113,6 +122,8 @@ grep -q "Pull $ref for the native sidecar" "$x/compose.native-sidecar.yaml" || f
 [ "$(grep -c "image: $ref\$" "$x/compose.native-sidecar.yaml")" = 2 ] || fail "native sidecar: tag and digest replaced"
 grep -q "image: \"\${MOLEBRIDGE_IMAGE:-$core_ref}\"\$" "$x/compose.native-sidecar.yaml" || fail "native sidecar: core default rewritten"
 grep -q '^COMPOSE_FILE=compose.native-sidecar.yaml$' "$x/.env.native-sidecar.example" || fail "native sidecar env example content"
+grep -q "^    image: $core_ref\$" "$x/compose.proxy.yaml" || fail "proxy overlay: core reference pinned"
+grep -q "$ref" "$x/compose.proxy.yaml" && fail "proxy overlay: core reference rewritten to the plain image"
 grep -q "^MOLEBRIDGE_IMAGE=$ref\$" "$x/.env.example" || fail ".env rewrite"
 grep -q "docker run $ref gluetun-auth" "$x/routing/gluetun-preflight" || fail "preflight diagnostic"
 grep -q ':0.8\|<tag>\|2222\|3333\|4444\|core:0\|core$' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
@@ -166,6 +177,9 @@ mv "$work/env.gluetun.bak" "$src/.env.gluetun.example"
 mv "$src/.env.native-sidecar.example" "$work/env.native.bak"
 refuses "a missing native sidecar env example" 'missing bundle file: .env.native-sidecar.example' v0.8.0 "$digest" "$core" "$work/o3"
 mv "$work/env.native.bak" "$src/.env.native-sidecar.example"
+mv "$src/compose.proxy.yaml" "$work/compose.proxy.bak"
+refuses "a missing proxy overlay" 'missing bundle file: compose.proxy.yaml' v0.8.0 "$digest" "$core" "$work/o3"
+mv "$work/compose.proxy.bak" "$src/compose.proxy.yaml"
 mv "$src/compose.native-sidecar.yaml" "$work/compose.native.bak"
 refuses "a missing native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.native-sidecar.yaml"

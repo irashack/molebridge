@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	register("status", "print the exit's runtime status: the verdict with reason codes, heartbeat and lease",
+	register("status", "print the exit's runtime status: the verdict with reason codes, heartbeat and lease; --proxy: the proxy's",
 		func(args []string) int {
 			return statusMain(args, exit.EnvMap(os.Environ()), bootclock.System(), time.Now, os.Stdout, os.Stderr)
 		})
@@ -29,8 +29,11 @@ func init() {
 // a number; nothing secret is read. Exit status 0 when the exit is connected,
 // 1 when it is not, 2 for a usage error.
 func statusMain(args []string, env map[string]string, clock bootclock.Clock, wall func() time.Time, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--proxy" {
+		return proxyStatusMain(env, wall, stdout, stderr)
+	}
 	if len(args) != 0 {
-		fmt.Fprintln(stderr, "usage: molebridge status")
+		fmt.Fprintln(stderr, "usage: molebridge status [--proxy]")
 		return 2
 	}
 	provider := env["PROVIDER"]
@@ -87,6 +90,49 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 	fmt.Fprintf(stdout, "lease: %s\n", leaseLine(exit.LeasePathOf(env), clock))
 	fmt.Fprintf(stdout, "version: %s\n", version)
 	// The sidecar attachment and the host's checks are not made from here.
+	if v.State == "ok" {
+		return 0
+	}
+	return 1
+}
+
+// proxyStatusMain prints the proxy's status from inside its container (or
+// any container that mounts its state directory): the verdict of
+// verdict.AssessProxy on state/proxy/proxy.json, for PROVIDER when it is
+// set. It reads nothing of the exit's and says nothing about the exit beyond
+// the verdict the proxy last saw. Exit status 0 while the proxy serves, 1
+// otherwise (refusing, failed, or no fresh record).
+func proxyStatusMain(env map[string]string, wall func() time.Time, stdout, stderr io.Writer) int {
+	stateDir := env["STATE_DIR"]
+	if stateDir == "" {
+		stateDir = exit.DefaultStateDir
+	}
+	switch env["PROVIDER"] {
+	case "", "mullvad", "pia", "nordvpn":
+	default:
+		fmt.Fprintln(stderr, "molebridge status: the proxy runs only with PROVIDER mullvad, pia or nordvpn")
+		return 1
+	}
+	v := verdict.AssessProxy(verdict.ReadProxy(proxyStatusPath(stateDir)), env["PROVIDER"], wall())
+	fmt.Fprintln(stdout, "guarantee: every connection the proxy opens leaves through the tunnel, or fails; nothing about traffic not sent to it")
+	fmt.Fprintf(stdout, "state: %s (%s)\n", v.State, v.Label)
+	reasons := "none"
+	if len(v.Reasons) > 0 {
+		reasons = strings.Join(v.Reasons, ", ")
+	}
+	fmt.Fprintf(stdout, "reasons: %s\n", reasons)
+	if v.Message != nil {
+		fmt.Fprintf(stdout, "message: %s\n", *v.Message)
+		tunnel := v.Tunnel
+		if tunnel == "" {
+			tunnel = "unknown"
+		}
+		fmt.Fprintf(stdout, "exit verdict: %s\n", tunnel)
+		fmt.Fprintf(stdout, "benched servers: %d\n", v.Benched)
+		fmt.Fprintf(stdout, "sessions: %d\n", v.Sessions)
+		fmt.Fprintf(stdout, "open connections: %d\n", v.Open)
+	}
+	fmt.Fprintf(stdout, "version: %s\n", version)
 	if v.State == "ok" {
 		return 0
 	}

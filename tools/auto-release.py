@@ -72,7 +72,8 @@ STATE = Path.home() / ".local/state/molebridge-auto-release"
 # internal/tools/initmenu/compose.tmpl holds the services `molebridge init`
 # writes, pinned as the Compose files are (its tests fail when they differ).
 PIN_FILES = ["compose.yaml", "compose.gluetun.yaml", "compose.sidecar.yaml",
-             "compose.native-sidecar.yaml", "internal/tools/initmenu/compose.tmpl",
+             "compose.native-sidecar.yaml", "compose.proxy.yaml",
+             "internal/tools/initmenu/compose.tmpl",
              "README.md", "docs/setup.md", ".github/ISSUE_TEMPLATE/bug.yml"]
 # Inside one hourly run, how long to keep following workflows and CI.
 FOLLOW_SECONDS = 50 * 60

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -27,7 +28,20 @@ const resultMaxBytes = 16384
 // has no panel request to hold the record to (it never reads
 // panel/desired.json), so a switch the panel asked for and the exit has not
 // yet acknowledged does not hold it back; the exit's own record does.
+//
+// An empty exit.Kind takes the kind the record states, when it is one of
+// verdict.Kinds (else "overlay"): the proxy joins an overlay exit or a native
+// sidecar alike, and the record is the exit's own, mounted read-only from its
+// applier directory. Provider and backend are still held to exit.Provider.
 func TunnelFromResult(exit verdict.ExitConfig, result any, now time.Time) TunnelState {
+	if exit.Kind == "" {
+		exit.Kind = "overlay"
+		if record, ok := result.(map[string]any); ok {
+			if kind, ok := record["kind"].(string); ok && slices.Contains(verdict.Kinds, kind) {
+				exit.Kind = kind
+			}
+		}
+	}
 	v := verdict.Assess(exit, result, verdict.TargetForPanel(result, nil, exit.Provider), now)
 	t := TunnelState{Verdict: v.State}
 	if record, ok := result.(map[string]any); ok {

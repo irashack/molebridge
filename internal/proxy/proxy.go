@@ -14,7 +14,8 @@
 // ServerState it is built against, CheckListen, ReadPassword, ParseUsername,
 // TunnelState with ResultGate (the exit's verdict from its result.json) and
 // the status record, proxy.json (status.go), which internal/verdict judges
-// with AssessProxy. No role uses it yet.
+// with AssessProxy. The role `molebridge proxy` (cmd/molebridge/role_proxy.go)
+// runs it over internal/relayproxy and internal/tunneldial.
 package proxy
 
 import (
@@ -27,6 +28,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/irashack/molebridge/internal/relayproxy"
 )
 
 // Upstream opens the proxy's connections (internal/relayproxy implements it).
@@ -38,14 +41,10 @@ type Upstream interface {
 	Servers() []ServerState // for the status record
 }
 
-// ServerState is one server as the Upstream knows it.
-type ServerState struct {
-	Server       string
-	Benched      bool
-	BenchedUntil time.Time
-	Reason       string
-	LastOK       time.Time
-}
+// ServerState is one server as the Upstream knows it: relayproxy's own type,
+// so that *relayproxy.Relays is an Upstream as it is (relayproxy imports
+// nothing of this package).
+type ServerState = relayproxy.ServerState
 
 // Defaults.
 const (

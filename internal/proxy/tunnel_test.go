@@ -3,6 +3,7 @@ package proxy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +87,24 @@ func TestResultGateRereadsOncePerSecond(t *testing.T) {
 	clock.advance(time.Second)
 	if got := gate(); got.Verdict != "unknown" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestTunnelFromResultTakesTheRecordsKind(t *testing.T) {
+	fresh := validate.FormatTime(tunnelNow.Add(-5 * time.Second))
+	// No kind configured: the record's own kind is the one judged.
+	own := verdict.ExitConfig{Provider: "mullvad"}
+	if got := TunnelFromResult(own, decode(t, healthyRecord(fresh)), tunnelNow); got.Verdict != "ok" {
+		t.Fatalf("an overlay record with no configured kind: %+v", got)
+	}
+	// A kind that isn't one is judged as an overlay, and refused by kind.
+	odd := strings.Replace(healthyRecord(fresh), `"kind": "overlay"`, `"kind": "bridge"`, 1)
+	if got := TunnelFromResult(own, decode(t, odd), tunnelNow); got.Verdict == "ok" {
+		t.Fatalf("an unknown kind judged ok: %+v", got)
+	}
+	// The provider is still held to the configured one.
+	pia := verdict.ExitConfig{Provider: "pia"}
+	if got := TunnelFromResult(pia, decode(t, healthyRecord(fresh)), tunnelNow); got.Verdict == "ok" {
+		t.Fatalf("a Mullvad record judged ok for PIA: %+v", got)
 	}
 }
