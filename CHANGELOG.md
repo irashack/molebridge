@@ -96,6 +96,16 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   files in Go and Node tests and in a headless browser; no release has a
   proxy role yet, so it has not shown a running proxy
   ([Switchyard](docs/switchyard.md#the-proxy-view)).
+- CI's System rig job runs the proxy's drill (`TestSystemRigProxy`,
+  [CONTRIBUTING](CONTRIBUTING.md#the-system-rig)): the release build's
+  `molebridge proxy` as an unprivileged uid with no capabilities in the
+  exit's namespace, against fake Mullvad relay proxies and DNS inside the
+  rig's fake Mullvad network. It checks choosing by country, city and server
+  over SOCKS5 and HTTP `CONNECT`, sessions, benching and recovery, refusal
+  while the exit switches or its tunnel is stopped, a wrong password, and an
+  nftables counter showing no packet from the proxy's uid outside the tunnel.
+  A real Mullvad relay proxy
+  is still untested.
 
 ## 0.13.0 — unreleased
 

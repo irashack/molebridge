@@ -152,6 +152,10 @@ type systemRig struct {
 	cert     tls.Certificate
 	// retired are the relays the fake relay API leaves out.
 	retired map[string]bool
+	// catalogExtra are relays the fake relay API lists besides the rig's
+	// two, which no WireGuard answers for (the proxy drill's other
+	// locations).
+	catalogExtra []rigCatalogRelay
 	// The overlay's keys, kept to key the overlay again after a restart.
 	wt0Key, clientKey wgtypes.Key
 
@@ -513,22 +517,38 @@ func (r *systemRig) relayBySNAT(a netip.Addr) *rigRelay {
 	return nil
 }
 
-// catalogJSON is the fake relay API's answer: every relay not retired.
+// rigCatalogRelay is a relay the fake relay API lists without a WireGuard
+// relay behind it.
+type rigCatalogRelay struct {
+	host, location, city, country, endpoint string
+	key                                     wgtypes.Key
+}
+
+// catalogJSON is the fake relay API's answer: every relay not retired, and
+// the extra ones.
 func (r *systemRig) catalogJSON() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var relays []any
+	entry := func(host, location, endpoint string, key wgtypes.Key) map[string]any {
+		return map[string]any{
+			"hostname": host, "location": location, "active": true, "owned": true, "stboot": true,
+			"provider": "Example Hosting", "ipv4_addr_in": endpoint, "public_key": key.PublicKey().String(),
+		}
+	}
+	locations := map[string]any{rigLocation: map[string]any{"city": rigCity, "country": rigCountry}}
 	for _, rl := range r.relays {
 		if r.retired[rl.host] {
 			continue
 		}
-		relays = append(relays, map[string]any{
-			"hostname": rl.host, "location": rigLocation, "active": true, "owned": true, "stboot": true,
-			"provider": "Example Hosting", "ipv4_addr_in": rl.endpoint, "public_key": rl.key.PublicKey().String(),
-		})
+		relays = append(relays, entry(rl.host, rigLocation, rl.endpoint, rl.key))
+	}
+	for _, x := range r.catalogExtra {
+		relays = append(relays, entry(x.host, x.location, x.endpoint, x.key))
+		locations[x.location] = map[string]any{"city": x.city, "country": x.country}
 	}
 	catalog, err := json.Marshal(map[string]any{
-		"locations": map[string]any{rigLocation: map[string]any{"city": rigCity, "country": rigCountry}},
+		"locations": locations,
 		"wireguard": map[string]any{"relays": relays},
 	})
 	if err != nil {
