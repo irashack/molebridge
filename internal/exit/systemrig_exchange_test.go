@@ -292,16 +292,17 @@ func TestSystemRigExchange(t *testing.T) {
 		r.startExchange()
 		r.waitPanelVerified(b, id, 60*time.Second)
 		currentAfter := time.Since(restarted)
-		for _, f := range []string{exchange.FileResult, exchange.FileRelays} {
-			if _, err := os.Stat(filepath.Join(r.panelApplier, f)); err != nil {
-				t.Errorf("the copy of %s after the restart: %v", f, err)
-			}
+		if _, err := os.Stat(filepath.Join(r.panelApplier, exchange.FileResult)); err != nil {
+			t.Errorf("the copy of %s after the restart: %v", exchange.FileResult, err)
 		}
-		mine, _ := os.ReadFile(filepath.Join(r.stateDir, "applier", exchange.FileRelays))
-		copied, _ := os.ReadFile(filepath.Join(r.panelApplier, exchange.FileRelays))
-		if len(mine) == 0 || exchange.Hash(mine) != exchange.Hash(copied) {
-			t.Errorf("the catalog's copy differs from the exit's after the restart")
-		}
+		// The exit sends result.json first and the catalog after it, in the
+		// same round, so the panel can show the exit verified before the
+		// catalog's copy is there.
+		r.waitFor(30*time.Second, "the catalog's copy of relays.json to match the exit's", func() bool {
+			mine, _ := os.ReadFile(filepath.Join(r.stateDir, "applier", exchange.FileRelays))
+			copied, _ := os.ReadFile(filepath.Join(r.panelApplier, exchange.FileRelays))
+			return len(mine) > 0 && exchange.Hash(mine) == exchange.Hash(copied)
+		})
 		if res := r.result(); res["server"] != b.host || res["request_id"] != id {
 			t.Errorf("the exit moved while the exchange restarted: %s", fmtStatus(res))
 		}
