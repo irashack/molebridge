@@ -87,6 +87,9 @@ type lab struct {
 	dir                     string
 	stateDir, runDir, nbDir string
 	fakeDir, confDir        string
+	// bin is the molebridge binary the exit runs; empty means the drill
+	// build from drillBinaries. The system rig sets the release build.
+	bin string
 }
 
 func (l *lab) path(parts ...string) string {
@@ -205,9 +208,13 @@ func (l *lab) start(extra ...string) *exitProc {
 
 func (l *lab) startEnv(env []string) *exitProc {
 	l.t.Helper()
-	drillBinaries(l.t)
+	bin := l.bin
+	if bin == "" {
+		drillBinaries(l.t)
+		bin = filepath.Join(binDir, "molebridge")
+	}
 	p := &exitProc{l: l, out: &syncBuf{}, done: make(chan int, 1), at: time.Now()}
-	p.cmd = exec.Command("ip", "netns", "exec", l.exit.Name, filepath.Join(binDir, "molebridge"), "exit")
+	p.cmd = exec.Command("ip", "netns", "exec", l.exit.Name, bin, "exit")
 	p.cmd.Env = env
 	p.cmd.Stdout, p.cmd.Stderr = p.out, p.out
 	if err := p.cmd.Start(); err != nil {

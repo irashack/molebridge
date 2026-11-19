@@ -137,6 +137,33 @@ extra-selector rules, event loss by flood, the PIA address transaction, a hung a
 worker with the namespace held by another container, and the stop budget
 ([architecture](docs/architecture.md#drift-and-repair)).
 
+### The system rig
+
+The system rig (`internal/exit/systemrig_test.go`, build tags `drill` and `systemrig`) runs the
+release build of `molebridge`, built with the flags of `tools/check-reproducible.sh`, as separate
+processes: the exit as root in its own namespace with the fake NetBird, and `molebridge panel` as
+uid 65534 with no capabilities and the applier directory mounted read-only. The provider side is
+fake but real at the network level: a Mullvad relay API and an HTTPS server for `am.i.mullvad.net`
+and the IP echo names, run by the test in an "internet" namespace, and two relays, each a kernel
+WireGuard interface with a key made at run time and an SNAT to its own egress address. The echo
+server says `mullvad_exit_ip` only for a relay's egress address, so a verified result needs the
+traffic to have gone through a relay. The exit finds the fakes through `/etc/netns/<namespace>/hosts`
+and trusts a certificate authority made at run time through `SSL_CERT_FILE`; no production code
+knows about the rig. `TestSystemRigClientSwitch` puts a client behind the overlay, switches the
+exit through the panel from relay A to B and back, and requires each switch to end verified with
+the client's traffic leaving by the new relay in both families and none of it by the host path.
+It logs the switch times. CI runs it in the "System rig" job; on a disposable Linux machine with
+kernel WireGuard, nftables, iproute2 and util-linux you can run it as root:
+
+```sh
+go test -count=1 -v -tags drill,systemrig -run TestSystemRig ./internal/exit/
+```
+
+It writes `/etc/netns/<namespace>/hosts` for the time it runs, so run it only where the namespace
+drills may run. It does not cover the real provider APIs, real relays, the real NetBird overlay
+(the overlay is a WireGuard pair the test keys, without NetBird's masquerade), container runtimes
+or the signed image; the [live acceptance](docs/releasing.md#3-run-the-live-acceptance) does.
+
 Tests never touch the network beyond loopback: they use `httptest`, fakes and fixtures, and never
 read anything under `~/.config`, `~/.ssh`, a keychain or a secret store. A test that adds a new side
 effect (a file, a process, a socket) mocks it first.

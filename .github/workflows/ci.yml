@@ -153,6 +153,32 @@ jobs:
         # runs them all. About 3 minutes on 4 cores.
         run: go test -race -short -count=1 ./...
 
+  system-rig:
+    name: System rig
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain the Dockerfile builds with (golang:1.27.4-alpine).
+          go-version: "1.27.4"
+          cache: false
+      - name: go vet with the rig's tags
+        run: go vet -tags drill,systemrig ./internal/exit/
+      - name: System rig drills
+        # The release build of molebridge, the exit and the panel, against
+        # fake Mullvad servers and two WireGuard relays in network namespaces
+        # of the runner, a disposable VM (CONTRIBUTING.md, "The system rig").
+        run: |
+          sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
+          sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
+            go test -count=1 -v -tags drill,systemrig -run TestSystemRig ./internal/exit/
+
   image:
     name: Image (amd64 and arm64)
     runs-on: ubuntu-24.04
