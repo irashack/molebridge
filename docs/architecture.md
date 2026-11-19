@@ -98,7 +98,11 @@ reads a 0.8.0 exit ([changelog](../CHANGELOG.md)). What moved:
 
 One image, `ghcr.io/irashack/molebridge`, and two containers from it. The
 first argument of the image's entrypoint picks the role, and the role is never
-guessed from the environment:
+guessed from the environment. The same Dockerfile also builds the binary
+without NetBird (`--target core`) for the sidecars, which never start NetBird;
+on that image the exit refuses a NetBird exit before reading any other setting.
+It is not published yet
+([#47](https://github.com/irashack/molebridge/issues/47)).
 
 | Container | Role | What it is |
 |---|---|---|

@@ -35,6 +35,17 @@ AllowedIPs = 0.0.0.0/0
 	}
 }
 
+// netbirdPath is a PATH holding a stand-in for the image's NetBird client:
+// the exit refuses an overlay when none is on PATH (the image without NetBird).
+func netbirdPath(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "netbird"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
 func roleEnv(t *testing.T) (map[string]string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -45,7 +56,7 @@ func roleEnv(t *testing.T) (map[string]string, string) {
 		}
 	}
 	writeConf(t, confDir)
-	return map[string]string{
+	return map[string]string{"PATH": netbirdPath(t),
 		"TUNNEL_BACKEND": "native", "PROVIDER": "mullvad", "EXIT_IF": "mullvad", "OVERLAY_CIDR": "192.0.2.0/24",
 		"NB_DISABLE_USERSPACE_ROUTING": "true", "NB_EXTRA_IFACE_BLACKLIST": "mullvad", "NB_STATE_DIR": filepath.Join(dir, "nb"),
 		"STATE_DIR": filepath.Join(dir, "state"), "TUNNEL_CONF_DIR": confDir, "MOLEBRIDGE_RUN_DIR": filepath.Join(dir, "run"),
@@ -61,7 +72,7 @@ func TestExitRoleRefusesUnknownArguments(t *testing.T) {
 
 func TestExitRoleRefusalPrintsOneFixedLine(t *testing.T) {
 	var stderr bytes.Buffer
-	code := exitMain(nil, []string{"TUNNEL_BACKEND=native", "PROVIDER=mullvad", "OVERLAY_CIDR=bogus", "STATE_DIR=/nonexistent"}, &stderr)
+	code := exitMain(nil, []string{"PATH=" + netbirdPath(t), "TUNNEL_BACKEND=native", "PROVIDER=mullvad", "OVERLAY_CIDR=bogus", "STATE_DIR=/nonexistent"}, &stderr)
 	if code != 1 || stderr.String() != "molebridge-exit: OVERLAY_CIDR must be an IPv4 CIDR\n" {
 		t.Fatalf("%d %q", code, stderr.String())
 	}
@@ -102,6 +113,32 @@ func TestHealthRole(t *testing.T) {
 	}
 	if code := healthMain([]string{"x"}, env, &stdout, &stderr); code != 2 {
 		t.Errorf("usage: %d", code)
+	}
+}
+
+// The image without NetBird refuses a NetBird exit with one line naming the
+// other image, before anything changes; check-config says the same.
+func TestOverlayRefusedWithoutNetBird(t *testing.T) {
+	env, _ := roleEnv(t)
+	env["PATH"] = t.TempDir()
+	environ := []string{}
+	for k, v := range env {
+		environ = append(environ, k+"="+v)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := exitMain(nil, environ, &stderr); code != 1 || stderr.String() != exit.CoreImageRefusal+"\n" {
+		t.Fatalf("exit: %d %q", code, stderr.String())
+	}
+	entries, _ := os.ReadDir(filepath.Join(env["STATE_DIR"], "applier"))
+	if len(entries) != 0 {
+		t.Errorf("the refused exit wrote %v", entries)
+	}
+	stderr.Reset()
+	if code := checkConfigMain(nil, env, &stdout, &stderr); code != 1 || stderr.String() != exit.CoreImageRefusal+"\n" || stdout.Len() != 0 {
+		t.Fatalf("check-config: %d %q %q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(exit.CoreImageRefusal, "ghcr.io/irashack/molebridge ") {
+		t.Errorf("the refusal names the image with NetBird: %q", exit.CoreImageRefusal)
 	}
 }
 

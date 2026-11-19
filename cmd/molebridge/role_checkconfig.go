@@ -22,7 +22,7 @@ func checkConfigMain(args []string, env map[string]string, stdout, stderr io.Wri
 		fmt.Fprintln(stderr, "usage: molebridge check-config (settings come from the environment)")
 		return 2
 	}
-	s, err := exit.LoadSettings(env, exit.LoadOptions{})
+	s, err := exit.LoadSettings(env, exit.LoadOptions{NeedNetBird: true})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

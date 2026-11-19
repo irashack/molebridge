@@ -23,7 +23,7 @@ func exitMain(args []string, environ []string, stderr io.Writer) int {
 	env := exit.EnvMap(environ)
 	switch {
 	case len(args) == 0:
-		s, err := exit.LoadSettings(env, exit.LoadOptions{WriteChecks: true})
+		s, err := exit.LoadSettings(env, exit.LoadOptions{WriteChecks: true, NeedNetBird: true})
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1

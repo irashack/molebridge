@@ -1,15 +1,19 @@
 #!/usr/bin/env sh
-# Static checks of the single Molebridge image (Dockerfile): what it holds, what
-# it must not hold, ownership and modes, license notices, the pinned NetBird
-# client, the binary's version, the OCI labels, and the unpacked size limit
-# (80 MB, D10). Nothing is started that needs privileges or a network. Runs for
-# the image's own architecture or, with QEMU, a foreign one. With VERSION set,
-# the version role must print exactly `molebridge $VERSION`.
-#   [VERSION=v0.10.0-rc.1] sh tools/check-image.sh <image> [linux/amd64|linux/arm64]
+# Static checks of a Molebridge image (Dockerfile): what it holds, what it must
+# not hold, ownership and modes, license notices, the pinned NetBird client, the
+# binary's version, the OCI labels, and the unpacked size limit (80 MB, D10).
+# Nothing is started that needs privileges or a network. Runs for the image's
+# own architecture or, with QEMU, a foreign one. With VERSION set, the version
+# role must print exactly `molebridge $VERSION`. VARIANT=core checks
+# molebridge-core (`--target core`) instead: no NetBird client or its notices,
+# and a NetBird exit refused with its one line.
+#   [VERSION=v0.10.0-rc.1] [VARIANT=core] sh tools/check-image.sh <image> [linux/amd64|linux/arm64]
 set -eu
 image=${1:?usage: sh tools/check-image.sh <image> [platform]}
 platform=${2:-}
 netbird_version=${NETBIRD_VERSION:-0.82.1}
+variant=${VARIANT:-netbird}
+case "$variant" in netbird|core) ;; *) echo "VARIANT must be netbird or core" >&2; exit 2 ;; esac
 # 80 MB unpacked, as `du -sk` counts it (1 MB = 1000 * 1000 bytes).
 limit_kib=78125
 fail() { echo "FAIL $1" >&2; exit 1; }
@@ -49,9 +53,22 @@ else
 fi
 pass "version role: $reported"
 
-run "$@" --entrypoint /usr/local/bin/netbird "$image" version | grep -qx "$netbird_version" ||
-    fail "netbird is not version $netbird_version"
-pass "NetBird client $netbird_version"
+if [ "$variant" = core ]; then
+    if run "$@" --entrypoint sh "$image" -c 'command -v netbird || test -e /usr/share/licenses/netbird' >/dev/null 2>&1; then
+        fail "molebridge-core holds the NetBird client or its notices"
+    fi
+    pass "no NetBird client"
+    # The line internal/exit/settings.go's CoreImageRefusal prints.
+    want='molebridge-exit: EXIT_KIND=overlay (the default) runs NetBird, and this image has no NetBird client: use ghcr.io/irashack/molebridge for a NetBird exit (molebridge-core is for the sidecars)'
+    rc=0
+    got=$(run "$@" "$image" exit 2>&1) || rc=$?
+    [ "$rc" -eq 1 ] && [ "$got" = "$want" ] || fail "a NetBird exit on molebridge-core exited $rc with: $got"
+    pass "a NetBird exit is refused with one line naming the image with NetBird"
+else
+    run "$@" --entrypoint /usr/local/bin/netbird "$image" version | grep -qx "$netbird_version" ||
+        fail "netbird is not version $netbird_version"
+    pass "NetBird client $netbird_version"
+fi
 
 # Nothing the old images carried: Python, bash, wireguard-tools, a second
 # init. busybox stays for `docker exec` diagnostics.
@@ -72,9 +89,11 @@ special=$(run "$@" --entrypoint sh "$image" -c 'find / -xdev \( -perm -4000 -o -
 [ -z "$special" ] || fail "setuid or setgid files: $special"
 pass "no setuid or setgid files"
 
-for f in /usr/share/licenses/molebridge/LICENSE /usr/share/licenses/molebridge/THIRD_PARTY.md \
-    /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/JetBrainsMono-OFL.txt \
-    /usr/share/licenses/netbird/LICENSE /usr/share/licenses/netbird/LICENSES/BSD-3-Clause.txt; do
+notices="/usr/share/licenses/molebridge/LICENSE /usr/share/licenses/molebridge/THIRD_PARTY.md
+    /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/JetBrainsMono-OFL.txt"
+[ "$variant" = core ] ||
+    notices="$notices /usr/share/licenses/netbird/LICENSE /usr/share/licenses/netbird/LICENSES/BSD-3-Clause.txt"
+for f in $notices; do
     run "$@" --entrypoint sh "$image" -c "test -s $f" || fail "license file missing or empty: $f"
 done
 pass "license notices present"
@@ -83,8 +102,10 @@ pass "license notices present"
 bad=$(run "$@" --entrypoint sh "$image" -c \
     'find /usr/local/bin /usr/share/licenses \( -perm -002 -o -perm -020 -o ! -user 0 -o ! -group 0 \) -print')
 [ -z "$bad" ] || fail "writable or non-root-owned: $bad"
-mode=$(run "$@" --entrypoint sh "$image" -c "stat -c '%a' /usr/local/bin/molebridge /usr/local/bin/netbird" | tr '\n' ' ')
-[ "$mode" = "755 755 " ] || fail "binary modes are '$mode'"
+binaries=/usr/local/bin/molebridge want='755 '
+[ "$variant" = core ] || { binaries="$binaries /usr/local/bin/netbird"; want='755 755 '; }
+mode=$(run "$@" --entrypoint sh "$image" -c "stat -c '%a' $binaries" | tr '\n' ' ')
+[ "$mode" = "$want" ] || fail "binary modes are '$mode'"
 pass "ownership and modes"
 
 size=$(run "$@" --entrypoint sh "$image" -c 'du -sxk / 2>/dev/null | cut -f1')
