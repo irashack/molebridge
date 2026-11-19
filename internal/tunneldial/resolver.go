@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 )
 
@@ -124,8 +125,14 @@ func (r *Resolver) exchange(ctx context.Context, network string, q []byte, id ui
 		_ = conn.SetDeadline(deadline)
 	}
 	result, err := r.roundTrip(conn, network, q, id, name, qtype)
-	if err != nil && ctx.Err() != nil {
-		return nil, ctx.Err()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// The connection's deadline is the context's, and can pass first.
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return nil, context.DeadlineExceeded
+		}
 	}
 	return result, err
 }

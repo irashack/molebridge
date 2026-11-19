@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -130,7 +131,11 @@ func TestParseLocationAndMatching(t *testing.T) {
 			t.Errorf("%q: %v", text, matched)
 		}
 	}
-	for _, text := range []string{"", "-se", "se got", "se/got", "se\x00", "Kse", "sé", string(make([]byte, 65))} {
+	// A PIA region id may hold '_'.
+	if loc, err := parseLocation("DE_Berlin"); err != nil || !loc.matches(server{name: "de_berlin", city: "de-de_berlin", country: "de"}) {
+		t.Fatalf("%+v %v", loc, err)
+	}
+	for _, text := range []string{"", "-se", "se.got", "se123.nordvpn.com", "se got", "se/got", "se\x00", "Kse", "sé", string(make([]byte, 65))} {
 		if _, err := parseLocation(text); !errors.Is(err, ErrLocation) {
 			t.Errorf("%q accepted", text)
 		}
@@ -294,6 +299,14 @@ func TestReplyCodes(t *testing.T) {
 		var reply *ReplyError
 		if !errors.As(err, &reply) || reply.Code != code {
 			t.Fatalf("code %d: %v", code, err)
+		}
+		// The proxy maps the far end's answer through the errno it wraps.
+		errnos := map[byte]error{ReplyConnectionRefused: syscall.ECONNREFUSED, ReplyHostUnreachable: syscall.EHOSTUNREACH,
+			ReplyNetworkUnreachable: syscall.ENETUNREACH}
+		for c, errno := range errnos {
+			if errors.Is(err, errno) != (c == code) {
+				t.Fatalf("code %d: errors.Is %v = %v", code, errno, !(c == code))
+			}
 		}
 		st := g.state("se-got-wg-001")
 		if code == ReplyHostUnreachable || code == ReplyConnectionRefused {
