@@ -119,6 +119,18 @@ Role `molebridge proxy`, package `internal/proxy`, standard library only.
   verdict. While the exit's verdict is not `ok`, new connections are refused
   (SOCKS reply `0x01`, HTTP 503) and open ones are left alone: a stopped
   tunnel fails them by itself.
+- **Built so far.** `internal/proxy` has the listener, both handshakes, the
+  checks above, sessions and `proxy.json`, entered through
+  `proxy.Serve(ctx, proxy.Config)`; the role and its Compose service come
+  next. Details it settles: a location is 1 to 63 of `[a-z0-9_-]` (a PIA
+  region has underscores), so it never holds a dot; the password file must
+  not be readable by its group or others, and one trailing newline is
+  dropped; a failed dial is SOCKS reply `0x05`, `0x04` or `0x03` when the
+  Upstream's error wraps `ECONNREFUSED`, `EHOSTUNREACH` (or a timeout) or
+  `ENETUNREACH`, else `0x01`, and HTTP 504 for a timeout, else 502; other
+  methods get 405, a malformed or oversized request (8 KiB) 400. The exit's
+  verdict comes from `result.json` without the panel's request, which the
+  proxy doesn't mount. Tested by unit tests against a fake Upstream only.
 
 ## The proxy's status
 

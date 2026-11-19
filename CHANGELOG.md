@@ -12,6 +12,16 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   No behavior change: settings, the status record, log lines, timing and the
   stop sequence are as before
   ([architecture](docs/architecture.md#netbird-as-a-child)).
+- New package `internal/proxy`, the core of the proxy way in
+  ([design](docs/design/menu.md)): one listener for SOCKS5
+  (`CONNECT` with a username and password) and HTTP `CONNECT`, the listen
+  address check (loopback or NetBird's interface only), the password file,
+  sessions that keep their server, the refusal of new connections while the
+  exit's verdict isn't `ok`, and the status record `proxy.json` with its
+  verdict in `internal/verdict`. No role uses it yet: there is no
+  `molebridge proxy` command and no Compose service, so nothing changes for
+  an installation. Tested by unit tests only, against a fake upstream on
+  loopback; it has not carried traffic through a tunnel.
 
 ## 0.13.0 — unreleased
 
