@@ -4,6 +4,15 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- Internal: the supervisor reaches NetBird through one boundary, the exit's
+  way in (`internal/exit/wayin.go`), with NetBird's supervision in
+  `internal/exit/netbird.go` and a way in that does nothing for the sidecars.
+  No behavior change: settings, the status record, log lines, timing and the
+  stop sequence are as before
+  ([architecture](docs/architecture.md#netbird-as-a-child)).
+
 ## 0.13.0 — unreleased
 
 **Experimental.** Upgrade from 0.12.0 by moving to the new image;
