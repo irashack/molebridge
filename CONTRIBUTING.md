@@ -201,7 +201,8 @@ is up; a switch of the exit held applying (new connections refused with SOCKS re
 (relay A dropping WireGuard): open and new connections fail, the proxy refuses once the exit's
 verdict leaves `ok`, and serves again after the tunnel is back. Throughout, an nftables counter in
 the exit's namespace on the proxy's uid (`meta skuid`) must see no packet by any interface but the
-tunnel (its answers to clients on loopback aside). The live drill on a real Mullvad exit is not on
+tunnel (its answers to clients on loopback aside; kernel WireGuard's own packets to a relay's endpoint
+carry the socket of the packet inside, so they are counted apart). The live drill on a real Mullvad exit is not on
 the rig. Every drill runs at once; the stopped exit, which waits
 out the 150-second evidence age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
