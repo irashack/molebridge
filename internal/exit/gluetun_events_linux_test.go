@@ -8,7 +8,7 @@ import (
 )
 
 func monitorsAt(now time.Duration) *gluetunMonitors {
-	return &gluetunMonitors{w: &worker{clock: func() time.Duration { return now }}, grace: 5 * time.Second}
+	return &gluetunMonitors{h: workerWayInHost{clock: func() time.Duration { return now }}, grace: 5 * time.Second}
 }
 
 // The reviewer's interleaving: launch 2 begins before launch 1's stopped event

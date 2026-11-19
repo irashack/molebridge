@@ -335,9 +335,18 @@ In the code, the supervisor reaches NetBird through one boundary, the way in
 (contract held, lease held, not stopping) and the stop sequence's timeline,
 and calls the way in only at those points; NetBird's processes, its log lines
 and what the worker is told about it are in `internal/exit/netbird.go`. A
-sidecar's way in does nothing. The worker's side of NetBird (the readiness
-loop, the profile checks, the `netbird` check of the record) is not behind the
-boundary yet.
+sidecar's way in does nothing. The worker has the matching boundary
+(`workerWayIn` in `internal/exit/wayin_worker_linux.go`): its core keeps the
+start order, the loops and the lease, and asks the way in when the control
+cycle may run, why the exit is not operational and what an unhealthy overlay is
+missing. NetBird's side of it, in `internal/exit/netbird_worker_linux.go`, is
+the readiness loop, the profile checks before each start and after
+`netbird up`, the loop that follows the supervisor's reports about each launch,
+the gluetun backend's NetBird monitors (`gluetun_linux.go`) and the failed
+record published while NetBird is held back (`NetBirdHeldRecord`, in
+`netbird.go`). Still outside it: the settings' NetBird checks at start, the
+"no NetBird identity" notice, the applier's `netbird` check in a measured
+record and the supervisor's failure record.
 
 ### The lease
 

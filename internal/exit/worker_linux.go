@@ -78,20 +78,13 @@ type worker struct {
 	// firewallOK is a native sidecar's firewall as last read back: installed
 	// and exactly as described.
 	firewallOK atomic.Bool
-	// fatalMsg is set when the generation must end with a failure (a gluetun
-	// monitor condemned NetBird).
+	// fatalMsg is set when the generation must end with a failure (the way
+	// in condemned its client).
 	fatalOnce sync.Once
 	fatalMsg  atomic.Pointer[string]
-	nbRunning atomic.Bool
-	blocked   atomic.Bool
-	// refusal is the profile check's refusal that set blocked.
-	refusal atomic.Pointer[string]
-	// held is why the readiness loop holds NetBird back while the contract
-	// holds (a missing precondition), nil once it starts NetBird.
-	held      atomic.Pointer[string]
-	pipeOn    atomic.Bool
-	launch    atomic.Int64
-	netbirdCh chan Msg
+
+	// way is the exit's way in (workerWayIn).
+	way workerWayIn
 
 	mut *mutator.Mutator
 	// watcher is the kernel watcher, nil without a routing contract.
@@ -99,7 +92,6 @@ type worker struct {
 	sys     *KernelSystem
 	pipe    Pipeline
 
-	monitors *gluetunMonitors
 	// drillStop is set by the drill-only hook (worker_hook_drill_linux.go).
 	drillStop func()
 
@@ -133,11 +125,11 @@ func RunWorker(environ []string, stderr io.Writer) int {
 	// until the lease lapses. While the queue is full a line is dropped and
 	// counted, and the count is logged once the sink moves again.
 	log := newBoundedLog(stderr, 512)
-	w := &worker{s: s, gen: gen, clock: bootclock.System(), out: log, warned: map[string]time.Time{},
-		netbirdCh: make(chan Msg, 64)}
+	w := &worker{s: s, gen: gen, clock: bootclock.System(), out: log, warned: map[string]time.Time{}}
 	w.send = &workerSender{w: os.NewFile(3, "to-supervisor"), gen: gen}
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 	defer w.cancel()
+	w.way = w.newWayIn()
 	go w.readSupervisor(os.NewFile(4, "from-supervisor"))
 	code := w.run()
 	// The last lines, a failure's reason among them, get a moment to land; a
@@ -210,10 +202,7 @@ func (w *worker) readSupervisor(in io.Reader) {
 				w.ackExpiry.Store(m.ExpiryBootNs)
 			}
 		case TypeNetBird:
-			select {
-			case w.netbirdCh <- m:
-			default:
-			}
+			w.way.Report(m)
 		}
 	}
 }
@@ -310,13 +299,7 @@ func (w *worker) run() int {
 	if s.OtherConfs > 0 {
 		w.logf("warning: %d other .conf file(s) in %s are ignored; only %s.conf is used", s.OtherConfs, s.ConfDir, s.Routing.ExitIf)
 	}
-	if s.Overlay() && !s.Native() && returnPathPrecondition() != nil {
-		// gluetun's own rule 101 takes the exit's ICMP errors into the
-		// tunnel, sourced from its address, whatever the sysctl says, and
-		// rule 104 refuses them without it: only path MTU discovery suffers.
-		// A native overlay holds NetBird instead (readinessLoop).
-		w.logf("warning: net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it in compose.yaml or IPv4 path MTU discovery through the exit will fail")
-	}
+	w.way.Announce()
 
 	if s.Routing.IsGluetun() {
 		if err := w.checkControlServer(); err != nil {
@@ -390,11 +373,9 @@ func (w *worker) run() int {
 			}
 		}()
 	}
-	if s.Routing.IsGluetun() && s.Overlay() {
-		if err := w.startGluetunMonitors(tun); err != nil {
-			w.logf("%v", err)
-			return 1
-		}
+	if err := w.way.Start(tun); err != nil {
+		w.logf("%v", err)
+		return 1
 	}
 
 	w.sys = &KernelSystem{S: s, Spec: spec, Obs: obs, Mut: w.mut, Tun: tun, Generation: w.gen}
@@ -468,11 +449,8 @@ func (w *worker) run() int {
 	if s.Routing.IsNativeSidecar() {
 		spawn(w.firewallLoop)
 	}
-	if s.Overlay() {
-		spawn(w.readinessLoop)
-		spawn(w.netbirdLoop)
-	} else {
-		w.pipeOn.Store(true)
+	for _, f := range w.way.Loops() {
+		spawn(f)
 	}
 	spawn(w.pipelineLoop)
 	spawn(w.heartbeatLoop)
@@ -670,165 +648,13 @@ func (w *worker) tunnelLoop(tun *tunnel.Manager, obs *rtnl.Conn) {
 	}
 }
 
-// readinessLoop decides when the supervisor may run NetBird.
-func (w *worker) readinessLoop() {
-	r := &readiness{grace: w.s.Grace}
-	t := time.NewTicker(500 * time.Millisecond)
-	defer t.Stop()
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-t.C:
-		}
-		res := w.mut.LastPass()
-		holds := res.ContractHolds
-		if w.s.Native() {
-			holds = res.Verified
-		}
-		switch r.step(time.Now(), holds, w.tunnelUp.Load(), w.blocked.Load()) {
-		case actReady:
-			if w.s.Native() {
-				if err := returnPathPrecondition(); err != nil {
-					r.markUnready()
-					w.hold(err)
-					w.warnEvery("return-path", 30*time.Second, "NetBird is not started: %v", err)
-					continue
-				}
-			}
-			if err := w.recheckNetBird(); err != nil {
-				r.markUnready()
-				w.hold(err)
-				w.warnEvery("recheck", 30*time.Second, "NetBird is not started: %v", err)
-				continue
-			}
-			w.held.Store(nil)
-			w.logf("ready")
-			w.renewOnce()
-			_ = w.send.send(Msg{Type: TypeReady})
-		case actUnready:
-			reason := w.unreadyReason(res)
-			w.logf("not ready: %s", reason)
-			_ = w.send.send(Msg{Type: TypeUnready, Reason: reason})
-		}
-	}
-}
-
-func (w *worker) unreadyReason(res mutator.PassResult) string {
-	if w.blocked.Load() {
-		return "the NetBird profile does not exclude the tunnel interface; nothing is admitted"
-	}
-	var parts []string
-	for _, f := range []rtnl.Family{rtnl.V4, rtnl.V6} {
-		for _, p := range res.Problems[f] {
-			parts = append(parts, fmt.Sprintf("%s %s", f, p))
-		}
-	}
-	msg := fmt.Sprintf("the routing contract has not held for %d seconds", int(w.s.Grace/time.Second))
-	if len(parts) > 0 {
-		msg += ": " + strings.Join(parts, ", ")
-	}
-	return msg
-}
-
-// returnPathSysctl is the file returnPathPrecondition reads (tests replace it).
-var returnPathSysctl = contract.ReturnPathSysctl
-
-// returnPathPrecondition: the kernel sources ICMP errors from the inbound
-// interface's address. A native overlay exit needs it before NetBird starts:
-// without it the errors the exit generates for traffic arriving from the
-// tunnel (fragmentation needed toward the overlay) are sourced from the
-// host's address, so rule 94 cannot match them and they leave by the host
-// interface carrying the inner headers.
-func returnPathPrecondition() error {
-	v, err := os.ReadFile(returnPathSysctl)
-	if err != nil || !contract.ReturnPathEnabled(string(v)) {
-		return errors.New("net.ipv4.icmp_errors_use_inbound_ifaddr is not 1; set it on the exit service (compose.yaml sets it), or the exit's ICMP errors for tunnel traffic would leave by the host interface")
-	}
-	return nil
-}
-
-// recheckNetBird repeats the checks that run before the daemon starts
-// (D25): NetBird's settings, the stored profile the daemon will load and its
-// interface blacklist.
-func (w *worker) recheckNetBird() error {
-	s := w.s
-	backend := nbprofile.BackendWireGuard
-	if s.Routing.IsGluetun() {
-		backend = nbprofile.BackendGluetun
-	}
-	if _, err := nbprofile.CheckAll(withDefaults(s.Env, map[string]string{"EXIT_IF": s.Routing.ExitIf}), backend, s.NBPaths); err != nil {
-		return err
-	}
-	_, err := nbprofile.CheckBlacklist(s.NBPaths, s.Routing.ExitIf)
-	return err
-}
-
-// netbirdLoop handles the supervisor's reports about NetBird. Every report
-// names its launch, and a report of a launch older than the current one is
-// ignored before it touches any state.
-func (w *worker) netbirdLoop() {
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case m := <-w.netbirdCh:
-			if m.State == NBLaunching {
-				if int64(m.Launch) < w.launch.Load() {
-					continue
-				}
-				w.launch.Store(int64(m.Launch))
-			} else if int64(m.Launch) != w.launch.Load() {
-				continue
-			}
-			if w.monitors != nil {
-				w.monitors.event(m)
-			}
-			switch m.State {
-			case NBStarted:
-				// `netbird up` in daemon mode can return before any
-				// configuration change applies: read the profile again and
-				// admit nothing unless the tunnel is excluded.
-				if err := nbprofile.CheckBlacklistAfterUp(w.s.NBPaths, w.s.Routing.OverlayIf, w.s.Routing.ExitIf); err != nil {
-					w.logf("%v", err)
-					refusal := err.Error()
-					w.refusal.Store(&refusal)
-					w.blocked.Store(true)
-					w.nbRunning.Store(false)
-					_ = w.send.send(Msg{Type: TypeUnready, Reason: truncate(err.Error(), 900)})
-					continue
-				}
-				w.nbRunning.Store(true)
-				w.pipeOn.Store(true)
-			case NBStopped, NBFailed:
-				w.nbRunning.Store(false)
-			}
-		}
-	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n]
-}
-
-// pipelineLoop runs the control cycle, once NetBird is up and its profile
-// verified (overlay) or at once (sidecar). Once the profile check after
-// `netbird up` has refused, the cycle never runs again in this generation and
-// the loop publishes the refusal instead; while NetBird is held back before
-// its first start (hold), it publishes why. Either is published on every
-// pass, so the record stays fresh for its readers, and a hold stops being
-// published once NetBird starts.
+// pipelineLoop runs the control cycle whenever the way in lets it (Cycle): at
+// once for a sidecar, once NetBird is up and its profile verified for an
+// overlay. A pass the way in holds back publishes the way in's record of why,
+// if it has one, so the record stays fresh for its readers.
 func (w *worker) pipelineLoop() {
 	for {
-		switch {
-		case w.blocked.Load():
-			w.publishHeld(w.refusal.Load())
-		case !w.pipeOn.Load() && w.held.Load() != nil:
-			w.publishHeld(w.held.Load())
-		case w.pipeOn.Load():
+		if w.way.Cycle() {
 			if err := w.pipe.Tick(w.ctx); err != nil && w.ctx.Err() == nil {
 				w.warnEvery("tick", 30*time.Second, "applier: control cycle failed: %v", err)
 			}
@@ -836,24 +662,6 @@ func (w *worker) pipelineLoop() {
 		if !sleepCtx(w.ctx, TickInterval) {
 			return
 		}
-	}
-}
-
-// hold records why the readiness loop does not start NetBird, as the log
-// line says it: "NetBird is not started: <reason>".
-func (w *worker) hold(err error) {
-	why := "NetBird is not started: " + err.Error()
-	w.held.Store(&why)
-}
-
-// publishHeld hands the supervisor the failed record that names why NetBird
-// does not run.
-func (w *worker) publishHeld(why *string) {
-	if why == nil {
-		return
-	}
-	if err := w.send.send(Msg{Type: TypeStatus, Record: NetBirdHeldRecord(w.s, time.Now(), *why)}); err != nil {
-		w.warnEvery("held", time.Minute, "cannot publish why NetBird does not run: %v", err)
 	}
 }
 
@@ -878,24 +686,8 @@ func (w *worker) heartbeatLoop() {
 // notOperational is why the heartbeat is not written, "" when the exit is
 // operational.
 func (w *worker) notOperational() string {
-	switch {
-	case w.blocked.Load():
-		return "the NetBird profile check refused"
-	case !w.pipeOn.Load():
-		return "NetBird has not been started yet"
-	}
-	if w.s.Overlay() {
-		res := w.mut.LastPass()
-		holds := res.ContractHolds
-		if w.s.Native() {
-			holds = res.Verified && w.tunnelUp.Load()
-		}
-		switch {
-		case !holds:
-			return "the routing contract is not verified"
-		case !w.nbRunning.Load():
-			return "NetBird is not running"
-		}
+	if why := w.way.NotOperational(); why != "" {
+		return why
 	}
 	if w.s.Routing.IsNativeSidecar() {
 		res := w.mut.LastPass()
@@ -969,12 +761,7 @@ func (w *worker) diagnose() string {
 	if v, err := w.sys.ReadSysctl(ctx, contract.ReturnPathSysctl); err != nil || !contract.ReturnPathEnabled(v) {
 		parts = append(parts, "icmp_errors_use_inbound_ifaddr is not 1")
 	}
-	if ok, err := w.sys.OverlayKernelWireGuard(ctx); err != nil || !ok {
-		parts = append(parts, "the overlay interface is not kernel WireGuard")
-	}
-	if ok, err := w.sys.NetbirdFirewallPresent(ctx); err != nil || !ok {
-		parts = append(parts, "NetBird's kernel firewall is not present")
-	}
+	parts = append(parts, w.way.Diagnose(ctx, w.sys)...)
 	if len(parts) == 0 {
 		parts = append(parts, "the record may be stale")
 	}
