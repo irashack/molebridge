@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"fmt"
@@ -58,11 +57,16 @@ func ReadPassword(path string) ([]byte, error) {
 	return []byte(s), nil
 }
 
-// passwordMatches compares in constant time; hashing first keeps the length
-// from showing either.
+// passwordMatches compares in constant time. Both sides are padded to the
+// longest password allowed, so neither the length nor the first difference
+// shows in the time taken.
 func passwordMatches(want, got []byte) bool {
-	a, b := sha256.Sum256(want), sha256.Sum256(got)
-	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
+	var a, b [maxPasswordBytes]byte
+	copy(a[:], want)
+	copy(b[:], got)
+	same := subtle.ConstantTimeCompare(a[:], b[:])
+	same &= subtle.ConstantTimeEq(int32(len(want)), int32(len(got)))
+	return same == 1 && len(got) <= maxPasswordBytes
 }
 
 // Bounds of the username's parts.

@@ -791,3 +791,24 @@ func TestParseUsername(t *testing.T) {
 		}
 	}
 }
+
+func TestPasswordMatches(t *testing.T) {
+	want := []byte("secret")
+	long := []byte(strings.Repeat("a", maxPasswordBytes))
+	for _, c := range []struct {
+		want, got []byte
+		ok        bool
+	}{
+		{want, []byte("secret"), true},
+		{want, []byte("secre"), false},
+		{want, []byte("secret\x00"), false},
+		{want, []byte("Secret"), false},
+		{want, nil, false},
+		{long, long, true},
+		{long, append(append([]byte{}, long...), 'a'), false},
+	} {
+		if got := passwordMatches(c.want, c.got); got != c.ok {
+			t.Errorf("passwordMatches(%q, %q) = %v", c.want, c.got, got)
+		}
+	}
+}
