@@ -4,13 +4,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/exit"
+	"github.com/irashack/molebridge/internal/verdict"
 )
 
 func init() {
-	register("health", "exit 0 when the exit's heartbeat is fresh (the container health check); --guarded: a native sidecar's guards are in place",
+	register("health", "exit 0 when the exit's heartbeat is fresh (the container health check); --guarded: a native sidecar's guards are in place; --proxy: the proxy is serving",
 		func(args []string) int { return healthMain(args, exit.EnvMap(os.Environ()), os.Stdout, os.Stderr) })
 }
 
@@ -25,13 +28,19 @@ func init() {
 // worker renews that heartbeat every 2 seconds while both read back as
 // installed. It is the startup gate for applications that share the
 // namespace: before it passes, nothing keeps their traffic off the host path.
+//
+// With --proxy it is the proxy container's check: proxy.json is fresh (at
+// most verdict.ProxyMaxAge old) and says the proxy is serving. A proxy that
+// refuses new connections because the exit's verdict isn't ok is unhealthy.
 func healthMain(args []string, env map[string]string, stdout, stderr io.Writer) int {
 	check := func() (bool, string) { return exit.Healthy(exit.HeartbeatPathOf(env), bootclock.System()) }
 	switch {
 	case len(args) == 1 && args[0] == "--guarded":
 		check = func() (bool, string) { return exit.Guarded(exit.GuardedPathOf(env), bootclock.System()) }
+	case len(args) == 1 && args[0] == "--proxy":
+		check = func() (bool, string) { return proxyHealthy(env, time.Now()) }
 	case len(args) != 0:
-		fmt.Fprintln(stderr, "usage: molebridge health [--guarded]")
+		fmt.Fprintln(stderr, "usage: molebridge health [--guarded | --proxy]")
 		return 2
 	}
 	ok, why := check()
@@ -42,4 +51,17 @@ func healthMain(args []string, env map[string]string, stdout, stderr io.Writer) 
 		return 1
 	}
 	return 0
+}
+
+// proxyHealthy judges state/proxy/proxy.json for PROVIDER (any when unset).
+func proxyHealthy(env map[string]string, now time.Time) (bool, string) {
+	stateDir := env["STATE_DIR"]
+	if stateDir == "" {
+		stateDir = exit.DefaultStateDir
+	}
+	v := verdict.AssessProxy(verdict.ReadProxy(proxyStatusPath(stateDir)), env["PROVIDER"], now)
+	if v.State != "ok" {
+		return false, "proxy " + v.State + " (" + strings.Join(v.Reasons, ", ") + ")"
+	}
+	return true, ""
 }

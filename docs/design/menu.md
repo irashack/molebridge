@@ -121,8 +121,14 @@ Role `molebridge proxy`, package `internal/proxy`, standard library only.
   tunnel fails them by itself.
 - **Built so far.** `internal/proxy` has the listener, both handshakes, the
   checks above, sessions and `proxy.json`, entered through
-  `proxy.Serve(ctx, proxy.Config)`; the role and its Compose service come
-  next. Details it settles: a location is 1 to 63 of `[a-z0-9_-]` (a PIA
+  `proxy.Serve(ctx, proxy.Config)`. The role (`cmd/molebridge/role_proxy.go`)
+  and its Compose service (`compose.proxy.yaml`) are built and documented in
+  [the proxy](../proxy.md); its settings are `STATE_DIR`, `PROVIDER`,
+  `TUNNEL_INTERFACE`, `PROXY_LISTEN`, `PROXY_MAX_CONNS`,
+  `PROXY_PASSWORD_FILE`, `PROXY_DNS` and `OVERLAY_IF` (NetBird's interface,
+  under the exit's own name for it). The role judges `result.json` by the
+  kind the record states (overlay or sidecar), the provider held to
+  `PROVIDER`. Details it settles: a location is 1 to 63 of `[a-z0-9_-]` (a PIA
   region has underscores), so it never holds a dot; the password file must
   not be readable by others (its group may read it), and one trailing newline is
   dropped; a failed dial is SOCKS reply `0x05`, `0x04` or `0x03` when the

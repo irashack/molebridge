@@ -289,7 +289,8 @@ func meaningful(lines []string) []string {
 // TestBlocksMatchShippedFiles fails when a service init writes and the same
 // service in the shipped Compose file differ in anything Compose reads:
 // image and pin, command, capabilities, settings, mounts, limits. Only the
-// three deliberate differences compose.tmpl names are allowed.
+// three deliberate differences compose.tmpl names are allowed. The proxy's
+// block is held to compose.proxy.yaml.
 func TestBlocksMatchShippedFiles(t *testing.T) {
 	overlay := shippedBlocks(t, "compose.yaml")
 	for form, file := range SourceFile {
@@ -343,6 +344,22 @@ func TestBlocksMatchShippedFiles(t *testing.T) {
 				t.Errorf("compose.tmpl has %s, which %s doesn't", tmpl.Name(), file)
 			}
 		}
+	}
+	// The proxy: compose.proxy.yaml, the overlay file for compose.yaml and
+	// compose.native-sidecar.yaml, is the block as the overlay form renders
+	// it, and has no other service.
+	proxyFile := shippedBlocks(t, "compose.proxy.yaml")
+	if len(proxyFile) != 1 || proxyFile["proxy"] == nil {
+		t.Fatalf("compose.proxy.yaml must hold exactly the proxy service")
+	}
+	block, err := Block("proxy", Plan{Form: FormOverlay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := meaningful(proxyFile["proxy"])
+	got := meaningful(strings.Split(strings.TrimRight(block, "\n"), "\n"))
+	if !slices.Equal(got, want) {
+		t.Errorf("proxy drifted from compose.proxy.yaml:\n%s", lineDiff(want, got))
 	}
 }
 

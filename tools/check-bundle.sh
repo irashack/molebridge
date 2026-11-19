@@ -2,7 +2,8 @@
 # Installs from an extracted bundle with no repository checkout: unpacks
 # molebridge-<tag>.tar.gz into a fresh directory, and from there checks that
 # the four Compose forms (native, gluetun, sidecar, native sidecar) validate
-# with their example environment files, that each runs the services it should
+# with their example environment files (and the proxy overlay with the native
+# and native sidecar forms, adding only the proxy on molebridge-core), that each runs the services it should
 # (the exit and Switchyard, plus gluetun for the gluetun forms, and the example
 # application and port-sync, in their profiles, for the native sidecar), that
 # every Molebridge image they reference, port-sync's included, is the exact
@@ -37,7 +38,7 @@ tar -xzf "$bundle"
 top=$(ls)
 [ "$(echo "$top" | wc -l | tr -d ' ')" = 1 ] || fail "bundle has more than one top-level entry"
 cd "$work/$top"
-for f in compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml .env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example routing/gluetun-preflight LICENSE THIRD_PARTY.md; do
+for f in compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml compose.proxy.yaml .env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example routing/gluetun-preflight LICENSE THIRD_PARTY.md; do
     [ -f "$f" ] || fail "bundle lacks $f"
 done
 [ ! -d .git ] || fail "bundle carries a .git directory"
@@ -91,6 +92,21 @@ kind_of() { resolved "$1" "$2" | jq -r '.services.gluetun.environment.MOLEBRIDGE
 [ "$(kind_of compose.gluetun.yaml .env.gluetun.example)" = overlay ] || fail "compose.gluetun.yaml does not set MOLEBRIDGE_KIND=overlay"
 [ "$(kind_of compose.sidecar.yaml .env.sidecar.example)" = sidecar ] || fail "compose.sidecar.yaml does not set MOLEBRIDGE_KIND=sidecar"
 pass "each form runs the right services, and tells its preflight its kind"
+
+# The proxy overlay (experimental) on the NetBird exit and on the native
+# sidecar: it validates with each, adds only the proxy, runs it on the pinned
+# molebridge-core and builds nothing.
+for form in "compose.yaml:.env" "compose.native-sidecar.yaml:.env.native-sidecar.example"; do
+    file=${form%%:*}; envfile=${form#*:}
+    model=$(docker compose --env-file "$envfile" -f "$file" -f compose.proxy.yaml config --format json) ||
+        fail "compose.proxy.yaml does not validate with $file"
+    with=$(echo "$model" | jq -r '.services | keys | join(" ")')
+    alone=$(docker compose --env-file "$envfile" -f "$file" config --format json | jq -r '.services + {"proxy": {}} | keys | join(" ")')
+    [ "$with" = "$alone" ] || fail "compose.proxy.yaml with $file runs $with, not $alone"
+    [ "$(echo "$model" | jq -r '.services.proxy.image')" = "$core_ref" ] || fail "compose.proxy.yaml's proxy is not $core_ref"
+    [ "$(echo "$model" | jq -r '.services.proxy.build // empty')" = "" ] || fail "compose.proxy.yaml builds the proxy from a Dockerfile the bundle does not have"
+done
+pass "the proxy overlay adds only the proxy, on the pinned molebridge-core, to the NetBird exit and the native sidecar"
 
 [ -x routing/gluetun-preflight ] || fail "gluetun-preflight is not executable"
 grep -q 'routing/gluetun-preflight' compose.gluetun.yaml compose.sidecar.yaml || fail "no Compose file mounts routing/gluetun-preflight"

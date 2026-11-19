@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Builds the installable bundle molebridge-<tag>.tar.gz: the Compose files, the
+# Builds the installable bundle molebridge-<tag>.tar.gz: the Compose files (the
+# experimental proxy overlay, compose.proxy.yaml, included), the
 # .env examples, routing/gluetun-preflight, LICENSE and THIRD_PARTY.md, with
 # every reference to the two Molebridge images (ghcr.io/irashack/molebridge and
 # ghcr.io/irashack/molebridge-core, in any form: bare name, a tag, a digest, a
@@ -64,7 +65,7 @@ done
 [ -n "$tar_cmd" ] || die "GNU tar is required (gtar on a Mac)"
 
 # Required files, then any optional ones.
-required=".env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
+required=".env.example .env.gluetun.example .env.sidecar.example .env.native-sidecar.example compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml compose.proxy.yaml routing/gluetun-preflight LICENSE THIRD_PARTY.md"
 optional=""
 files=
 for f in $required; do

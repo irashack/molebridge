@@ -341,6 +341,58 @@ ok nsc "process limits: 512 for the exit, 128 for port-sync and the panel" '
   '"$defs"' (.services.exit | pids(512)) and (.services["port-sync"] | pids(128)) and (.services.switchyard | pids(128)) and allLimited'
 pass "native sidecar form: the exit holds the tunnel and the PIA login, the applications and port-sync hold nothing"
 
+# --- the proxy overlay ------------------------------------------------------
+# compose.proxy.yaml adds the proxy (experimental) to the NetBird exit or the
+# native sidecar. It must leave every other service exactly as the form alone
+# resolves it, and the proxy itself holds nothing but its own state and
+# password: no capabilities, a read-only root, a non-root user, the exit's
+# applier state read-only, in the exit's namespace, on molebridge-core.
+core_image=$(jq -c .services.exit.image "$work/nsc.json")
+for form in "native:compose.yaml:.env.example" "nsc:compose.native-sidecar.yaml:.env.native-sidecar.example"; do
+    base=${form%%:*}; rest=${form#*:}; file=${rest%%:*}; envfile=${rest#*:}
+    name="$base-proxy"
+    profiles=
+    [ "$base" = nsc ] && profiles=example,port-sync
+    COMPOSE_PROFILES=$profiles docker compose --env-file "$envfile" -f "$file" -f compose.proxy.yaml config --format json > "$work/$name.json" ||
+        fail "$file with compose.proxy.yaml does not resolve with $envfile"
+    jq -e --slurpfile b "$work/$base.json" '
+      ((.services | keys) == (($b[0].services | keys) + ["proxy"] | sort)) and
+      ([.services | to_entries[] | select(.key != "proxy") | .value == $b[0].services[.key]] | all)' "$work/$name.json" >/dev/null ||
+        fail "$name: compose.proxy.yaml changes a service of $file, or adds more than the proxy"
+    ok "$name" "the proxy: molebridge-core, no capabilities, non-root, read-only, in the exit's namespace, its own state and password only" '
+      '"$defs"' .services.exit as $exit | .services.proxy |
+      hardened and jsonlog and (has("cap_add") | not) and .image == '"$core_image"' and coreImage and
+      .command == ["proxy"] and .network_mode == "service:exit" and .ports == null and
+      .user == "1000:1000" and (.env_file == null) and (has("sysctls") | not) and (.tmpfs == null) and (.privileged != true) and
+      .depends_on.exit.condition == "service_healthy" and .depends_on.exit.restart == true and
+      .healthcheck.test == ["CMD","/usr/local/bin/molebridge","health","--proxy"] and
+      (targets | sort) == ["/run/secrets/proxy","/state/applier","/state/proxy"] and
+      ([.volumes[] | .type] | all(. == "bind")) and
+      (bind("/state/applier") | .read_only == true and (.source | endswith("/state/applier"))) and
+      (bind("/state/proxy") | .read_only != true and (.bind.create_host_path // false) == false and (.source | endswith("/state/proxy"))) and
+      (bind("/run/secrets/proxy") | .read_only == true and (.bind.create_host_path // false) == false and (.source | endswith("/secrets/proxy"))) and
+      .environment.STATE_DIR == "/state" and
+      .environment.PROVIDER == $exit.environment.PROVIDER and .environment.TUNNEL_INTERFACE == $exit.environment.EXIT_IF and
+      .environment.PROXY_LISTEN == "127.0.0.1:1080" and .environment.PROXY_MAX_CONNS == "512" and
+      .environment.PROXY_PASSWORD_FILE == "/run/secrets/proxy/password" and .environment.PROXY_DNS == "" and
+      .environment.OVERLAY_IF == ($exit.environment.OVERLAY_IF // "wt0") and
+      ([.environment | keys[] | select(test("^(STATE_DIR|PROVIDER|TUNNEL_INTERFACE|OVERLAY_IF|PROXY_(LISTEN|MAX_CONNS|PASSWORD_FILE|DNS))$") | not)] == []) and
+      pids(128) and .deploy.resources.limits.memory != null'
+    ok "$name" "only the proxy mounts its state and password, and it sees no tunnel or provider secret" '
+      '"$defs"' ([.services | to_entries[] | select(.key != "proxy") | .value.volumes[]? | (.source // "") | select(test("secrets/proxy|state/proxy"))] == []) and
+      ([.services.proxy | sources[] | select(test("tunnel|wg_confs|secrets/pia|applier.env|netbird|state/panel"))] == [])'
+done
+env PROVIDER=pia EXIT_IF=pia0 OVERLAY_IF=mesh0 PROXY_LISTEN=192.0.2.10:1081 PROXY_MAX_CONNS=64 PROXY_DNS=192.0.2.53 PANEL_USER=1001:1001 \
+    docker compose --env-file .env.example -f compose.yaml -f compose.proxy.yaml config --format json > "$work/proxy-set.json" ||
+    fail "compose.proxy.yaml does not resolve with its settings set"
+ok proxy-set "the proxy's settings reach it, and the exit's interface names agree with it" '
+  .services.proxy.environment as $p | .services.exit.environment as $e |
+  $p.PROVIDER == "pia" and $p.TUNNEL_INTERFACE == "pia0" and $e.EXIT_IF == "pia0" and
+  $p.OVERLAY_IF == "mesh0" and $e.OVERLAY_IF == "mesh0" and
+  $p.PROXY_LISTEN == "192.0.2.10:1081" and $p.PROXY_MAX_CONNS == "64" and $p.PROXY_DNS == "192.0.2.53" and
+  .services.proxy.user == "1001:1001"'
+pass "proxy overlay: added to the NetBird exit and the native sidecar, hardened, holding only its own state and password"
+
 # --- the settings -----------------------------------------------------------
 # .env.example lists at most 20 settings, once each, and every one is read by
 # the Compose file; every ${NAME} the Compose files use that has no default
@@ -389,10 +441,10 @@ done
 # The pinned tag is the same for both images in every Compose file, the
 # NetBird forms name only molebridge and the sidecar forms only
 # molebridge-core, and none still names a service from 0.7.
-refs=$(grep -hoE 'ghcr\.io/irashack/molebridge(-core)?:[A-Za-z0-9._-]+' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml | sed 's/.*://' | sort -u)
+refs=$(grep -hoE 'ghcr\.io/irashack/molebridge(-core)?:[A-Za-z0-9._-]+' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml compose.proxy.yaml | sed 's/.*://' | sort -u)
 [ "$(echo "$refs" | wc -l | tr -d ' ')" = 1 ] || fail "the Compose files name different Molebridge image tags: $refs"
 ! grep -nE 'ghcr\.io/irashack/molebridge-core' compose.yaml compose.gluetun.yaml || fail "a NetBird form names molebridge-core"
-! grep -nE 'ghcr\.io/irashack/molebridge[:@]' compose.sidecar.yaml compose.native-sidecar.yaml || fail "a sidecar form names the image with NetBird"
+! grep -nE 'ghcr\.io/irashack/molebridge[:@]' compose.sidecar.yaml compose.native-sidecar.yaml compose.proxy.yaml || fail "a sidecar form or the proxy names the image with NetBird"
 if grep -nE 'exit-run|guard-run|wait-for-guards|contract-rules|routing/molebridge-exit|tools/molebridge\.py|applier/Dockerfile|routing/Dockerfile|python3? ' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml; then
     fail "a Compose file still names a 0.7 service, script or helper"
 fi
