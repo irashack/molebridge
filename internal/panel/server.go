@@ -165,6 +165,7 @@ func (s *Server) buildManifest() []byte {
 		"icons", []any{
 			validate.Members("src", "/static/icon-192.png", "sizes", "192x192", "type", "image/png"),
 			validate.Members("src", "/static/icon-512.png", "sizes", "512x512", "type", "image/png"),
+			validate.Members("src", "/static/icon-maskable-512.png", "sizes", "512x512", "type", "image/png", "purpose", "maskable"),
 		})
 	raw, err := validate.MarshalJSON(manifest)
 	if err != nil {

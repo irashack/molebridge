@@ -28,6 +28,9 @@ var staticTypes = []struct{ name, contentType string }{
 	{"apple-touch-icon.png", "image/png"},
 	{"icon-192.png", "image/png"},
 	{"icon-512.png", "image/png"},
+	{"icon-maskable-512.png", "image/png"},
+	{"favicon.svg", "image/svg+xml"},
+	{"favicon-32.png", "image/png"},
 }
 
 // fill substitutes «name» markers in a template. A marker without a value
@@ -456,13 +459,19 @@ type ExitSummary struct {
 	Place    string
 }
 
-// brandMark is Molebridge's mark for the masthead: the arch, the circuit line
-// with its end nodes, and the mole between them.
-const brandMark = `<svg class="brand-mark" viewBox="0 0 120 90" fill="none" aria-hidden="true">` +
-	`<path class="mark-arch" d="M24 76V54a36 36 0 0 1 72 0v22"/>` +
-	`<path class="mark-mole" d="M38 75c8-5 13-27 33-29 10-1 18 4 22 10l6 3-3 7c-5 3-10 3-14 1M72 55q3-3 6 0M58 76c0-6 8-6 8 0M82 76c0-6 8-6 8 0"/>` +
-	`<path class="mark-line" d="M12.5 76h95"/>` +
-	`<circle class="mark-node" cx="8" cy="76" r="4.5"/><circle class="mark-node" cx="112" cy="76" r="4.5"/></svg>`
+// brandMark is Molebridge's mark for the masthead, from
+// docs/assets/brand/mark-parts.svg with its colours moved to classes, so the
+// stylesheet can follow the theme: the arch, the circuit line with its end
+// nodes, and the mole between them.
+const brandMark = `<svg class="brand-mark" viewBox="0 0 800 430" fill="none" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
+	`<g class="mk-arch"><path d="m166 327v-87c0-131 105-208 234-208s234 77 234 208v87" class="mk-teal" stroke-width="48"/></g>` +
+	`<g class="mk-circuit-line"><path d="m94 384h612" class="mk-ink-line" stroke-width="12"/></g>` +
+	`<g class="mk-node-left"><circle cx="75" cy="384" r="25" class="mk-ink-line" stroke-width="13"/></g>` +
+	`<g class="mk-node-right"><circle cx="725" cy="384" r="25" class="mk-ink-line" stroke-width="13"/></g>` +
+	`<g class="mk-mole"><path d="m181 357c44-29 63-76 100-144 32-59 86-88 144-85 44 2 78 21 102 51" class="mk-ink-line" stroke-width="15"/><path d="m518 194c22-14 49-13 70 4 17 13 12 35-2 54-14 23-30 40-49 35s-31-21-49-29" class="mk-ink"/><circle cx="580" cy="207" r="19" class="mk-ink-dot" stroke-width="6"/><path d="m569 205c4-8 12-11 19-7" class="mk-bg-line" stroke-width="5"/><path d="m518 243-47 4m44 10-52 14m53 0-38 21" class="mk-ink-line" stroke-width="5"/></g>` +
+	`<g class="mk-mole-eye"><path d="m399 210q18-23 37 0" class="mk-ink-line" stroke-width="10"/></g>` +
+	`<g class="mk-paws mk-ink"><path d="m286 376c-9-22 0-41 19-47 25-10 48 7 55 25 9 21 13 41 2 48-13 9-21-7-27-25 6 26-8 33-19 23l-11-21c8 26-6 30-18 18-8-9-8-14-1-21z"/><path d="m478 376c-11-24 3-42 24-48 24-7 45 8 53 26 8 19 13 41 2 48-13 10-22-6-25-24 4 27-11 31-22 21l-10-19c6 24-10 28-19 17-6-10-6-15-3-21z"/></g>` +
+	`</svg>`
 
 // exitTabs is the Switchyard's exit picker: one tab per exit, with its
 // provider's arch, its state and, when connected, where it exits.
@@ -761,7 +770,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 		"theme", s.Settings.Theme, "style", s.Settings.Style, "cssID", esc(spec.CSSID()), "accent", providerAccent(provider),
 		"colorScheme", s.Settings.colorScheme(), "themeColorMeta", s.Settings.themeColorMeta(provider),
 		"shortTitle", esc(s.Settings.ShortTitle), "title", title,
-		"vIcon", versions["icon-192.png"], "vTouch", versions["apple-touch-icon.png"], "vCSS", versions["panel.css"], "vJS", versions["panel.js"],
+		"vIcon", versions["favicon-32.png"], "vFav", versions["favicon.svg"], "vTouch", versions["apple-touch-icon.png"], "vCSS", versions["panel.css"], "vJS", versions["panel.js"],
 		"bodyClass", bodyClass, "configuredAttr", configuredAttr, "layout", spec.Layout,
 		"pattern", esc(spec.ServerNamePattern), "exitID", esc(ex.ID), "kind", esc(ex.Kind), "textJSON", esc(textJSON),
 		"timeout", strconv.Itoa(timeout), "checked", esc(orEmpty(result["checked_at"])), "multi", multi,
@@ -815,7 +824,7 @@ func (s *Server) RenderMessage(heading, message string, link *[2]string, embed b
 	return fill(messageTemplate,
 		"theme", s.Settings.Theme, "style", s.Settings.Style, "colorScheme", s.Settings.colorScheme(),
 		"themeColorMeta", s.Settings.themeColorMeta(""), "heading", esc(heading), "title", esc(s.Settings.Title),
-		"vIcon", v["icon-192.png"], "vCSS", v["panel.css"], "bodyClass", bodyClass, "message", esc(message), "link", linkHTML)
+		"vIcon", v["favicon-32.png"], "vFav", v["favicon.svg"], "vCSS", v["panel.css"], "bodyClass", bodyClass, "message", esc(message), "link", linkHTML)
 }
 
 const switchingControlsTemplate = `<section class="widget" id="saved" hidden>
@@ -858,7 +867,8 @@ const indexTemplate = `<!DOCTYPE html>
 <title>«title»</title>
 <!-- An authenticating proxy needs its session cookie, which manifest fetches omit by default. -->
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
-<link rel="icon" href="/static/icon-192.png?v=«vIcon»" type="image/png">
+<link rel="icon" href="/static/favicon.svg?v=«vFav»" type="image/svg+xml">
+<link rel="icon" href="/static/favicon-32.png?v=«vIcon»" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=«vTouch»">
 <link rel="stylesheet" href="/static/panel.css?v=«vCSS»">
 <script src="/static/panel.js?v=«vJS»" defer></script>
@@ -922,7 +932,8 @@ const messageTemplate = `<!DOCTYPE html>
 <meta name="color-scheme" content="«colorScheme»">
 «themeColorMeta»
 <title>«heading» · «title»</title>
-<link rel="icon" href="/static/icon-192.png?v=«vIcon»" type="image/png">
+<link rel="icon" href="/static/favicon.svg?v=«vFav»" type="image/svg+xml">
+<link rel="icon" href="/static/favicon-32.png?v=«vIcon»" sizes="32x32" type="image/png">
 <link rel="stylesheet" href="/static/panel.css?v=«vCSS»">
 </head>
 <body class="«bodyClass»">
