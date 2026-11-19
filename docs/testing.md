@@ -15,6 +15,87 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.12.0
+
+Released from `v0.12.0-rc.1` by the release automation. The acceptance policy (`tools/acceptance-policy.json`, version 15) is the one the candidate was attested against.
+
+### v0.12.0-rc.1, 2026-11-19: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.12.0-rc.1`, index digest `sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e`, and `ghcr.io/irashack/molebridge-core:v0.12.0-rc.1`, index digest `sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0` (commit `f9fcde7`). Attested by [run 44548134254](https://github.com/irashack/molebridge/actions/runs/44548134254) and promoted as `v0.12.0`.
+
+### v0.12.0-rc.1, 2026-11-19
+
+The candidate's two images from commit `f9fcde7`:
+`ghcr.io/irashack/molebridge:v0.12.0-rc.1`, index digest
+`sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e`, and
+`ghcr.io/irashack/molebridge-core:v0.12.0-rc.1`, index digest
+`sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0`.
+Before anything changed, both images' signatures (the release workflow at the
+tag, workflow commit `f9fcde7`), their build provenance naming `f9fcde7`, and
+the tag digests on ghcr were verified. CI and Release passed on the tag, the
+namespace drills included. Policy version 15. Run 2026-11-19 13:03–13:52 UTC
+on the same Kubernetes cluster and rootless Podman Quadlet unit (Podman 5.8.9)
+as for 0.11.1, with a throwaway NetBird peer as the client.
+
+**Images by kind:** the native exits (Mullvad, PIA, NordVPN) and the gluetun
+overlay exit ran `molebridge`. The gluetun sidecar (on Kubernetes and as the
+Podman Quadlet copy) and the native PIA sidecar ran `molebridge-core`.
+
+- **Upgrade from 0.11.1, Kubernetes:** every counted workload was `ok` and
+  verified on `v0.11.1` with no restart: the native Mullvad, PIA and NordVPN
+  exits, the gluetun overlay exit, the gluetun sidecar, the native PIA
+  sidecar, and the network exchange's panel and exchange. Each then moved to
+  the candidate by its image alone (the sidecars to `molebridge-core`): all
+  `ok`, verified, no restart, each on the server it started on.
+- **Upgrade from 0.11.1, Podman:** `ok` on `v0.11.1`, then the exit unit's
+  `Image=` changed to `molebridge-core` and the exit alone restarted. It was
+  healthy 7 s later and `ok` on the same server. gluetun and the application
+  did not restart, and the application's egress stayed on the VPN's address.
+- **Client egress** through every exit: Mullvad IPv4 and IPv6, PIA, NordVPN
+  and gluetun IPv4 from the VPN's address (IPv6 blocked where the provider has
+  none), never the host's.
+- **Tunnel loss**, the interface deleted in the exit, with the client probing:
+  traffic was back after 1.53 s / 6.60 s / 2.30 s (Mullvad / PIA / NordVPN).
+  The gluetun overlay exit recovered through gluetun's healthcheck in 36.5 s,
+  traffic at 36.9 s, with no restart. No probe left from the host's address.
+- **Client switch** on the native Mullvad exit, IPv4 and IPv6: to the next
+  server in 9.5 s and back in 8.5 s, both families on the new server each
+  time; 1 of 14 probes failed, none from the host's address.
+- **Status drills:**
+  - The egress-check failure on Mullvad and PIA: failed,
+    `applied-unverified`, recheck, after 73 s / 36 s; `ok` again 33 s / 28 s
+    after the drop was lifted.
+  - The 409 for a second switch, both ways.
+  - A failed switch on NordVPN through the exchange's panel: failed,
+    `applied-unverified`, Retry offered; verified 8 s after Retry with source
+    `operator-retry`.
+  - A stopped exit (the Podman copy, on `molebridge-core`): stale with
+    `/readyz` 503 and `/healthz` 200 after 100 s, and `/readyz` 200 6 s after
+    it started again.
+- **Network exchange:** the panel and exchange (on the candidate) on one node,
+  the NordVPN exit on another: `last_contact_at` 1 s before the read, clock
+  offset 0.0 s, `/api/exits` `ok`. The 409 and failed-switch drills ran
+  through it.
+- **A retired server**, on the gluetun overlay exit on Kubernetes (NordVPN,
+  IPv4) with a client probing: `ok` and verified on the next server of the
+  city 23 s after the removal, `moved` with `left-catalogue`. Back on the
+  selected server 64 s after the file returned, with no `moved`. One failed
+  probe per switch, never from the host's address; no restart. On the Podman
+  copy (`molebridge-core`): moved in 54 s, the panel `ok` with
+  `server-moved` and the note naming both servers; back 60 s after the file
+  returned, with no reason or note.
+
+**Not tested live:** `tunnel-silent` and the optional status checks, and the
+retired-server move on the native providers (no live procedure). Rule drift
+and the lease lapse count through `ci-namespace-drills`.
+
+At the end every exit was `ok` and verified on the candidate, each on the
+server it started on.
+
+Evidence:
+
+- homelab-ops services/molebridge-sidecar/acceptance/notes-0.12.0-rc.1/evidence.txt (the run's notes, 2026-11-19 13:03-13:52 UTC)
+
 ## 0.11.1
 
 Released from `v0.11.1-rc.1`. A security rebuild: the image runs `apk upgrade`
