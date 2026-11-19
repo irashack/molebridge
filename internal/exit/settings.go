@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/failover"
 	"github.com/irashack/molebridge/internal/nbprofile"
 	"github.com/irashack/molebridge/internal/providers"
+	"github.com/irashack/molebridge/internal/state"
 	"github.com/irashack/molebridge/internal/tunnelconf"
 )
 
@@ -73,6 +75,9 @@ type Settings struct {
 	PrivateDir string
 	// Server is the SERVER setting.
 	Server string
+	// Failover is FAILOVER, FAILOVER_SERVERS, FAILOVER_AFTER and
+	// FAILOVER_RETURN (docs/design/failover.md); off by default.
+	Failover failover.Config
 	// Conf is the native backend's validated tunnel config.
 	Conf *tunnelconf.Conf
 	// NB are NetBird's validated settings (overlay kinds only).
@@ -278,6 +283,10 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		}
 	}
 
+	if s.Failover, err = loadFailover(get, provider, s.Server, s.NativeTunnel()); err != nil {
+		return nil, err
+	}
+
 	if s.NativeTunnel() {
 		pv := tunnelconf.Provider(provider)
 		conf, err := tunnelconf.Load(s.ConfDir, cfg.ExitIf, pv, cfg.Table)
@@ -305,6 +314,62 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// failoverEnvMax bounds FAILOVER_SERVERS: eight long names and commas.
+const failoverEnvMax = 1024
+
+// loadFailover reads the FAILOVER* settings. Failover is experimental and
+// for the native backend only.
+func loadFailover(get func(string) string, provider, server string, native bool) (failover.Config, error) {
+	var c failover.Config
+	var err error
+	if c.Mode, err = failover.ParseMode(get("FAILOVER")); err != nil {
+		return c, refuse("%v", err)
+	}
+	if list := get("FAILOVER_SERVERS"); list != "" {
+		if len(list) > failoverEnvMax {
+			return c, refuse("FAILOVER_SERVERS is too long")
+		}
+		for _, name := range strings.Split(list, ",") {
+			c.Servers = append(c.Servers, strings.TrimSpace(name))
+		}
+	}
+	c.After = failover.DefaultAfter
+	if text := get("FAILOVER_AFTER"); text != "" {
+		n, ok := seconds(text)
+		if !ok {
+			return c, refuse("FAILOVER_AFTER must be %d to %d seconds", int(failover.MinAfter.Seconds()), int(failover.MaxAfter.Seconds()))
+		}
+		c.After = time.Duration(n) * time.Second
+	}
+	c.Return = failover.DefaultReturn
+	if v := get("FAILOVER_RETURN"); v != "" {
+		c.Return = v
+	}
+	valid := func(name string) bool { return state.ValidServerName(name, provider) }
+	if err := c.Validate(valid, server); err != nil {
+		return c, refuse("%v", err)
+	}
+	if c.On() && !native {
+		return c, refuse("FAILOVER needs TUNNEL_BACKEND=native: gluetun reconnects by itself")
+	}
+	return c, nil
+}
+
+// seconds parses a plain decimal of at most 4 digits, no sign or leading 0.
+func seconds(text string) (int, bool) {
+	if text == "" || len(text) > 4 || text[0] == '0' {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			return 0, false
+		}
+		n = n*10 + int(text[i]-'0')
+	}
+	return n, true
 }
 
 func orDefault(v, def string) string {

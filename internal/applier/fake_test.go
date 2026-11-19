@@ -87,7 +87,13 @@ type kernel struct {
 	noHandshake  bool
 	// silent: the peer sends but receives nothing (a server that forgot the
 	// registration); transfers counts the Transfers calls.
-	silent           bool
+	silent bool
+	// unheard: the peer receives only handshake initiations (a server that
+	// doesn't hear the exit and keeps asking for a handshake).
+	unheard bool
+	// keepalives: the peer receives only keepalives (a server that hears
+	// the exit, with nothing to send back).
+	keepalives       bool
 	transfers        int64
 	failSet          bool
 	peersErr         error
@@ -300,6 +306,12 @@ func (k *kernel) Transfers(context.Context) (map[string]Transfer, error) {
 		received := k.transfers * 1500
 		if k.silent {
 			received = 0
+		}
+		if k.unheard {
+			received = k.transfers * HandshakeInitiationBytes
+		}
+		if k.keepalives {
+			received = k.transfers * 32
 		}
 		out[key] = Transfer{Received: received, Sent: k.transfers * 1500}
 	}

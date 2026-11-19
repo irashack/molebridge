@@ -698,6 +698,30 @@ func (p *piaProvider) RegistrationAnswers(ctx context.Context, a *Applier) bool 
 	return err == nil
 }
 
+// UplinkAnswers asks the recorded server's registration API first, then
+// the catalogue host (failover's uplink probe).
+func (p *piaProvider) UplinkAnswers(ctx context.Context, a *Applier) bool {
+	return p.RegistrationAnswers(ctx, a) || catalogHostAnswers(ctx, a)
+}
+
+// ServerAnswers asks a region's registration API, on its first server in
+// the catalogue, outside the tunnel: the check before failover returns to
+// it, the one the silent tunnel uses.
+func (p *piaProvider) ServerAnswers(ctx context.Context, a *Applier, server string) bool {
+	region, ok := a.catalog.Relays().Get(server)
+	if !ok || len(region.Servers) == 0 {
+		return false
+	}
+	cn, address := region.Servers[0].CN, region.Servers[0].IP
+	if !piaCNRE.MatchString(cn) || !validate.ValidIPv4(address) {
+		return false
+	}
+	port := strconv.Itoa(addKeyPort)
+	_, err := a.sys.Fetch(ctx, netx.Request{URL: "https://" + cn + ":" + port + "/", RootCAs: p.cfg.RootCAs,
+		ConnectAddr: address + ":" + port, MaxBytes: piaAnswerMaxSize, Timeout: 5 * time.Second, AnyStatus: true})
+	return err == nil
+}
+
 // ServerFor is the recorded region, while the registration matches the live
 // peer.
 func (p *piaProvider) ServerFor(ctx context.Context, a *Applier, keys []string) (string, error) {

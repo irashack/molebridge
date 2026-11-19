@@ -34,7 +34,7 @@ before 2.0.
   0.11.0) is present only while the exit's server stands in for a retired
   one; a reader older than 0.11.0 judges such a record "verification failed",
   because `server` isn't the requested server. `failover` ([automatic
-  failover](design/failover.md), being built) is present only during a
+  failover](design/failover.md), experimental and off by default) is present only during a
   failover episode; a reader from before it judges a record on a backup
   "verification failed" for the same reason, never connected.
 - The eight checks (`routing`, `traffic_protection`, `netbird`,

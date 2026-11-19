@@ -14,7 +14,7 @@ import (
 // table in the page (data-text) and has no wording of its own. Only fixed
 // text: nothing from a record. The bytes are what json.dumps(TEXT,
 // separators=(',', ':')) wrote, and are embedded in the page as they are.
-const textJSON = `{"connection":{"overlay":{"ok":"Secure connection","applying":"Switching route","failed":"Connection needs attention","unknown":"Connection unverified"},"sidecar":{"ok":"Secure connection","applying":"Switching server","failed":"Connection needs attention","unknown":"Connection unverified"}},"tier":{"provider":"provider-confirmed","tunnel":"tunnel checks only","none":"not confirmed"},"failed":"Tunnel verification failed.","stale":"Status is stale or unavailable. Details are from the last check.","unverified":"The connection can't be confirmed. Details are from the last check.","unreachable":"Cannot reach the panel. Connection status is unknown.","drop":{"overlay":"Open connections through the exit will drop.","sidecar":"Open connections through the tunnel will drop."},"gives_up":"Verification gives up after {s} seconds.","next":{"recheck":"Re-checking at {at} UTC.","reapply":"Retrying at {at} UTC."},"checks":{"routing":"Routing protection","netbird":"NetBird kernel mode","owner_record":"Owner record","peer":"Tunnel peer","handshake":"Handshake","egress":"Egress check","traffic_protection":"Traffic protection","app_attachment":"App attachment"},"check_state":{"pass":"passed","fail":"failed","unknown":"unknown","n/a":"not applicable","legacy":"not reported individually"},"not_checked":"not checked by Molebridge ({by})","handshake_age":", {age} s old","reason":{"no-peer":"no tunnel peer","multiple-peers":"more than one tunnel peer","catalogue-stale":"no fresh server list","unidentified":"peer not in the server list","not-target":"not the selected server","unanswered":"the check got no answer","tunnel-silent":"the tunnel received nothing back","not-confirmed":"not confirmed by the provider","tunnel-checks-failed":"tunnel checks failed","host-address-not-measurable":"this host's address can't be measured","reconnecting":"gluetun is reconnecting"},"reason_format":"{text}: {reason}","moved":"{from} is no longer in the provider's server list. Connected through {to}, in the same city, instead.","proxy":{"guarantee":"Opt-in: connections sent to the proxy leave through the tunnel or fail; nothing else is covered.","reason":{"no-status":"No proxy status yet: proxy.json is missing, or this panel can't read it.","unsupported-schema":"proxy.json is a version this panel doesn't read.","kind-mismatch":"The file is not a proxy status record.","provider-mismatch":"The proxy's status is for another provider than this exit's.","invalid-record":"proxy.json is malformed.","status-stale":"The proxy's status is more than 30 seconds old.","tunnel-not-ok":"The exit's verdict isn't ok, so the proxy refuses new connections.","listener-down":"The proxy's listener is down."},"connections":"{open} open, {total} total, {failed} failed","servers":"{known} known, {benched} benched","until":"until {at} UTC","more":"and {n} more","unavailable":"status unavailable","none":"—"}}`
+const textJSON = `{"connection":{"overlay":{"ok":"Secure connection","applying":"Switching route","failed":"Connection needs attention","unknown":"Connection unverified"},"sidecar":{"ok":"Secure connection","applying":"Switching server","failed":"Connection needs attention","unknown":"Connection unverified"}},"tier":{"provider":"provider-confirmed","tunnel":"tunnel checks only","none":"not confirmed"},"failed":"Tunnel verification failed.","stale":"Status is stale or unavailable. Details are from the last check.","unverified":"The connection can't be confirmed. Details are from the last check.","unreachable":"Cannot reach the panel. Connection status is unknown.","drop":{"overlay":"Open connections through the exit will drop.","sidecar":"Open connections through the tunnel will drop."},"gives_up":"Verification gives up after {s} seconds.","next":{"recheck":"Re-checking at {at} UTC.","reapply":"Retrying at {at} UTC."},"checks":{"routing":"Routing protection","netbird":"NetBird kernel mode","owner_record":"Owner record","peer":"Tunnel peer","handshake":"Handshake","egress":"Egress check","traffic_protection":"Traffic protection","app_attachment":"App attachment"},"check_state":{"pass":"passed","fail":"failed","unknown":"unknown","n/a":"not applicable","legacy":"not reported individually"},"not_checked":"not checked by Molebridge ({by})","handshake_age":", {age} s old","reason":{"no-peer":"no tunnel peer","multiple-peers":"more than one tunnel peer","catalogue-stale":"no fresh server list","unidentified":"peer not in the server list","not-target":"not the selected server","unanswered":"the check got no answer","tunnel-silent":"the tunnel received nothing back","not-confirmed":"not confirmed by the provider","tunnel-checks-failed":"tunnel checks failed","host-address-not-measurable":"this host's address can't be measured","reconnecting":"gluetun is reconnecting"},"reason_format":"{text}: {reason}","moved":"{from} is no longer in the provider's server list. Connected through {to}, in the same city, instead.","failover":{"backup":"Connected to backup {to}. {from} has kept failing{since}; trying it again at {at} UTC.","manual":"Connected to backup {to}. {from} has kept failing{since}; pick it again to return.","since":" since {at} UTC","exhausted":"No backup verified; retrying {from}.","tag":"backup"},"proxy":{"guarantee":"Opt-in: connections sent to the proxy leave through the tunnel or fail; nothing else is covered.","reason":{"no-status":"No proxy status yet: proxy.json is missing, or this panel can't read it.","unsupported-schema":"proxy.json is a version this panel doesn't read.","kind-mismatch":"The file is not a proxy status record.","provider-mismatch":"The proxy's status is for another provider than this exit's.","invalid-record":"proxy.json is malformed.","status-stale":"The proxy's status is more than 30 seconds old.","tunnel-not-ok":"The exit's verdict isn't ok, so the proxy refuses new connections.","listener-down":"The proxy's listener is down."},"connections":"{open} open, {total} total, {failed} failed","servers":"{known} known, {benched} benched","until":"until {at} UTC","more":"and {n} more","unavailable":"status unavailable","none":"—"}}`
 
 // wording is textJSON, read once.
 type wording struct {
@@ -34,7 +34,18 @@ type wording struct {
 	Reason       map[string]string            `json:"reason"`
 	ReasonFormat string                       `json:"reason_format"`
 	Moved        string                       `json:"moved"`
+	Failover     failoverWording              `json:"failover"`
 	Proxy        proxyWording                 `json:"proxy"`
+}
+
+// failoverWording is automatic failover's wording: on a backup, with a
+// return time (backup) or without (manual), and when no backup verified.
+type failoverWording struct {
+	Backup    string `json:"backup"`
+	Manual    string `json:"manual"`
+	Since     string `json:"since"`
+	Exhausted string `json:"exhausted"`
+	Tag       string `json:"tag"`
 }
 
 // proxyWording is the proxy view's wording (proxy.go).
@@ -70,6 +81,8 @@ type exitView struct {
 	NextActionAt string
 	NotCheckedBy map[string]string
 	Checks       map[string]string
+	// Failover is the verdict's backup standing in, nil when none.
+	Failover *verdict.FailoverView
 }
 
 // CheckView is one line of Diagnostics.
@@ -95,7 +108,10 @@ type View struct {
 	Next       string
 	// Moved says the requested server left the provider's list and which
 	// one the exit runs instead; "" when it runs the requested one.
-	Moved      string
+	Moved string
+	// Failover says the exit runs a backup and when it tries the selected
+	// server again, or that no backup verified; "" otherwise.
+	Failover   string
 	Status     string
 	Message    string
 	Egress     string
@@ -118,7 +134,7 @@ func (v View) JSONObject() validate.Obj {
 	}
 	return validate.Members(
 		"state", v.State, "label", v.Label, "kind", v.Kind, "connection", v.Connection,
-		"tier", tier, "tunnel_only", v.TunnelOnly, "ip", v.IP, "note", v.Note, "next", v.Next, "moved", v.Moved,
+		"tier", tier, "tunnel_only", v.TunnelOnly, "ip", v.IP, "note", v.Note, "next", v.Next, "moved", v.Moved, "failover", v.Failover,
 		"fields", validate.Members("status", v.Status, "message", v.Message, "egress", v.Egress,
 			"egress_tier", v.EgressTier, "forwarded_port", v.Forwarded, "checked_at", v.CheckedAt),
 		"checks", checks)
@@ -208,6 +224,7 @@ func describe(v exitView, result map[string]any) View {
 	if from, to, ok := verdict.Moved(result); ok && state == "ok" {
 		moved = strings.ReplaceAll(strings.ReplaceAll(text.Moved, "{from}", from), "{to}", to)
 	}
+	backup := failoverNote(v, state, result)
 	forwarded := "none"
 	if port, ok := validate.IsInt(result["forwarded_port"]); ok {
 		forwarded = strconv.FormatInt(port, 10)
@@ -223,7 +240,7 @@ func describe(v exitView, result map[string]any) View {
 	view := View{
 		State: state, Label: v.Label, Kind: kind, Connection: text.Connection[kind][state],
 		Tier: tier, TunnelOnly: tier == "tunnel",
-		IP: ip, Note: note, Next: upcoming, Moved: moved,
+		IP: ip, Note: note, Next: upcoming, Moved: moved, Failover: backup,
 		Status:     textOr(result["status"], "(unknown)"),
 		Message:    textOr(result["message"], ""),
 		Egress:     textOr(result["egress_city"], "(unknown)") + ", " + textOr(result["egress_country"], "(unknown)"),
@@ -242,6 +259,35 @@ func describe(v exitView, result map[string]any) View {
 		})
 	}
 	return view
+}
+
+// failoverNote is the failover line: on a connected verdict on a backup,
+// the backup, the selected server, since when it fails and when it is tried
+// again; on a failed or unknown verdict whose episode found no backup, that
+// the selected server is retried. panel.js failoverNote says the same.
+func failoverNote(v exitView, state string, result map[string]any) string {
+	if f := v.Failover; f != nil && state == "ok" {
+		since := ""
+		if f.Since != "" {
+			since = strings.ReplaceAll(text.Failover.Since, "{at}", runeSlice(f.Since, 11, 16))
+		}
+		pattern := text.Failover.Manual
+		if f.NextReturnAt != "" {
+			pattern = strings.ReplaceAll(text.Failover.Backup, "{at}", runeSlice(f.NextReturnAt, 11, 16))
+		}
+		return strings.NewReplacer("{to}", f.To, "{from}", f.From, "{since}", since).Replace(pattern)
+	}
+	if state != "failed" && state != "unknown" {
+		return ""
+	}
+	exhausted := false
+	for _, r := range v.Reasons {
+		exhausted = exhausted || r == verdict.ReasonFailoverExhausted
+	}
+	if from, _, _, ok := verdict.Failover(result); ok && exhausted {
+		return strings.ReplaceAll(text.Failover.Exhausted, "{from}", from)
+	}
+	return ""
 }
 
 // runeSlice is s[from:to] on characters.

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/irashack/molebridge/internal/failover"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/state"
 	"github.com/irashack/molebridge/internal/validate"
@@ -36,6 +37,10 @@ const (
 	// registrations can lapse.
 	StallSec   = 10
 	StallBytes = 1024
+	// HandshakeInitiationBytes is a WireGuard handshake initiation's size,
+	// fixed by the protocol; a peer's receive counter counts each one it
+	// gets, as it counts data (Finding.Quiet).
+	HandshakeInitiationBytes = 148
 	// SilentReuseSec: a silent check at most this old is the repair's
 	// inspection.
 	SilentReuseSec = 30
@@ -182,6 +187,13 @@ type Config struct {
 	// when nil.
 	Log   func(string)
 	Gatus Gatus
+	// Failover is the automatic failover settings (FAILOVER*); the zero
+	// value is off.
+	Failover failover.Config
+	// FailoverTrace, when set, gets a line for each pass the failover
+	// policy observes and for each failed egress check's byte counts (the
+	// drill binary logs them); nil in production.
+	FailoverTrace func(line string)
 	// RoutingActivity, when set, is the routing_activity member of every
 	// record: the mutation owner's and the kernel watcher's counters as they
 	// stand when the record is built. Nil leaves the member out (an exit with
@@ -199,11 +211,27 @@ type Selection struct {
 	// Replaces is the requested server when Server stands in for it: the
 	// request named a server the provider retired (moved.go).
 	Replaces string
+	// Failover is set when Server is a failover target (failover.go): a
+	// backup standing in for the primary, or the primary while the exit
+	// returns to it. Source is then "failover".
+	Failover *FailoverOf
+}
+
+// primary is the selection a failover target stands in for.
+func (s *Selection) primary() *Selection {
+	if s.Failover == nil {
+		return s
+	}
+	return &Selection{Server: s.Failover.Primary, Source: s.Failover.Source, Request: s.Request, Replaces: s.Replaces}
 }
 
 // Key identifies the selection. A replacement is another target than the
 // request it serves, so moving to it and returning from it are new targets.
 func (s *Selection) Key() string {
+	if s.Failover != nil {
+		// Moving to a backup, between backups and back are new targets.
+		return s.primary().Key() + "|failover:" + s.Server
+	}
 	key := s.Source + ":" + s.Server
 	if s.Source == "panel" && s.Request != nil {
 		key = state.RequestToken(*s.Request)
@@ -219,6 +247,11 @@ func (s *Selection) Key() string {
 func (s *Selection) target() verdict.Target {
 	if s == nil {
 		return verdict.Target{}
+	}
+	if s.Failover != nil {
+		// What was asked for; the record's failover member says what
+		// stands in for it.
+		return s.primary().target()
 	}
 	if s.Replaces != "" {
 		// A reader's target is what was asked for; the record says what
@@ -249,6 +282,10 @@ type Finding struct {
 	// while it ran, and the registration's server answers outside it
 	// (checkedEgress).
 	Silent bool
+	// Quiet: with failover on, the egress check got no answer and, while it
+	// ran, the peer received nothing but whole handshake initiations
+	// (unheard): the server didn't hear the exit.
+	Quiet bool
 }
 
 // EgressResult is a provider's egress answer.

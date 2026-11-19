@@ -228,6 +228,37 @@ func TestAMovedExitSaysWhichServerItStandsInFor(t *testing.T) {
 	mustNotContain(t, h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.readStatus(ex), CSRFToken: "tok"}), "data-moved")
 }
 
+func TestAnExitOnABackupSaysSoAndWhenItTriesAgain(t *testing.T) {
+	for name, want := range map[string]string{
+		"failover-backup":    `<p class="note" data-failover>Connected to backup se-sto-wg-001. se-sto-wg-009 has kept failing since 18:00 UTC; trying it again at 18:15 UTC.</p>`,
+		"failover-manual":    `<p class="note" data-failover>Connected to backup se-sto-wg-001. se-sto-wg-009 has kept failing since 18:00 UTC; pick it again to return.</p>`,
+		"failover-exhausted": `<p class="note" data-failover>No backup verified; retrying se-sto-wg-001.</p>`,
+	} {
+		c := consumerCases[name]
+		h := setupExit(t, c.provider, c.kind, c.record(), c.request())
+		ex := h.exit("x")
+		page := h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.readStatus(ex), CSRFToken: "tok"})
+		mustContain(t, page, `data-state="`+c.state+`"`, want)
+		if name == "failover-exhausted" {
+			mustContain(t, page, `note-negative`)
+		}
+		// /api/exits and the tab say "backup" beside the place.
+		summary := h.srv.exitSummary(ex, nil)
+		if summary.Backup != (c.state == "ok") || summary.Status != c.label {
+			t.Errorf("%s: summary %+v", name, summary)
+		}
+	}
+	h := setupExit(t, "mullvad", "overlay", schema2(recOpts{}), request(serverOf("mullvad")))
+	ex := h.exit("x")
+	mustNotContain(t, h.srv.renderIndex(IndexPage{Exit: ex, Status: h.srv.readStatus(ex), CSRFToken: "tok"}), "data-failover")
+	if tabPlace("Stockholm", true) != "Stockholm · backup" || tabPlace("Stockholm", false) != "Stockholm" || tabPlace("", true) != "backup" {
+		t.Error("tab place")
+	}
+	if got := exitTabs([]ExitSummary{{ID: "x", Label: "X", Provider: "mullvad", State: "ok", Status: "connected to backup", Place: "Stockholm", Backup: true}}, "x", false); !strings.Contains(got, `data-exit-place>Stockholm · backup</span>`) {
+		t.Errorf("tabs %s", got)
+	}
+}
+
 // -- sidecar wording -------------------------------------------------------------------
 
 func sidecarPage(t *testing.T, result, desired map[string]any) string {
@@ -410,6 +441,9 @@ func TestASwitchInProgressRefusesAnother(t *testing.T) {
 		"applying":                 {schema2(recOpts{Status: "applying"}), request("se-sto-wg-001")},
 		"request not acknowledged": {schema2(recOpts{}), request("se-got-wg-001", strings.Repeat("b", 32))},
 		"legacy applying":          {legacy("applying", nil), request("se-sto-wg-001")},
+		// A failover switch publishes applying like any other.
+		"failover applying": {schema2(recOpts{Status: "applying", Source: "failover", Extra: map[string]any{"requested_server": "se-sto-wg-009"}}),
+			request("se-sto-wg-009")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := newGate(t, tc.result, tc.desired)
@@ -459,6 +493,21 @@ func TestOnlyAVisibleSwitchBlocks(t *testing.T) {
 				t.Fatalf("desired = %v", readDesired(g.ex))
 			}
 		})
+	}
+}
+
+func TestASelectionOnABackupIsAccepted(t *testing.T) {
+	// Picking any server, the backup itself included, is a new request, which
+	// ends the episode in the applier. (The fixture's catalogue doesn't list
+	// the selected se-sto-wg-009.)
+	for _, server := range []string{serverOf("mullvad"), "se-got-wg-001"} {
+		g := newGate(t, onBackup("2026-10-10T18:15:00Z"), request("se-sto-wg-009"))
+		if a := g.post(server, g.token); a.Status != 303 {
+			t.Fatalf("%s: %d %q", server, a.Status, a.Body)
+		}
+		if desired := readDesired(g.ex); desired["server"] != server || desired["request_id"] == requestID {
+			t.Fatalf("%s: desired = %v", server, desired)
+		}
 	}
 }
 

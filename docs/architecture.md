@@ -1997,11 +1997,11 @@ retires](#a-server-the-provider-retires)); other records don't have the
 member.
 
 A record of an exit with [automatic failover](design/failover.md)
-(experimental, being built) may have `failover`: `from` (the server it
+(experimental, off by default) may have `failover`: `from` (the server it
 stands in for), `to` (the backup, `null` once no backup verified), `phase`
 (`trying`, `on-backup`, `returning` or `exhausted`), `reason`, `since`,
-`next_return_at` and `tried`. No exit writes it yet; the verdict reads it
-(below).
+`next_return_at` and `tried`. The exit writes it from the episode in
+`failover.json` while one runs; the verdict reads it (below).
 
 ### The verdict
 

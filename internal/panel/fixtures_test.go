@@ -208,6 +208,14 @@ func legacy(status string, fields map[string]any) map[string]any {
 	return record
 }
 
+// onBackup is a record connected through backup se-sto-wg-001 while the
+// selected se-sto-wg-009 keeps failing; nextReturn is next_return_at.
+func onBackup(nextReturn any) map[string]any {
+	return schema2(recOpts{Source: "failover", Extra: map[string]any{"requested_server": "se-sto-wg-009",
+		"failover": map[string]any{"from": "se-sto-wg-009", "to": serverOf("mullvad"), "phase": "on-backup",
+			"reason": "handshake-failed", "since": "2026-10-10T18:00:00Z", "next_return_at": nextReturn, "tried": []any{serverOf("mullvad")}}}})
+}
+
 func without(record map[string]any, check string) map[string]any {
 	delete(record["checks"].(map[string]any), check)
 	return record
@@ -293,6 +301,19 @@ var consumerCases = map[string]consumerCase{
 		return schema2(recOpts{Extra: map[string]any{"requested_server": "se-sto-wg-009",
 			"moved": map[string]any{"from": "se-sto-wg-009", "to": serverOf("mullvad"), "reason": "left-catalogue"}}})
 	}, func() map[string]any { return request("se-sto-wg-009") }, "ok", "connected", "provider"},
+	// Automatic failover (experimental): connected through a backup in the
+	// same city, with a return time, without one (FAILOVER_RETURN=manual),
+	// and an episode that found no backup.
+	"failover-backup": {"mullvad", "overlay", func() map[string]any { return onBackup("2026-10-10T18:15:00Z") },
+		func() map[string]any { return request("se-sto-wg-009") }, "ok", "connected to backup", "provider"},
+	"failover-manual": {"mullvad", "overlay", func() map[string]any { return onBackup(nil) },
+		func() map[string]any { return request("se-sto-wg-009") }, "ok", "connected to backup", "provider"},
+	"failover-exhausted": {"mullvad", "overlay", func() map[string]any {
+		return schema2(recOpts{Status: "failed", Checks: map[string]any{"handshake": "fail", "egress": "fail"}, Outcome: "applied-unverified",
+			Extra: map[string]any{"failover": map[string]any{"from": serverOf("mullvad"), "to": nil, "phase": "exhausted",
+				"reason": "handshake-failed", "since": "2026-10-10T18:00:00Z", "next_return_at": nil,
+				"tried": []any{"se-sto-wg-002", "se-sto-wg-003"}}}})
+	}, func() map[string]any { return request(serverOf("mullvad")) }, "failed", "failed", ""},
 	"no-status": {"mullvad", "overlay", func() map[string]any { return nil }, func() map[string]any { return nil },
 		"unknown", "awaiting status", ""},
 	// An exit reached through the network exchange that the exchange hasn't

@@ -87,6 +87,19 @@ test('notes: the failure, the unverified switch, and when the applier acts next'
   const odd = structuredClone(cases.moved.payload);
   odd.result.moved = { from: 7, to: 'se-sto-wg-001' };
   assert.equal(describe(odd, TEXT).moved, '');
+  // Automatic failover: the backup, and when the selected server is tried again.
+  assert.equal(describe(cases['failover-backup'].payload, TEXT).failover,
+    'Connected to backup se-sto-wg-001. se-sto-wg-009 has kept failing since 18:00 UTC; trying it again at 18:15 UTC.');
+  assert.equal(describe(cases['failover-manual'].payload, TEXT).failover,
+    'Connected to backup se-sto-wg-001. se-sto-wg-009 has kept failing since 18:00 UTC; pick it again to return.');
+  const exhausted = describe(cases['failover-exhausted'].payload, TEXT);
+  assert.equal(exhausted.failover, 'No backup verified; retrying se-sto-wg-001.');
+  assert.ok(exhausted.note);
+  assert.equal(describe(cases['overlay-ok'].payload, TEXT).failover, '');
+  // The page never judges a backup itself: no verdict member, no line.
+  const unjudged = structuredClone(cases['failover-backup'].payload);
+  delete unjudged.verdict.failover;
+  assert.equal(describe(unjudged, TEXT).failover, '');
   const switching = structuredClone(cases['request-pending'].payload);
   switching.verdict.kind = 'sidecar';
   assert.equal(describe(switching, TEXT).connection, 'Switching server');

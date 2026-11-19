@@ -6,6 +6,27 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- New, experimental, off by default, and not drilled on a real provider:
+  automatic failover ([automatic
+  failover](docs/configuration.md#automatic-failover)). With `FAILOVER=on`
+  (or `same-city`, `same-country`, `servers` with `FAILOVER_SERVERS`), a
+  native exit whose selected server has failed at least three checks over
+  `FAILOVER_AFTER` seconds (300) for reasons that are the server's moves to
+  a backup, if the host's own network answers. A server that stops hearing
+  the exit counts from the first check it leaves unanswered, its handshake
+  still fresh: the tunnel then receives nothing but the server's handshake
+  initiations; a check service that is down, while the tunnel receives
+  anything else, never counts. With `FAILOVER_RETURN=auto`
+  it tries the selected server again after 15, 30 and 60 minutes, then every
+  120. The record's `source` is `failover` and its `failover` member says
+  which server it stands in for; the panel shows "connected to backup", the
+  server that keeps failing and when it is tried again, and "backup" in the
+  exit tabs and in `/api/exits` (a new `backup` member). The episode is kept
+  in the new private file `failover.json`. Refused with the gluetun backend.
+  Nothing changes with failover off. Tested by fake-kernel and panel tests;
+  the defaults are the design's recommendations, which the owner accepted
+  (2026-11-19, issue #90).
+
 - The verdict reads the status record's new `failover` member
   ([design](docs/design/failover.md)): a record on a backup that stands in
   for the reader's target is `ok`, "connected to backup", with the reason

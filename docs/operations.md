@@ -112,7 +112,7 @@ or `not-target-server`. A connected exit may carry `no-selection`: nothing has
 been selected yet, or `server-moved`: its server stands in for one the
 provider retired ([a server the provider retires](architecture.md#a-server-the-provider-retires)),
 or `failover`: it is connected to a backup ([automatic
-failover](design/failover.md), experimental and not yet in any exit). A
+failover](configuration.md#automatic-failover), experimental and off by default). A
 failed or unknown verdict may end with `failover-exhausted`: no backup
 verified. An exit reached through the [network
 exchange](configuration.md#the-network-exchange) may also be `unknown` with
