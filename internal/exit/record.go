@@ -160,9 +160,9 @@ func WithOwnerCheck(rec map[string]any, check validate.Obj) map[string]any {
 // or the worker dies, built from the last record it held (D7). One
 // constructor, three branches:
 //
-//   - a native overlay fails owner_record, routing, netbird and, consistently
-//     (the reader rejects a passed traffic_protection beside a failed
-//     routing), traffic_protection;
+//   - a native overlay fails owner_record, routing, the way in's check
+//     (netbird, wayInChecks) and, consistently (the reader rejects a passed
+//     traffic_protection beside a failed routing), traffic_protection;
 //   - a gluetun overlay fails routing, netbird and traffic_protection and
 //     keeps owner_record n/a;
 //   - a sidecar keeps every fixed field and marks its required checks (peer,
@@ -212,7 +212,9 @@ func FailureRecord(prev map[string]any, s *Settings, lapse time.Time) map[string
 			fail("owner_record")
 		}
 		fail("routing")
-		fail("netbird")
+		for _, name := range wayInChecks(s) {
+			fail(name)
+		}
 		fail("traffic_protection", "from", "routing")
 	}
 	rec["checks"] = checks
