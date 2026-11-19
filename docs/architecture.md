@@ -102,9 +102,8 @@ guessed from the environment. The same Dockerfile also builds the binary
 without NetBird (`--target core`) for the sidecars, which never start NetBird;
 on that image the exit refuses a NetBird exit before reading any other setting.
 Each release publishes it beside the image with NetBird as
-`ghcr.io/irashack/molebridge-core` ([releasing](releasing.md)); the sidecar
-Compose files move to it once a release carries it
-([#47](https://github.com/irashack/molebridge/issues/47)).
+`ghcr.io/irashack/molebridge-core` ([releasing](releasing.md)), and the
+gluetun and native sidecar Compose files run it.
 
 | Container | Role | What it is |
 |---|---|---|

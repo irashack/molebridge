@@ -268,13 +268,19 @@ def coverage_problems(coverage, evidence) -> list[str]:
     return out
 
 
-def compose_pin(compose: str):
-    m = re.search(rf"{re.escape(IMAGE)}:(v\d+\.\d+\.\d+)@({DIGEST})", compose)
+def compose_pin(compose: str, image: str = IMAGE):
+    m = re.search(rf"{re.escape(image)}:(v\d+\.\d+\.\d+)@({DIGEST})", compose)
     return (m[1], m[2]) if m else None
 
 
 def rewrite_pins(text: str, old: str, old_digest: str, old_rc: str | None,
-                 new: str, digest: str, rc: str) -> str:
+                 new: str, digest: str, rc: str,
+                 core: tuple[str, str] | None = None) -> str:
+    """Pins moved from old to new. core is (old core digest, new core digest)
+    for the molebridge-core pins of the sidecar Compose files."""
+    if core:
+        text = text.replace(f"{CORE_IMAGE}:{old}@{core[0]}", f"{CORE_IMAGE}:{new}@{core[1]}")
+        text = text.replace(core[0], core[1])
     text = text.replace(f"{IMAGE}:{old}@{old_digest}", f"{IMAGE}:{new}@{digest}")
     if old_rc:
         text = text.replace(old_rc, rc)
@@ -664,10 +670,17 @@ def step_record(w: World, stable: str) -> str:
         m = re.search(rf"{re.escape(old[0])}-rc\.\d+", setup)
         if m:
             old_rc = m[0]
+        # The sidecar forms pin molebridge-core at the same tag.
+        old_core = compose_pin((root / "compose.sidecar.yaml").read_text(), CORE_IMAGE)
+        if old_core and old_core[0] != old[0]:
+            raise Blocked(f"{BLOCKED}{tag} Compose pins disagree",
+                          f"compose.yaml pins `{old[0]}` but compose.sidecar.yaml pins "
+                          f"molebridge-core `{old_core[0]}`. Pin both to one release by hand.")
+        core = (old_core[1], acc["digests"]["molebridge-core"]) if old_core else None
         for path in PIN_FILES:
             if (root / path).exists():
                 files[path] = rewrite_pins((root / path).read_text(), old[0], old[1], old_rc,
-                                           tag, acc["digests"]["molebridge"], acc["rc"])
+                                           tag, acc["digests"]["molebridge"], acc["rc"], core)
     return make_pr(w, branch, f"{tag}: changelog dated, live acceptance recorded, Compose pins",
                    f"The record of `{tag}`, promoted from `{acc['rc']}` by the release "
                    f"automation: docs/testing.md, the changelog's date, and the Compose files "

@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 # Tests tools/check-bundle.sh with a minimal fake source tree: a good bundle
-# passes; a bundle with an unpinned Molebridge image, a build section, a
+# passes; a bundle with an unpinned Molebridge image, the wrong image for a
+# form (the sidecar forms run molebridge-core), a build section, a
 # missing preflight or an invalid Compose file is refused. Needs GNU tar (tar, or gtar on a Mac),
 # Docker Compose and jq; skips when one is missing.
 set -eu
@@ -17,7 +18,9 @@ done
 docker compose version >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || { echo "SKIP check-bundle tests: docker compose or jq not found"; exit 0; }
 
 digest=sha256:$(printf '0%.0s' $(seq 1 64))
+core_digest=sha256:$(printf '5%.0s' $(seq 1 64))
 ref=ghcr.io/irashack/molebridge:v0.8.0-rc.1@$digest
+core_ref=ghcr.io/irashack/molebridge-core:v0.8.0-rc.1@$core_digest
 src=$work/src
 mkdir -p "$src/routing"
 cp "$root/routing/gluetun-preflight" "$src/routing/gluetun-preflight"
@@ -56,19 +59,19 @@ services:
     volumes:
       - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
   exit:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge-core:0.8
   switchyard:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge-core:0.8
 EOM
 cat > "$src/compose.native-sidecar.yaml" <<'EOM'
 services:
   exit:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge-core:0.8
     environment:
       EXIT_KIND: sidecar
       TUNNEL_BACKEND: native
   switchyard:
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge-core:0.8
     environment:
       EXIT_KIND: sidecar
   example-app:
@@ -77,7 +80,7 @@ services:
     network_mode: service:exit
   port-sync:
     profiles: [port-sync]
-    image: ghcr.io/irashack/molebridge:0.8
+    image: ghcr.io/irashack/molebridge-core:0.8
     network_mode: service:exit
 EOM
 echo 'PROVIDER=mullvad' > "$src/.env.example"
@@ -86,15 +89,38 @@ echo 'X=1' > "$src/.env.sidecar.example"
 printf 'COMPOSE_PROFILES=example\n' > "$src/.env.native-sidecar.example"
 echo MIT > "$src/LICENSE"; echo notices > "$src/THIRD_PARTY.md"
 
-make() { BUNDLE_SOURCE=$src sh "$here/make-bundle.sh" v0.8.0-rc.1 "$digest" "$1" >/dev/null; }
+make() { BUNDLE_SOURCE=$src sh "$here/make-bundle.sh" v0.8.0-rc.1 "$digest" "$core_digest" "$1" >/dev/null; }
 mkdir -p "$work/good"
 make "$work/good"
-sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "$ref" >/dev/null || fail "good bundle refused"
+sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "$ref" "$core_ref" >/dev/null || fail "good bundle refused"
 pass "a good bundle installs"
 
-sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "ghcr.io/irashack/molebridge:v0.8.0@$digest" >/dev/null 2>&1 &&
+sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "ghcr.io/irashack/molebridge:v0.8.0@$digest" "$core_ref" >/dev/null 2>&1 &&
     fail "accepted a bundle for another reference"
 pass "refuses a bundle pinned to another reference"
+sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "$ref" "ghcr.io/irashack/molebridge-core:v0.8.0@$core_digest" >/dev/null 2>&1 &&
+    fail "accepted a bundle for another core reference"
+sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "$ref" >/dev/null 2>&1 &&
+    fail "ran without a core reference"
+sh "$here/check-bundle.sh" "$work/good/molebridge-v0.8.0-rc.1.tar.gz" "$core_ref" "$ref" >/dev/null 2>&1 &&
+    fail "accepted the references swapped"
+pass "refuses another core reference, a missing one and swapped ones"
+
+# A sidecar form on the NetBird image, and a NetBird form on core.
+mkdir -p "$work/bad/w"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/w"
+sed "s#$core_ref#$ref#" "$work/bad/w/molebridge-v0.8.0-rc.1/compose.sidecar.yaml" > "$work/bad/c" &&
+    cp "$work/bad/c" "$work/bad/w/molebridge-v0.8.0-rc.1/compose.sidecar.yaml"
+tar -czf "$work/bad/wrong.tar.gz" -C "$work/bad/w" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/wrong.tar.gz" "$ref" "$core_ref" >"$work/bad/out" 2>&1 && fail "accepted a sidecar form on the NetBird image"
+grep -q 'FAIL compose.sidecar.yaml references a Molebridge image other than' "$work/bad/out" || { cat "$work/bad/out" >&2; fail "wrong image: wrong message"; }
+mkdir -p "$work/bad/v"
+tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/v"
+sed "s#$ref#$core_ref#" "$work/bad/v/molebridge-v0.8.0-rc.1/compose.gluetun.yaml" > "$work/bad/c" &&
+    cp "$work/bad/c" "$work/bad/v/molebridge-v0.8.0-rc.1/compose.gluetun.yaml"
+tar -czf "$work/bad/wrong2.tar.gz" -C "$work/bad/v" molebridge-v0.8.0-rc.1
+sh "$here/check-bundle.sh" "$work/bad/wrong2.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted the gluetun overlay form on core"
+pass "refuses a sidecar form on the NetBird image and an overlay form on core"
 
 # An unpinned image slipped past the packer: edit the extracted archive by hand.
 mkdir -p "$work/bad/x"
@@ -102,7 +128,7 @@ tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/x"
 sed 's#image: ghcr.io/irashack/molebridge:.*#image: ghcr.io/irashack/molebridge:0.8#' "$work/bad/x/molebridge-v0.8.0-rc.1/compose.yaml" > "$work/bad/c" &&
     cp "$work/bad/c" "$work/bad/x/molebridge-v0.8.0-rc.1/compose.yaml"
 tar -czf "$work/bad/unpinned.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/unpinned.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted an unpinned image"
+sh "$here/check-bundle.sh" "$work/bad/unpinned.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted an unpinned image"
 pass "refuses an unpinned image"
 
 # A build section put back by hand, on the native sidecar's profiled port-sync.
@@ -113,7 +139,7 @@ awk '{ print } /port-sync:/ { p = 1 } p && /^    image: / { print "    build: {c
     cp "$work/bad/c" "$work/bad/b/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml"
 grep -q 'build: {context: .}' "$work/bad/b/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml" || fail "the test did not add a build section"
 tar -czf "$work/bad/build.tar.gz" -C "$work/bad/b" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/build.tar.gz" "$ref" >"$work/bad/out" 2>&1 && fail "accepted a service with a build section"
+sh "$here/check-bundle.sh" "$work/bad/build.tar.gz" "$ref" "$core_ref" >"$work/bad/out" 2>&1 && fail "accepted a service with a build section"
 grep -q 'FAIL compose.native-sidecar.yaml builds port-sync from a Dockerfile' "$work/bad/out" || { cat "$work/bad/out" >&2; fail "a build section: wrong message"; }
 pass "refuses a service with a build section"
 
@@ -123,7 +149,7 @@ tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/k"
 sed 's/MOLEBRIDGE_KIND: overlay/MOLEBRIDGE_KIND: sidecar/' "$work/bad/k/molebridge-v0.8.0-rc.1/compose.gluetun.yaml" > "$work/bad/c" &&
     cp "$work/bad/c" "$work/bad/k/molebridge-v0.8.0-rc.1/compose.gluetun.yaml"
 tar -czf "$work/bad/kind.tar.gz" -C "$work/bad/k" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/kind.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a gluetun form with the wrong kind"
+sh "$here/check-bundle.sh" "$work/bad/kind.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a gluetun form with the wrong kind"
 pass "refuses a gluetun form that tells its preflight the wrong kind"
 mkdir -p "$work/bad/s"
 tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/s"
@@ -131,7 +157,7 @@ grep -v 'switchyard:\|image: ghcr.io/irashack/molebridge' "$work/bad/s/molebridg
 printf '  switchyard:\n    image: %s\n' "$ref" >> "$work/bad/c"
 cp "$work/bad/c" "$work/bad/s/molebridge-v0.8.0-rc.1/compose.yaml"
 tar -czf "$work/bad/noexit.tar.gz" -C "$work/bad/s" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/noexit.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native form without its exit service"
+sh "$here/check-bundle.sh" "$work/bad/noexit.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a native form without its exit service"
 pass "refuses a native form without its exit service"
 
 # The native sidecar form: port-sync runs only in its profile, and an unpinned
@@ -143,27 +169,27 @@ bad_native() { # name sed-expression
         cp "$work/bad/c" "$work/bad/n-$1/molebridge-v0.8.0-rc.1/compose.native-sidecar.yaml"
     tar -czf "$work/bad/n-$1.tar.gz" -C "$work/bad/n-$1" molebridge-v0.8.0-rc.1
 }
-bad_native unpinned '/port-sync:/,$ s#image: ghcr.io/irashack/molebridge:.*#image: ghcr.io/irashack/molebridge:0.8#'
-sh "$here/check-bundle.sh" "$work/bad/n-unpinned.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted an unpinned port-sync image"
+bad_native unpinned '/port-sync:/,$ s#image: ghcr.io/irashack/molebridge-core:.*#image: ghcr.io/irashack/molebridge-core:0.8#'
+sh "$here/check-bundle.sh" "$work/bad/n-unpinned.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted an unpinned port-sync image"
 pass "refuses a native sidecar whose port-sync image is not pinned"
 bad_native noport '/port-sync:/,$ s#port-sync:#port-sync-gone:#'
-sh "$here/check-bundle.sh" "$work/bad/n-noport.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar without port-sync"
+sh "$here/check-bundle.sh" "$work/bad/n-noport.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a native sidecar without port-sync"
 pass "refuses a native sidecar without its port-sync service"
 bad_native backend 's/TUNNEL_BACKEND: native/TUNNEL_BACKEND: gluetun/'
-sh "$here/check-bundle.sh" "$work/bad/n-backend.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar with the wrong backend"
+sh "$here/check-bundle.sh" "$work/bad/n-backend.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a native sidecar with the wrong backend"
 pass "refuses a native sidecar form that is not the native backend"
 bad_native panelkind '/switchyard:/,/example-app:/ s/EXIT_KIND: sidecar/EXIT_KIND: overlay/'
-sh "$here/check-bundle.sh" "$work/bad/n-panelkind.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a native sidecar panel of the wrong kind"
+sh "$here/check-bundle.sh" "$work/bad/n-panelkind.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a native sidecar panel of the wrong kind"
 pass "refuses a native sidecar form whose panel is not the sidecar kind"
 mkdir -p "$work/bad/m"
 tar -xzf "$work/good/molebridge-v0.8.0-rc.1.tar.gz" -C "$work/bad/m"
 rm "$work/bad/m/molebridge-v0.8.0-rc.1/.env.native-sidecar.example"
 tar -czf "$work/bad/nonative.tar.gz" -C "$work/bad/m" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/nonative.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a bundle without the native sidecar's env example"
+sh "$here/check-bundle.sh" "$work/bad/nonative.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a bundle without the native sidecar's env example"
 pass "refuses a bundle without the native sidecar's env example"
 
 rm "$work/bad/x/molebridge-v0.8.0-rc.1/routing/gluetun-preflight"
 tar -czf "$work/bad/nopreflight.tar.gz" -C "$work/bad/x" molebridge-v0.8.0-rc.1
-sh "$here/check-bundle.sh" "$work/bad/nopreflight.tar.gz" "$ref" >/dev/null 2>&1 && fail "accepted a bundle without the preflight"
+sh "$here/check-bundle.sh" "$work/bad/nopreflight.tar.gz" "$ref" "$core_ref" >/dev/null 2>&1 && fail "accepted a bundle without the preflight"
 pass "refuses a bundle without the preflight"
 echo "all check-bundle tests passed"

@@ -81,6 +81,7 @@ jobs:
         id: bundle
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
         run: |
           set -euo pipefail
           if ! grep -q 'ghcr.io/irashack/molebridge' compose.yaml; then
@@ -90,7 +91,7 @@ jobs:
           fi
           echo "built=true" >> "$GITHUB_OUTPUT"
           mkdir -p dist
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$DIGEST" dist
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$DIGEST" "$CORE_DIGEST" dist
           cosign sign-blob --yes --bundle dist/molebridge-v0.0.0-rc.0.tar.gz.sigstore.json dist/molebridge-v0.0.0-rc.0.tar.gz
       - name: Attest the rehearsal bundle
         if: steps.bundle.outputs.built == 'true'
@@ -225,9 +226,10 @@ jobs:
       - name: Build and sign the bundle
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh "$GITHUB_REF_NAME" "$DIGEST" dist
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh "$GITHUB_REF_NAME" "$DIGEST" "$CORE_DIGEST" dist
           cosign sign-blob --yes --bundle "dist/molebridge-$GITHUB_REF_NAME.tar.gz.sigstore.json" "dist/molebridge-$GITHUB_REF_NAME.tar.gz"
           sha256sum "dist/molebridge-$GITHUB_REF_NAME.tar.gz" | tee "$RUNNER_TEMP/bundle.sha256"
       - name: Attest the bundle
@@ -396,9 +398,10 @@ jobs:
       - name: Build and sign the bundle
         env:
           DIGEST: ${{ steps.rc.outputs.digest }}
+          CORE_DIGEST: ${{ steps.rc.outputs.core_digest }}
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh "$GITHUB_REF_NAME" "$DIGEST" dist
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh "$GITHUB_REF_NAME" "$DIGEST" "$CORE_DIGEST" dist
           cosign sign-blob --yes --bundle "dist/molebridge-$GITHUB_REF_NAME.tar.gz.sigstore.json" "dist/molebridge-$GITHUB_REF_NAME.tar.gz"
       - name: Attest the bundle
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

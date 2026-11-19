@@ -67,8 +67,8 @@ candidate` job of `release.yml`, which:
    client, as `ghcr.io/irashack/molebridge-core:v0.10.0-rc.1`. Both images
    come from the same commit and run, and both carry the candidate's version;
 3. builds `molebridge-v0.10.0-rc.1.tar.gz` with `tools/make-bundle.sh`, which
-   rewrites every image reference in the Compose files to that tag and
-   digest, signs it (`.sigstore.json`) and attests its provenance;
+   rewrites every image reference in the Compose files to that tag and the
+   image's digest (molebridge-core in the two sidecar forms), signs it (`.sigstore.json`) and attests its provenance;
 4. writes the release notes (`tools/release-notes.sh`), with the commit and
    both images' digests;
 5. creates a GitHub pre-release with the bundle, its signature and the SBOMs
@@ -229,11 +229,12 @@ On `main`, in separate commits as before:
    acceptance run, and give the changelog entry its date.
 2. **The Compose pins.** The Compose files in the source pin the latest
    release by tag and digest, so a checkout runs a published image. Replace
-   the image reference in `compose.yaml`, `compose.gluetun.yaml`,
-   `compose.sidecar.yaml` and `compose.native-sidecar.yaml` (every service
-   that runs the Molebridge image) with
-   `ghcr.io/irashack/molebridge:v0.10.0@sha256:<index digest>`, from the
-   release notes. Update the example tags that follow it: the bundle example
+   the image reference in `compose.yaml` and `compose.gluetun.yaml` (every
+   service that runs the Molebridge image) with
+   `ghcr.io/irashack/molebridge:v0.10.0@sha256:<index digest>`, and in
+   `compose.sidecar.yaml` and `compose.native-sidecar.yaml` with
+   `ghcr.io/irashack/molebridge-core:v0.10.0@sha256:<core index digest>`,
+   both from the release notes. Update the example tags that follow it: the bundle example
    in the README, `TAG` and `RC` in [setup](setup.md#1-download-and-verify)
    and the placeholder in `.github/ISSUE_TEMPLATE/bug.yml`. Then run
    `docker compose config` for each form and `sh tools/check-compose.sh`, as
@@ -242,7 +243,7 @@ On `main`, in separate commits as before:
    run from a checkout.
 
 ```sh
-grep -rn 'ghcr.io/irashack/molebridge:' compose*.yaml README.md docs/setup.md .github/ISSUE_TEMPLATE/bug.yml
+grep -rnE 'ghcr.io/irashack/molebridge(-core)?:' compose*.yaml README.md docs/setup.md .github/ISSUE_TEMPLATE/bug.yml
 ```
 
 ## Automatic releases
