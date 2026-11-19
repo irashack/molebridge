@@ -101,7 +101,8 @@ func newExchangeRig(t *testing.T) *systemRig {
 	return r
 }
 
-func (r *systemRig) panelState() string { return filepath.Dir(r.panelOwn) }
+// panelState is the panel's state directory, STATE_DIR on the panel's node.
+func (r *systemRig) panelState() string { return filepath.Dir(filepath.Dir(r.panelOwn)) }
 
 // startExchange runs the exchange role in "panelnode" and waits until it
 // answers over TLS.
