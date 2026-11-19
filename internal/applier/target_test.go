@@ -26,8 +26,7 @@ func (m *multiExit) attemptFile(t testing.TB) map[string]any {
 func TestAChangeOfProviderBetweenEveryPair(t *testing.T) {
 	for _, from := range allThree {
 		for _, to := range allThree {
-			if from == to || from == "pia" {
-				// Leaving PIA is the design's step 4.
+			if from == to {
 				continue
 			}
 			t.Run(from+"_to_"+to, func(t *testing.T) {
@@ -298,18 +297,6 @@ func TestServerNamesItsProviderOnAMultiProviderExit(t *testing.T) {
 	m = newMulti(t, "", "mullvad", allThree, func(c *Config) { c.Server = "nordvpn/us9999.nordvpn.com" })
 	if r := mustTick(t, m.a); !strings.HasPrefix(message(r), "Unknown SERVER") {
 		t.Fatalf("%s", message(r))
-	}
-}
-
-func TestLeavingPIAIsRefusedUntilItIsBuilt(t *testing.T) {
-	m := newMulti(t, "", "pia", allThree, nil)
-	m.a.switchTo(t, targetOf("pia"))
-	r := m.a.switchTo(t, targetOf("mullvad"))
-	if status(r) == "ok" || len(m.tunnels.replaced) != 0 || m.a.Providers().Active() != "pia" {
-		t.Fatalf("%s %v %s", status(r), m.tunnels.replaced, m.a.Providers().Active())
-	}
-	if at := m.attemptFile(t); at["mutation_certainty"] != "definite" {
-		t.Fatalf("attempt %v", at)
 	}
 }
 
