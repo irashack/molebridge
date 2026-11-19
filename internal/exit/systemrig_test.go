@@ -150,7 +150,10 @@ type systemRig struct {
 	roots    *x509.CertPool
 	caPath   string
 	cert     tls.Certificate
-	catalog  []byte
+	// retired are the relays the fake relay API leaves out.
+	retired map[string]bool
+	// The overlay's keys, kept to key the overlay again after a restart.
+	wt0Key, clientKey wgtypes.Key
 
 	panelNS  *nstest.NS
 	panelOut *syncBuf
@@ -510,9 +513,15 @@ func (r *systemRig) relayBySNAT(a netip.Addr) *rigRelay {
 	return nil
 }
 
-func (r *systemRig) startServers() {
+// catalogJSON is the fake relay API's answer: every relay not retired.
+func (r *systemRig) catalogJSON() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var relays []any
 	for _, rl := range r.relays {
+		if r.retired[rl.host] {
+			continue
+		}
 		relays = append(relays, map[string]any{
 			"hostname": rl.host, "location": rigLocation, "active": true, "owned": true, "stboot": true,
 			"provider": "Example Hosting", "ipv4_addr_in": rl.endpoint, "public_key": rl.key.PublicKey().String(),
@@ -525,7 +534,20 @@ func (r *systemRig) startServers() {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.catalog = catalog
+	return catalog
+}
+
+// retire takes a relay out of the fake relay API's list, or puts it back.
+func (r *systemRig) retire(host string, retired bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retired == nil {
+		r.retired = map[string]bool{}
+	}
+	r.retired[host] = retired
+}
+
+func (r *systemRig) startServers() {
 	relayPath := strings.TrimPrefix(providers.MullvadRelaysURL, "https://api.mullvad.net")
 	api := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.logServed("api %s %s%s from %s", req.Method, req.Host, req.URL.Path, req.RemoteAddr)
@@ -534,7 +556,7 @@ func (r *systemRig) startServers() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(r.catalog)
+		_, _ = w.Write(r.catalogJSON())
 	})
 	check := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		host, _, _ := net.SplitHostPort(req.RemoteAddr)
@@ -656,15 +678,10 @@ func (r *systemRig) start() *exitProc {
 // client's end of it, as NetBird would have connected a peer.
 func (r *systemRig) connectOverlay() {
 	t := r.t
-	wt0Key, clientKey := rigKey(t), rigKey(t)
+	r.wt0Key, r.clientKey = rigKey(t), rigKey(t)
+	wt0Key, clientKey := r.wt0Key, r.clientKey
 	exitPort, clientPort, keepalive := 51830, 51831, 5*time.Second
-	wgSet(t, r.exit, dOverlay, wgtypes.Config{PrivateKey: &wt0Key, ListenPort: &exitPort, ReplacePeers: true, Peers: []wgtypes.PeerConfig{{
-		PublicKey: clientKey.PublicKey(), Endpoint: &net.UDPAddr{IP: net.ParseIP("198.51.100.14"), Port: clientPort},
-		ReplaceAllowedIPs: true, AllowedIPs: rigPrefixes(t, rigClient4+"/32", rigClient6+"/128"), PersistentKeepaliveInterval: &keepalive,
-	}}})
-	r.exit.IP("addr", "add", "192.0.2.1/24", "dev", dOverlay)
-	r.exit.IP("-6", "addr", "add", "2001:db8:1::1/64", "dev", dOverlay, "nodad")
-	r.exit.IP("link", "set", dOverlay, "up")
+	r.keyOverlay()
 
 	c := r.client
 	c.IP("link", "add", "wgc", "type", "wireguard")
@@ -675,6 +692,21 @@ func (r *systemRig) connectOverlay() {
 	addrUp(c, "wgc", rigClient4+"/24", rigClient6+"/64")
 	c.IP("route", "add", "default", "dev", "wgc")
 	c.IP("-6", "route", "add", "default", "dev", "wgc")
+}
+
+// keyOverlay keys the exit's end of the overlay with the keys connectOverlay
+// made: once, and again after the exit restarts and the fake NetBird
+// creates the interface anew.
+func (r *systemRig) keyOverlay() {
+	t := r.t
+	exitPort, clientPort, keepalive := 51830, 51831, 5*time.Second
+	wgSet(t, r.exit, dOverlay, wgtypes.Config{PrivateKey: &r.wt0Key, ListenPort: &exitPort, ReplacePeers: true, Peers: []wgtypes.PeerConfig{{
+		PublicKey: r.clientKey.PublicKey(), Endpoint: &net.UDPAddr{IP: net.ParseIP("198.51.100.14"), Port: clientPort},
+		ReplaceAllowedIPs: true, AllowedIPs: rigPrefixes(t, rigClient4+"/32", rigClient6+"/128"), PersistentKeepaliveInterval: &keepalive,
+	}}})
+	r.exit.IP("addr", "add", "192.0.2.1/24", "dev", dOverlay)
+	r.exit.IP("-6", "addr", "add", "2001:db8:1::1/64", "dev", dOverlay, "nodad")
+	r.exit.IP("link", "set", dOverlay, "up")
 }
 
 // startPanel runs `molebridge panel` in a namespace of its own, as uid 65534

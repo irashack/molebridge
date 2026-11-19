@@ -179,7 +179,7 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
           sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
-            go test -count=1 -v -timeout 12m -parallel 8 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+            go test -count=1 -v -timeout 12m -parallel 9 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 
   image:
     name: Image (amd64 and arm64)

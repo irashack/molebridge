@@ -166,12 +166,18 @@ with a certificate from the rig's authority) in a "panelnode" namespace with
 link state (`last_contact_at` fresh, `clock_offset_s` about 0), `/api/exits` `ok`, a switch shown
 verified on the panel's side, the 409 and the failed switch with Retry through the exchange, and
 the exchange restarted with an empty volume ("exit unreachable", then the copies back, the server
-kept and the panel driving the exit again). Every drill runs at once; the stopped exit, which waits
+kept and the panel driving the exit again). `TestSystemRigRetiredServer` runs the [retired-server
+move](docs/architecture.md#a-server-the-provider-retires) on the native Mullvad exit, which has no
+live procedure: relay A, requested through the panel, leaves the fake relay API's list and the exit
+is restarted (the native exit reads the list at start and every six hours), so it moves to relay B
+with `moved` (`left-catalogue`), the log line, `location.json` and the panel's `server-moved` note;
+with A listed again and another restart it returns to A. The gluetun form's move, where gluetun's
+`servers.json` changes and gluetun itself reconnects, is not on the rig. Every drill runs at once; the stopped exit, which waits
 out the 150-second evidence age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
-go test -count=1 -v -timeout 12m -parallel 8 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+go test -count=1 -v -timeout 12m -parallel 9 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 ```
 
 A stopped container takes its namespace with it; on the rig the exit's namespace stays, so the stopped

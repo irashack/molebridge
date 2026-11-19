@@ -21,6 +21,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   the link state, a switch shown verified on the panel's side, the 409 and
   Retry drills through it, and the exchange restarted with an empty volume
   ([contributing](CONTRIBUTING.md#the-system-rig)).
+- And the retired-server move on the native Mullvad exit, until now covered
+  by `go test` only: the requested server leaves the relay API's list, the
+  exit moves to the next server of its city with `moved` and the panel's
+  note, and returns once the server is listed again
+  ([contributing](CONTRIBUTING.md#the-system-rig)).
 
 ## 0.12.0 — unreleased
 
