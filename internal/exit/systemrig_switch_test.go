@@ -14,21 +14,10 @@ import (
 // from the client may reach the internet by the exit's host path at any
 // point.
 func TestSystemRigClientSwitch(t *testing.T) {
+	t.Parallel()
 	r := newSystemRig(t)
 	a, b := r.relays[0], r.relays[1]
-	p := r.start()
-	r.waitReady(p)
-	r.connectOverlay()
-	r.startPanel()
-
-	started := time.Now()
-	r.waitFor(120*time.Second, "result.json ok and verified on "+a.host, func() bool {
-		if !p.running() {
-			t.Fatalf("the exit stopped (%d):\n%s", p.code, p.out.String())
-		}
-		return r.verified(a, "")
-	})
-	t.Logf("verified on %s %v after NetBird was up; selection %s", a.host, time.Since(started).Round(time.Millisecond), jsonText(r.result()["selection"]))
+	p := r.bringUp()
 	r.clientVia(a, 30*time.Second)
 
 	stop := make(chan struct{})
@@ -40,12 +29,7 @@ func TestSystemRigClientSwitch(t *testing.T) {
 	var times []switchTime
 	for _, step := range []struct{ from, to *rigRelay }{{a, b}, {b, a}} {
 		id, at := r.panelSwitch(step.to.host)
-		r.waitFor(120*time.Second, "result.json verified on "+step.to.host+" for request "+id, func() bool {
-			if !p.running() {
-				t.Fatalf("the exit stopped (%d):\n%s", p.code, p.out.String())
-			}
-			return r.verified(step.to, id)
-		})
+		r.waitVerified(p, step.to, id, 120*time.Second)
 		verified := time.Since(at)
 		client := r.clientVia(step.to, 30*time.Second).Sub(at)
 		times = append(times, switchTime{step.from.host, step.to.host, verified, client})
