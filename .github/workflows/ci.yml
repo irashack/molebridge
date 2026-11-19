@@ -324,9 +324,11 @@ jobs:
         # without a checkout.
         run: |
           digest=sha256:$(printf '0%.0s' $(seq 1 64))
+          core=sha256:$(printf '1%.0s' $(seq 1 64))
           mkdir -p "$RUNNER_TEMP/bundle"
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$digest" "$RUNNER_TEMP/bundle"
-          sh tools/check-bundle.sh "$RUNNER_TEMP/bundle/molebridge-v0.0.0-rc.0.tar.gz" "ghcr.io/irashack/molebridge:v0.0.0-rc.0@$digest"
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) sh tools/make-bundle.sh v0.0.0-rc.0 "$digest" "$core" "$RUNNER_TEMP/bundle"
+          sh tools/check-bundle.sh "$RUNNER_TEMP/bundle/molebridge-v0.0.0-rc.0.tar.gz" \
+            "ghcr.io/irashack/molebridge:v0.0.0-rc.0@$digest" "ghcr.io/irashack/molebridge-core:v0.0.0-rc.0@$core"
       - name: Workflows
         run: |
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color

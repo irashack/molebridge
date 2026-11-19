@@ -54,11 +54,16 @@ open through the exit drop when it switches.
 
 ## What Molebridge is
 
-You pull one signed image and run it.
+You pull one signed image and run it: `ghcr.io/irashack/molebridge` for a
+NetBird exit, `ghcr.io/irashack/molebridge-core` for a gluetun or native
+sidecar.
 
-- **One image, one binary.** `ghcr.io/irashack/molebridge` (amd64 and arm64)
-  holds one Go binary, `molebridge`, and the pinned NetBird client. The first
-  argument picks the role: `exit`, `panel`, `health`, `status`,
+- **Two images, one binary.** `ghcr.io/irashack/molebridge` (amd64 and arm64)
+  holds one Go binary, `molebridge`, and the pinned NetBird client.
+  `ghcr.io/irashack/molebridge-core` holds the same binary without NetBird;
+  the sidecar Compose files run it, and its exit refuses a NetBird exit. Both
+  come from one commit and are released together. The first argument picks
+  the role: `exit`, `panel`, `health`, `status`,
   `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
   `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`, `port-sync` and
   `exchange` (the experimental [network exchange](docs/configuration.md#the-network-exchange)).
@@ -143,7 +148,8 @@ You pull a signed image and run it with Compose; the commands are in
    docker compose up -d
    ```
 
-The bundle pins the image by tag and digest (`ghcr.io/irashack/molebridge:v0.12.0@sha256:...`),
+The bundle pins each image by tag and digest (`ghcr.io/irashack/molebridge:v0.12.0@sha256:...`,
+and `ghcr.io/irashack/molebridge-core` in the two sidecar forms),
 so the image that runs is the one you verified. A release tag never moves;
 `:0.9`, without the `v`, follows the newest 0.9 patch release
 ([image tags](docs/compatibility.md#image-tags)). To build from source instead,

@@ -180,17 +180,38 @@ class Pins(unittest.TestCase):
         self.assertIsNotNone(pin)
         self.assertRegex(pin[0], r"^v\d+\.\d+\.\d+$")
 
+    def test_real_core_pin(self):
+        # The sidecar forms pin molebridge-core at compose.yaml's tag.
+        pin = ar.compose_pin((ROOT / "compose.yaml").read_text())
+        core = ar.compose_pin((ROOT / "compose.sidecar.yaml").read_text(), ar.CORE_IMAGE)
+        self.assertIsNotNone(core)
+        self.assertEqual(core[0], pin[0])
+        self.assertNotEqual(core[1], pin[1])
+
     def test_rewrite_real_files(self):
         old, old_d = ar.compose_pin((ROOT / "compose.yaml").read_text())
+        _, old_core = ar.compose_pin((ROOT / "compose.sidecar.yaml").read_text(), ar.CORE_IMAGE)
         for path in ar.PIN_FILES:
             text = (ROOT / path).read_text()
-            out = ar.rewrite_pins(text, old, old_d, f"{old}-rc.1", "v9.9.9", D1, "v9.9.9-rc.2")
+            out = ar.rewrite_pins(text, old, old_d, f"{old}-rc.1", "v9.9.9", D1, "v9.9.9-rc.2",
+                                  (old_core, D2))
             self.assertNotIn(old_d, out, path)
+            self.assertNotIn(old_core, out, path)
             self.assertNotRegex(out, rf"{old.replace('.', '[.]')}(?!\d|\.\d|-)", path)
             if f"ghcr.io/irashack/molebridge:{old}@{old_d}" in text:
                 self.assertIn(f"ghcr.io/irashack/molebridge:v9.9.9@{D1}", out, path)
-            # molebridge-core references and other versions are left alone.
+            if f"ghcr.io/irashack/molebridge-core:{old}@{old_core}" in text:
+                self.assertIn(f"ghcr.io/irashack/molebridge-core:v9.9.9@{D2}", out, path)
+                self.assertNotIn(f"ghcr.io/irashack/molebridge-core:v9.9.9@{D1}", out, path)
             self.assertEqual(text.count("molebridge-core"), out.count("molebridge-core"), path)
+
+    def test_rewrite_core_takes_its_own_digest(self):
+        d3, d4 = "sha256:" + "c" * 64, "sha256:" + "d" * 64
+        text = (f"ghcr.io/irashack/molebridge:v0.12.0@{D1}\n"
+                f"ghcr.io/irashack/molebridge-core:v0.12.0@{D2}\n")
+        out = ar.rewrite_pins(text, "v0.12.0", D1, None, "v0.13.0", d3, "v0.13.0-rc.1", (D2, d4))
+        self.assertEqual(out, f"ghcr.io/irashack/molebridge:v0.13.0@{d3}\n"
+                              f"ghcr.io/irashack/molebridge-core:v0.13.0@{d4}\n")
 
     def test_rewrite_does_not_touch_longer_versions(self):
         out = ar.rewrite_pins("v0.11.1 v0.11.10 v0.11.1-rc.1 v0.11.1.", "v0.11.1", D2,

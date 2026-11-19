@@ -605,7 +605,7 @@ spec:
     nameservers: ["10.0.0.243", "10.0.0.242"]   # PIA's resolvers, inside the tunnel
   initContainers:
     - name: exit
-      image: ghcr.io/irashack/molebridge:<tag>@sha256:<digest>   # the verified reference
+      image: ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>   # the verified reference
       args: ["exit"]
       restartPolicy: Always            # a sidecar container: it keeps running
       env:
@@ -650,7 +650,7 @@ spec:
         capabilities:
           drop: [ALL]
     - name: port-sync
-      image: ghcr.io/irashack/molebridge:<tag>@sha256:<digest>
+      image: ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>
       args: ["port-sync"]
       env:
         - {name: STATE_DIR, value: /state}

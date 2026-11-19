@@ -6,7 +6,9 @@
 # (the exit and Switchyard, plus gluetun for the gluetun forms, and the example
 # application and port-sync, in their profiles, for the native sidecar), that
 # every Molebridge image they reference, port-sync's included, is the exact
-# pinned tag@digest reference the bundle was built with, that no service has a
+# pinned tag@digest reference the bundle was built with (molebridge for the
+# native and gluetun forms, which run NetBird; molebridge-core for the two
+# sidecar forms, which do not), that no service has a
 # build section (the bundle has no Dockerfile), that the native
 # sidecar's exit is the native sidecar kind and the panel is the sidecar
 # kind, that the relative file the gluetun forms bind-mount
@@ -15,10 +17,14 @@
 # control-server role file, an unset kind and the wrong post-rules for its kind,
 # and accepts the role file the tools write. Needs Docker Compose and jq;
 # starts no container.
-#   sh tools/check-bundle.sh <bundle.tar.gz> <tag@sha256:digest reference>
+#   sh tools/check-bundle.sh <bundle.tar.gz> <molebridge tag@sha256:digest reference> <molebridge-core reference>
 set -eu
-bundle=${1:?usage: sh tools/check-bundle.sh <bundle.tar.gz> <image-reference>}
-ref=${2:?usage: sh tools/check-bundle.sh <bundle.tar.gz> <image-reference>}
+usage='usage: sh tools/check-bundle.sh <bundle.tar.gz> <image-reference> <core-image-reference>'
+bundle=${1:?$usage}
+ref=${2:?$usage}
+core_ref=${3:?$usage}
+case "$ref" in ghcr.io/irashack/molebridge:*@sha256:*) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case "$core_ref" in ghcr.io/irashack/molebridge-core:*@sha256:*) ;; *) echo "$usage" >&2; exit 2 ;; esac
 case "$bundle" in /*) ;; *) bundle=$(pwd)/$bundle ;; esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
@@ -53,17 +59,19 @@ resolved() {
         docker compose --env-file "$2" -f "$1" config --format json
     fi
 }
-for form in "compose.yaml:.env" "compose.gluetun.yaml:.env.gluetun.example" "compose.sidecar.yaml:.env.sidecar.example" "compose.native-sidecar.yaml:.env.native-sidecar.example"; do
+for form in "compose.yaml:.env:$ref" "compose.gluetun.yaml:.env.gluetun.example:$ref" "compose.sidecar.yaml:.env.sidecar.example:$core_ref" "compose.native-sidecar.yaml:.env.native-sidecar.example:$core_ref"; do
     file=${form%%:*}
-    envfile=${form#*:}
+    rest=${form#*:}
+    envfile=${rest%%:*}
+    want=${rest#*:}
     images=$(resolved "$file" "$envfile" | jq -r '.services[].image // empty')
     mine=$(echo "$images" | grep '^ghcr\.io/irashack/molebridge' || true)
     [ -n "$mine" ] || fail "$file references no Molebridge image"
-    echo "$mine" | grep -vxF "$ref" && fail "$file references a Molebridge image other than $ref"
+    echo "$mine" | grep -vxF "$want" && fail "$file references a Molebridge image other than $want"
     built=$(resolved "$file" "$envfile" | jq -r '.services | to_entries[] | select(.value.build != null) | .key')
     [ -z "$built" ] || fail "$file builds $(echo "$built" | tr '\n' ' ')from a Dockerfile the bundle does not have"
 done
-pass "every Molebridge image is the pinned reference, and nothing is built"
+pass "every Molebridge image is its form's pinned reference, and nothing is built"
 
 # Services, and the kind each gluetun form tells its preflight.
 services() { resolved "$1" "$2" | jq -r '.services | keys | join(" ")'; }

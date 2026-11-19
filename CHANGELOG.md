@@ -27,6 +27,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   note, and returns once the server is listed again
   ([contributing](CONTRIBUTING.md#the-system-rig)).
 
+- The gluetun and native sidecar Compose files run
+  `ghcr.io/irashack/molebridge-core`, the image without NetBird, which live
+  acceptance has tested in both sidecar forms since 0.12.0. To move an
+  existing sidecar, change its image to molebridge-core at the same release;
+  nothing else changes, and the image with NetBird keeps working as a sidecar
+  ([#47](https://github.com/irashack/molebridge/issues/47)).
+  `tools/make-bundle.sh` takes the core digest as its third argument and pins
+  each form to its image, and `tools/check-bundle.sh` and
+  `tools/check-compose.sh` refuse a sidecar form on the image with NetBird or
+  a NetBird form on core. The release automation moves both images' pins.
+
 ## 0.12.0 — 2026-11-19
 
 **Experimental.** Upgrade from 0.11.1 by moving to the new image;

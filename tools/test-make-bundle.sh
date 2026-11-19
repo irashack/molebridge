@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Tests tools/make-bundle.sh on a fake source tree: the image rewrite in every
-# form, the build sections removed, the member list and metadata,
+# Tests tools/make-bundle.sh on a fake source tree: the rewrite of both
+# images in every form, the build sections removed, the member list and metadata,
 # determinism, and the refusals. Needs GNU
 # tar (tar, or gtar on a Mac); without it the test says so and skips.
 set -eu
@@ -20,7 +20,9 @@ tar=$have_gnu_tar
 
 digest=sha256:0000000000000000000000000000000000000000000000000000000000000000
 other=sha256:1111111111111111111111111111111111111111111111111111111111111111
+core=sha256:5555555555555555555555555555555555555555555555555555555555555555
 ref=ghcr.io/irashack/molebridge:v0.8.0@$digest
+core_ref=ghcr.io/irashack/molebridge-core:v0.8.0@$core
 
 src=$work/src
 mkdir -p "$src/routing"
@@ -51,10 +53,12 @@ services:
     image: ghcr.io/irashack/molebridge
 EOM
 cat > "$src/compose.sidecar.yaml" <<'EOM'
-# Pull ghcr.io/irashack/molebridge:<tag> for the sidecar.
+# Pull ghcr.io/irashack/molebridge-core:<tag> for the sidecar.
 services:
   exit:
-    image: ghcr.io/irashack/molebridge:v0.8.0-rc.1@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    image: ghcr.io/irashack/molebridge-core:v0.8.0-rc.1@sha256:3333333333333333333333333333333333333333333333333333333333333333
+  switchyard:
+    image: ghcr.io/irashack/molebridge-core
 EOM
 cat > "$src/compose.native-sidecar.yaml" <<'EOM'
 # Pull ghcr.io/irashack/molebridge:<tag> for the native sidecar.
@@ -67,7 +71,7 @@ services:
     image: ghcr.io/irashack/molebridge:v0.8.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
     command: ["port-sync"]
   switchyard:
-    image: "${MOLEBRIDGE_IMAGE:-ghcr.io/irashack/molebridge:0.8}"
+    image: "${MOLEBRIDGE_IMAGE:-ghcr.io/irashack/molebridge-core:0.8}"
 EOM
 printf 'MOLEBRIDGE_IMAGE=ghcr.io/irashack/molebridge:0.8\nPROVIDER=mullvad\n' > "$src/.env.example"
 printf 'G=1\n' > "$src/.env.gluetun.example"
@@ -87,7 +91,7 @@ refuses() { # description expected-text args...
 }
 
 mkdir -p "$work/o1"
-archive=$(run v0.8.0 "$digest" "$work/o1")
+archive=$(run v0.8.0 "$digest" "$core" "$work/o1")
 [ "$archive" = "$work/o1/molebridge-v0.8.0.tar.gz" ] || fail "archive path: $archive"
 members=$($tar -tzf "$archive" | tr '\n' ' ')
 want="molebridge-v0.8.0/ molebridge-v0.8.0/.env.example molebridge-v0.8.0/.env.gluetun.example molebridge-v0.8.0/.env.native-sidecar.example molebridge-v0.8.0/.env.sidecar.example molebridge-v0.8.0/LICENSE molebridge-v0.8.0/THIRD_PARTY.md molebridge-v0.8.0/compose.gluetun.yaml molebridge-v0.8.0/compose.native-sidecar.yaml molebridge-v0.8.0/compose.sidecar.yaml molebridge-v0.8.0/compose.yaml molebridge-v0.8.0/routing/ molebridge-v0.8.0/routing/gluetun-preflight "
@@ -102,15 +106,16 @@ grep -q 'image: docker.io/example/other:1.0' "$x/compose.yaml" || fail "other im
 grep -q "image: \"\${MOLEBRIDGE_IMAGE:-$ref}\"  # panel" "$x/compose.yaml" || fail "default and comment kept"
 grep -q "^    image: $ref\$" "$x/compose.gluetun.yaml" || fail "digest reference"
 [ "$(grep -c "$ref" "$x/compose.gluetun.yaml")" = 2 ] || fail "bare name rewritten"
-grep -q "Pull $ref for the sidecar" "$x/compose.sidecar.yaml" || fail "placeholder in a comment"
-grep -q "image: $ref\$" "$x/compose.sidecar.yaml" || fail "tag and digest replaced"
+grep -q "Pull $core_ref for the sidecar" "$x/compose.sidecar.yaml" || fail "core placeholder in a comment"
+[ "$(grep -c "image: $core_ref\$" "$x/compose.sidecar.yaml")" = 2 ] || fail "core: tag, digest and bare name replaced"
+grep -q "$ref" "$x/compose.sidecar.yaml" && fail "core reference rewritten to the plain image"
 grep -q "Pull $ref for the native sidecar" "$x/compose.native-sidecar.yaml" || fail "placeholder in the native sidecar's comment"
 [ "$(grep -c "image: $ref\$" "$x/compose.native-sidecar.yaml")" = 2 ] || fail "native sidecar: tag and digest replaced"
-grep -q "image: \"\${MOLEBRIDGE_IMAGE:-$ref}\"\$" "$x/compose.native-sidecar.yaml" || fail "native sidecar: default rewritten"
+grep -q "image: \"\${MOLEBRIDGE_IMAGE:-$core_ref}\"\$" "$x/compose.native-sidecar.yaml" || fail "native sidecar: core default rewritten"
 grep -q '^COMPOSE_FILE=compose.native-sidecar.yaml$' "$x/.env.native-sidecar.example" || fail "native sidecar env example content"
 grep -q "^MOLEBRIDGE_IMAGE=$ref\$" "$x/.env.example" || fail ".env rewrite"
 grep -q "docker run $ref gluetun-auth" "$x/routing/gluetun-preflight" || fail "preflight diagnostic"
-grep -q ':0.8\|<tag>\|2222\|3333\|4444' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
+grep -q ':0.8\|<tag>\|2222\|3333\|4444\|core:0\|core$' "$x"/compose*.yaml "$x/.env.example" "$x/routing/gluetun-preflight" && fail "old reference left"
 pass "image references rewritten in every form"
 
 grep -q 'build\|context\|Dockerfile\|checkout\|inside the block' "$x"/compose*.yaml && fail "a build section or its comment is left"
@@ -131,54 +136,59 @@ pass "owner, mtime and modes"
 # Determinism: again, elsewhere, with different source mtimes and umask.
 touch -t 202501010101 "$src"/compose*.yaml "$src/LICENSE"
 mkdir -p "$work/o2"
-(umask 077; run v0.8.0 "$digest" "$work/o2" >/dev/null)
+(umask 077; run v0.8.0 "$digest" "$core" "$work/o2" >/dev/null)
 cmp -s "$archive" "$work/o2/molebridge-v0.8.0.tar.gz" || fail "archives differ between runs"
 pass "deterministic"
-SOURCE_DATE_EPOCH=1700000000 run v0.8.0 "$digest" "$work/o2" >/dev/null
+SOURCE_DATE_EPOCH=1700000000 run v0.8.0 "$digest" "$core" "$work/o2" >/dev/null
 cmp -s "$archive" "$work/o2/molebridge-v0.8.0.tar.gz" && fail "SOURCE_DATE_EPOCH ignored"
 pass "SOURCE_DATE_EPOCH changes the mtime"
 
 # A different digest changes the archive.
-run v0.8.0-rc.1 "$other" "$work/o2" >/dev/null
+run v0.8.0-rc.1 "$other" "$core" "$work/o2" >/dev/null
 $tar -tzf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" | grep -q '/.env.gluetun.example$' || fail "gluetun env example missing"
 $tar -xzOf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" molebridge-v0.8.0-rc.1/compose.yaml | grep -q "molebridge:v0.8.0-rc.1@$other" || fail "rc reference"
+$tar -xzOf "$work/o2/molebridge-v0.8.0-rc.1.tar.gz" molebridge-v0.8.0-rc.1/compose.sidecar.yaml | grep -q "molebridge-core:v0.8.0-rc.1@$core" || fail "rc core reference"
 pass "release candidate tag"
 
 # Refusals.
-refuses "a bad tag" 'tag must look like' 0.8.0 "$digest" "$work/o3"
-refuses "a branch name as tag" 'tag must look like' main "$digest" "$work/o3"
-refuses "a short digest" 'digest must be' v0.8.0 sha256:abc "$work/o3"
-refuses "an uppercase digest" 'digest must be' v0.8.0 "sha256:$(printf 'A%.0s' $(seq 1 64))" "$work/o3"
+refuses "a bad tag" 'tag must look like' 0.8.0 "$digest" "$core" "$work/o3"
+refuses "a branch name as tag" 'tag must look like' main "$digest" "$core" "$work/o3"
+refuses "a short digest" 'digests must be' v0.8.0 sha256:abc "$core" "$work/o3"
+refuses "a short core digest" 'digests must be' v0.8.0 "$digest" sha256:abc "$work/o3"
+refuses "no core digest" 'usage' v0.8.0 "$digest"
+refuses "an uppercase digest" 'digests must be' v0.8.0 "sha256:$(printf 'A%.0s' $(seq 1 64))" "$core" "$work/o3"
 rm "$src/LICENSE"
-refuses "a missing file" 'missing bundle file: LICENSE' v0.8.0 "$digest" "$work/o3"
+refuses "a missing file" 'missing bundle file: LICENSE' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'MIT\n' > "$src/LICENSE"
 mv "$src/.env.gluetun.example" "$work/env.gluetun.bak"
-refuses "a missing gluetun env example" 'missing bundle file: .env.gluetun.example' v0.8.0 "$digest" "$work/o3"
+refuses "a missing gluetun env example" 'missing bundle file: .env.gluetun.example' v0.8.0 "$digest" "$core" "$work/o3"
 mv "$work/env.gluetun.bak" "$src/.env.gluetun.example"
 mv "$src/.env.native-sidecar.example" "$work/env.native.bak"
-refuses "a missing native sidecar env example" 'missing bundle file: .env.native-sidecar.example' v0.8.0 "$digest" "$work/o3"
+refuses "a missing native sidecar env example" 'missing bundle file: .env.native-sidecar.example' v0.8.0 "$digest" "$core" "$work/o3"
 mv "$work/env.native.bak" "$src/.env.native-sidecar.example"
 mv "$src/compose.native-sidecar.yaml" "$work/compose.native.bak"
-refuses "a missing native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$work/o3"
+refuses "a missing native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.native-sidecar.yaml"
-refuses "a native sidecar compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$work/o3"
+refuses "a native sidecar compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge-ci:x\n' > "$src/compose.native-sidecar.yaml"
-refuses "another package in the native sidecar compose file" 'still names the image' v0.8.0 "$digest" "$work/o3"
+refuses "another package in the native sidecar compose file" 'still names the image' v0.8.0 "$digest" "$core" "$work/o3"
+printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge-core-ci:x\n' > "$src/compose.native-sidecar.yaml"
+refuses "a longer name after molebridge-core" 'still names the image' v0.8.0 "$digest" "$core" "$work/o3"
 rm "$src/compose.native-sidecar.yaml"; ln -s compose.yaml "$src/compose.native-sidecar.yaml"
-refuses "a symlinked native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$work/o3"
+refuses "a symlinked native sidecar compose file" 'missing bundle file: compose.native-sidecar.yaml' v0.8.0 "$digest" "$core" "$work/o3"
 rm "$src/compose.native-sidecar.yaml"
 mv "$work/compose.native.bak" "$src/compose.native-sidecar.yaml"
 cp "$src/compose.yaml" "$work/compose.yaml.bak"
 printf 'services:\n  exit:\n    image: docker.io/example/other:1.0\n' > "$src/compose.yaml"
-refuses "a compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$work/o3"
+refuses "a compose file with no Molebridge image" 'has no Molebridge image reference' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge-ci:x\n' > "$src/compose.yaml"
-refuses "another package under the same owner" 'still names the image' v0.8.0 "$digest" "$work/o3"
+refuses "another package under the same owner" 'still names the image' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge:\n' > "$src/compose.yaml"
-refuses "an unparseable reference" 'still names the image' v0.8.0 "$digest" "$work/o3"
+refuses "an unparseable reference" 'still names the image' v0.8.0 "$digest" "$core" "$work/o3"
 printf 'services:\n  exit:\n    image: ghcr.io/irashack/molebridge:0.8\n    "build": .\n' > "$src/compose.yaml"
-refuses "a build key the script cannot remove" 'still has a build: key' v0.8.0 "$digest" "$work/o3"
+refuses "a build key the script cannot remove" 'still has a build: key' v0.8.0 "$digest" "$core" "$work/o3"
 cp "$work/compose.yaml.bak" "$src/compose.yaml"
 rm "$src/compose.sidecar.yaml"; ln -s compose.yaml "$src/compose.sidecar.yaml"
-refuses "a symlink" 'missing bundle file: compose.sidecar.yaml' v0.8.0 "$digest" "$work/o3"
+refuses "a symlink" 'missing bundle file: compose.sidecar.yaml' v0.8.0 "$digest" "$core" "$work/o3"
 [ ! -e "$work/o3" ] || fail "output created by a refused run"
 echo "all make-bundle tests passed"

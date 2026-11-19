@@ -41,7 +41,8 @@ def jsonlog: .logging.driver == "json-file" and (.logging.options | keys) == ["m
 def noSecretMounts: [sources[] | select(test("secrets|tunnel"))] == [];
 def stateOnly: (targets | sort) == ["/state/applier","/state/panel"];
 def pids($n): .deploy.resources.limits.pids == $n;
-def mine: .image | startswith("ghcr.io/irashack/molebridge:");
+def mine: .image | test("^ghcr.io/irashack/molebridge(-core)?:");
+def coreImage: .image | startswith("ghcr.io/irashack/molebridge-core:");
 def allLimited: [.services[] | select(mine) | .deploy.resources.limits.pids] | all(. != null);
 '
 
@@ -219,6 +220,9 @@ ok sidecar "Switchyard: sidecar kind, no capabilities, no secrets, loopback port
   hardened and (has("cap_add") | not) and stateOnly and noSecretMounts and
   .environment.EXIT_KIND == "sidecar" and .environment.PROVIDER == "gluetun-nordvpn" and
   .ports[0].host_ip == "127.0.0.1" and .ports[0].target == 8080 and (.networks | keys) == ["panel"]'
+ok sidecar "the exit and Switchyard run molebridge-core, the image without NetBird; the exit builds its core target from a checkout" '
+  '"$defs"' (.services.exit | coreImage) and .services.exit.image == .services.switchyard.image and
+  .services.exit.build.target == "core"'
 ok sidecar "SERVER goes only to the exit" '[.services | to_entries[] | select(.value.environment.SERVER != null) | .key] == ["exit"]'
 ok sidecar "no NetBird volume and no old service" '(.volumes | keys) == ["gluetun-data","gluetun-servers"] and (.services | has("applier") or has("control-panel") | not)'
 ok sidecar "gluetun gains no privileges through setuid binaries, as in the overlay form" '
@@ -236,10 +240,10 @@ ok nsc "services are exit, example-app, port-sync and switchyard" '.services | k
 ok nsc "the example application and port-sync run only in their profiles" '
   .services["example-app"].profiles == ["example"] and .services["port-sync"].profiles == ["port-sync"] and
   (.services.exit.profiles == null) and (.services.switchyard.profiles == null)'
-ok nsc "the exit and port-sync run the one image, and so does Switchyard, pinned by digest; the exit builds it from a checkout" '
+ok nsc "the exit and port-sync run the one image, molebridge-core, and so does Switchyard, pinned by digest; the exit builds the core target from a checkout" '
   .services.exit.image == .services.switchyard.image and .services.exit.image == .services["port-sync"].image and
-  (.services.exit.image | test("^ghcr.io/irashack/molebridge:v[0-9.]+(-rc[.][0-9]+)?@sha256:[0-9a-f]{64}$")) and
-  .services.exit.build.dockerfile == "Dockerfile" and (.services.switchyard.build == null) and (.services["port-sync"].build == null)'
+  (.services.exit.image | test("^ghcr.io/irashack/molebridge-core:v[0-9.]+(-rc[.][0-9]+)?@sha256:[0-9a-f]{64}$")) and
+  .services.exit.build.dockerfile == "Dockerfile" and .services.exit.build.target == "core" and (.services.switchyard.build == null) and (.services["port-sync"].build == null)'
 ok nsc "roles by argument" '
   .services.exit.command == ["exit"] and .services.switchyard.command == ["panel"] and .services["port-sync"].command == ["port-sync"]'
 ok nsc "the exit owns the namespace: hardened with exactly NET_ADMIN, NET_RAW and DAC_OVERRIDE, publishing nothing" '
@@ -381,10 +385,13 @@ for name in $(grep -oE '[$][{][A-Z][A-Z0-9_]*' compose.native-sidecar.yaml | cut
 done
 ! grep -q '^COMPOSE_FILE=' .env.example || fail ".env.example must not select a Compose file"
 
-# The pinned image is the same in every Compose file, and none still names a
-# service from 0.7.
-refs=$(grep -hoE 'ghcr\.io/irashack/molebridge:[A-Za-z0-9._-]+' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml | sort -u)
+# The pinned tag is the same for both images in every Compose file, the
+# NetBird forms name only molebridge and the sidecar forms only
+# molebridge-core, and none still names a service from 0.7.
+refs=$(grep -hoE 'ghcr\.io/irashack/molebridge(-core)?:[A-Za-z0-9._-]+' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml | sed 's/.*://' | sort -u)
 [ "$(echo "$refs" | wc -l | tr -d ' ')" = 1 ] || fail "the Compose files name different Molebridge image tags: $refs"
+! grep -nE 'ghcr\.io/irashack/molebridge-core' compose.yaml compose.gluetun.yaml || fail "a NetBird form names molebridge-core"
+! grep -nE 'ghcr\.io/irashack/molebridge[:@]' compose.sidecar.yaml compose.native-sidecar.yaml || fail "a sidecar form names the image with NetBird"
 if grep -nE 'exit-run|guard-run|wait-for-guards|contract-rules|routing/molebridge-exit|tools/molebridge\.py|applier/Dockerfile|routing/Dockerfile|python3? ' compose.yaml compose.gluetun.yaml compose.sidecar.yaml compose.native-sidecar.yaml; then
     fail "a Compose file still names a 0.7 service, script or helper"
 fi

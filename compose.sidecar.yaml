@@ -116,19 +116,21 @@ services:
           memory: 256m
 
   exit:
-    # The image from compose.yaml, as a sidecar (EXIT_KIND=sidecar): it
+    # molebridge-core, the image without the NetBird client, as a sidecar
+    # (EXIT_KIND=sidecar): it
     # reads gluetun's server list (read-only, never downloaded), selects
     # servers through gluetun's control server on the namespace's loopback,
     # then verifies the peer, the handshake and egress. It runs no NetBird,
     # installs no routes or firewall rules and has no routing contract, so its
     # supervisor has nothing to clean up when it stops.
-    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
     # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
     build:
       context: .
       dockerfile: Dockerfile
+      target: core
     command: ["exit"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-exit"
     restart: unless-stopped
@@ -251,7 +253,7 @@ services:
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-switchyard"
     restart: unless-stopped
