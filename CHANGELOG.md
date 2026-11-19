@@ -6,6 +6,8 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- The Molebridge logo, including the panel's icons, is all rights reserved
+  and not covered by the MIT License ([the logo notice](docs/assets/brand/NOTICE.md)).
 - The Dockerfile builds a second image without NetBird (`--target core`),
   for the sidecars; the default target is unchanged. CI builds and checks
   both.

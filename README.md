@@ -334,7 +334,9 @@ Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 Molebridge isn't affiliated with Mullvad VPN AB, Private Internet Access,
 NordVPN or NetBird. Their names are used only to say what Molebridge works with. The
 panel's provider styling uses colors only, with no logos or copied assets.
-Molebridge is released under the [MIT License](LICENSE). The bundled
+Molebridge is released under the [MIT License](LICENSE), except the
+Molebridge logo, which is all rights reserved
+([the logo notice](docs/assets/brand/NOTICE.md)). The bundled
 JetBrains Mono font is under the [SIL Open Font License](panel/static/JetBrainsMono-OFL.txt),
 the bundled PIA certificate authority comes with
 [PIA's MIT notice](internal/applier/PIA-CA-LICENSE.txt), and the image carries
