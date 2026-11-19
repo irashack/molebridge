@@ -15,6 +15,85 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.11.1
+
+Released from `v0.11.1-rc.1`. A security rebuild: the image runs `apk upgrade`
+when it is built, which brings zlib 1.4-r0 (CVE-2026-4738); Molebridge's code
+is 0.11.0's. The acceptance policy (`tools/acceptance-policy.json`, version 14)
+is 0.11.0's with the upgrade drilled from the release before it,
+`upgrade-from-0.11.0`. **Not tested live:** `tunnel-silent` and the optional
+status checks, and the retired-server move on the native providers (no live
+procedure, as for 0.11.0).
+
+### v0.11.1-rc.1, 2026-11-19: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.11.1-rc.1`, index digest
+`sha256:52f9734bf2d5c85be1aab644ff37eeabe137e184f1d88368f987f5c285b9631d`
+(commit `547cbb6`; the bundle's signature and attestation, the image
+signature, its build provenance and both SBOM attestations verified against
+the release workflow at the tag before anything changed; both SBOMs list
+zlib 1.4-r0), CI's five jobs passing on the tag, namespace drills included
+([run 44433526753](https://github.com/irashack/molebridge/actions/runs/44433526753)).
+Policy version 14; attested by [run
+44440452578](https://github.com/irashack/molebridge/actions/runs/44440452578)
+and promoted as `v0.11.1`. Run 2026-11-19 01:07–01:54 UTC on the same
+Kubernetes cluster and rootless Podman Quadlet unit (Podman 5.8.9) as for
+0.11.0, with a throwaway NetBird peer as the client.
+
+- **Upgrade from 0.11.0, Kubernetes:** every counted workload (the native
+  Mullvad, PIA and NordVPN exits, three more native Mullvad exits, the
+  gluetun overlay exit, the gluetun sidecar, two native PIA sidecars,
+  Switchyard, and the network exchange's trial panel and exchange) was ready
+  on `v0.11.0`, `ok` and verified with no restart, then moved to the
+  candidate by its image alone: all `ok`, verified, no restart.
+- **Upgrade from 0.11.0, Podman:** the unit's `Image=` changed and the exit
+  unit alone restarted; `ok` at the next record, gluetun and the application
+  not restarted, the application's egress on the VPN address throughout. A
+  first attempt came back failed with an unidentified peer; `v0.11.0` on the
+  same state failed the same way. gluetun had started on its built-in server
+  list, which carried a stale WireGuard key for the selected server, so the
+  failure was the test host's. After a gluetun restart on `v0.11.0` (`ok`)
+  the upgrade was repeated and passed.
+- **Client egress** before and after the upgrade, unchanged: Mullvad IPv4 and
+  IPv6, PIA, NordVPN and gluetun IPv4 from the VPN's address (IPv6 blocked
+  where the provider has none), never the host's.
+- **Rule drift**, frozen and unfrozen: repaired in 6–25 ms (Mullvad, IPv4 and
+  IPv6), 6–23 ms (PIA), 5–17 ms (NordVPN). The only leak was the known one
+  during the frozen lookup of `main` at priority 50 (40–76 packets, about
+  4–5 s), as for 0.11.0; none over IPv6.
+- **Tunnel loss**, the interface deleted in the exit: back in 708 ms /
+  793 ms / 1.84 s (Mullvad / PIA / NordVPN), traffic after 1.17 s / 5.25 s /
+  2.45 s; the gluetun overlay exit recovered through gluetun's healthcheck in
+  41.2 s, traffic at 41.8 s, with no restart.
+- **Lease lapse** on the native Mullvad and PIA exits: "stopped (lease
+  lapsed, exit 1); the routing guards stay in place", restarted after
+  37 s / 38 s, `ok` again 44 s / 46 s after the freeze; the client never left
+  from the host's address.
+- **Client switch** on the native Mullvad exit, IPv4 and IPv6: to the next
+  server in 9.2 s and back in 8.6 s, both families on the new server each
+  time; 1 of 18 probes failed, none from the host's address.
+- **Status drills:** the egress-check failure on Mullvad and PIA (failed,
+  `applied-unverified`, recheck after 60 s / 71 s; `ok` about 60 s after the
+  drop was lifted); the 409 for a second switch, both ways; a failed switch
+  on NordVPN (reasons `handshake-failed` and `egress-failed`, Retry offered,
+  then verified 7.6 s after Retry with source `operator-retry`); a stopped
+  exit showing stale with `/readyz` 503 and `/healthz` 200, and `/readyz` 200
+  5 s after it started again.
+- **Network exchange:** trial panel and exchange (on the candidate) on one
+  node, the NordVPN exit on another: `last_contact_at` 2 s before the read,
+  clock offset 0.0 s, `/api/exits` `ok`; the 409 and failed-switch drills ran
+  through it.
+- **A retired server**, on the gluetun overlay exit on Kubernetes (NordVPN,
+  IPv4) with a client probing: `ok` and verified on the next server of the
+  city 19 s after the removal, `moved` with `left-catalogue`; back on the
+  selected server 64 s after the file returned, with no `moved`. One failed
+  probe per switch, never from the host's address; no restart. On the Podman
+  copy: moved in 10 s, the panel `ok` with `server-moved` and the note naming
+  both servers; back in 58 s with no reason or note.
+
+At the end every exit was `ok` and verified on the candidate, each on the
+server it started on.
+
 ## 0.11.0
 
 Released from `v0.11.0-rc.1`. The acceptance policy for 0.11.0
