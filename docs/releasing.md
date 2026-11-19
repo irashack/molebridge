@@ -5,7 +5,8 @@ acceptance, the attestation of that acceptance, the promotion and the Compose
 pins afterwards. The workflows that do the work are
 `.github/workflows/release.yml` and `.github/workflows/acceptance.yml`; this
 page says what you run and in which order. Only the owner creates release
-tags ([AGENTS.md](../AGENTS.md)).
+tags ([AGENTS.md](../AGENTS.md)), or the release automation does
+([automatic releases](#automatic-releases)).
 
 Two rules hold throughout. A `v*` tag can't be moved or deleted, and a
 published release is immutable. So a candidate that fails is never re-tagged:
@@ -234,6 +235,60 @@ On `main`, in separate commits as before:
 ```sh
 grep -rn 'ghcr.io/irashack/molebridge:' compose*.yaml README.md docs/setup.md .github/ISSUE_TEMPLATE/bug.yml
 ```
+
+## Automatic releases
+
+`tools/auto-release.py` runs these steps without a person. The maintainer
+runs it hourly against a clean clone of the repository, with a token of the
+release bot (`MOLEBRIDGE_RELEASE_TOKEN_COMMAND`, a command that prints one,
+else `GH_TOKEN`). A tag pushed with a workflow's own `GITHUB_TOKEN` doesn't
+start `release.yml`, so this can't run as a workflow. Each run picks up where
+the repository stands:
+
+1. **Prepare.** When the changelog's `## Unreleased` section has entries, or
+   the open "Scheduled scan findings" issue lists an Alpine package with a fix
+   for the current release's image, it opens a pull request with
+   [step 1](#1-prepare-main): the heading `## X.Y.Z — unreleased`, the policy's
+   version and upgrade drill. Changelog entries make a minor release; Alpine
+   fixes alone make a patch release, a rebuild. It merges the pull request once
+   CI passes, then tags `vX.Y.Z-rc.1` on `main` once CI passes there.
+2. **Ask for the live acceptance.** Once the candidate is published, it
+   comments `Live acceptance requested: vX.Y.Z-rc.1` on
+   [#45](https://github.com/irashack/molebridge/issues/45) with both images'
+   references and digests.
+3. **Read the result.** Whoever runs the live acceptance answers on #45. The
+   comment starts `Live acceptance result: vX.Y.Z-rc.1` and has a fenced
+   `json` block:
+
+   ```json
+   {"rc_tag":"v0.12.0-rc.1","result":"passed",
+    "digests":{"molebridge":"sha256:<index digest>","molebridge-core":"sha256:<index digest>"},
+    "coverage":{"platforms":[],"providers":[],"kinds":[],"drills":[]},
+    "evidence":["<reference>"]}
+   ```
+
+   It may also carry a fenced `markdown` block, the record of what ran, for
+   [testing](testing.md). `result` is `passed`, `failed` or
+   `needs-attended`. Only comments from the accepted author
+   (`RESULT_AUTHORS` in the script) count, and only unedited ones. The
+   newest one for the candidate decides.
+4. **Attest and promote.** On `passed`, with both digests matching the
+   candidate's, it dispatches `acceptance.yml` ([step 4](#4-attest-the-acceptance)).
+   Once that run passes, it tags `vX.Y.Z` on the candidate's commit
+   ([step 5](#5-promote)).
+5. **Record.** After the promotion it opens and merges, on green CI, the pull
+   request for [step 6](#6-after-the-release): the record in testing, the
+   changelog's date, and the Compose pins and examples.
+
+It stops and opens an issue titled `Release blocked: ...` on a **Breaking**
+item in the changelog, a failed workflow or CI, a failed live acceptance, or
+digests that don't match, and when the script itself fails two runs in a row.
+While that issue, or any issue or pull request
+labeled `hold-release`, is open, it does nothing. Close the issue to let it go
+on. After a failed acceptance it tags the next candidate from `main` once
+`main` has moved on and CI passes. A `needs-attended` result waits for a later
+result on the same candidate. A Breaking release is prepared and tagged by a
+person; the automation then carries on from the live acceptance.
 
 ## Superseding a candidate
 
