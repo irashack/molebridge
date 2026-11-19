@@ -5,15 +5,20 @@
 #
 #   sh tools/release-notes.sh --kind candidate|release --tag TAG --commit SHA \
 #       --digest sha256:INDEX --amd64 sha256:A --arm64 sha256:B \
+#       --core-digest sha256:INDEX --core-amd64 sha256:A --core-arm64 sha256:B \
 #       [--build-tag RC_TAG]
 #
-# --build-tag is the candidate tag whose workflow run built the image; for a
-# candidate it is the tag itself, so it may be left out.
+# --digest, --amd64 and --arm64 are the image with NetBird
+# (ghcr.io/irashack/molebridge); the --core-* options are molebridge-core,
+# built from the same commit by the same run. --build-tag is the candidate tag
+# whose workflow run built the images; for a candidate it is the tag itself, so
+# it may be left out.
 set -eu
 LC_ALL=C
 export LC_ALL
 die() { echo "release-notes: $1" >&2; exit 1; }
 kind='' tag='' commit='' digest='' amd64='' arm64='' build_tag=''
+core_digest='' core_amd64='' core_arm64=''
 while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || die "missing value for $1"
     case "$1" in
@@ -23,6 +28,9 @@ while [ $# -gt 0 ]; do
         --digest) digest=$2 ;;
         --amd64) amd64=$2 ;;
         --arm64) arm64=$2 ;;
+        --core-digest) core_digest=$2 ;;
+        --core-amd64) core_amd64=$2 ;;
+        --core-arm64) core_arm64=$2 ;;
         --build-tag) build_tag=$2 ;;
         *) die "unknown option $1" ;;
     esac
@@ -31,7 +39,7 @@ done
 case "$kind" in candidate | release) ;; *) die "--kind must be candidate or release" ;; esac
 printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || die "bad tag"
 printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' || die "bad commit"
-for d in "$digest" "$amd64" "$arm64"; do
+for d in "$digest" "$amd64" "$arm64" "$core_digest" "$core_amd64" "$core_arm64"; do
     printf '%s' "$d" | grep -Eq '^sha256:[0-9a-f]{64}$' || die "bad digest"
 done
 [ -n "$build_tag" ] || build_tag=$tag
@@ -41,6 +49,7 @@ if [ "$kind" = release ] && [ "$build_tag" = "$tag" ]; then die "a release is pr
 
 repo=irashack/molebridge
 image=ghcr.io/irashack/molebridge
+core_image=ghcr.io/irashack/molebridge-core
 issuer=https://token.actions.githubusercontent.com
 wf=https://github.com/$repo/.github/workflows
 build_id=$wf/release.yml@refs/tags/$build_tag
@@ -57,24 +66,25 @@ fi
 cat <<EOM
 
 Source commit: \`$commit\`
-Image index: \`$image:$tag@$digest\`
+Image index: \`$image:$tag@$digest\` (with the NetBird client: exits and the panel)
+molebridge-core index: \`$core_image:$tag@$core_digest\` (no NetBird client: the gluetun and native sidecars)
 Bundle: \`$bundle\` (Compose files with the image pinned to that reference, the \`.env\` examples, \`routing/gluetun-preflight\`, license notices)
 
 ## What to trust
 
 | Material | Signed by (workflow identity) | Subject |
 |---|---|---|
-| Build provenance (SLSA) and SBOMs | \`$build_id\` | the image index and each architecture's manifest |
+| Build provenance (SLSA) and SBOMs | \`$build_id\` | each image index and each architecture's manifest |
 EOM
 if [ "$kind" = release ]; then
     cat <<EOM
-| Live-acceptance attestation | \`$accept_id\` | the image index; predicate type \`$accept_type\` |
-| Image index signature | \`$release_id\` | the image index |
+| Live-acceptance attestation | \`$accept_id\` | each image index; predicate type \`$accept_type\` |
+| Image index signature | \`$release_id\` | each image index |
 | Bundle signature and provenance | \`$release_id\` | \`$bundle\` |
 EOM
 else
     cat <<EOM
-| Image index signature | \`$build_id\` | the image index |
+| Image index signature | \`$build_id\` | each image index |
 | Bundle signature and provenance | \`$build_id\` | \`$bundle\` |
 EOM
 fi
@@ -153,7 +163,42 @@ $step. Verify each architecture's SBOM attestation (the manifests the signed ind
 
    The SBOM documents are also attached to this release.
 
-$((step + 1)). Start the exit with the verified files only: edit \`.env\` from \`.env.example\` (or \`.env.gluetun.example\`, \`.env.sidecar.example\` or \`.env.native-sidecar.example\`, each of which selects its own Compose file), then \`docker compose up -d\`. The Compose files reference the image by digest, so the image that runs is the one verified above.
+$((step + 1)). Verify molebridge-core the same way if you run a sidecar: its signature, its build provenance, $( [ "$kind" = release ] && echo "its live-acceptance attestation, " )and its SBOMs, with the same identities and commit:
 
-Architecture manifests: linux/amd64 \`$amd64\`, linux/arm64 \`$arm64\`.
+   \`\`\`sh
+   cosign verify \\
+     --certificate-identity $( [ "$kind" = release ] && echo "$release_id" || echo "$build_id" ) \\
+     --certificate-oidc-issuer $issuer \\
+     --certificate-github-workflow-repository $repo \\
+     --certificate-github-workflow-sha $commit \\
+     $core_image@$core_digest
+   gh attestation verify oci://$core_image@$core_digest --repo $repo \\
+     --cert-identity $build_id \\
+     --cert-oidc-issuer $issuer \\
+     --source-digest $commit \\
+     --predicate-type https://slsa.dev/provenance/v1
+EOM
+if [ "$kind" = release ]; then
+    cat <<EOM
+   gh attestation verify oci://$core_image@$core_digest --repo $repo \\
+     --cert-identity $accept_id \\
+     --cert-oidc-issuer $issuer \\
+     --predicate-type $accept_type \\
+     --format json | jq '.[].verificationResult.statement.predicate'
+EOM
+fi
+cat <<EOM
+   for manifest in $core_amd64 $core_arm64; do
+     gh attestation verify oci://$core_image@\$manifest --repo $repo \\
+       --cert-identity $build_id \\
+       --cert-oidc-issuer $issuer \\
+       --predicate-type https://spdx.dev/Document/v2.3
+   done
+   \`\`\`
+
+   Its SBOMs are attached as \`sbom-core-linux-amd64.spdx.json\` and \`sbom-core-linux-arm64.spdx.json\`.
+
+$((step + 2)). Start the exit with the verified files only: edit \`.env\` from \`.env.example\` (or \`.env.gluetun.example\`, \`.env.sidecar.example\` or \`.env.native-sidecar.example\`, each of which selects its own Compose file), then \`docker compose up -d\`. The Compose files reference the image by digest, so the image that runs is the one verified above.
+
+Architecture manifests: linux/amd64 \`$amd64\`, linux/arm64 \`$arm64\`; molebridge-core linux/amd64 \`$core_amd64\`, linux/arm64 \`$core_arm64\`.
 EOM

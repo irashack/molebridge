@@ -1,6 +1,7 @@
 name: Publish, sign and attest the image
 description: >
-  Builds the root Dockerfile for linux/amd64 and linux/arm64, pushes the index
+  Builds the root Dockerfile (or one of its targets) for linux/amd64 and
+  linux/arm64, pushes the index
   as <image>:<tag>, signs the index digest with cosign (keyless), attests build
   provenance for the index digest, and attests a syft SBOM against each
   architecture's manifest digest. The calling job needs packages: write,
@@ -14,9 +15,19 @@ inputs:
   tag:
     description: Tag to push
     required: true
+  target:
+    description: >
+      Dockerfile target to build; empty builds the last stage (the image with
+      NetBird). `core` is molebridge-core.
+    default: ""
   dist-dir:
     description: Directory (under the workspace) that receives the SBOM files
     default: dist
+  sbom-prefix:
+    description: >
+      SBOM file name prefix, <prefix>-linux-<arch>.spdx.json, so two images'
+      SBOMs can share one directory
+    default: sbom
 
 outputs:
   digest:
@@ -67,6 +78,7 @@ runs:
       with:
         context: .
         file: Dockerfile
+        target: ${{ inputs.target }}
         platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ inputs.image }}:${{ inputs.tag }}
@@ -121,11 +133,13 @@ runs:
         AMD64: ${{ steps.manifests.outputs.amd64 }}
         ARM64: ${{ steps.manifests.outputs.arm64 }}
         DIST: ${{ inputs.dist-dir }}
+        PREFIX: ${{ inputs.sbom-prefix }}
       run: |
         set -euo pipefail
+        printf '%s' "$PREFIX" | grep -Eq '^[a-z0-9-]+$'
         mkdir -p "$DIST"
-        syft scan "registry:$IMAGE@$AMD64" -o "spdx-json=$DIST/sbom-linux-amd64.spdx.json"
-        syft scan "registry:$IMAGE@$ARM64" -o "spdx-json=$DIST/sbom-linux-arm64.spdx.json"
+        syft scan "registry:$IMAGE@$AMD64" -o "spdx-json=$DIST/$PREFIX-linux-amd64.spdx.json"
+        syft scan "registry:$IMAGE@$ARM64" -o "spdx-json=$DIST/$PREFIX-linux-arm64.spdx.json"
     # actions/attest-sbom is deprecated in favor of actions/attest with
     # sbom-path, which it wraps; the attestation is the same.
     - name: Attest the linux/amd64 SBOM
@@ -133,7 +147,7 @@ runs:
       with:
         subject-name: ${{ inputs.image }}
         subject-digest: ${{ steps.manifests.outputs.amd64 }}
-        sbom-path: ${{ inputs.dist-dir }}/sbom-linux-amd64.spdx.json
+        sbom-path: ${{ inputs.dist-dir }}/${{ inputs.sbom-prefix }}-linux-amd64.spdx.json
         push-to-registry: true
         create-storage-record: false
     - name: Attest the linux/arm64 SBOM
@@ -141,6 +155,6 @@ runs:
       with:
         subject-name: ${{ inputs.image }}
         subject-digest: ${{ steps.manifests.outputs.arm64 }}
-        sbom-path: ${{ inputs.dist-dir }}/sbom-linux-arm64.spdx.json
+        sbom-path: ${{ inputs.dist-dir }}/${{ inputs.sbom-prefix }}-linux-arm64.spdx.json
         push-to-registry: true
         create-storage-record: false

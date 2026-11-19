@@ -38,9 +38,10 @@ gh run list --workflow ci.yml --commit "$(git rev-parse HEAD)"
 ```
 
 If you changed `release.yml` or the actions it uses, run the signing
-rehearsal first. It builds, signs and attests to a throwaway package,
-`ghcr.io/irashack/molebridge-ci`, never the release one, and checks the whole
-promotion policy against a synthetic acceptance:
+rehearsal first. It builds, signs and attests both images to throwaway
+packages, `ghcr.io/irashack/molebridge-ci` and
+`ghcr.io/irashack/molebridge-core-ci`, never the release ones, and checks the
+whole promotion policy against a synthetic acceptance for each:
 
 ```sh
 gh workflow run release.yml --ref main
@@ -60,13 +61,18 @@ candidate` job of `release.yml`, which:
 2. builds the image for amd64 and arm64, pushes it as
    `ghcr.io/irashack/molebridge:v0.10.0-rc.1`, signs the index digest with
    cosign (keyless, under the workflow's identity) and attaches build
-   provenance and an SBOM for each architecture;
+   provenance and an SBOM for each architecture; then does the same for
+   molebridge-core, the Dockerfile's `core` target without the NetBird
+   client, as `ghcr.io/irashack/molebridge-core:v0.10.0-rc.1`. Both images
+   come from the same commit and run, and both carry the candidate's version;
 3. builds `molebridge-v0.10.0-rc.1.tar.gz` with `tools/make-bundle.sh`, which
    rewrites every image reference in the Compose files to that tag and
    digest, signs it (`.sigstore.json`) and attests its provenance;
 4. writes the release notes (`tools/release-notes.sh`), with the commit and
-   the digests;
-5. creates a GitHub pre-release with the bundle, its signature and the SBOMs.
+   both images' digests;
+5. creates a GitHub pre-release with the bundle, its signature and the SBOMs
+   (`sbom-linux-<arch>.spdx.json` for the image with NetBird,
+   `sbom-core-linux-<arch>.spdx.json` for molebridge-core).
 
 CI also runs on the tag push. The `ci-namespace-drills` drill in the
 acceptance policy is CI's namespace-drill job passing on the tag:
@@ -116,8 +122,9 @@ candidate](#superseding-a-candidate).
 
 ## 4. Attest the acceptance
 
-`acceptance.yml` writes the attestation that promotion looks for. It takes
-three inputs:
+`acceptance.yml` writes the attestation that promotion looks for, once for
+each image: one run, one coverage and evidence, an attestation on the image
+with NetBird and another on molebridge-core. It takes three inputs:
 
 - `rc_tag`: the candidate tag, `v0.10.0-rc.1`;
 - `coverage`: a JSON object with `platforms`, `providers` and `kinds` (arrays
@@ -164,8 +171,8 @@ includes everything the policy names and every drill has the result
 incomplete or a drill did not pass:` and the missing items. The tools run from
 `main`'s checkout; only `tools/acceptance-policy.json` is taken from the
 candidate, so the policy that counts is the candidate's own. The
-attestation is then pushed to the registry beside the image and checked with
-the same policy promotion uses.
+attestations are then pushed to the registry beside each image and checked
+with the same policy promotion uses.
 
 Nothing checks the coverage against what actually ran: the attestation
 records your statement. Attest only what you ran.
@@ -184,17 +191,19 @@ nothing. It:
 
 1. checks the tag's form (`vX.Y.Z`) and that its commit is on `main`;
 2. considers the candidate tags `v0.10.0-rc.*` that point at the same commit,
-   highest first, and takes the first whose image signature, build
-   provenance and acceptance attestation all verify. With none it stops with
+   highest first, and takes the first whose signature, build provenance and
+   acceptance attestation all verify on both images. With none it stops with
    `no accepted release candidate for v0.10.0 at <commit>; run live
    acceptance (acceptance.yml) for a candidate of this commit`;
-3. copies that digest to `ghcr.io/irashack/molebridge:v0.10.0`, refusing if
-   the tag already exists with another digest, and moves the floating `0.10`
-   tag to it when this is the highest `v0.10.*` release
+3. copies each image's digest to its `v0.10.0` tag
+   (`ghcr.io/irashack/molebridge:v0.10.0`,
+   `ghcr.io/irashack/molebridge-core:v0.10.0`), refusing before it tags
+   either if a tag already exists with another digest, and moves each image's
+   floating `0.10` tag when this is the highest `v0.10.*` release
    ([image tags](compatibility.md#image-tags));
-4. signs the digest again under the release tag's workflow identity;
-5. builds and signs `molebridge-v0.10.0.tar.gz` for the same digest, fetches
-   the candidate's SBOMs, writes the release notes (which name the candidate
+4. signs both digests again under the release tag's workflow identity;
+5. builds and signs `molebridge-v0.10.0.tar.gz` for the image with NetBird's
+   digest, fetches both images' SBOMs from the candidate, writes the release notes (which name the candidate
    the build ran under) and creates the GitHub release.
 
 Then verify the published release from a clean directory with

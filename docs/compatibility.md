@@ -167,6 +167,11 @@ description is without them.
 
 ## Image tags
 
+Each release has two images with the same tags:
+`ghcr.io/irashack/molebridge` (with the NetBird client, for exits and the
+panel) and `ghcr.io/irashack/molebridge-core` (without it, for the gluetun
+and native sidecars), built from the same commit and promoted together.
+
 - `vX.Y.Z` is a release. It is never moved or deleted, and its index digest is
   the one the live acceptance attested ([releasing](releasing.md)). Pin it
   with its digest, as the Compose files and the bundle do.

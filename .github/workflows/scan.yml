@@ -6,7 +6,9 @@ name: Scan
 #                 modules (reachable vulnerabilities only, as in CI)
 #   image         grype against the latest published release's image, both
 #                 architectures: Alpine's packages, the molebridge binary and
-#                 the NetBird client
+#                 the NetBird client. This covers molebridge-core too: it is
+#                 the same build's `core` stage, which the image with NetBird
+#                 is built FROM, so its packages are a subset
 # A govulncheck finding is a reachable vulnerability in what main builds, and
 # may have no fix yet: it goes only to the run's summary and fails the run,
 # which GitHub reports to the maintainer privately like any failed workflow,

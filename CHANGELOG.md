@@ -8,8 +8,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 - The Dockerfile builds a second image without NetBird (`--target core`),
   for the sidecars; the default target is unchanged. CI builds and checks
-  both. It is not published yet: the release workflow publishes it as
-  `ghcr.io/irashack/molebridge-core` in a later change
+  both.
+- Each release candidate publishes both images from one run:
+  `ghcr.io/irashack/molebridge` (with NetBird, as before) and
+  `ghcr.io/irashack/molebridge-core`, each signed, with its own build
+  provenance and SBOMs (`sbom-core-linux-<arch>.spdx.json` for core). Live
+  acceptance attests both, and a release promotes both together or neither
+  ([releasing](docs/releasing.md)). The sidecar Compose files still run the
+  image with NetBird until a release publishes molebridge-core
   ([#47](https://github.com/irashack/molebridge/issues/47)).
 - `molebridge exit` and `check-config` refuse a NetBird exit
   (`EXIT_KIND=overlay`, or `EXIT_KIND` unset) when the image has no NetBird
