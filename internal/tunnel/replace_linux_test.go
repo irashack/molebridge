@@ -402,15 +402,6 @@ func (r *replaceRig) liveOn() (idx uint32, addrs []string) {
 	return l.Index, addrs
 }
 
-func (r *replaceRig) opIndex(prefix string) int {
-	for i, op := range r.k.ops {
-		if strings.HasPrefix(op, prefix) {
-			return i
-		}
-	}
-	return -1
-}
-
 func TestReplaceSwapsTheWholeTunnelInOrder(t *testing.T) {
 	r := newReplaceRig(t, replaceConf(t, tunnelconf.Mullvad, "203.0.113.2/32, 2001:db8:3::2/128", "198.51.100.10:51820"))
 	oldIdx, _ := r.liveOn()
