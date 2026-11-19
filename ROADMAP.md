@@ -43,7 +43,7 @@ come after the proxy.
 
 Two decisions shape the work (maintainer, 2026-11-19):
 
-- **[Two images](#an-image-without-netbird)**: one without NetBird, for the
+- **Two images**: one without NetBird, for the
   sidecars and the proxy, and one with it, for the NetBird exit. Mounting the
   operator's own NetBird image instead of bundling one is not planned for
   now, and NetBird is never run as a separate container outside the
@@ -63,10 +63,11 @@ The order of work: exchanging requests and status over the network first,
 so that more ways in don't mean more shared directories (built in 0.10.0 and
 run live in every release's acceptance since:
 [the network exchange](docs/architecture.md#the-network-exchange));
-then [an image without NetBird](#an-image-without-netbird), which needs no
-other change; then a status record that can
-describe a way in using many servers at once; then [the
-proxy](#a-proxy-on-the-exit). Meanwhile a device on a Mullvad exit can already
+then an image without NetBird (0.12.0, the sidecars on it since 0.13.0); then
+the proxy, with a status file of its own instead of a change to the exit's
+record, the menu and `molebridge init`, and NetBird as a module, built in
+parallel to the contract in [the menu's design](docs/design/menu.md).
+Meanwhile a device on a Mullvad exit can already
 reach Mullvad's own per-server proxies ([Mullvad's SOCKS5
 proxies](docs/mullvad-socks5.md)).
 
@@ -118,6 +119,12 @@ proxies](docs/mullvad-socks5.md)).
   live on Kubernetes with a NordVPN exit and the panel on different nodes
   ([testing](docs/testing.md#v0100-rc2-2026-11-03-released)); the gluetun
   form and the native sidecar have not run it.
+
+- **An image without NetBird** (0.12.0): `ghcr.io/irashack/molebridge-core`,
+  built from the same Dockerfile and promoted with the image that has NetBird
+  from one candidate, each with its own SBOM and scan. It refuses
+  `EXIT_KIND=overlay` at start. The sidecar Compose files use it after
+  0.12.0 ([#47](https://github.com/irashack/molebridge/issues/47)).
 
 ## Backlog
 
@@ -269,24 +276,3 @@ would take:
   kept and moved, a benched server, a server switch of the exit, tunnel loss,
   and an nftables counter on every interface but the tunnel showing no
   packet from the proxy.
-
-### An image without NetBird
-
-Every image carries the pinned NetBird client today, so a sidecar, which
-never starts NetBird, still downloads it and inherits its advisories (most of
-what the scheduled scan reports). The plan is two images from one Dockerfile
-and one release: one with NetBird, for the NetBird exit, and one without, for
-the sidecars and later the proxy. What it would take:
-
-- A build target without the NetBird stage, and a binary that refuses
-  `EXIT_KIND=overlay` at startup, with one line naming the other image, when
-  no NetBird client is present, before anything changes.
-- Names that keep existing setups working: `ghcr.io/irashack/molebridge` keeps
-  NetBird, as it has since 0.8.0, and the new image gets a name of its own, so
-  that no upgrade removes NetBird from an exit. Whether the plain name later
-  becomes the image without NetBird goes through the
-  [deprecation rules](docs/compatibility.md).
-- Both images signed, attested and promoted together from one candidate, each
-  with its own SBOM and scan, and the live acceptance covering the sidecars
-  on the new image.
-- The sidecar Compose files and examples pinned to the new image.
