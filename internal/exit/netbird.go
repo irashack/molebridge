@@ -72,7 +72,9 @@ type nbEvent struct {
 // nbManager runs NetBird's 0.82.1 entrypoint sequence itself: `netbird service
 // run` as a daemon in a process group of its own, `netbird status --check
 // live` once a second until the daemon answers, then `netbird up`. Every wait
-// is bounded and every process is reaped by the reaper.
+// is bounded and every process is reaped by the reaper. It is the overlay
+// exit's way in (wayIn, wayin.go): the supervisor calls it only at the points
+// the boundary names.
 type nbManager struct {
 	reaper *proc.Reaper
 	bin    string
@@ -523,6 +525,75 @@ func (m *nbManager) run(ctx context.Context, info launchInfo, done chan struct{}
 	case <-ctx.Done():
 	}
 }
+
+// -- NetBird as the supervisor's way in ------------------------------------------
+
+// ReasonNetBird is the stop reason when NetBird could not be started or
+// stopped unexpectedly.
+const ReasonNetBird = "netbird exited"
+
+// newNetBirdWayIn is the overlay exit's way in. Every command gets NetBird's
+// environment (ChildEnvNetBird), `netbird up` alone the setup key; events go to
+// the supervisor's loop through push.
+func newNetBirdWayIn(st *Settings, reap *proc.Reaper, c Config, out io.Writer, push func(e any)) *nbManager {
+	tmp := filepath.Join(st.RunDir, "tmp")
+	return &nbManager{reaper: reap, bin: c.NetBirdBin, clock: c.Clock,
+		env: ChildEnvNetBird(st.Env, tmp, false), envUp: ChildEnvNetBird(st.Env, tmp, true),
+		logPath: watchLogPath(st.Env), out: out, timing: c.Timing,
+		hook: c.nbHook, emit: func(e nbEvent) { push(e) }}
+}
+
+// Launch starts NetBird unless a launch is active.
+func (m *nbManager) Launch(h wayInHost) {
+	if m.Active() {
+		return
+	}
+	if info, ok := m.Start(); ok {
+		h.logf("starting NetBird")
+		// The launch's log offset and start time go to the worker now, before
+		// the daemon exists: its monitors count from the launch.
+		h.tell(Msg{Type: TypeNetBird, Launch: info.launch, State: NBLaunching, LogOffset: info.offset, AtBootNs: int64(info.at)})
+	}
+}
+
+// Unready stops NetBird because the routing contract no longer holds.
+func (m *nbManager) Unready(h wayInHost, reason string) {
+	h.logf("the worker cannot hold the routing contract: %s; stopping NetBird", reason)
+	m.Stop()
+}
+
+// Handle reports the manager's events to the worker; a launch that failed or
+// a daemon that exited by itself stops the exit.
+func (m *nbManager) Handle(h wayInHost, ev any) (string, string) {
+	e, ok := ev.(nbEvent)
+	if !ok {
+		return "", ""
+	}
+	// An event of an older launch is dropped, a stopped event included: the
+	// manager marks a launch inactive before its event reaches this loop, so a
+	// newer launch may already be running, and telling the worker the older
+	// one stopped would end the newer one's accounting.
+	if e.launch != m.currentLaunch() {
+		return "", ""
+	}
+	switch e.kind {
+	case nbStarted:
+		h.logf("NetBird is up (launch %d)", e.launch)
+		h.tell(Msg{Type: TypeNetBird, Launch: e.launch, State: NBStarted, LogOffset: e.offset, AtBootNs: int64(e.at)})
+	case nbFailed:
+		h.tell(Msg{Type: TypeNetBird, Launch: e.launch, State: NBFailed})
+		return ReasonNetBird, "NetBird could not be started: " + e.detail
+	case nbExited:
+		return ReasonNetBird, "NetBird stopped unexpectedly: " + e.detail
+	case nbStopped:
+		h.tell(Msg{Type: TypeNetBird, Launch: e.launch, State: NBStopped})
+		h.again()
+	}
+	return "", ""
+}
+
+// Left is how the stop sequence names a NetBird process that survived it.
+func (m *nbManager) Left() string { return "NetBird" }
 
 // CopyLines copies r to w one line at a time with a prefix, cutting lines
 // longer than max bytes (the rest of such a line is dropped and marked), so a

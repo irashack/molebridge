@@ -558,7 +558,7 @@ func TestAStalledSpawnNeverDelaysTheStop(t *testing.T) {
 	// waited for here, while the reaper and the test's directory (the child
 	// writes the trace) still exist.
 	release()
-	if !h.sup.nb.waitGone(5 * time.Second) {
+	if !h.sup.way.(*nbManager).waitGone(5 * time.Second) {
 		t.Error("the late child outlived the stop")
 	}
 }
@@ -595,11 +595,11 @@ func TestAWorkerThatStopsReadingItsPipeDelaysNothing(t *testing.T) {
 func TestAStaleStoppedEventIsDropped(t *testing.T) {
 	h := newHarness(t, "good", "ok")
 	sup := New(h.cfg)
-	sup.nb = &nbManager{launch: 2, active: true, closed: false}
+	sup.way = &nbManager{launch: 2, active: true, closed: false}
 	sup.toW = make(chan Msg, 8)
 	sup.gen = strings.Repeat("a", 32)
 	for _, kind := range []nbKind{nbStopped, nbStarted, nbFailed, nbExited} {
-		if reason, _ := sup.handleNB(nbEvent{kind: kind, launch: 1}); reason != "" {
+		if reason, _ := sup.handleWayIn(nbEvent{kind: kind, launch: 1}); reason != "" {
 			t.Errorf("kind %d of launch 1 stops the exit: %q", kind, reason)
 		}
 	}
@@ -609,7 +609,7 @@ func TestAStaleStoppedEventIsDropped(t *testing.T) {
 	default:
 	}
 	// The current launch's started event carries its launch and start time.
-	sup.handleNB(nbEvent{kind: nbStarted, launch: 2, offset: 7, at: 5 * time.Second})
+	sup.handleWayIn(nbEvent{kind: nbStarted, launch: 2, offset: 7, at: 5 * time.Second})
 	m := <-sup.toW
 	if m.State != NBStarted || m.Launch != 2 || m.LogOffset != 7 || m.AtBootNs != int64(5*time.Second) {
 		t.Fatalf("%+v", m)

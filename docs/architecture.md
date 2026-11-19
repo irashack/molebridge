@@ -330,6 +330,15 @@ already drops everything. If NetBird cannot be started, or one of its processes
 exits unexpectedly, the whole exit stops and the restart policy starts it again.
 A stopping supervisor starts no NetBird.
 
+In the code, the supervisor reaches NetBird through one boundary, the way in
+(`wayIn` in `internal/exit/wayin.go`): the supervisor keeps the decision
+(contract held, lease held, not stopping) and the stop sequence's timeline,
+and calls the way in only at those points; NetBird's processes, its log lines
+and what the worker is told about it are in `internal/exit/netbird.go`. A
+sidecar's way in does nothing. The worker's side of NetBird (the readiness
+loop, the profile checks, the `netbird` check of the record) is not behind the
+boundary yet.
+
 ### The lease
 
 The independent bound on a hung routing owner: if the worker stops doing its

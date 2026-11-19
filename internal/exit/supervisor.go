@@ -23,7 +23,6 @@ const (
 	ReasonLapsed    = "lease lapsed"
 	ReasonWorker    = "worker exited"
 	ReasonProtocol  = "protocol"
-	ReasonNetBird   = "netbird exited"
 )
 
 // Config configures a Supervisor. Zero values take the production defaults.
@@ -54,7 +53,7 @@ type Config struct {
 	Write func(path string, v any) error
 	// Bounds replaces the loops and bounds the lease supervises (tests).
 	Bounds map[string]time.Duration
-	// nbHook is the NetBird manager's test hook; cleanupHook is called on the
+	// nbHook is the NetBird way in's test hook; cleanupHook is called on the
 	// cleanup child's creation goroutine ("create", before the fork, and "late",
 	// with the process of a child that attached after the deadline).
 	nbHook      func(stage string)
@@ -69,7 +68,7 @@ type (
 	evWorkerMsg  struct{ m Msg }
 	evViolation  struct{ err error }
 	evWorkerGone struct{}
-	evNB         struct{ e nbEvent }
+	evWayIn      struct{ e any }
 )
 
 // Supervisor is `molebridge exit`.
@@ -79,7 +78,8 @@ type Supervisor struct {
 	reap  *proc.Reaper
 	lease *Lease
 	pub   *publisher
-	nb    *nbManager
+	// way is the exit's way in (wayin.go): NetBird for an overlay exit.
+	way wayIn
 	// exchange keeps the exchange child running when EXCHANGE_URL is set.
 	exchange *exchangeRunner
 	stderr   io.Writer // never blocks: see boundedLog
@@ -97,12 +97,14 @@ type Supervisor struct {
 
 	// testFinal, when set (tests), replaces the stop sequence's last look at
 	// what survived the reaping deadline.
-	testFinal func() (worker, netbird bool)
+	testFinal func() (worker, wayIn bool)
 
 	// exitBy is the absolute deadline of the stop sequence's exit.
 	exitBy time.Time
 
-	wantNB      bool
+	// wantWayIn: the worker said the routing contract holds (ready, not
+	// unready since).
+	wantWayIn   bool
 	stopping    bool
 	lastPublish time.Time
 	warned      map[string]time.Time
@@ -138,7 +140,7 @@ func New(c Config) *Supervisor {
 		c.hardExit = os.Exit
 	}
 	log := newBoundedLog(c.Stderr, 512)
-	s := &Supervisor{c: c, s: c.Settings, stderr: log, log: log, leaseOut: newCoalescer(),
+	s := &Supervisor{c: c, s: c.Settings, way: noWayIn{}, stderr: log, log: log, leaseOut: newCoalescer(),
 		events: make(chan event, 256), done: make(chan struct{}), warned: map[string]time.Time{}}
 	bounds := c.Bounds
 	if bounds == nil {
@@ -174,8 +176,9 @@ func (s *Supervisor) push(e event) {
 	}
 }
 
-// Run is the supervisor: it starts the worker, holds the lease, starts NetBird
-// when told and runs the stop sequence. It returns the process's exit status.
+// Run is the supervisor: it starts the worker, holds the lease, starts the way
+// in (NetBird) when told and runs the stop sequence. It returns the process's
+// exit status.
 func (s *Supervisor) Run() int {
 	code := s.run()
 	// The log is a bounded queue behind a sink that may be stuck: give it a
@@ -216,13 +219,7 @@ func (s *Supervisor) run() int {
 		s.logf("%v", err)
 		return 1
 	}
-	if s.s.Overlay() {
-		tmp := filepath.Join(s.s.RunDir, "tmp")
-		s.nb = &nbManager{reaper: s.reap, bin: s.c.NetBirdBin, clock: s.c.Clock,
-			env: ChildEnvNetBird(s.s.Env, tmp, false), envUp: ChildEnvNetBird(s.s.Env, tmp, true),
-			logPath: watchLogPath(s.s.Env), out: s.stderr, timing: s.c.Timing,
-			hook: s.c.nbHook, emit: func(e nbEvent) { s.push(evNB{e}) }}
-	}
+	s.way = s.newWayIn()
 	s.pub.Full(StartingRecord(s.s, s.c.Wall()))
 	if err := s.startWorker(); err != nil {
 		s.logf("cannot start the worker: %v", err)
@@ -314,7 +311,7 @@ func (s *Supervisor) startWorker() error {
 }
 
 // startExchange starts the exchange child's runner when EXCHANGE_URL is set.
-// The child is outside the lease: it never stops NetBird or the worker.
+// The child is outside the lease: it never stops the way in or the worker.
 func (s *Supervisor) startExchange() {
 	if s.s.Exchange == nil {
 		return
@@ -394,8 +391,8 @@ func (s *Supervisor) handle(e event) (reason, detail string) {
 	case evWorkerGone:
 		ws, _ := s.worker.Status()
 		return ReasonWorker, fmt.Sprintf("the worker exited (status %d)", proc.ExitCode(ws))
-	case evNB:
-		return s.handleNB(e.e)
+	case evWayIn:
+		return s.handleWayIn(e.e)
 	case evWorkerMsg:
 		// Expiry is checked before any message is processed: a renewal or a
 		// record that arrives after the deadline revives nothing.
@@ -416,22 +413,19 @@ func (s *Supervisor) handleMsg(m Msg) (string, string) {
 			return "", ""
 		}
 		s.send(Msg{Type: TypeAck, Gen: m.Gen, Seq: m.Seq, ExpiryBootNs: int64(expiry)})
-		s.maybeStartNetBird()
+		s.maybeStartWayIn()
 	case TypeReady:
 		if m.Gen != s.gen {
 			return "", ""
 		}
-		s.wantNB = true
-		s.maybeStartNetBird()
+		s.wantWayIn = true
+		s.maybeStartWayIn()
 	case TypeUnready:
 		if m.Gen != s.gen {
 			return "", ""
 		}
-		s.wantNB = false
-		s.logf("the worker cannot hold the routing contract: %s; stopping NetBird", m.Reason)
-		if s.nb != nil {
-			s.nb.Stop()
-		}
+		s.wantWayIn = false
+		s.way.Unready(s.host(), m.Reason)
 	case TypeStatus:
 		if !s.lease.AcceptStatus(m.Gen, m.Seq) {
 			return "", ""
@@ -466,42 +460,18 @@ func (s *Supervisor) checkRecord(rec map[string]any) error {
 	return nil
 }
 
-// maybeStartNetBird starts NetBird when the worker wants it and the lease is
+// maybeStartWayIn starts the way in when the worker wants it and the lease is
 // held, and never while stopping.
-func (s *Supervisor) maybeStartNetBird() {
-	if s.nb == nil || s.stopping || !s.wantNB || !s.lease.Held() || s.nb.Active() {
+func (s *Supervisor) maybeStartWayIn() {
+	if s.stopping || !s.wantWayIn || !s.lease.Held() {
 		return
 	}
-	if info, ok := s.nb.Start(); ok {
-		s.logf("starting NetBird")
-		// The launch's log offset and start time go to the worker now, before
-		// the daemon exists: its monitors count from the launch.
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: info.launch, State: NBLaunching, LogOffset: info.offset, AtBootNs: int64(info.at)})
-	}
+	s.way.Launch(s.host())
 }
 
-func (s *Supervisor) handleNB(e nbEvent) (string, string) {
-	// An event of an older launch is dropped, a stopped event included: the
-	// manager marks a launch inactive before its event reaches this loop, so a
-	// newer launch may already be running, and telling the worker the older
-	// one stopped would end the newer one's accounting.
-	if e.launch != s.nb.currentLaunch() {
-		return "", ""
-	}
-	switch e.kind {
-	case nbStarted:
-		s.logf("NetBird is up (launch %d)", e.launch)
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStarted, LogOffset: e.offset, AtBootNs: int64(e.at)})
-	case nbFailed:
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBFailed})
-		return ReasonNetBird, "NetBird could not be started: " + e.detail
-	case nbExited:
-		return ReasonNetBird, "NetBird stopped unexpectedly: " + e.detail
-	case nbStopped:
-		s.send(Msg{Type: TypeNetBird, Gen: s.gen, Launch: e.launch, State: NBStopped})
-		s.maybeStartNetBird()
-	}
-	return "", ""
+// handleWayIn hands an event the way in pushed back to it.
+func (s *Supervisor) handleWayIn(e any) (string, string) {
+	return s.way.Handle(s.host(), e)
 }
 
 // writeLeaseFile queues the small file `molebridge status` reads. The write
@@ -525,8 +495,8 @@ func (s *Supervisor) writeLeaseFile() {
 
 // stopSequence is the plan's timeline, budget 15 seconds:
 //
-//	T+0   the worker is told to stop and every NetBird group gets TERM
-//	T+6   KILL to the worker and to any NetBird process still alive
+//	T+0   the worker is told to stop and every way-in (NetBird) group gets TERM
+//	T+6   KILL to the worker and to any way-in process still alive
 //	T+7   everything is reaped, or the step is named as incomplete
 //	T+7..12 the cleanup child (not while the worker survives)
 //	T+13  exit: 0 only for a requested stop with complete cleanup
@@ -547,14 +517,12 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	})
 	defer hard.Stop()
 	s.stopping = true
-	s.wantNB = false
+	s.wantWayIn = false
 	s.lease.Revoke()
 	// The signals go first. Nothing before them touches a file, a pipe that
 	// can fill, or a log: every write below is queued off this goroutine.
-	if s.nb != nil {
-		s.nb.Close()
-		s.nb.TermAll()
-	}
+	s.way.Close()
+	s.way.TermAll()
 	if s.worker != nil {
 		s.send(Msg{Type: TypeStop})
 	}
@@ -569,7 +537,7 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	s.writeLeaseFile()
 	s.logf("stopping (%s)", reason)
 
-	alive := func() (worker, netbird bool) {
+	alive := func() (worker, way bool) {
 		if s.worker != nil {
 			select {
 			case <-s.worker.Reaped():
@@ -578,9 +546,7 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 				worker = true
 			}
 		}
-		if s.nb != nil {
-			netbird = s.nb.Alive()
-		}
+		way = s.way.Alive()
 		return
 	}
 	wait := func(until time.Time) {
@@ -597,7 +563,7 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 			_ = s.worker.KillGroup()
 		}
 		if n {
-			s.nb.KillAll()
+			s.way.KillAll()
 		}
 	}
 	wait(at(tm.StopReaped))
@@ -606,19 +572,20 @@ func (s *Supervisor) stopSequence(reason string, requested bool) int {
 	if s.testFinal != nil {
 		final = s.testFinal
 	}
-	workerLeft, nbLeft := final()
+	workerLeft, wayLeft := final()
 	if workerLeft {
 		left = append(left, "the worker")
 	}
-	if nbLeft {
-		left = append(left, "NetBird")
+	if wayLeft {
+		left = append(left, s.way.Left())
 	}
 
 	// The cleanup is an executor independent of the failed worker, and never
 	// runs beside a mutator that survived: not beside the worker, and not
-	// beside a NetBird process either, which could recreate the overlay link
-	// the cleanup is deleting. With either left, it is reported incomplete.
-	if !workerLeft && !nbLeft {
+	// beside a process of the way in either (NetBird could recreate the overlay
+	// link the cleanup is deleting). With either left, it is reported
+	// incomplete.
+	if !workerLeft && !wayLeft {
 		if err := s.cleanup(at(tm.CleanupEnd), at(tm.ExitBy)); err != nil {
 			left = append(left, err.Error())
 		}
