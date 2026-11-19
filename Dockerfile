@@ -64,7 +64,11 @@ LABEL org.opencontainers.image.title="Molebridge" \
       org.opencontainers.image.licenses="MIT AND BSD-3-Clause"
 # Tools come from the pinned base image's signed Alpine repositories. busybox
 # stays for `docker exec` diagnostics; the binary never starts a shell.
-RUN apk add --no-cache ca-certificates \
+# `apk upgrade` takes the branch's security fixes that the pinned base image
+# predates (zlib 1.4-r0 for CVE-2026-4738 is in v3.24 but not in alpine:3.24.4),
+# so a rebuild picks them up without waiting for the next point image.
+RUN apk upgrade --no-cache \
+ && apk add --no-cache ca-certificates \
  && install -d -m 0755 -o 0 -g 0 /usr/share/licenses/molebridge /usr/share/licenses/netbird
 COPY --from=build --chown=0:0 --chmod=0755 /out/molebridge /usr/local/bin/molebridge
 COPY --from=netbird --chown=0:0 --chmod=0755 /netbird/netbird /usr/local/bin/netbird

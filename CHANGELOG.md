@@ -4,6 +4,21 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## 0.11.1 — unreleased
+
+**Experimental.** A security rebuild: no change to Molebridge's code or
+behaviour. Upgrade from 0.11.0 by moving to the new image; nothing else
+changes.
+
+**Security**:
+- The image takes Alpine 3.24's package updates when it is built, which
+  brings zlib 1.4-r0 (CVE-2026-4738, critical); the 0.11.0 image has
+  zlib 1.3.2-r1 from the `alpine:3.24.4` base.
+- Known: the bundled NetBird client (0.82.1) still carries public advisories
+  in its Go modules (x/net, grpc, x/crypto, pion and others). NetBird's
+  newest release, 0.83.1, has the same ones; the client is bumped when
+  NetBird publishes a release that fixes them.
+
 ## 0.11.0 — 2026-11-14
 
 **Experimental.** An exit whose server the provider retires moves to another
