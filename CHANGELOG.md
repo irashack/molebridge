@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.13.0 — unreleased
+
+**Experimental.** Upgrade from 0.12.0 by moving to the new image;
+what changed is below.
 
 - CI's new "System rig" job runs the release build of the exit and the
   panel against fake Mullvad servers and two WireGuard relays in network
