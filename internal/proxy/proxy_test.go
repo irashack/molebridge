@@ -738,7 +738,6 @@ func TestReadPassword(t *testing.T) {
 		"missing":        filepath.Join(t.TempDir(), "none"),
 		"empty":          writePassword(t, "", 0o600),
 		"newline only":   writePassword(t, "\n", 0o600),
-		"group-readable": writePassword(t, "secret", 0o640),
 		"world-readable": writePassword(t, "secret", 0o604),
 		"too long":       writePassword(t, strings.Repeat("a", 256), 0o600),
 		"a directory":    t.TempDir(),
@@ -746,6 +745,10 @@ func TestReadPassword(t *testing.T) {
 		if _, err := ReadPassword(path); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// A group may read it: the proxy's user often gets the file by its group.
+	if _, err := ReadPassword(writePassword(t, "secret", 0o640)); err != nil {
+		t.Errorf("group-readable: %v", err)
 	}
 	// Serve refuses to start without it.
 	err := Serve(context.Background(), Config{Listen: DefaultListen, Upstream: &fakeUpstream{},
