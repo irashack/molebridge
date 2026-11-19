@@ -27,7 +27,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   note, and returns once the server is listed again
   ([contributing](CONTRIBUTING.md#the-system-rig)).
 
-## 0.12.0 — unreleased
+## 0.12.0 — 2026-11-19
 
 **Experimental.** Upgrade from 0.11.1 by moving to the new image;
 what changed is below.
