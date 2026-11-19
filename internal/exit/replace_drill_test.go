@@ -205,7 +205,8 @@ func TestAFailedReplaceInANamespaceFailsClosedAndRecovers(t *testing.T) {
 		t.Error("a link survived the failure")
 	}
 	for _, f := range []string{"-4", "-6"} {
-		if r := d.ns.IP(f, "route", "show", "table", "51821"); !strings.Contains(r, "unreachable default metric 4096") {
+		// ip prints IPv6's as "unreachable default dev lo metric 4096".
+		if r := d.ns.IP(f, "route", "show", "table", "51821"); !strings.Contains(r, "unreachable default") || !strings.Contains(r, "metric 4096") {
 			t.Errorf("%s: no fallback: %s", f, r)
 		}
 	}
