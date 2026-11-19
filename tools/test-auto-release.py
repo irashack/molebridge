@@ -151,6 +151,13 @@ class Coverage(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn('"tunnel-loss"', problems[0])
 
+    def test_names_in_a_passed_result_expand(self):
+        cov = ar.expand_drills(dict(self.GOOD, drills=["tunnel-loss", {"id": "x", "result": "failed"}]))
+        self.assertEqual(cov["drills"][0], {"id": "tunnel-loss", "result": "passed"})
+        self.assertEqual(cov["drills"][1], {"id": "x", "result": "failed"})
+        self.assertEqual(len(ar.coverage_problems(cov, ["n"])), 1)
+        self.assertIsNone(ar.expand_drills(None))
+
     def test_failed_drill_and_bad_evidence(self):
         cov = dict(self.GOOD, drills=[{"id": "tunnel-loss", "result": "failed"}])
         self.assertEqual(len(ar.coverage_problems(cov, [])), 2)

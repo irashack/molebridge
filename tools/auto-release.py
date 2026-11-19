@@ -231,6 +231,15 @@ def parse_result(body: str, rc: str):
 NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
+def expand_drills(coverage):
+    """In a passed result a drill may be named alone: it passed. Give it the
+    {"id","result"} form acceptance.yml takes; anything else stays as it is."""
+    if isinstance(coverage, dict) and isinstance(coverage.get("drills"), list):
+        coverage = dict(coverage, drills=[{"id": d, "result": "passed"} if isinstance(d, str)
+                                          else d for d in coverage["drills"]])
+    return coverage
+
+
 def coverage_problems(coverage, evidence) -> list[str]:
     """Why acceptance.yml would refuse this coverage and evidence (docs/releasing.md,
     step 4), or [] when it takes them."""
@@ -573,6 +582,7 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
         raise Blocked(f"{BLOCKED}{rc} result digests do not match",
                       f"The result {note['html_url']} names digests {json.dumps(got)}, but "
                       f"`{rc}` is {json.dumps(digests)}. Nothing was attested.")
+    result["coverage"] = expand_drills(result.get("coverage"))
     problems = coverage_problems(result.get("coverage"), result.get("evidence"))
     if problems:
         # acceptance.yml would refuse it: ask once for a corrected result.
@@ -636,6 +646,7 @@ def step_record(w: World, stable: str) -> str:
                       "result to record. Write the record by hand (docs/releasing.md, step 6).")
     note = w.api(f"repos/{REPO}/issues/comments/{acc['comment']}")
     result = parse_result(note["body"], acc["rc"])
+    result["coverage"] = expand_drills(result.get("coverage"))
     root = w.dir
     files = {}
     changelog = (root / "CHANGELOG.md").read_text()
