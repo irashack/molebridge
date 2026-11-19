@@ -8,7 +8,8 @@
 # (tools/test_host_and_routing.py, test_gluetun.py, test_sidecar_tools.py,
 # test_pia.py, test_nordvpn_applier.py, test_server_setting.py). Needs Docker
 # Compose and jq, no daemon; starts no container, reads no secret and writes
-# nothing in the checkout.
+# nothing in the checkout. With Go, it also builds molebridge and checks every
+# Compose file `molebridge init` can write.
 #   sh tools/check-compose.sh
 set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
@@ -397,4 +398,98 @@ if grep -nE 'exit-run|guard-run|wait-for-guards|contract-rules|routing/molebridg
 fi
 [ ! -e compose.pia.yaml ] && [ ! -e compose.nordvpn.yaml ] || fail "compose.pia.yaml or compose.nordvpn.yaml is back"
 pass "one image tag, no 0.7 leftovers"
+
+# --- molebridge init --------------------------------------------------------
+# Every combination `molebridge init` accepts, written with --answers into a
+# directory of its own. Each output resolves with its own .env, and each of
+# its services resolves exactly as the same service of the shipped form it
+# comes from (resolved with init's .env, mount paths taken relative to each
+# file's directory, `build:` and profiles set aside): so every check above
+# holds for init's services too. The proxy, which no shipped file has yet,
+# gets its own checks. Combinations init refuses must say why and write
+# nothing. Needs Go to build the binary.
+if ! command -v go >/dev/null 2>&1; then
+    echo "SKIP init: go not found"
+    echo "all Compose checks passed"
+    exit 0
+fi
+go build -o "$work/molebridge" ./cmd/molebridge || fail "molebridge does not build"
+core_image=$(jq -c .services.exit.image "$work/nsc.json")
+# check_init <n> <shipped file> <expected services>: init's output in $work/init-<n>.
+check_init() {
+    n=$1; src=$2; want=$3; dir="$work/init-$n"
+    docker compose --project-directory "$dir" -f "$dir/compose.yaml" --env-file "$dir/.env" config --format json > "$work/init-$n.json" ||
+        fail "init-$n: its compose.yaml does not resolve with its .env ($(cat "$work/answers-$n.json"))"
+    profiles=$(sed -n 's/^COMPOSE_PROFILES=//p' "$dir/.env")
+    case " $want " in *" port-sync "*) profiles="$profiles,port-sync" ;; esac
+    COMPOSE_PROFILES=$profiles docker compose --project-directory "$root" -f "$src" --env-file "$dir/.env" config --format json > "$work/init-$n-shipped.json" ||
+        fail "init-$n: $src does not resolve with init's .env"
+    jq -e --slurpfile s "$work/init-$n-shipped.json" --arg di "$dir" --arg dr "$root" --arg want "$want" '
+      def strip($d): walk(if type == "string" and startswith($d + "/") then .[($d | length):] else . end);
+      def norm($d): .services | map_values(del(.build, .profiles)) | strip($d);
+      norm($di) as $i | ($s[0] | norm($dr)) as $sh |
+      (($i | keys) == ($want | split(" ") | sort)) and
+      ([$i | to_entries[] | select(.key != "proxy") | .value == $sh[.key]] | all)' "$work/init-$n.json" >/dev/null ||
+        fail "init-$n: its services are not $want as $src resolves them ($(cat "$work/answers-$n.json"))"
+    ok "init-$n" "every Molebridge service has a process limit" "$defs allLimited"
+    case " $want " in *" proxy "*)
+        ok "init-$n" "the proxy: molebridge-core, no capabilities, non-root, in the exit's namespace, its own state and password only" '
+          '"$defs"' .services.exit as $exit | .services.proxy |
+          hardened and jsonlog and (has("cap_add") | not) and .image == '"$core_image"' and
+          .command == ["proxy"] and .network_mode == "service:exit" and .ports == null and
+          .user == "1000:1000" and (.env_file == null) and (has("sysctls") | not) and
+          .depends_on.exit.condition == "service_healthy" and .depends_on.exit.restart == true and
+          (targets | sort) == ["/run/secrets/proxy","/state/applier","/state/proxy"] and
+          (bind("/state/applier") | .read_only == true and (.source | endswith("/state/applier"))) and
+          (bind("/state/proxy") | .read_only != true and (.bind.create_host_path // false) == false and (.source | endswith("/state/proxy"))) and
+          (bind("/run/secrets/proxy") | .read_only == true and (.bind.create_host_path // false) == false and (.source | endswith("/secrets/proxy"))) and
+          .environment.PROXY_PASSWORD_FILE == "/run/secrets/proxy/password" and
+          .environment.PROXY_LISTEN == "127.0.0.1:1080" and .environment.PROXY_MAX_CONNS == "512" and
+          .environment.STATE_DIR == "/state" and
+          .environment.TUNNEL_INTERFACE == $exit.environment.EXIT_IF and .environment.PROVIDER == $exit.environment.PROVIDER and
+          pids(128)'
+        ok "init-$n" "only the proxy mounts its state and password" '
+          [.services | to_entries[] | select(.key != "proxy") | .value.volumes[]? | (.source // "") | select(test("secrets/proxy|state/proxy"))] == []'
+        ;;
+    esac
+    for name in $(grep -E '^[A-Z][A-Z0-9_]*=' "$dir/.env" | cut -d= -f1); do
+        case $name in COMPOSE_PROFILES) continue ;; esac
+        grep -Eq "[$][{]${name}[:}?-]" "$dir/compose.yaml" || fail "init-$n: .env sets $name, which its compose.yaml does not read"
+    done
+    if grep -qE '(SECRET|PASSWORD|TOKEN|PRIVATE_KEY|API_KEY)[A-Z_]*=.' "$dir/.env"; then
+        fail "init-$n: .env sets something that looks like a secret"
+    fi
+    case $src in compose.gluetun.yaml|compose.sidecar.yaml)
+        cmp -s "$dir/routing/gluetun-preflight" routing/gluetun-preflight || fail "init-$n: routing/gluetun-preflight is not the shipped one" ;;
+    *)
+        [ ! -e "$dir/routing" ] || fail "init-$n: a native form has routing/" ;;
+    esac
+}
+n=0
+accepted=0
+for provider in mullvad pia nordvpn gluetun-fastestvpn gluetun-ivpn gluetun-mullvad gluetun-nordvpn \
+        gluetun-surfshark gluetun-windscribe gluetun-airvpn gluetun-protonvpn wireguard; do
+    for ways in '"netbird-exit"' '"sidecar"' '"proxy"' '"netbird-exit","sidecar"' '"netbird-exit","proxy"' \
+            '"sidecar","proxy"' '"netbird-exit","sidecar","proxy"'; do
+        for extras in '' '"switchyard"' '"port-sync"' '"switchyard","port-sync"'; do
+            n=$((n + 1))
+            printf '{"schema":1,"provider":"%s","ways_in":[%s],"extras":[%s]}\n' "$provider" "$ways" "$extras" > "$work/answers-$n.json"
+            if ! "$work/molebridge" init --out "$work/init-$n" --answers "$work/answers-$n.json" > "$work/init-$n.log" 2>&1; then
+                grep -q '^molebridge init: ' "$work/init-$n.log" || fail "init-$n: failed without saying why"
+                [ ! -e "$work/init-$n/compose.yaml" ] && [ ! -e "$work/init-$n/.env" ] || fail "init-$n: a refused combination wrote files"
+                continue
+            fi
+            accepted=$((accepted + 1))
+            src=$(sed -n 's/.*: the services of \(compose[a-z.-]*\) with .*/\1/p' "$work/init-$n.log")
+            want=$(sed -n 's/.*: the services of compose[a-z.-]* with \(.*\)[.]$/\1/p' "$work/init-$n.log" | sed 's/, / /g')
+            [ -n "$src" ] && [ -n "$want" ] || fail "init-$n: init did not say what it wrote"
+            check_init "$n" "$src" "$want"
+        done
+    done
+done
+# TestEveryCombination (internal/tools/initmenu) counts the same 52.
+[ "$accepted" = 52 ] || fail "init accepted $accepted combinations, want 52"
+"$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
+    fail "init overwrote an earlier output without --force"
+pass "init: $accepted combinations written, each resolving as the shipped forms' services, the proxy hardened"
 echo "all Compose checks passed"

@@ -1,0 +1,234 @@
+# Written by `molebridge init` (experimental, docs/setup.md#molebridge-init).
+#   provider: gluetun-ivpn
+#   ways in:  sidecar
+#   extras:   none
+# The services are those of compose.sidecar.yaml in the Molebridge source
+# of the same release, with its settings and image pins; that file's
+# comments say more.
+# Your settings are in .env beside this file.
+#
+# Secrets live in the mode-0600 files under ./tunnel and ./secrets; never
+# print them or paste `docker compose config` output anywhere.
+name: molebridge-sidecar
+
+services:
+  gluetun:
+    # Pinned as in compose.gluetun.yaml.
+    image: docker.io/qmcgaw/gluetun:<pin>
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-gluetun"
+    # Checks the control-server role file on every start, then runs gluetun's
+    # own entrypoint: gluetun would log an excerpt of a malformed role file,
+    # API key included (routing/gluetun-preflight). MOLEBRIDGE_KIND below
+    # makes it refuse to start gluetun if the overlay's post-rules are
+    # mounted: a sidecar's protection has no overlay guard behind them.
+    entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    # gluetun keeps the engine's default capabilities on top of NET_ADMIN;
+    # this only stops anything it runs from gaining more through a setuid or
+    # file-capability binary. Dropping the defaults and a read-only root have
+    # not been tried with gluetun, so neither is set. gluetun has no pids
+    # limit: its process tree is gluetun's to size, not Molebridge's.
+    security_opt: ["no-new-privileges:true"]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # Publish your applications' ports here, and open them in gluetun's
+    # firewall with FIREWALL_INPUT_PORTS. Never publish 8000: the control
+    # server's port is full gluetun administration (docs/gluetun-sidecar.md).
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      VPN_SERVICE_PROVIDER: "${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
+      VPN_TYPE: wireguard
+      # gluetun's values are auto, userspace and kernelspace; kernelspace
+      # fails instead of falling back to a userspace tunnel, which the
+      # exit can't inspect.
+      WIREGUARD_IMPLEMENTATION: kernelspace
+      # gluetun's image defaults this to tun0; the exit reads EXIT_IF.
+      VPN_INTERFACE: "${EXIT_IF:-wg0}"
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/wireguard_private_key
+      WIREGUARD_ADDRESSES: "${GLUETUN_WIREGUARD_ADDRESSES:-}"
+      SERVER_COUNTRIES: "${GLUETUN_SERVER_COUNTRIES:-}"
+      SERVER_CITIES: "${GLUETUN_SERVER_CITIES:-}"
+      SERVER_HOSTNAMES: "${GLUETUN_SERVER_HOSTNAMES:-}"
+      FIREWALL_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS:-}"
+      # gluetun's server list, in a directory of its own so the exit can
+      # mount only that, read-only.
+      STORAGE_FILEPATH: /gluetun/servers/servers.json
+      UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      # Namespace loopback only, never published. Its credential is full
+      # gluetun administration; the role file decides which routes answer.
+      # Your applications share this loopback: keep the key out of their mounts.
+      HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      MOLEBRIDGE_KIND: sidecar
+    volumes:
+      - gluetun-data:/gluetun
+      - gluetun-servers:/gluetun/servers
+      - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
+      # Both must exist: Compose then fails instead of creating an empty
+      # directory in their place. Without its role file gluetun would answer
+      # several routes with no authentication, including PUT /v1/vpn/status.
+      # There are deliberately no post-rules: compose.gluetun.yaml's accept
+      # output on the host interface, safe only behind the overlay's guard.
+      # The preflight refuses to start gluetun if you mount them anyway.
+      # secrets/gluetun/wireguard_private_key: the provider key, one line, mode 0600.
+      - type: bind
+        source: ./secrets/gluetun/wireguard_private_key
+        target: /run/secrets/wireguard_private_key
+        read_only: true
+        bind:
+          create_host_path: false
+      # secrets/gluetun/auth.toml: control-server roles, mode 0600, written
+      # by the `gluetun-auth` tool (docs/operations.md).
+      - type: bind
+        source: ./secrets/gluetun/auth.toml
+        target: /gluetun/auth/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  exit:
+    # molebridge-core, the image without the NetBird client, as a sidecar
+    # (EXIT_KIND=sidecar): it
+    # reads gluetun's server list (read-only, never downloaded), selects
+    # servers through gluetun's control server on the namespace's loopback,
+    # then verifies the peer, the handshake and egress. It runs no NetBird,
+    # installs no routes or firewall rules and has no routing contract, so its
+    # supervisor has nothing to clean up when it stops.
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-exit"
+    restart: unless-stopped
+    network_mode: service:gluetun
+    cap_drop: [ALL]
+    # NET_ADMIN: reading peers, handshake and endpoint through kernel
+    # WireGuard's WG_CMD_GET_DEVICE requires CAP_NET_ADMIN over the namespace.
+    # In gluetun's namespace it could equally change gluetun's routes and
+    # firewall and read the live WireGuard private key
+    # (docs/gluetun-sidecar.md).
+    # NET_RAW: binding to the tunnel for egress checks needs it on kernels
+    # before 5.7.
+    # DAC_OVERRIDE: reads the mode-0600 API key and panel requests owned by
+    # your host user, and writes host-user-owned state directories (rootful
+    # Docker; a rootless engine's container root is that user already).
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    stop_grace_period: 15s
+    # The Compose services of the applications that use the tunnel,
+    # comma-separated, for the attachment procedure in docs/operations.md:
+    # each one must be in gluetun's current namespace, and
+    # `docker compose up -d --force-recreate` must cover them with gluetun.
+    labels:
+      io.molebridge.sidecar-apps: "${SIDECAR_APPS:-}"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: gluetun
+      PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
+      EXIT_IF: "${EXIT_IF:-wg0}"
+      SERVER: "${SERVER:-}"
+      GLUETUN_CONTROL_URL: http://127.0.0.1:8000
+      GLUETUN_API_KEY_FILE: /run/secrets/gluetun/api_key
+      GLUETUN_SERVERS_FILE: /gluetun-servers/servers.json
+      # The exit starts one refresh of the list at start when the data is
+      # older than this period or than 7 days; 0 means never.
+      GLUETUN_UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Seconds without an accepted lease renewal before the supervisor
+      # declares the exit stopped (5 to 30; docs/configuration.md).
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # Only the directory of gluetun's server list, read-only.
+      - gluetun-servers:/gluetun-servers:ro
+      # The API key from the `gluetun-auth` tool, mode 0600. Never the role
+      # file, which only gluetun mounts.
+      - type: bind
+        source: ./secrets/gluetun/api_key
+        target: /run/secrets/gluetun/api_key
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      gluetun:
+        condition: service_started
+        restart: true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          # gluetun's server list for every provider is about 7.5 MB of
+          # JSON, parsed whole when it changes.
+          memory: 384m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+
+  example-app:
+    # A stand-in for your application: it only sleeps, in gluetun's
+    # namespace. It runs only with COMPOSE_PROFILES=example (as
+    # the .env beside this file sets it). Add your own services in a file of your
+    # own, each with `network_mode: service:gluetun`, and list them in
+    # SIDECAR_APPS (docs/gluetun-sidecar.md).
+    profiles: [example]
+    image: docker.io/library/busybox:<pin>
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-example-app"
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run in gluetun's namespace before gluetun has set
+    # up its firewall, with the host's routes open to it. Start the stack at
+    # boot with `docker compose up -d`, which waits for gluetun to be
+    # healthy (docs/gluetun-sidecar.md#starting-at-boot). Give your
+    # applications the same policy.
+    restart: "no"
+    network_mode: service:gluetun
+    init: true
+    command: ["sleep", "2147483647"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    depends_on:
+      gluetun:
+        # Starts once gluetun's tunnel is up; restarted when Compose
+        # restarts or recreates gluetun.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 16m
+
+volumes:
+  gluetun-data:
+  gluetun-servers:

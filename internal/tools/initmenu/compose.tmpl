@@ -1,0 +1,1097 @@
+{{/*
+The service blocks `molebridge init` writes, one per form and service.
+
+Each block is the service as the shipped Compose file in the repository root
+has it, without the `build:` key (init writes no Dockerfile beside it), with
+three deliberate differences: port-sync has no profile (it is written only
+when chosen), compose.gluetun.yaml's switchyard is written out instead of
+extending compose.yaml, and the proxy, which no shipped file has yet, is
+init's own. TestBlocksMatchShippedFiles fails when a block and its shipped
+service drift apart in anything but comments, so change the shipped file and
+the block together. The release automation rewrites the image pins here as in
+the shipped files (tools/auto-release.py, PIN_FILES).
+*/}}
+{{define "overlay/exit"}}
+  exit:
+    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # NET_ADMIN: the routing contract, the tunnel and NetBird's interface.
+    # NET_RAW: NetBird opens an IPv4 raw socket while bringing the overlay
+    # interface up. Docker grants NET_RAW by default and Podman does not,
+    # where the engine then fails with "failed to create ipv4 raw socket:
+    # operation not permitted", the interface never appears, and the exit
+    # carries no traffic.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and creates, syncs and replaces files in a state
+    # directory your host user owns (rootful Docker; a rootless engine's
+    # container root is that user already).
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files and NetBird's control socket.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+      # NetBird's client log, kept off the read-only root; the exit reads its
+      # own launch's lines from it.
+      - /var/log/netbird:size=16m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence ends NetBird and the worker and removes the tunnel
+    # within 13 seconds; this leaves room so the engine never cuts it short.
+    stop_grace_period: 15s
+    sysctls:
+      # The namespace forwards overlay traffic into the tunnel.
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      # ICMP errors for tunnel traffic (fragmentation needed) are sourced from
+      # the tunnel address so the priority-94 rule returns them through the
+      # tunnel. Without it, path MTU discovery through the exit silently fails.
+      net.ipv4.icmp_errors_use_inbound_ifaddr: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv6.conf.default.disable_ipv6: "0"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      # Molebridge creates the provider tunnel itself, on an overlay exit.
+      # compose.gluetun.yaml and compose.sidecar.yaml set the other forms.
+      TUNNEL_BACKEND: native
+      EXIT_KIND: overlay
+      PROVIDER: "${PROVIDER:-mullvad}"
+      EXIT_IF: "${EXIT_IF:-mullvad}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default; see docs/providers.md#port-forwarding.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Overrides whose defaults live in the binary (docs/configuration.md).
+      # Seconds between full repair passes, 2 to 60; netlink events repair in
+      # between. And seconds without an accepted lease renewal before the
+      # supervisor stops NetBird, 5 to 30.
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+      # NetBird, as the old netbird service set it.
+      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
+      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
+      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
+      NB_LOG_LEVEL: info
+      # This peer only forwards traffic; NetBird leaves the namespace's
+      # resolver alone.
+      NB_DISABLE_DNS: "true"
+      # Part of Molebridge's supported NetBird configuration; the exit
+      # refuses to start NetBird without it.
+      NB_DISABLE_USERSPACE_ROUTING: "true"
+      # Keeps ICE off the exit tunnel interface from the peer's first
+      # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
+      # first `netbird up`. An already enrolled peer keeps its stored
+      # blacklist; the exit then refuses to start and names the repair tool
+      # (`fix-blacklist`, docs/operations.md).
+      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
+    env_file:
+      # NB_SETUP_KEY, needed only until the peer first enrolls.
+      - path: ./secrets/netbird.env
+        required: false
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
+      - ./tunnel/wg_confs:/config/wg_confs:ro
+      # The panel's requests in, read-only; the exit's records out.
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: the account login the exit registers the tunnel key with,
+      # secrets/pia/username and secrets/pia/password, one value per file,
+      # mode 0600. Compose cannot mount a directory for one PROVIDER only, so
+      # the mount is always there: the directory is empty, and unused, with
+      # Mullvad or NordVPN. Create it for every provider (docs/setup.md);
+      # Compose then refuses to start, rather than create it root-owned, when
+      # it is missing.
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+      # Durable peer identity; deleting it re-enrolls as a new peer.
+      - netbird-data:/var/lib/netbird
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # `json-file` with a size cap is the one bounded driver every supported
+    # engine accepts. Docker's `local` driver does not exist under Podman, and
+    # a container naming an unknown driver fails to create outright; Podman's
+    # log options do not include `max-file`.
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          # One process tree where 0.7.0 had 256m (tunnel), 256m (NetBird)
+          # and 128m (applier). 512m is NordVPN's: its server list is about
+          # 8 MB of JSON, downloaded and parsed every six hours and capped at
+          # 32 MiB, and a list near that cap takes about 300 MB to parse, with
+          # NetBird beside it. It is a ceiling, not a reservation: Mullvad and
+          # PIA exits idle far below it.
+          memory: 512m
+          # Every process and thread in the container counts: the
+          # supervisor, the worker, the cleanup child and NetBird are Go
+          # programs, each with up to about one thread per CPU plus a few.
+          # 512 holds them on a 64-CPU host and still stops a runaway fork.
+          pids: 512
+{{end}}
+{{define "overlay/switchyard"}}
+  switchyard:
+    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
+    restart: unless-stopped
+    # The user that owns ./state/panel, as the container sees it. Keep it equal
+    # to your host user's uid:gid on an engine that maps container uids to host
+    # uids directly.
+    # Under a rootless engine that remaps them, container root is already the
+    # host user and an unmapped uid cannot read the 0700 state tree; set
+    # PANEL_USER=0:0 there, and PANEL_ALLOW_ROOT=1 beside it, because the
+    # panel refuses to run as uid 0 unless you say so. See
+    # docs/configuration.md.
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-mullvad}"
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The panel treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      # Several exits in one panel: `id=provider[/kind][:label]`, with each
+      # exit's state mounted under /state/<id> in a compose.override.yaml,
+      # every applier directory read-only (docs/switchyard.md). Empty means
+      # this one exit.
+      PANEL_EXITS: "${PANEL_EXITS:-}"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Switchyard}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this exit}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
+      PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      # Optional sign-in; empty PANEL_OIDC_ISSUER means no login. See docs/access.md.
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
+    ports:
+      # Loopback only. Publish it through an authenticating proxy, or through
+      # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      # Only `panel/`, where requests are written, is writable here;
+      # everything the exit publishes is read-only. The panel checks this at
+      # start and refuses to run otherwise.
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    # Its own network: it shares none with the exit.
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          # One Go process: up to about one thread per CPU, plus a few.
+          pids: 128
+{{end}}
+{{define "gluetun-overlay/gluetun"}}
+  gluetun:
+    image: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-gluetun"
+    # Checks the control-server role file on every start, then runs gluetun's
+    # own entrypoint: gluetun would log an excerpt of a malformed role file,
+    # API key included (routing/gluetun-preflight). MOLEBRIDGE_KIND below
+    # tells it which kind of exit this is.
+    entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    # gluetun keeps the engine's default capabilities on top of NET_ADMIN;
+    # this only stops anything it runs from gaining more through a setuid or
+    # file-capability binary. Dropping the defaults and a read-only root have
+    # not been tried with gluetun, so neither is set. gluetun has no pids
+    # limit: its process tree is gluetun's to size, not Molebridge's.
+    security_opt: ["no-new-privileges:true"]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      # The namespace forwards overlay traffic into the tunnel.
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      # ICMP errors for tunnel traffic are sourced from the tunnel address so
+      # the priority-94 rule returns them through the tunnel.
+      net.ipv4.icmp_errors_use_inbound_ifaddr: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv6.conf.default.disable_ipv6: "0"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      VPN_SERVICE_PROVIDER: "${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/configuration.md#gluetun-backend)}"
+      VPN_TYPE: wireguard
+      # gluetun's values are auto, userspace and kernelspace; kernelspace
+      # fails instead of falling back to a userspace tunnel.
+      WIREGUARD_IMPLEMENTATION: kernelspace
+      # gluetun's image defaults this to tun0; the exit and NetBird's ICE
+      # blacklist must name the same interface.
+      VPN_INTERFACE: "${EXIT_IF:-wg0}"
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/wireguard_private_key
+      WIREGUARD_ADDRESSES: "${GLUETUN_WIREGUARD_ADDRESSES:-}"
+      SERVER_COUNTRIES: "${GLUETUN_SERVER_COUNTRIES:-}"
+      SERVER_CITIES: "${GLUETUN_SERVER_CITIES:-}"
+      SERVER_HOSTNAMES: "${GLUETUN_SERVER_HOSTNAMES:-}"
+      # gluetun's server list, in a directory of its own so the exit can
+      # mount only that, read-only. The updater refreshes it; the panel shows
+      # the provider data's date and calls it stale after 30 days.
+      STORAGE_FILEPATH: /gluetun/servers/servers.json
+      UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      # NetBird's WireGuard port, opened in gluetun's INPUT chain on the host
+      # interface; the post-rules open it too.
+      FIREWALL_INPUT_PORTS: "${NB_WIREGUARD_PORT:-51820}"
+      # Namespace loopback only, never published. Its credential is full
+      # gluetun administration; the role file decides which routes answer.
+      HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      # An overlay exit: the preflight requires the post-rules file mounted
+      # below, which the sidecar form must not have (compose.sidecar.yaml sets
+      # `sidecar`). Anything else keeps gluetun from starting.
+      MOLEBRIDGE_KIND: overlay
+    volumes:
+      - gluetun-data:/gluetun
+      - gluetun-servers:/gluetun/servers
+      - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
+      # These three must exist: Compose then fails instead of creating an
+      # empty directory in their place. Without its role file gluetun would
+      # answer several routes with no authentication, including PUT
+      # /v1/vpn/status.
+      # secrets/gluetun/wireguard_private_key: the provider key, one line, mode 0600.
+      - type: bind
+        source: ./secrets/gluetun/wireguard_private_key
+        target: /run/secrets/wireguard_private_key
+        read_only: true
+        bind:
+          create_host_path: false
+      # secrets/gluetun/auth.toml: control-server roles, mode 0600, written
+      # by the `gluetun-auth` tool (docs/operations.md).
+      - type: bind
+        source: ./secrets/gluetun/auth.toml
+        target: /gluetun/auth/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      # Written by the `gluetun-post-rules` tool (docs/operations.md); the
+      # preflight refuses to start gluetun without it.
+      - type: bind
+        source: ./tunnel/gluetun/post-rules.txt
+        target: /iptables/post-rules.txt
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+{{end}}
+{{define "gluetun-overlay/exit"}}
+  exit:
+    # The image from compose.yaml, in its gluetun form (TUNNEL_BACKEND=gluetun):
+    # one container where 0.7.0 had `guard`, `netbird` and `applier`. It
+    # installs Molebridge's routing contract in gluetun's namespace and keeps
+    # it in place while gluetun recreates its interface on every reconnect,
+    # starts NetBird only once the contract holds and stops it, under a lease,
+    # if the contract or NetBird's control-traffic marking fails, and switches
+    # servers through gluetun's control server on the namespace's loopback,
+    # then verifies the peer, the handshake, the contract and egress. It
+    # never removes the unreachable fallback or rules 1 and 97, and on a
+    # stop it removes only NetBird's overlay interface, never gluetun's
+    # tunnel. NET_ADMIN as with the native exit; the API key is full gluetun
+    # administration, part of the same trusted base.
+    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
+    restart: unless-stopped
+    network_mode: service:gluetun
+    cap_drop: [ALL]
+    # NET_RAW: NetBird opens an IPv4 raw socket while bringing the overlay
+    # interface up (Podman does not grant it by default), and interface
+    # binding on older kernels needs it. DAC_OVERRIDE reads mode-0600 files
+    # and panel requests, and writes host-user-owned state directories.
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files and NetBird's control socket.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+      # NetBird's client log, kept off the read-only root; the exit reads its
+      # own launch's lines from it to detect NetBird's fallback from advanced
+      # routing.
+      - /var/log/netbird:size=16m,mode=0755,noexec,nosuid,nodev
+    stop_grace_period: 15s
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      TUNNEL_BACKEND: gluetun
+      EXIT_KIND: overlay
+      PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/configuration.md#gluetun-backend)}"
+      EXIT_IF: "${EXIT_IF:-wg0}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      HOST_IF: "${HOST_IF:-eth0}"
+      HOST_TABLE: "${HOST_TABLE:-51822}"
+      CONTROL_MARK: "${CONTROL_MARK:-0x1bd00}"
+      SERVER: "${SERVER:-}"
+      GLUETUN_CONTROL_URL: http://127.0.0.1:8000
+      GLUETUN_API_KEY_FILE: /run/secrets/gluetun/api_key
+      GLUETUN_SERVERS_FILE: /gluetun-servers/servers.json
+      # The exit starts one refresh of the list at start when the data is
+      # older than this period or than 7 days; 0 means never.
+      GLUETUN_UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Overrides whose defaults live in the binary (docs/configuration.md).
+      # Seconds between full repair passes, 2 to 60; netlink events repair in
+      # between. Seconds without an accepted lease renewal before the
+      # supervisor stops NetBird, 5 to 30. And seconds NetBird may go without
+      # carrying the control-plane mark before it is stopped, 5 to 30.
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+      FWMARK_GRACE: "${FWMARK_GRACE:-30}"
+      # NetBird, as the old netbird service set it.
+      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
+      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
+      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
+      NB_LOG_LEVEL: info
+      NB_DISABLE_DNS: "true"
+      NB_DISABLE_USERSPACE_ROUTING: "true"
+      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-wg0}"
+      NB_WIREGUARD_PORT: "${NB_WIREGUARD_PORT:-51820}"
+      # The control-plane mark rules 88/89 match. NetBird takes its base from
+      # NB_FWMARK_BASE; the exit refuses to start NetBird unless the two are
+      # equal.
+      NB_FWMARK_BASE: "${CONTROL_MARK:-0x1bd00}"
+    env_file:
+      # NB_SETUP_KEY, needed only until the peer first enrolls.
+      - path: ./secrets/netbird.env
+        required: false
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # Only the directory of gluetun's server list, read-only.
+      - gluetun-servers:/gluetun-servers:ro
+      # The API key from the `gluetun-auth` tool, mode 0600.
+      - type: bind
+        source: ./secrets/gluetun/api_key
+        target: /run/secrets/gluetun/api_key
+        read_only: true
+        bind:
+          create_host_path: false
+      # Durable peer identity; deleting it re-enrolls as a new peer.
+      - netbird-data:/var/lib/netbird
+    depends_on:
+      gluetun:
+        condition: service_started
+        restart: true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          # NetBird (256m in 0.7.0) and gluetun's server list for every
+          # provider, about 7.5 MB of JSON parsed whole when it changes (the
+          # applier had 384m); the guard had 64m.
+          memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+{{end}}
+{{define "gluetun-overlay/switchyard"}}
+  switchyard:
+    # compose.gluetun.yaml extends compose.yaml's panel; init writes it out
+    # here, for this exit's gluetun provider, as there is no compose.yaml
+    # beside this file to extend.
+    image: ghcr.io/irashack/molebridge:v0.12.0@sha256:49e1d87711e876ceead0525347667ede7a17fa2ed190df11edbfd1a6857f563e
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
+    restart: unless-stopped
+    # The user that owns ./state/panel, as the container sees it. Keep it equal
+    # to your host user's uid:gid on an engine that maps container uids to host
+    # uids directly.
+    # Under a rootless engine that remaps them, container root is already the
+    # host user and an unmapped uid cannot read the 0700 state tree; set
+    # PANEL_USER=0:0 there, and PANEL_ALLOW_ROOT=1 beside it, because the
+    # panel refuses to run as uid 0 unless you say so. See
+    # docs/configuration.md.
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/configuration.md#gluetun-backend)}"
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The panel treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      # Several exits in one panel: `id=provider[/kind][:label]`, with each
+      # exit's state mounted under /state/<id> in a compose.override.yaml,
+      # every applier directory read-only (docs/switchyard.md). Empty means
+      # this one exit.
+      PANEL_EXITS: "${PANEL_EXITS:-}"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Switchyard}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this exit}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
+      PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      # Optional sign-in; empty PANEL_OIDC_ISSUER means no login. See docs/access.md.
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
+    ports:
+      # Loopback only. Publish it through an authenticating proxy, or through
+      # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      # Only `panel/`, where requests are written, is writable here;
+      # everything the exit publishes is read-only. The panel checks this at
+      # start and refuses to run otherwise.
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    # Its own network: it shares none with the exit.
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          # One Go process: up to about one thread per CPU, plus a few.
+          pids: 128
+{{end}}
+{{define "gluetun-sidecar/gluetun"}}
+  gluetun:
+    # Pinned as in compose.gluetun.yaml.
+    image: docker.io/qmcgaw/gluetun:v3.41.3@sha256:fa19cc76b2af13d57a8d3dc3066f2ada061b1c761b8aecf989b3877c0486e027
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-gluetun"
+    # Checks the control-server role file on every start, then runs gluetun's
+    # own entrypoint: gluetun would log an excerpt of a malformed role file,
+    # API key included (routing/gluetun-preflight). MOLEBRIDGE_KIND below
+    # makes it refuse to start gluetun if the overlay's post-rules are
+    # mounted: a sidecar's protection has no overlay guard behind them.
+    entrypoint: ["/bin/sh", "/usr/local/bin/molebridge-gluetun-preflight", "/gluetun-entrypoint"]
+    restart: unless-stopped
+    cap_add: [NET_ADMIN]
+    # gluetun keeps the engine's default capabilities on top of NET_ADMIN;
+    # this only stops anything it runs from gaining more through a setuid or
+    # file-capability binary. Dropping the defaults and a read-only root have
+    # not been tried with gluetun, so neither is set. gluetun has no pids
+    # limit: its process tree is gluetun's to size, not Molebridge's.
+    security_opt: ["no-new-privileges:true"]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # Publish your applications' ports here, and open them in gluetun's
+    # firewall with FIREWALL_INPUT_PORTS. Never publish 8000: the control
+    # server's port is full gluetun administration (docs/gluetun-sidecar.md).
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      VPN_SERVICE_PROVIDER: "${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
+      VPN_TYPE: wireguard
+      # gluetun's values are auto, userspace and kernelspace; kernelspace
+      # fails instead of falling back to a userspace tunnel, which the
+      # exit can't inspect.
+      WIREGUARD_IMPLEMENTATION: kernelspace
+      # gluetun's image defaults this to tun0; the exit reads EXIT_IF.
+      VPN_INTERFACE: "${EXIT_IF:-wg0}"
+      WIREGUARD_PRIVATE_KEY_SECRETFILE: /run/secrets/wireguard_private_key
+      WIREGUARD_ADDRESSES: "${GLUETUN_WIREGUARD_ADDRESSES:-}"
+      SERVER_COUNTRIES: "${GLUETUN_SERVER_COUNTRIES:-}"
+      SERVER_CITIES: "${GLUETUN_SERVER_CITIES:-}"
+      SERVER_HOSTNAMES: "${GLUETUN_SERVER_HOSTNAMES:-}"
+      FIREWALL_INPUT_PORTS: "${GLUETUN_FIREWALL_INPUT_PORTS:-}"
+      # gluetun's server list, in a directory of its own so the exit can
+      # mount only that, read-only.
+      STORAGE_FILEPATH: /gluetun/servers/servers.json
+      UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      # Namespace loopback only, never published. Its credential is full
+      # gluetun administration; the role file decides which routes answer.
+      # Your applications share this loopback: keep the key out of their mounts.
+      HTTP_CONTROL_SERVER_ADDRESS: "127.0.0.1:8000"
+      HTTP_CONTROL_SERVER_AUTH_CONFIG_FILEPATH: /gluetun/auth/config.toml
+      MOLEBRIDGE_KIND: sidecar
+    volumes:
+      - gluetun-data:/gluetun
+      - gluetun-servers:/gluetun/servers
+      - ./routing/gluetun-preflight:/usr/local/bin/molebridge-gluetun-preflight:ro
+      # Both must exist: Compose then fails instead of creating an empty
+      # directory in their place. Without its role file gluetun would answer
+      # several routes with no authentication, including PUT /v1/vpn/status.
+      # There are deliberately no post-rules: compose.gluetun.yaml's accept
+      # output on the host interface, safe only behind the overlay's guard.
+      # The preflight refuses to start gluetun if you mount them anyway.
+      # secrets/gluetun/wireguard_private_key: the provider key, one line, mode 0600.
+      - type: bind
+        source: ./secrets/gluetun/wireguard_private_key
+        target: /run/secrets/wireguard_private_key
+        read_only: true
+        bind:
+          create_host_path: false
+      # secrets/gluetun/auth.toml: control-server roles, mode 0600, written
+      # by the `gluetun-auth` tool (docs/operations.md).
+      - type: bind
+        source: ./secrets/gluetun/auth.toml
+        target: /gluetun/auth/config.toml
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+{{end}}
+{{define "gluetun-sidecar/exit"}}
+  exit:
+    # molebridge-core, the image without the NetBird client, as a sidecar
+    # (EXIT_KIND=sidecar): it
+    # reads gluetun's server list (read-only, never downloaded), selects
+    # servers through gluetun's control server on the namespace's loopback,
+    # then verifies the peer, the handshake and egress. It runs no NetBird,
+    # installs no routes or firewall rules and has no routing contract, so its
+    # supervisor has nothing to clean up when it stops.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-exit"
+    restart: unless-stopped
+    network_mode: service:gluetun
+    cap_drop: [ALL]
+    # NET_ADMIN: reading peers, handshake and endpoint through kernel
+    # WireGuard's WG_CMD_GET_DEVICE requires CAP_NET_ADMIN over the namespace.
+    # In gluetun's namespace it could equally change gluetun's routes and
+    # firewall and read the live WireGuard private key
+    # (docs/gluetun-sidecar.md).
+    # NET_RAW: binding to the tunnel for egress checks needs it on kernels
+    # before 5.7.
+    # DAC_OVERRIDE: reads the mode-0600 API key and panel requests owned by
+    # your host user, and writes host-user-owned state directories (rootful
+    # Docker; a rootless engine's container root is that user already).
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    stop_grace_period: 15s
+    # The Compose services of the applications that use the tunnel,
+    # comma-separated, for the attachment procedure in docs/operations.md:
+    # each one must be in gluetun's current namespace, and
+    # `docker compose up -d --force-recreate` must cover them with gluetun.
+    labels:
+      io.molebridge.sidecar-apps: "${SIDECAR_APPS:-}"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: gluetun
+      PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
+      EXIT_IF: "${EXIT_IF:-wg0}"
+      SERVER: "${SERVER:-}"
+      GLUETUN_CONTROL_URL: http://127.0.0.1:8000
+      GLUETUN_API_KEY_FILE: /run/secrets/gluetun/api_key
+      GLUETUN_SERVERS_FILE: /gluetun-servers/servers.json
+      # The exit starts one refresh of the list at start when the data is
+      # older than this period or than 7 days; 0 means never.
+      GLUETUN_UPDATER_PERIOD: "${GLUETUN_UPDATER_PERIOD:-24h}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Seconds without an accepted lease renewal before the supervisor
+      # declares the exit stopped (5 to 30; docs/configuration.md).
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # Only the directory of gluetun's server list, read-only.
+      - gluetun-servers:/gluetun-servers:ro
+      # The API key from the `gluetun-auth` tool, mode 0600. Never the role
+      # file, which only gluetun mounts.
+      - type: bind
+        source: ./secrets/gluetun/api_key
+        target: /run/secrets/gluetun/api_key
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      gluetun:
+        condition: service_started
+        restart: true
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          # gluetun's server list for every provider is about 7.5 MB of
+          # JSON, parsed whole when it changes.
+          memory: 384m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+{{end}}
+{{define "gluetun-sidecar/example-app"}}
+  example-app:
+    # A stand-in for your application: it only sleeps, in gluetun's
+    # namespace. It runs only with COMPOSE_PROFILES=example (as
+    # the .env beside this file sets it). Add your own services in a file of your
+    # own, each with `network_mode: service:gluetun`, and list them in
+    # SIDECAR_APPS (docs/gluetun-sidecar.md).
+    profiles: [example]
+    image: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-example-app"
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run in gluetun's namespace before gluetun has set
+    # up its firewall, with the host's routes open to it. Start the stack at
+    # boot with `docker compose up -d`, which waits for gluetun to be
+    # healthy (docs/gluetun-sidecar.md#starting-at-boot). Give your
+    # applications the same policy.
+    restart: "no"
+    network_mode: service:gluetun
+    init: true
+    command: ["sleep", "2147483647"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    depends_on:
+      gluetun:
+        # Starts once gluetun's tunnel is up; restarted when Compose
+        # restarts or recreates gluetun.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 16m
+{{end}}
+{{define "gluetun-sidecar/switchyard"}}
+  switchyard:
+    # compose.yaml's panel, repeated here rather than extended: extending it
+    # would make Compose resolve compose.yaml's overlay settings too.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-switchyard"
+    restart: unless-stopped
+    # The user that owns ./state/panel, as the container sees it: your host
+    # user's uid:gid on Docker. Under a rootless engine that remaps uids, set
+    # PANEL_USER=0:0 and PANEL_ALLOW_ROOT=1 beside it, because the panel
+    # refuses to run as uid 0 unless you say so (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "gluetun-${GLUETUN_PROVIDER:?set GLUETUN_PROVIDER in .env (docs/gluetun-sidecar.md)}"
+      # A single-exit panel reads the kind from here.
+      EXIT_KIND: sidecar
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The panel treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      PANEL_EXITS: "${PANEL_EXITS:-}"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Switchyard}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this gluetun}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
+      PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      # Optional sign-in; empty PANEL_OIDC_ISSUER means no login. See docs/access.md.
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
+    ports:
+      # Loopback only. Publish it through an authenticating proxy, or through
+      # a proxy with sign-in (PANEL_OIDC_ISSUER above) turned on.
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      # Only `panel/`, where requests are written, is writable here.
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          # As compose.yaml's panel.
+          pids: 128
+{{end}}
+{{define "native-sidecar/exit"}}
+  exit:
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-exit"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # NET_ADMIN: the routing contract, the firewall and the tunnel.
+    # NET_RAW: binding egress checks to the tunnel on kernels before 5.7.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and writes state directories your host user owns
+    # (rootful Docker; a rootless engine's container root is that user already).
+    # The applications get none of these, and no capability at all: without
+    # NET_ADMIN they cannot change the rules, and without NET_ADMIN or NET_RAW
+    # (enough for SO_MARK from Linux 5.17, and in Docker's default set) they
+    # cannot mark a socket past the firewall. Hence cap_drop: [ALL] on each.
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence removes the tunnel within 13 seconds; the rules and
+    # the firewall stay.
+    stop_grace_period: 15s
+    # Publish your applications' ports here: they listen in this namespace.
+    # A published port arrives from the engine's network, so name that
+    # network in SIDECAR_LAN_CIDRS or the replies are dropped.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: native
+      PROVIDER: "${PROVIDER:-pia}"
+      EXIT_IF: "${EXIT_IF:-pia}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      HOST_IF: "${HOST_IF:-eth0}"
+      # Where the applications may go outside the tunnel, comma-separated:
+      # the engine's network for published ports and neighbours, a resolver
+      # (docs/native-sidecar.md#dns). Everything else goes through the tunnel
+      # or nowhere.
+      SIDECAR_LAN_CIDRS: "${SIDECAR_LAN_CIDRS:-}"
+      # The exit's own lookups, when the namespace's resolvers are reachable
+      # only through the tunnel (docs/native-sidecar.md#dns).
+      SIDECAR_HOST_RESOLVERS: "${SIDECAR_HOST_RESOLVERS:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default: the forwarded port reaches this namespace;
+      # port-sync below tells qBittorrent which one it is.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
+      - ./tunnel/wg_confs:/config/wg_confs:ro
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: secrets/pia/username and secrets/pia/password, mode 0600.
+      # Create the directory for every provider (docs/setup.md).
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+{{end}}
+{{define "native-sidecar/example-app"}}
+  example-app:
+    # A stand-in for your application: it only sleeps, in the exit's
+    # namespace. It runs only with COMPOSE_PROFILES=example (as
+    # the .env beside this file sets it). Add your own services in a file of
+    # your own, each with `network_mode: service:exit`, and give them no
+    # capabilities.
+    profiles: [example]
+    image: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-example-app"
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run before the exit has installed its firewall and
+    # rules, with the host's routes open to it. Start the stack at boot with
+    # `docker compose up -d`, which waits for the exit to be healthy
+    # (docs/native-sidecar.md#starting-at-boot). Give your applications the
+    # same policy.
+    restart: "no"
+    network_mode: service:exit
+    init: true
+    command: ["sleep", "2147483647"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted when Compose restarts
+        # or recreates the exit.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 16m
+{{end}}
+{{define "native-sidecar/port-sync"}}
+  port-sync:
+    # Keeps qBittorrent's listening port on PIA's forwarded port
+    # (docs/native-sidecar.md#port-forwarding). You chose it, so it has no
+    # profile here. No capabilities, nothing written: it reads the exit's
+    # record and calls qBittorrent's Web API on the namespace's loopback with
+    # the login in ./secrets/port-sync.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["port-sync"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-port-sync"
+    restart: unless-stopped
+    network_mode: service:exit
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PORT_SYNC_CLIENT: qbittorrent
+      PORT_SYNC_URL: "${PORT_SYNC_URL:-http://127.0.0.1:8080}"
+      PORT_SYNC_USERNAME_FILE: /run/secrets/port-sync/username
+      PORT_SYNC_PASSWORD_FILE: /run/secrets/port-sync/password
+    volumes:
+      - ./state/applier:/state/applier:ro
+      - type: bind
+        source: ./secrets/port-sync
+        target: /run/secrets/port-sync
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      exit:
+        condition: service_started
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+          # One Go process, as the panel.
+          pids: 128
+{{end}}
+{{define "native-sidecar/switchyard"}}
+  switchyard:
+    # compose.yaml's panel, repeated here rather than extended: extending it
+    # would make Compose resolve compose.yaml's overlay settings too.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-switchyard"
+    restart: unless-stopped
+    # The user that owns ./state/panel, as the container sees it: your host
+    # user's uid:gid on Docker. Under a rootless engine that remaps uids, set
+    # PANEL_USER=0:0 and PANEL_ALLOW_ROOT=1 beside it (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-pia}"
+      # A single-exit panel reads the kind from here.
+      EXIT_KIND: sidecar
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      PANEL_EXITS: "${PANEL_EXITS:-}"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Switchyard}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this tunnel}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
+      PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
+    ports:
+      # Loopback only. Publish it through an authenticating proxy, or turn on
+      # sign-in (docs/access.md).
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          # As compose.yaml's panel.
+          pids: 128
+{{end}}
+{{define "proxy"}}
+  proxy:
+    # EXPERIMENTAL, and in no release yet: the proxy role is being built
+    # (docs/design/menu.md#the-proxy). An image without it exits at once
+    # with "unknown role". Its guarantee: every connection the proxy opens
+    # leaves through the tunnel, or fails. It promises nothing about traffic
+    # not sent to it.
+    # SOCKS5 and HTTP CONNECT on one address in the exit's namespace, for
+    # programs you point at it. No capabilities: binding its connections to
+    # the tunnel interface needs none. It reads the exit's records, read-only,
+    # and writes only its own state.
+    image: ghcr.io/irashack/molebridge-core:v0.12.0@sha256:395bca0432e5b956bc8f5363a589d967c3b4276a6d308e79325234160a45b0b0
+    command: ["proxy"]
+    container_name: "${COMPOSE_PROJECT_NAME:-{{.Project}}}-proxy"
+    restart: unless-stopped
+    network_mode: service:exit
+    # The user that owns ./state/proxy and ./secrets/proxy, as the panel's
+    # PANEL_USER (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-{{.DefaultProvider}}}"
+      TUNNEL_INTERFACE: "${EXIT_IF:-{{.DefaultProvider}}}"
+{{- if eq .Form "overlay"}}
+      # The exit's NetBird address and a port, for devices on the overlay,
+      # or loopback; anything else is refused.
+{{- else}}
+      # Loopback, for the containers in this namespace; anything else is
+      # refused (there is no NetBird interface here).
+{{- end}}
+      PROXY_LISTEN: "${PROXY_LISTEN:-127.0.0.1:1080}"
+      PROXY_MAX_CONNS: "${PROXY_MAX_CONNS:-512}"
+      # One line, mode 0600, owned by the user above.
+      PROXY_PASSWORD_FILE: /run/secrets/proxy/password
+    volumes:
+      - ./state/applier:/state/applier:ro
+      # Both must exist: Compose then fails instead of creating them owned by
+      # root, where this non-root user could not use them.
+      - type: bind
+        source: ./state/proxy
+        target: /state/proxy
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./secrets/proxy
+        target: /run/secrets/proxy
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted with the exit.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          # One Go process, as the panel.
+          pids: 128
+{{end}}
