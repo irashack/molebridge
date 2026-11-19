@@ -87,6 +87,11 @@ class Policy(unittest.TestCase):
         self.assertIn("upgrade-from-0.11.1", new["drills"])
         self.assertEqual(len(new["drills"]), len(old["drills"]))
 
+    def test_ready_policy_is_left_alone(self):
+        text = (ROOT / "tools/acceptance-policy.json").read_text()
+        self.assertFalse(ar.policy_ready(text, "0.0.1"))
+        self.assertTrue(ar.policy_ready(ar.bump_policy(text, "0.0.1"), "0.0.1"))
+
     def test_bump_real_test_script(self):
         text = (ROOT / "tools/test-make-acceptance-predicate.sh").read_text()
         policy = json.loads((ROOT / "tools/acceptance-policy.json").read_text())

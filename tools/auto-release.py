@@ -168,6 +168,12 @@ def bump_policy(policy: str, prev: str) -> str:
     return re.sub(r"upgrade-from-\d+\.\d+\.\d+", f"upgrade-from-{prev}", out)
 
 
+def policy_ready(policy: str, prev: str) -> bool:
+    """True when a change on main already raised the policy for this release:
+    its upgrade drill is from <prev>, the release being upgraded from."""
+    return f'"upgrade-from-{prev}"' in policy
+
+
 def bump_policy_test(script: str, prev: str) -> str:
     def inc(m):
         return f'{m[1]}{int(m[2]) + 1}"'
@@ -643,11 +649,12 @@ def step_prepare(w: World, stable: str) -> str:
             print("nothing to release")
             return IDLE
         new = f"{x}.{y}.{z + 1}"
-    files = {"CHANGELOG.md": prep_changelog(changelog, new, stable, fixes),
-             "tools/acceptance-policy.json": bump_policy(
-                 (root / "tools/acceptance-policy.json").read_text(), stable),
-             "tools/test-make-acceptance-predicate.sh": bump_policy_test(
-                 (root / "tools/test-make-acceptance-predicate.sh").read_text(), stable)}
+    files = {"CHANGELOG.md": prep_changelog(changelog, new, stable, fixes)}
+    policy = (root / "tools/acceptance-policy.json").read_text()
+    if not policy_ready(policy, stable):
+        files["tools/acceptance-policy.json"] = bump_policy(policy, stable)
+        files["tools/test-make-acceptance-predicate.sh"] = bump_policy_test(
+            (root / "tools/test-make-acceptance-predicate.sh").read_text(), stable)
     why = ("the changes under Unreleased in CHANGELOG.md" if not fixes else
            "Alpine fixes the weekly scan found for the current image: " + ", ".join(fixes))
     return make_pr(w, f"{branch_prefix}{new}", f"Release prep: {new}",
@@ -700,9 +707,9 @@ def main() -> int:
         print("another run holds the lock")
         return 0
     w = World(args.workdir, args.dry_run)
-    w.login()
     deadline = time.monotonic() + FOLLOW_SECONDS
     try:
+        w.login()
         while True:
             why = held(w)
             if why:
@@ -726,8 +733,11 @@ def main() -> int:
         failures = (state("failures") or 0) + 1
         save("failures", failures)
         if failures >= 2:
-            file_issue(w, f"{BLOCKED}the automation failed",
-                       f"`tools/auto-release.py` failed {failures} runs in a row; the last: {e}")
+            try:
+                file_issue(w, f"{BLOCKED}the automation failed",
+                           f"`tools/auto-release.py` failed {failures} runs in a row; the last: {e}")
+            except Exception as again:  # noqa: BLE001 - no token, no issue
+                print(f"could not file the issue: {again}", file=sys.stderr)
         return 1
 
 
