@@ -173,14 +173,16 @@ func newProxyRig(t *testing.T) *proxyRig {
 	counters := fmt.Sprintf(`table inet proxyrig {
   counter leak {}
   counter tunnel {}
+  counter listener {}
+  set leakif { typeof oifname; flags dynamic; size 64; }
   chain out {
     type filter hook output priority raw; policy accept;
-    meta skuid %d oifname %q counter name tunnel
-    meta skuid %d oifname "lo" tcp sport %s accept
-    meta skuid %d counter name leak
+    meta skuid %[1]d oifname %[2]q counter name tunnel accept
+    meta skuid %[1]d oifname "lo" tcp sport %[3]s counter name listener accept
+    meta skuid %[1]d counter name leak add @leakif { oifname }
   }
 }
-`, rigProxyUID, dExit, rigProxyUID, listenPort, rigProxyUID)
+`, rigProxyUID, dExit, listenPort)
 	if out, err := sr.exit.ExecInput(counters, "nft", "-f", "-"); err != nil {
 		t.Fatalf("nft: %v\n%s", err, out)
 	}
@@ -746,9 +748,10 @@ func (r *proxyRig) uidCounted(name string) int {
 // some by the tunnel, and none of the client's by the host path.
 func (r *proxyRig) noLeak(when string) {
 	r.t.Helper()
-	leak, tunnel := r.uidCounted("leak"), r.uidCounted("tunnel")
+	leak, tunnel, listener := r.uidCounted("leak"), r.uidCounted("tunnel"), r.uidCounted("listener")
 	if leak != 0 {
-		r.t.Errorf("%s: %d packets of the proxy's uid left by an interface other than %s", when, leak, dExit)
+		out, _ := r.exit.Exec("nft", "list", "table", "inet", "proxyrig")
+		r.t.Errorf("%s: %d packets of the proxy's uid left by an interface other than %s:\n%s", when, leak, dExit, out)
 	}
 	if tunnel == 0 {
 		r.t.Errorf("%s: no packet of the proxy's uid counted by %s: the counter does not see it", when, dExit)
@@ -756,7 +759,7 @@ func (r *proxyRig) noLeak(when string) {
 	if n := r.counted("leak"); n != 0 {
 		r.t.Errorf("%s: %d client packets by the host path", when, n)
 	}
-	r.t.Logf("%s: %d packets of the proxy's uid by %s, 0 by any other interface", when, tunnel, dExit)
+	r.t.Logf("%s: packets of the proxy's uid: %d by %s, %d answering clients on its listener, %d by anything else", when, tunnel, dExit, listener, leak)
 }
 
 // waitRefused waits until a new connection is refused because of the
