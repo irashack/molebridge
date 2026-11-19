@@ -302,8 +302,10 @@ Podman details, is in [requirements](docs/prerequisites.md).
   [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
 - **PIA and NordVPN are IPv4 only.** PIA's port forwarding is experimental
   and opens a port to the Internet.
-- **No automatic failover.** Molebridge never picks a different server or
-  region when one fails. It retries the one you chose, with growing pauses;
+- **Automatic failover is experimental and off by default.** Unless you
+  turn on [automatic failover](docs/configuration.md#automatic-failover)
+  (native exits only; its live drill has not run), Molebridge never picks a
+  different server or region when one fails. It retries the one you chose, with growing pauses;
   PIA re-registers within the same region when its server stops answering,
   and with gluetun the exit puts your selection back after gluetun
   restarts on another server.

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irashack/molebridge/internal/failover"
 	"github.com/irashack/molebridge/internal/nbprofile"
 )
 
@@ -325,5 +326,75 @@ func TestChildEnvironments(t *testing.T) {
 	}
 	if got := watchLogPath(map[string]string{"NB_LOG_FILE": "console"}); got != "" {
 		t.Errorf("console only: %q", got)
+	}
+}
+
+func TestFailoverSettings(t *testing.T) {
+	f := newFixture(t)
+	s, err := f.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Failover.On() || s.Failover.Mode != failover.DefaultMode || s.Failover.After != failover.DefaultAfter || s.Failover.Return != failover.DefaultReturn {
+		t.Errorf("defaults %+v", s.Failover)
+	}
+	f.env["FAILOVER"] = "on"
+	if s, err = f.load(); err != nil || s.Failover.Mode != failover.DefaultOnMode {
+		t.Errorf("on: %+v %v", s, err)
+	}
+	f.env["FAILOVER"] = "servers"
+	f.env["FAILOVER_SERVERS"] = "se-got-wg-001, se-mma-wg-002"
+	f.env["FAILOVER_AFTER"] = "600"
+	f.env["FAILOVER_RETURN"] = "manual"
+	f.env["SERVER"] = "se-sto-wg-001"
+	if s, err = f.load(); err != nil {
+		t.Fatal(err)
+	}
+	if c := s.Failover; len(c.Servers) != 2 || c.Servers[1] != "se-mma-wg-002" || c.After != 600*time.Second || c.Return != failover.ReturnManual {
+		t.Errorf("servers %+v", c)
+	}
+
+	for name, tt := range map[string]struct {
+		env  map[string]string
+		want string
+	}{
+		"unknown mode":         {map[string]string{"FAILOVER": "yes"}, "FAILOVER must be off, on,"},
+		"servers without list": {map[string]string{"FAILOVER": "servers"}, "FAILOVER=servers needs FAILOVER_SERVERS"},
+		"list without servers": {map[string]string{"FAILOVER": "same-city", "FAILOVER_SERVERS": "se-got-wg-001"}, "only for FAILOVER=servers"},
+		"invalid name":         {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": "se-got-wg-001,example.net"}, "isn't a server name"},
+		"empty name":           {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": "se-got-wg-001,"}, "isn't a server name"},
+		"SERVER listed": {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": "se-got-wg-001", "SERVER": "se-got-wg-001"},
+			"must not list SERVER"},
+		"listed twice": {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": "se-got-wg-001,se-got-wg-001"}, "twice"},
+		"too many":     {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": strings.Repeat("se-got-wg-001,", 8) + "se-got-wg-009"}, "more than 8"},
+		"too long":     {map[string]string{"FAILOVER": "servers", "FAILOVER_SERVERS": strings.Repeat("a", 2000)}, "too long"},
+		"after small":  {map[string]string{"FAILOVER": "on", "FAILOVER_AFTER": "119"}, "FAILOVER_AFTER must be 120 to 3600 seconds"},
+		"after large":  {map[string]string{"FAILOVER": "on", "FAILOVER_AFTER": "3601"}, "FAILOVER_AFTER must be 120 to 3600 seconds"},
+		"after padded": {map[string]string{"FAILOVER": "on", "FAILOVER_AFTER": "0300"}, "FAILOVER_AFTER must be"},
+		"after signed": {map[string]string{"FAILOVER": "on", "FAILOVER_AFTER": "+300"}, "FAILOVER_AFTER must be"},
+		"after unit":   {map[string]string{"FAILOVER": "on", "FAILOVER_AFTER": "5m"}, "FAILOVER_AFTER must be"},
+		"return other": {map[string]string{"FAILOVER": "on", "FAILOVER_RETURN": "never"}, "FAILOVER_RETURN must be auto or manual"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			for k, v := range tt.env {
+				f.env[k] = v
+			}
+			if _, err := f.load(); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+
+	// gluetun is out of scope: refused with failover on, accepted with it off.
+	f = newFixture(t)
+	f.env = map[string]string{"EXIT_KIND": "sidecar", "TUNNEL_BACKEND": "gluetun", "PROVIDER": "gluetun-mullvad", "EXIT_IF": "wg0",
+		"STATE_DIR": f.env["STATE_DIR"], "FAILOVER": "off"}
+	if _, err := f.load(); err != nil {
+		t.Fatal(err)
+	}
+	f.env["FAILOVER"] = "same-city"
+	if _, err := f.load(); err == nil || !strings.Contains(err.Error(), "FAILOVER needs TUNNEL_BACKEND=native") {
+		t.Fatalf("gluetun: %v", err)
 	}
 }

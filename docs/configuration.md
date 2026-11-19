@@ -55,6 +55,10 @@ they differ the row says so.
 | `PANEL_SESSION_TTL` | switchyard | `3600` | Seconds a sign-in lasts; see [panel sign-in](#panel-sign-in). |
 | `GATUS_ENDPOINT` | exit | `molebridge` | Gatus external endpoint key. |
 | `ROUTING_RECONCILE_INTERVAL` | exit | `30` | Seconds between full repair passes, 2 to 60; see [repair and lease timing](#repair-and-lease-timing). |
+| `FAILOVER` | exit | `off` | Experimental: `on` (backups in the same city), `same-city`, `same-country` or `servers` moves a native exit to a backup when its server keeps failing. See [automatic failover](#automatic-failover). |
+| `FAILOVER_SERVERS` | exit | empty | With `FAILOVER=servers`: 1 to 8 server names, comma-separated, in order of preference. |
+| `FAILOVER_AFTER` | exit | `300` | Seconds the server must keep failing before a failover, 120 to 3600. |
+| `FAILOVER_RETURN` | exit | `auto` | `auto` tries the selected server again after 15, 30 and 60 minutes, then every 120; `manual` stays on the backup until you pick a server. |
 | `GUARD_GRACE` | exit | `30` | Seconds without an accepted lease renewal before the supervisor stops NetBird, 5 to 30; see [repair and lease timing](#repair-and-lease-timing). |
 
 `PUID`, `PGID` and `OWNER_RECORD`, which earlier releases used, are gone:
@@ -184,7 +188,8 @@ These errors do not fall back to a panel request. Fix the setting and apply
 your configuration change with [recovery](operations.md#recovery). A failed
 application of a valid configured server is retried after 1, 2, 4 and 8
 minutes, then every 15 ([retries](operations.md#retries)); Molebridge does
-not choose another server. Whether the exit is on its `SERVER` and verified
+not choose another server unless [automatic failover](#automatic-failover)
+is on. Whether the exit is on its `SERVER` and verified
 is reported by the panel, `/readyz` and `molebridge status`; the container's
 health check doesn't fail over it ([health](operations.md#health)). Removing
 `SERVER` returns control to the panel, including any `desired.json` request
@@ -200,6 +205,47 @@ the panel cannot know the setting; the exit still ignores its requests.
 With gluetun, `GLUETUN_SERVER_*` filters still control gluetun's first
 connection, before the exit runs. `SERVER` takes over once the exit has a
 fresh catalog and can apply it.
+
+### Automatic failover
+
+**Experimental, off by default.** The live drill on a real provider has not
+run: the behavior is covered by unit tests and by drills against fake
+servers only ([its design](design/failover.md), "Testing"). Native
+exits only (Mullvad, PIA, NordVPN, the NetBird exit or the native sidecar);
+with `TUNNEL_BACKEND=gluetun` the exit refuses to start with it on, as
+gluetun reconnects by itself.
+
+```sh
+FAILOVER=on               # or same-city, same-country, servers
+FAILOVER_SERVERS=         # with servers: se-got-wg-001,se-got-wg-002
+FAILOVER_AFTER=300        # seconds, 120 to 3600
+FAILOVER_RETURN=auto      # or manual
+```
+
+With it on, when the selected server (the panel's, or `SERVER`) has failed
+at least three checks over `FAILOVER_AFTER` seconds, the failures are the
+server's (a stale handshake, a tunnel that gets nothing back but the
+server's own handshake requests, a switch or repair that didn't verify) and the host's own network answers, the exit
+moves to a backup: another server in the same city, the same country, or
+the next one in `FAILOVER_SERVERS` that a fresh catalog lists (same city
+and same country need the selected server to have been verified on this
+exit once, so that its location is known). A failure of
+the provider's check service, an answer that doesn't confirm the egress, or
+a host without a network never fails over. If a backup doesn't verify, the
+next is tried, up to three; if none verifies, the exit stays on the
+selected server, retries it as before and doesn't fail over again for 30
+minutes. With PIA port forwarding on, only regions that forward ports are
+backups.
+
+The panel shows "connected to backup" and says which server keeps failing
+and when it is tried again; `/readyz`, the proxy and PIA's port forwarding
+treat the backup as connected. With `FAILOVER_RETURN=auto` the exit tries
+the selected server again after 15, 30 and 60 minutes, then every 120, each
+a short interruption; if it still fails, the exit goes back to the backup.
+Picking any server in the panel ends the failover at once. The selected
+server stays the panel's selection and `SERVER` throughout: the backup is
+never remembered as your choice. The episode is kept in
+`applier/failover.json` across a restart ([state files](#state-files)).
 
 ### Panel sign-in
 
@@ -673,8 +719,8 @@ any more.
 Under `state/`, written with temp-file-and-rename. None hold secrets. These
 names, paths, fields and timestamp formats are the same as in 0.7.0, so a
 bridge that reads `result.json` keeps working; what later releases keep is in
-[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the four files only the exit reads
-(`attempt.json`, `gluetun-selection.json` and `tunnel.json`) are in that
+[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the files only the exit reads
+(`attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json` and `tunnel.json`) are in that
 directory instead of `applier/`
 ([below](#keeping-the-published-files-in-memory)). For a healthy
 `result.json` of each exit kind, see [the example
@@ -686,6 +732,7 @@ records](architecture.md#example-records).
 | `applier/gluetun-selection.json` | exit | exit | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
 | `applier/attempt.json` | exit | exit | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
 | `applier/location.json` | exit | exit | Since 0.11.0: the last verified `server`, its `city` and `country`, `port_forward` (a PIA region that forwards ports) and `replacement`, the server standing in for it while the catalog doesn't list it, or null ([a server the provider retires](architecture.md#a-server-the-provider-retires)). |
+| `applier/failover.json` | exit | exit | With [automatic failover](#automatic-failover) on (experimental): the episode in progress, for the selected server it belongs to: its phase, the backup, the servers tried, the failures counted and the return schedule (on the boot clock, with `boot_id`). Mode 0600. Missing or malformed means no episode; removed when failover is off. No secret. |
 | `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
@@ -728,7 +775,7 @@ with gluetun the exit warns. See
   the panel and other readers read. The exit rebuilds them. It publishes a
   status record when it starts and again after each inspection, and it
   downloads the server list at start (with gluetun, reads gluetun's file).
-- **Private**: `attempt.json`, `location.json`, `gluetun-selection.json`
+- **Private**: `attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json`
   (gluetun backend) and `tunnel.json` (PIA). Only the exit reads them, and they carry its
   state across a restart ([retries](operations.md#retries),
   [backups](operations.md#backups)).

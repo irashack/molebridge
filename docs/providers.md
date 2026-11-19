@@ -227,6 +227,12 @@ With it on:
   re-registration or restart, so anything that depends on it has to follow
   `forwarded_port`.
 
+With [automatic failover](configuration.md#automatic-failover) on
+(experimental), only forwarding regions are backups. The port belongs to a
+registration, so a failover changes it, as a switch does, and a return
+changes it again: anything that depends on it has to follow
+`forwarded_port`.
+
 The service on the target must listen on the forwarded port itself; there's
 no port translation. You also need a NetBird policy that lets the exit peer
 reach that port on the target.

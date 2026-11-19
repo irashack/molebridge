@@ -192,7 +192,7 @@ func TestStatusReadinessAndSummaries(t *testing.T) {
 		entry := s.(map[string]any)
 		summaries[entry["id"].(string)] = entry
 	}
-	want := map[string]any{"id": "away", "label": "PIA Chicago", "provider": "pia", "state": "ok", "status": "connected", "place": "Example City"}
+	want := map[string]any{"id": "away", "label": "PIA Chicago", "provider": "pia", "state": "ok", "status": "connected", "place": "Example City", "backup": false}
 	if !reflect.DeepEqual(summaries["away"], want) || summaries["home"]["state"] != "unknown" {
 		t.Fatalf("summaries = %v", summaries)
 	}

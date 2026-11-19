@@ -4,13 +4,17 @@ Status: **being built** (2026-11-19). This is the working contract for the
 roadmap's [automatic failover](../../ROADMAP.md#automatic-failover): the
 rules, the pieces, their boundaries and the interfaces between them, so that
 they can be built in parallel. Built so far: [the failover
-policy](#the-failover-policy) (`internal/failover`, unit-tested; no role
-uses it yet) and [the verdict](#the-verdict) (`internal/verdict` reads the
-`failover` member; no exit writes it yet). The owner's decisions are pending; the code takes the
-recommended defaults, each one named constant. The choices marked
-**(owner)** are product decisions, gathered with a recommended default in
-[decisions for the owner](#decisions-for-the-owner); the rest follows from
-the code as it is. When the feature ships, its user documentation replaces
+policy](#the-failover-policy) (`internal/failover`, unit-tested), [the
+verdict](#the-verdict) (`internal/verdict` reads the `failover` member),
+and the applier's wiring, `failover.json`, the settings, the uplink probe
+and the panel's wording (fake-kernel and panel tests; the user
+documentation is [automatic failover](../configuration.md#automatic-failover),
+experimental). Still to come: the system rig drills; the live drill has not
+run. The choices marked **(owner)** are product decisions, gathered in
+[decisions for the owner](#decisions-for-the-owner): the owner took every
+recommended default (2026-11-19, issue #90), and the code keeps each one a
+named constant; the rest follows from the code as it is. When the feature
+ships, its user documentation replaces
 this file.
 
 ## What it is
@@ -95,7 +99,7 @@ pipeline's existing terms.
 |---|---|
 | An attempt ends `failed`: the change failed (`mutation-failed`), or verification timed out with another server live, or "The last switch was interrupted" is followed by a failed re-apply | `switch-failed` |
 | An inspection of the live target finds `handshake` `fail`: none, or 180 seconds old or older (`unverified`) | `handshake-failed` |
-| An egress check with `reason` `unanswered` (no usable answer twice) while the peer's receive counter didn't rise during the check, or `tunnel-silent` (PIA) | `tunnel-silent` |
+| An egress check with `reason` `unanswered` (no usable answer twice) while the peer received nothing during the check but whole handshake initiations (148 bytes each), or `tunnel-silent` (PIA) | `tunnel-silent` |
 | A PIA lapse repair (`repair.reason` `tunnel-silent` or `handshake-stale`) that ends without a verified record | `repair-failed` |
 
 **Not eligible**, and each one **resets** the count (the episode, if one has
@@ -110,9 +114,15 @@ started, keeps its state; see [the episode](#the-episode)):
   PIA's `connected: false`, NordVPN's `protected: false`). That may be
   traffic leaving the wrong way; moving it to another server would hide it.
   It stays the failure it is today.
-- An egress check that got no answer while the tunnel still received (the
-  provider's check service is down, not the server): it never triggers a
-  repair today, and it never triggers failover.
+- An egress check that got no answer while the tunnel still received
+  anything but handshake initiations (the provider's check service is down,
+  not the server): it never triggers a repair today, and it never triggers
+  failover. A server that hears the exit answers with data, a handshake
+  response or a keepalive; one that doesn't hear it keeps sending handshake
+  initiations, because the exit's responses never reach it, while the
+  exit's last handshake stays fresh for up to three minutes. Data alone
+  adds up to whole initiations about once in 148 checks, and failover takes
+  at least three eligible checks in a row.
 - A routing, NetBird or owner-record failure, a lost lease, a worker restart.
 - Any verified record (`idle` verified): the count and the window clear.
 
@@ -350,6 +360,18 @@ time come in with the observation), `Observation.ReturnReady` (the checks
 `State.Target`. `FAILOVER=on` is accepted as `DefaultOnMode` (`same-city`),
 so the owner's second decision is one constant.
 
+The applier's wiring added, as built: `classify(state, target, finding,
+mutated, repaired)`, because whether this pass changed the tunnel or ran a
+repair decides `switch-failed` and `repair-failed`; `Finding.Quiet`, the
+tunnel's receive counter risen by nothing but whole handshake initiations
+across a failed egress check (`unheard`), measured only with failover on,
+for `tunnel-silent` on Mullvad and NordVPN; and a
+second hook, `Provider.ServerAnswers(ctx, a, server)`, the provider tier of
+`ReturnReady` (PIA asks the region's registration API; the others answer
+true, as the design allows). The port-forwarding filter on candidates is the
+retired-server move's (the region's own `port_forward`, remembered in
+`location.json`).
+
 Deadlines are on the boot clock with the boot's id, as `attempt.json`'s are:
 after a reboot, a due return runs at once, a running `FAILOVER_AFTER` window
 starts over (the evidence is from before the reboot), and the hold-down after
@@ -421,7 +443,10 @@ a backup, `tried` at most 3 names. Server names are bounded as everywhere in
 the record (256 characters), so the member stays well inside the 16 KiB
 bound. An exhausted episode keeps the member, with `to` null and `phase`
 `exhausted`, until the hold-down ends or the primary verifies. Records
-without an episode have no `failover` member.
+without an episode have no `failover` member. The pass that verifies a
+backup publishes its record again once the policy has seen it, so the first
+record that readers keep from the backup already says `on-backup`, with its
+`next_return_at`, rather than `trying` until the next check.
 
 It is deliberately **not** `moved`. `verdict.Moved` and `movedFrom` ignore
 `moved.reason`, so an older reader given `moved` would accept the backup as
@@ -546,10 +571,13 @@ record counts as an eligible failure.
 - `internal/applier`: `classify` against every row of the eligibility
   tables; with the fakes, a primary whose handshake stops for 300 seconds
   moving to a same-city backup with source `failover` and the `failover`
-  member; `location.json` unchanged by the backup; `pending`, a refused login
-  and a check service that is down never failing over; a panel request
-  during an episode ending it; `SERVER` with failover; the move and failover
-  chained; a malformed `failover.json`; PIA's forwarding filter.
+  member, the first record on the backup already `on-backup`; a server
+  that stops hearing the exit (it keeps sending handshake initiations, the
+  handshake still fresh) counted from the first unanswered check;
+  `location.json` unchanged by the backup; `pending`, a refused login and a
+  check service that is down or drops requests never failing over; a panel
+  request during an episode ending it; `SERVER` with failover; the move and
+  failover chained; a malformed `failover.json`; PIA's forwarding filter.
 - `internal/verdict`: golden records for each phase; agreement for panel,
   configured and chained targets; each of the four conditions missing
   making it disagree; `failover-exhausted`; and a test that judges every
@@ -595,7 +623,10 @@ port changing and the panel showing the backup. The results go in
 
 ## Decisions for the owner
 
-| # | Decision | Recommended default |
+Decided as recommended: the owner accepted every default below (owner,
+2026-11-19, issue #90).
+
+| # | Decision | Decided |
 |---|---|---|
 | 1 | Failover on by default, or opt-in | **Opt-in** (`FAILOVER=off`): today's promise is "it retries the one you chose", and an exit that moves by itself should be asked for |
 | 2 | Default backups when it's on | **`same-city`**, with `same-country` and an explicit list as the other modes; the docs point PIA users at `same-country` |

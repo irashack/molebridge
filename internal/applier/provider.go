@@ -112,6 +112,13 @@ type Provider interface {
 	// server has forgotten the registration. False where registrations can't
 	// lapse.
 	RegistrationAnswers(ctx context.Context, a *Applier) bool
+	// UplinkAnswers is whether the host's own network answers outside the
+	// tunnel now (failover's uplink probe, failover.go): asked only when
+	// failover is about to move to a backup.
+	UplinkAnswers(ctx context.Context, a *Applier) bool
+	// ServerAnswers is whether a server passes the cheap checks outside the
+	// tunnel before failover returns to it; true where there are none.
+	ServerAnswers(ctx context.Context, a *Applier, server string) bool
 	// ReleaseSignature is what a rejection waits for; ok is false when the
 	// provider has no signature of its own for this reason (the core's applies).
 	ReleaseSignature(a *Applier, why string) (signature string, ok bool)

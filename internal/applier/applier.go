@@ -53,6 +53,7 @@ import (
 	"weak"
 
 	"github.com/irashack/molebridge/internal/attempt"
+	"github.com/irashack/molebridge/internal/failover"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/netx"
 	"github.com/irashack/molebridge/internal/providers"
@@ -145,6 +146,26 @@ type Applier struct {
 	failures map[string]stepFailure
 	// traced is the attempt as its last log line saw it (traceAttempt).
 	traced string
+
+	// Automatic failover (failover.go): the settings, the policy's state
+	// with the key of the primary it is for (failover.json), what was last
+	// saved, and the primary this pass resolved. passMutated and
+	// passRepaired say what this pass did; foRestore lets the switch back
+	// to a verified backup skip the reapply guard; foUplinkDown keeps the
+	// uplink line to one per change.
+	failover          failover.Config
+	fo, foSaved       failover.State
+	foKey, foSavedKey string
+	primary           *Selection
+	passMutated       bool
+	passRepaired      bool
+	foRestore         bool
+	foUplinkDown      bool
+	// foTrace, when set, sees each pass's observation with the attempt's
+	// state (tests and the drill binary's log).
+	foTrace func(state string, o failover.Observation)
+	// foNote, when set, gets the trace's other lines.
+	foNote func(line string)
 }
 
 // New builds the applier for a provider's settings.
@@ -159,6 +180,9 @@ func New(cfg Config) (*Applier, error) {
 	// Validate the provider and kind before building the catalogue.
 	if _, err := verdict.NewExitConfig(spec.ID, cfg.Exit.Kind, ""); err != nil {
 		return nil, err
+	}
+	if cfg.Failover.On() && spec.Backend != providers.BackendNative {
+		return nil, errors.New("applier: automatic failover needs the native backend")
 	}
 	if checker, ok := cfg.Provider.(SystemChecker); ok {
 		if err := checker.CheckSystem(cfg.System, cfg.Exit); err != nil {
@@ -207,6 +231,31 @@ func New(cfg Config) (*Applier, error) {
 	}
 	a.attempt = attempt.Load(a.attemptPath, a.bootID, a.clock())
 	a.location = a.loadLocation()
+	a.failover = cfg.Failover
+	if trace := cfg.FailoverTrace; trace != nil {
+		a.foNote = trace
+		last := ""
+		a.foTrace = func(state string, o failover.Observation) {
+			m := a.measurement
+			desc := "no inspection"
+			if m != nil {
+				desc = fmt.Sprintf("status=%s server=%s handshake=%s egress=%s/%v silent=%v quiet=%v safe=%v", m.Status, m.Server,
+					checkStateOf(m.Checks, "handshake"), checkStateOf(m.Checks, "egress"), checkMember(m.Checks, "egress", "reason"),
+					m.Silent, m.Quiet, m.Safe)
+			}
+			line := fmt.Sprintf("state=%s target=%s mutated=%v repaired=%v outcome=%d reason=%s fresh=%v failures=%d phase=%s; %s",
+				state, a.attempt.Target, a.passMutated, a.passRepaired, o.Outcome, o.Reason, o.Fresh, a.fo.Failures, a.fo.Phase, desc)
+			if o.Outcome != failover.None || line != last {
+				trace(fmt.Sprintf("failover pass: now=%.0f %s", o.Now, line))
+			}
+			last = line
+		}
+	}
+	if a.failover.On() {
+		a.loadFailover()
+	} else {
+		a.dropFailover()
+	}
 	// A restart logs the attempt's next change, not the state it resumes in.
 	a.traced = traceKey(a.attempt)
 	a.warnPlainGatus()
@@ -563,6 +612,10 @@ func (a *Applier) selectionRecord() validate.Obj {
 	if source == "" {
 		source = "seed"
 	}
+	if a.target != nil && a.target.Failover != nil && at.TargetKey == a.target.Key() {
+		// Whatever re-applied it (a retry, drift), a backup is failover's.
+		source = "failover"
+	}
 	var nextAt any
 	if at.NextAction != "" {
 		nextAt = a.wallOf(at.NextActionAt)
@@ -591,6 +644,11 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 		// runs another in the same city: readers accept that server for the
 		// request (verdict), and people see why.
 		members = members.Set("moved", moved)
+	}
+	if episode := a.failoverRecord(); episode != nil {
+		// A failover episode: readers accept the backup only with it
+		// (verdict), and people see why.
+		members = members.Set("failover", episode)
 	}
 	members = append(members, a.hooks.ResultDefaults()...)
 	all := append(validate.Obj(nil), fields...)
@@ -784,6 +842,11 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 		expected = append(expected, strconv.Itoa(family))
 		expectedAny = append(expectedAny, strconv.Itoa(family))
 	}
+	var before Transfer
+	watched := false
+	if a.failover.On() && !applying {
+		before, watched = a.transferOf(ctx, keys[0])
+	}
 	egress, silent, err := a.checkedEgress(ctx, server, age, applying)
 	if err != nil {
 		reason := "unanswered"
@@ -791,6 +854,14 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 			reason = "tunnel-silent"
 		}
 		f.Silent = silent
+		if watched {
+			after, ok := a.transferOf(ctx, keys[0])
+			f.Quiet = ok && unheard(after.Received-before.Received)
+			if a.foNote != nil {
+				a.foNote(fmt.Sprintf("failover egress check: now=%.0f received=+%d sent=+%d handshake_age=%v quiet=%v", a.clock(),
+					after.Received-before.Received, after.Sent-before.Sent, ageOf(age), f.Quiet))
+			}
+		}
 		f.Checks = f.Checks.Set("egress", validate.Members("state", "fail", "at", a.nowISO(), "server", orNull(server),
 			"reason", reason, "tier", nil, "expected_families", expectedAny, "families", validate.Obj{}))
 		f.Message = EgressFailedMessage
@@ -996,6 +1067,17 @@ func (a *Applier) peerTransfer(ctx context.Context) (string, Transfer, bool) {
 	return keys[0], transfer, ok
 }
 
+// unheard reports whether received bytes, a peer's receive counter's rise
+// over an egress check, are nothing or whole handshake initiations only. A
+// server that hears the exit answers: data, a handshake response, or a
+// keepalive after the exit's traffic. One that doesn't keeps asking for a
+// handshake every few seconds, because the exit's responses never reach
+// it; the handshake doesn't go stale for minutes. Data alone matches by
+// chance about once in 148 checks, and failover takes three in a row.
+func unheard(received int64) bool {
+	return received >= 0 && received%HandshakeInitiationBytes == 0
+}
+
 func (a *Applier) transferOf(ctx context.Context, key string) (Transfer, bool) {
 	transfers, err := a.sys.Transfers(ctx)
 	if err != nil {
@@ -1081,9 +1163,19 @@ func (a *Applier) scheduleRecheck() {
 }
 
 // resolve is the effective target: SERVER, else the panel's accepted request,
-// else (gluetun) the server to restore, else nil. With peek, nothing is
-// remembered (the Gatus push).
+// else (gluetun) the server to restore, else nil; with failover, the backup
+// standing in for it. With peek, nothing is remembered (the Gatus push).
 func (a *Applier) resolve(peek bool) *Selection {
+	primary := a.resolvePrimary(peek)
+	if !peek {
+		a.notePrimary(primary)
+	}
+	return a.withFailover(primary)
+}
+
+// resolvePrimary is the target the operator's choice makes, the retired
+// server's replacement included.
+func (a *Applier) resolvePrimary(peek bool) *Selection {
 	if a.configuredServer != "" {
 		if !peek {
 			a.request, a.invalidDesired = a.configuredRequest(), false
@@ -1203,6 +1295,7 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	if err := a.hooks.MaintainCatalog(ctx, a); err != nil {
 		return nil, err
 	}
+	a.passMutated, a.passRepaired = false, false
 	a.target = a.resolve(false)
 	var result *Record
 	var err error
@@ -1230,7 +1323,11 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 			return nil, err
 		}
 	}
+	a.observeFailover(ctx, result != nil)
 	if result != nil {
+		if result, err = a.settleEpisode(result); err != nil {
+			return nil, err
+		}
 		a.pushGatus(ctx, result)
 	}
 	return result, nil
@@ -1365,6 +1462,10 @@ func (a *Applier) admit(ctx context.Context, target *Selection) (*Record, error)
 		key = target.Key()
 	}
 	if key != at.TargetKey {
+		if a.failoverWaits(target) {
+			return nil, nil
+		}
+		a.foRestore = false
 		return a.start(ctx, target)
 	}
 	if target == nil || at.State == "attempting" {
@@ -1704,6 +1805,7 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 				reason = "tunnel-silent"
 			}
 			a.repair = &repairState{reason: reason, since: a.nowISO()}
+			a.passRepaired = true
 			defer func() { a.repair = nil }()
 		}
 	}
@@ -1731,6 +1833,7 @@ func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error
 	}
 	at.State, at.Outcome, at.Message = "attempting", "", ""
 	at.Attempts++
+	a.passMutated = true
 	now := a.clock()
 	at.LastMutationAt = &now
 	at.MutationCertainty = "uncertain"
@@ -1981,4 +2084,12 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 		return protected && firewall && err == nil
 	}
 	return protected && a.way.Ready(ctx)
+}
+
+// ageOf is a handshake age for a log line: nil for none.
+func ageOf(age *int) any {
+	if age == nil {
+		return nil
+	}
+	return *age
 }

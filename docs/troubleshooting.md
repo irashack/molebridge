@@ -887,6 +887,22 @@ The panel then shows "<server> is no longer in the provider's server list.
 Connected through <server>, in the same city, instead." Nothing needs doing;
 pick a server yourself if you want a particular one.
 
+With [automatic failover](configuration.md#automatic-failover) on
+(experimental), these lines tell an episode:
+
+- `applier: the selected server has kept failing for <n> s (<reason>); moving to backup <server>`
+- `applier: backup <server> did not verify; trying the next`
+- `applier: no backup verified; staying on the selected server`
+- `applier: trying the selected server again`
+- `applier: the selected server still fails; back to backup <server>`
+- `applier: the selected server verified again; failover ended`
+- `applier: a new selection ends the failover`
+- `applier: the host's network does not answer; not failing over`
+
+The panel then shows "connected to backup" and "Connected to backup
+<server>. <server> has kept failing since <time> UTC; trying it again at
+<time> UTC." Picking any server ends the failover.
+
 `<source>` is what asked for the switch, as in
 [requests and switching](architecture.md#requests-and-switching), and `<message>` is the
 panel's message, explained below. A check that changes nothing logs nothing.

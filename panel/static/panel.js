@@ -27,6 +27,25 @@
     return text;
   }
 
+  // The failover line: on a connected verdict on a backup (the verdict's
+  // `failover`), the backup and when the selected server is tried again; on
+  // a failed or unknown one whose episode found no backup (reason
+  // failover-exhausted), that the selected server is retried.
+  function failoverNote(verdict, state, reasons, result, TEXT) {
+    const f = verdict.failover && typeof verdict.failover === 'object' ? verdict.failover : null;
+    if (state === 'ok' && f && isText(f.from) && isText(f.to)) {
+      const since = isText(f.since) && f.since ? TEXT.failover.since.replace('{at}', () => f.since.slice(11, 16)) : '';
+      const pattern = isText(f.next_return_at) && f.next_return_at
+        ? TEXT.failover.backup.replace('{at}', () => f.next_return_at.slice(11, 16)) : TEXT.failover.manual;
+      return pattern.replace('{to}', () => f.to).replace('{from}', () => f.from).replace('{since}', () => since);
+    }
+    if (!['failed', 'unknown'].includes(state) || !reasons.includes('failover-exhausted')) return '';
+    const member = result.failover && typeof result.failover === 'object' ? result.failover : {};
+    const phases = ['trying', 'on-backup', 'returning', 'exhausted'];
+    if (!isText(member.from) || !member.from || !phases.includes(member.phase)) return '';
+    return TEXT.failover.exhausted.replace('{from}', () => member.from);
+  }
+
   function describe(data, TEXT) {
     const verdict = data.verdict;
     const result = data.result && typeof data.result === 'object' ? data.result : {};
@@ -53,6 +72,7 @@
     if (state === 'ok' && isText(move.from) && move.from && isText(move.to) && move.to && result.server === move.to) {
       moved = TEXT.moved.replace('{from}', () => move.from).replace('{to}', () => move.to);
     }
+    const failover = failoverNote(verdict, state, reasons, result, TEXT);
     const by = verdict.not_checked_by || {};
     const checks = verdict.checks || {};
     const port = result.forwarded_port;
@@ -63,7 +83,7 @@
       tier, tunnel_only: tier === 'tunnel',
       // Only a connected exit's egress address is its own.
       ip: state === 'ok' && isText(ip) && ip ? ip : '—',
-      note, next, moved,
+      note, next, moved, failover,
       fields: {
         status: isText(result.status) ? result.status : '(unknown)',
         message: isText(result.message) ? result.message : '',
@@ -805,7 +825,7 @@
     progress.firstChild.textContent = seconds === null ? route : `${route} · ${seconds} s`;
   }
 
-  function paintNotes(state, message, next = '', moved = '') {
+  function paintNotes(state, message, next = '', moved = '', failover = '') {
     if (!notes) return;
     progress = null;
     const children = [];
@@ -849,6 +869,13 @@
       note.className = 'note';
       note.dataset.moved = '';
       note.textContent = moved;
+      children.push(note);
+    }
+    if (failover) {
+      const note = document.createElement('p');
+      note.className = 'note';
+      note.dataset.failover = '';
+      note.textContent = failover;
       children.push(note);
     }
     if (armed && notes.contains(armed)) return;
@@ -955,7 +982,7 @@
     const connectionLabel = page.querySelector('[data-connection-label]');
     if (connectionLabel) connectionLabel.textContent = view.connection;
     if (state === 'applying') rememberSwitch(state);
-    paintNotes(state, view.note, view.next, view.moved);
+    paintNotes(state, view.note, view.next, view.moved, view.failover);
     paintPin();
     paintCopy();
   }
@@ -1107,10 +1134,13 @@
   const tabs = new Map(Array.from(page.querySelectorAll('.exit-tab'), (t) => [t.dataset.exit, t]));
   const TAB_STATES = ['ok', 'failed', 'applying', 'unknown'];
 
-  function paintTab(tab, state, status, place) {
+  // tabPlace in render.go says the same: "backup" beside the place while the
+  // exit runs an automatic failover's backup.
+  function paintTab(tab, state, status, place, backup = false) {
     tab.querySelector('[data-exit-dot]').className = `exit-dot dot-${state}`;
     tab.querySelector('[data-exit-status]').textContent = status;
-    tab.querySelector('[data-exit-place]').textContent = place;
+    const tag = TEXT && TEXT.failover ? TEXT.failover.tag : 'backup';
+    tab.querySelector('[data-exit-place]').textContent = !backup ? place : place ? `${place} · ${tag}` : tag;
   }
 
   // -- the circuit under the tabs ----------------------------------------------
@@ -1178,7 +1208,7 @@
       for (const summary of Array.isArray(data.exits) ? data.exits : []) {
         const tab = tabs.get(summary.id);
         if (!tab || !TAB_STATES.includes(summary.state)) continue;
-        paintTab(tab, summary.state, String(summary.status || ''), String(summary.place || ''));
+        paintTab(tab, summary.state, String(summary.status || ''), String(summary.place || ''), summary.backup === true);
         seen.add(summary.id);
       }
     } catch {

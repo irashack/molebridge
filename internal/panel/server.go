@@ -336,6 +336,7 @@ func (s *Server) exitView(ex Exit, v verdict.Verdict) exitView {
 	return exitView{
 		State: v.State, Label: v.Label, Kind: v.Kind, Tier: v.Tier, Message: v.Message, Reasons: v.Reasons,
 		NextAction: v.NextAction, NextActionAt: v.NextActionAt, NotCheckedBy: by, Checks: complete,
+		Failover: v.Failover,
 	}
 }
 
@@ -461,12 +462,12 @@ func (s *Server) exitSummary(ex Exit, status *ExitStatus) ExitSummary {
 		}
 	}
 	return ExitSummary{ID: ex.ID, Label: ex.Label, Provider: ex.Provider, State: st.Verdict.State,
-		Status: st.Verdict.Label, Place: place}
+		Status: st.Verdict.Label, Place: place, Backup: st.Verdict.State == "ok" && st.Verdict.Failover != nil}
 }
 
 func summaryJSON(x ExitSummary) validate.Obj {
 	return validate.Members("id", x.ID, "label", x.Label, "provider", x.Provider, "state", x.State,
-		"status", x.Status, "place", x.Place)
+		"status", x.Status, "place", x.Place, "backup", x.Backup)
 }
 
 // -- CSRF ----------------------------------------------------------------------

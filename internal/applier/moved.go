@@ -75,7 +75,7 @@ func (a *Applier) saveLocation(l location) error {
 // server someone then picks is.
 func (a *Applier) verified(server string) error {
 	if relay, ok := a.catalog.Relays().Get(server); ok && a.catalog.Usable() && relay.City != "" && relay.Country != "" &&
-		!(a.target != nil && a.target.Replaces != "" && a.target.Server == server) {
+		!(a.target != nil && (a.target.Replaces != "" || a.target.Failover != nil) && a.target.Server == server) {
 		l := location{Server: server, City: relay.City, Country: relay.Country, PortForward: relay.PortForward}
 		if l.Server != a.location.Server || l.City != a.location.City || l.Country != a.location.Country ||
 			l.PortForward != a.location.PortForward || a.location.Replacement != "" {
@@ -164,5 +164,6 @@ func (a *Applier) movedRecord() any {
 	if a.target == nil || a.target.Replaces == "" {
 		return nil
 	}
-	return validate.Members("from", a.target.Replaces, "to", a.target.Server, "reason", "left-catalogue")
+	// With failover the replacement is the primary a backup stands in for.
+	return validate.Members("from", a.target.Replaces, "to", a.target.primary().Server, "reason", "left-catalogue")
 }

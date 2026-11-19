@@ -457,6 +457,8 @@ type ExitSummary struct {
 	State    string
 	Status   string
 	Place    string
+	// Backup: connected through an automatic failover's backup.
+	Backup bool
 }
 
 // brandMark is Molebridge's mark for the masthead, from
@@ -475,6 +477,18 @@ const brandMark = `<svg class="brand-mark" viewBox="0 0 800 430" fill="none" str
 
 // exitTabs is the Switchyard's exit picker: one tab per exit, with its
 // provider's arch, its state and, when connected, where it exits.
+// tabPlace is a tab's place, with "backup" beside it while the exit runs
+// an automatic failover's backup (panel.js paintTab says the same).
+func tabPlace(place string, backup bool) string {
+	if !backup {
+		return place
+	}
+	if place == "" {
+		return text.Failover.Tag
+	}
+	return place + " · " + text.Failover.Tag
+}
+
 func exitTabs(summaries []ExitSummary, currentID string, embed bool) string {
 	base := "/"
 	if embed {
@@ -486,7 +500,7 @@ func exitTabs(summaries []ExitSummary, currentID string, embed bool) string {
 		if summary.ID == currentID {
 			selected, current = " is-selected", ` aria-current="page"`
 		}
-		place := `<span class="exit-place" data-exit-place>` + esc(summary.Place) + `</span>`
+		place := `<span class="exit-place" data-exit-place>` + esc(tabPlace(summary.Place, summary.Backup)) + `</span>`
 		links.WriteString(`<a class="exit-tab` + selected + `" href="` + base + `?exit=` + esc(summary.ID) + `" ` +
 			`data-exit="` + esc(summary.ID) + `" data-provider="` + esc(providerCSS(summary.Provider)) + `"` + providerAccent(summary.Provider) + ` ` +
 			`title="` + esc(summary.Label) + `"` + current + `>` +
@@ -594,6 +608,9 @@ func (s *Server) renderIndex(p IndexPage) string {
 	}
 	if view.Moved != "" {
 		notes += `<p class="note" data-moved>` + esc(view.Moved) + `</p>`
+	}
+	if view.Failover != "" {
+		notes += `<p class="note" data-failover>` + esc(view.Failover) + `</p>`
 	}
 
 	token := esc(p.CSRFToken)
