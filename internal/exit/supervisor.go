@@ -97,7 +97,7 @@ type Supervisor struct {
 
 	// testFinal, when set (tests), replaces the stop sequence's last look at
 	// what survived the reaping deadline.
-	testFinal func() (worker, wayIn bool)
+	testFinal func() (worker, way bool)
 
 	// exitBy is the absolute deadline of the stop sequence's exit.
 	exitBy time.Time
