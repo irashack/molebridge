@@ -8,7 +8,8 @@
 //     timestamps).
 //   - Files: ReadJSON, ReadObject and WriteJSONAtomic, which are
 //     internal/jsonfile under the Python names.
-//   - The panel's request: Request, DesiredRequest, RequestToken.
+//   - The panel's request: Request, DesiredRequest, DesiredRequestFor,
+//     RequestToken.
 //   - Status helpers: ConfiguredServer, ExitConfirmed, EgressTier,
 //     ValidServerName, ProviderFromEnv.
 //
@@ -19,6 +20,7 @@ package state
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -119,6 +121,9 @@ func EgressTier(result map[string]any, provider string) string {
 
 // Request is the panel's request of a server (state/panel/desired.json).
 type Request struct {
+	// Provider is the provider a multi-provider exit's request names
+	// (DesiredRequestFor), "" for every other request.
+	Provider    string
 	Server      string
 	RequestedAt string
 	// RequestID is 32 lower-case hex digits, or empty for the old two-field
@@ -160,10 +165,54 @@ func DesiredRequest(value any, provider string) (Request, bool) {
 	return request, true
 }
 
+// DesiredRequestFor is DesiredRequest for a multi-provider exit whose
+// providers are ids (docs/design/multi-provider.md): the request may name
+// its provider in a fourth member, "provider", which must be one of ids,
+// with a server name valid for that provider. The old request
+// without it is accepted too, with Provider "", for the caller to read as
+// its active provider's; its server must be valid for one of ids here,
+// and the caller checks it against the active one. Anything else is false.
+// DesiredRequest itself is unchanged: a single-provider exit refuses a
+// request with a provider as an invalid desired-state file.
+func DesiredRequestFor(value any, ids []string) (Request, bool) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return Request{}, false
+	}
+	provider, named := m["provider"]
+	if !named {
+		for _, id := range ids {
+			if request, ok := DesiredRequest(value, id); ok {
+				return request, true
+			}
+		}
+		return Request{}, false
+	}
+	id, isString := provider.(string)
+	if !isString || !slices.Contains(ids, id) {
+		return Request{}, false
+	}
+	rest := make(map[string]any, len(m)-1)
+	for k, v := range m {
+		if k != "provider" {
+			rest[k] = v
+		}
+	}
+	request, ok := DesiredRequest(rest, id)
+	if !ok {
+		return Request{}, false
+	}
+	request.Provider = id
+	return request, true
+}
+
 // JSONObject implements validate.ObjectMarshaler: the members in the order the
-// panel writes them.
+// panel writes them, the provider first when the request names one.
 func (r Request) JSONObject() validate.Obj {
 	o := validate.Members("server", r.Server, "requested_at", r.RequestedAt)
+	if r.Provider != "" {
+		o = append(validate.Members("provider", r.Provider), o...)
+	}
 	if r.RequestID != "" {
 		o = append(o, validate.Pair{Key: "request_id", Value: r.RequestID})
 	}

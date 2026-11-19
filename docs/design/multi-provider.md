@@ -1,9 +1,10 @@
 # Design: one exit for several providers
 
 Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
-replacement](#whole-tunnel-replacement), and piece 2, [the provider
-set](#the-provider-set), are built; no setting reaches a multi-provider
-exit yet (that is piece 6). This is the working contract for the
+replacement](#whole-tunnel-replacement), piece 2, [the provider
+set](#the-provider-set), and the applier's side of piece 3, [the
+target](#the-target), are built; no setting reaches a multi-provider exit
+yet (that is piece 6). This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
 shape, the pieces, their boundaries and the interfaces between them, the
@@ -241,6 +242,43 @@ today, but nothing should depend on it).
   target, and the target is applied again.
 - **Failover** ([its design](failover.md)) stays within the target's
   provider **(owner)**.
+
+**As built (piece 3).** The applier's side only, still behind
+`Config.Providers`, which no setting sets. `Selection.Provider` and the
+attempt's `provider` are set on a multi-provider exit only, so a
+single-provider exit's keys, signatures and files are as before (locked by
+`single_provider_test.go`); `provider` follows `target` in `attempt.json`,
+and one naming a provider outside the set is read as naming none. A
+request without `provider` must be valid for the active provider. A panel
+target's key is `<provider>/<request token>`, and a release signature
+begins `<provider>:`. A retired server is replaced by its successor only
+on the active provider, whose catalogue and location memory are resident;
+another provider's retired server is refused until that provider is
+active. At the gate the target provider's catalogue is read from disk and
+kept while it is the target; its credentials are asked of the provider
+when it can tell (`CredentialChecker`: PIA's two files), pending with
+"Waiting for PIA's credentials; …" otherwise. The change itself
+(`internal/applier/target.go`) records the attempt, calls the active
+provider's `Leave`, then the target's new `EnterTunnel` hook, which does
+what must happen outside the mutation owner first (PIA: a token and a
+registration of the target config's public key) and then calls back for
+`SetActive` and the exit's `Replace`, then (PIA) sets the address and peer
+as a switch does. The exit's part is an interface, `ProviderTunnels`
+(`PublicKey`, `Replace`), required with `Config.Providers`; nothing
+implements it outside the tests yet: the per-provider configs, the
+`TunnelSource` that reads `tunnel-provider.json` and the call into
+`tunnel.Manager.Replace` come with piece 6. A refusal before `SetActive`
+(a refused PIA login or registration, a `Leave` that fails) leaves the
+previous provider's tunnel as it was; a failure after it leaves the target
+provider active, and the retry, once the exit's recovery has brought up
+that provider's config, is a switch on it through its `ApplyRelay`. Until
+piece 4, PIA's `Leave` refuses (`ErrMutationRefused`), so a change away
+from PIA is refused. The status record names no provider yet (piece 5).
+Tested with a fake kernel and a fake `ProviderTunnels`: every change
+between Mullvad, NordVPN and PIA except away from PIA, failures before and
+after `SetActive`, interrupted changes resumed after a restart, rejections
+per provider, both gates and `SERVER=<provider>/<server>`
+(`internal/applier/target_test.go`); no rig, namespace or live test.
 
 ### Key handling
 

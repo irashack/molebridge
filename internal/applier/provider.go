@@ -124,6 +124,18 @@ type Provider interface {
 	ReleaseSignature(a *Applier, why string) (signature string, ok bool)
 	// Published sees every record the applier publishes.
 	Published(rec *Record)
+
+	// Leave runs on a multi-provider exit when the tunnel changes from this
+	// provider to another, before anything of the other's: it lets go of
+	// what the provider holds beyond the tunnel (PIA's port forward). A
+	// failure wraps ErrMutationRefused and the change does not happen.
+	Leave(ctx context.Context, a *Applier) error
+	// EnterTunnel brings the tunnel up as this provider's on relay, on a
+	// multi-provider exit changing to it: what must happen outside the
+	// mutation owner first (PIA registers the config's key), then replace,
+	// which makes this provider active and replaces the tunnel with its
+	// config carrying a peer, then what follows (PIA's address and peer).
+	EnterTunnel(ctx context.Context, a *Applier, relay *providers.Relay, replace func(PeerConfig) error) error
 }
 
 // BaseProvider is the Mullvad applier's behavior and the defaults every other

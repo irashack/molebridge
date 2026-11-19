@@ -1,12 +1,15 @@
 package applier
 
 import (
+	"context"
 	"net/netip"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/irashack/molebridge/internal/jsonfile"
+	"github.com/irashack/molebridge/internal/netx"
 	"github.com/irashack/molebridge/internal/validate"
 )
 
@@ -24,6 +27,46 @@ type multiExit struct {
 	dir string
 	// providers are the hooks given to the applier, by id.
 	providers map[string]Provider
+	tunnels   *fakeTunnels
+}
+
+// fakeTunnels is the exit's side of a change of provider on the fake
+// kernel: Replace puts the tunnel in the state the provider's config brings
+// it up in (tunnelAs), with the peer given.
+type fakeTunnels struct {
+	k *kernel
+	// replaced are the providers Replace was asked for, in order.
+	replaced []string
+	// fail, when set, is what Replace returns, before changing anything.
+	fail error
+	// active is what the applier had persisted as active when Replace ran.
+	active []string
+	a      *Applier
+}
+
+func (f *fakeTunnels) PublicKey(provider string) (string, error) {
+	if provider == "pia" {
+		return piaOurKey, nil
+	}
+	return otherKey, nil
+}
+
+func (f *fakeTunnels) Replace(_ context.Context, provider string, peer PeerConfig) error {
+	f.k.record("Replace %s", provider)
+	f.replaced = append(f.replaced, provider)
+	if f.a != nil {
+		f.active = append(f.active, f.a.set.active)
+	}
+	if f.fail != nil {
+		return f.fail
+	}
+	tunnelAs(f.k, provider)
+	f.k.keys = nil
+	if peer.PublicKey != "" {
+		f.k.keys = []string{peer.PublicKey}
+		f.k.endpoints[peer.PublicKey] = peer.Endpoint
+	}
+	return nil
 }
 
 func writeSnapshotFile(t testing.TB, dir, file, provider string, relays any) {
@@ -96,7 +139,15 @@ func newMulti(t testing.TB, dir string, start string, ids []string, configure fu
 		"country_code": "US", "protected": true}}
 	tunnelAs(k, start)
 	api := newPIAAPI(t, k)
-	m := &multiExit{k: k, pia: api, dir: dir, providers: map[string]Provider{}}
+	// PIA's API on the PIA fake, everything else (Mullvad's and NordVPN's
+	// checks) on the kernel's own.
+	k.handler = func(req netx.Request) (netx.Response, error) {
+		if req.URL == PIATokenURL || req.URL == PIAStatusURL || req.ConnectAddr != "" {
+			return api.fetch(req)
+		}
+		return k.defaultHandler(req)
+	}
+	m := &multiExit{k: k, pia: api, dir: dir, providers: map[string]Provider{}, tunnels: &fakeTunnels{k: k}}
 	var list []Provider
 	for _, id := range ids {
 		var p Provider
@@ -111,7 +162,8 @@ func newMulti(t testing.TB, dir string, start string, ids []string, configure fu
 		m.providers[id] = p
 		list = append(list, p)
 	}
-	cfg := Config{StateDir: dir, Exit: k.exit, Provider: m.providers[start], Providers: list, System: k, BootID: testBoot,
+	cfg := Config{StateDir: dir, Exit: k.exit, Provider: m.providers[start], Providers: list, Tunnels: m.tunnels,
+		System: k, BootID: testBoot,
 		Monotonic: k.clock, Sleep: k.sleep, Log: func(s string) { k.logs = append(k.logs, s) }}
 	if configure != nil {
 		configure(&cfg)
@@ -120,6 +172,7 @@ func newMulti(t testing.TB, dir string, start string, ids []string, configure fu
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.tunnels.a = a
 	a.nextCatalog = infinity
 	for _, id := range ids {
 		if id != a.set.active {
@@ -134,3 +187,10 @@ func newMulti(t testing.TB, dir string, start string, ids []string, configure fu
 }
 
 var allThree = []string{"mullvad", "pia", "nordvpn"}
+
+// targetOf is a request of each provider's server in the fixture's
+// catalogues, naming its provider.
+func targetOf(provider string) map[string]any {
+	server := map[string]string{"mullvad": testHost, "nordvpn": nordUS, "pia": piaRegion}[provider]
+	return requestAt(server, map[string]any{"provider": provider, "request_id": strings.Repeat("2", 32)})
+}

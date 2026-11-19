@@ -300,7 +300,7 @@ func TestNativeSidecarPIAStillRefusesNamespaceAddressCollisions(t *testing.T) {
 	a, k, _ := nativeSidecarSetup(t, "pia", false)
 	k.namespaceNets = []netip.Prefix{netip.PrefixFrom(mustAddr("10.0.0.2"), 32)}
 	relay, _ := a.catalog.Relays().Get(piaRegion)
-	_, err := piaOf(a).register(context.Background(), a, relay)
+	_, err := piaOf(a).register(context.Background(), a, relay, piaOurKey)
 	if err == nil || err.Error() != "PIA tunnel address collides with this namespace" {
 		t.Fatalf("collision: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestNativeSidecarPIARefusesAnAddressInsideTheLAN(t *testing.T) {
 	a, k, _ := nativeSidecarSetup(t, "pia", false)
 	a.exit.LAN = []string{"10.0.0.0/24", "2001:db8::/64"}
 	relay, _ := a.catalog.Relays().Get(piaRegion)
-	_, err := piaOf(a).register(context.Background(), a, relay)
+	_, err := piaOf(a).register(context.Background(), a, relay, piaOurKey)
 	if err == nil || err.Error() != "PIA tunnel address collides with this namespace" {
 		t.Fatalf("collision with SIDECAR_LAN_CIDRS: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestNativeSidecarPIARefusesAnAddressInsideTheLAN(t *testing.T) {
 		t.Error("refused registration mutated the tunnel")
 	}
 	a.exit.LAN = []string{"192.0.2.0/24"}
-	if _, err := piaOf(a).register(context.Background(), a, relay); err != nil {
+	if _, err := piaOf(a).register(context.Background(), a, relay, piaOurKey); err != nil {
 		t.Fatalf("a LAN elsewhere: %v", err)
 	}
 }

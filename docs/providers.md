@@ -361,6 +361,11 @@ provider needs:
   address, an IPv6 address and a peer;
   [the tunnel config](configuration.md#the-tunnel-config)). The image itself stays
   free of credentials.
+- for the [multi-provider exit](design/multi-provider.md), still being built,
+  the hooks `Leave` (let go of what the provider holds beyond the tunnel before
+  another provider's tunnel replaces it; `BaseProvider`'s does nothing) and
+  `EnterTunnel` (bring the tunnel up as the provider's on a server, around the
+  exit's whole-tunnel replacement; `BaseProvider`'s sets the server's peer).
 
 A provider counts as supported only once the full
 [verification](verification.md) has run on a real host with a real client,
