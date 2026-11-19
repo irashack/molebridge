@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.13.0 — unreleased
+
+**Experimental.** Upgrade from 0.12.0 by moving to the new image;
+what changed is below.
 
 - Acceptance policy 16: the client switch, the status drills and the full
   network exchange are no longer live drills. CI's System rig job, required
