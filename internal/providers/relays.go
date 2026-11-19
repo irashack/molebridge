@@ -172,8 +172,15 @@ type RelayCatalog struct {
 
 // NewRelayCatalog reads the snapshot in directory, if there is a valid one.
 func NewRelayCatalog(directory, provider string, portForwardOnly bool, now func() time.Time) *RelayCatalog {
-	c := &RelayCatalog{Path: filepath.Join(directory, "relays.json"), ErrorPath: filepath.Join(directory, "relay-error.json"),
-		Provider: provider, PortForwardOnly: portForwardOnly, Now: now}
+	return NewRelayCatalogFiles(filepath.Join(directory, "relays.json"), filepath.Join(directory, "relay-error.json"),
+		provider, portForwardOnly, now)
+}
+
+// NewRelayCatalogFiles is NewRelayCatalog with the snapshot and its error
+// record at the paths given: a multi-provider exit keeps one pair per
+// provider (relays-<id>.json, relay-error-<id>.json).
+func NewRelayCatalogFiles(path, errorPath, provider string, portForwardOnly bool, now func() time.Time) *RelayCatalog {
+	c := &RelayCatalog{Path: path, ErrorPath: errorPath, Provider: provider, PortForwardOnly: portForwardOnly, Now: now}
 	snapshot := ReadSnapshot(c.Path, provider)
 	c.Snapshot = map[string]any{}
 	for k, v := range snapshot {

@@ -88,6 +88,16 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   and remembered peer). Nothing calls `Replace` yet. Tested with fakes, with
   the policy model judging every state, and in namespace drills (CI); not on
   the system rig or a real tunnel.
+- Internal, no user-visible change: piece 2 of the [multi-provider
+  exit](docs/design/multi-provider.md), the provider set. The applier can
+  hold two or three native providers, one active: each with its own
+  catalogue (`relays-<id>.json`, only the active one in memory, the others
+  refreshed on their own schedules and dropped), refresh backoff and
+  location memory (`location-<id>.json`), and the active one persisted in
+  the private `tunnel-provider.json`. No setting builds such an applier yet
+  (that comes with `PROVIDERS`); a single-provider exit is a set of one, and
+  a new test locks its files byte for byte beside the golden records.
+  Tested with fakes only.
 - Internal: the rest of NetBird moves behind the way in. The applier asks
   its own way in (`internal/applier/wayin.go`) whether NetBird runs as
   required and has it set the record's `netbird` check; the supervisor's

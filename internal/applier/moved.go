@@ -38,7 +38,14 @@ func (l location) object() validate.Obj {
 		"port_forward", l.PortForward, "replacement", orNull(l.Replacement))
 }
 
-func (a *Applier) locationPath() string { return filepath.Join(a.privateDir, "location.json") }
+// locationPath is location.json, or on a multi-provider exit the active
+// provider's location-<id>.json: each provider remembers its own server.
+func (a *Applier) locationPath() string {
+	if a.multiProvider() {
+		return filepath.Join(a.privateDir, "location-"+a.set.active+".json")
+	}
+	return filepath.Join(a.privateDir, "location.json")
+}
 
 // loadLocation reads location.json; anything malformed is no memory.
 func (a *Applier) loadLocation() location {

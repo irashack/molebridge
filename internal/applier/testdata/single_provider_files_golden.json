@@ -1,0 +1,37 @@
+{
+  "mullvad_configured": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"configured\", \"target\": \"se-sto-wg-001\", \"target_key\": \"configured:se-sto-wg-001\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 0, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": null, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/location.json": "{\"server\": \"se-sto-wg-001\", \"city\": \"Example City\", \"country\": \"Example\", \"port_forward\": false, \"replacement\": null}",
+    "applier/relays.json": ""
+  },
+  "mullvad_mutation_failed": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"00000000000000000000000000000000\", \"state\": \"failed\", \"outcome\": \"mutation-failed\", \"message\": \"Peer update failed; retrying automatically.\", \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 1, \"backoff_step\": 1, \"next_action\": \"reapply\", \"next_action_at\": 60.0, \"last_mutation_at\": 0.0, \"mutation_certainty\": \"uncertain\", \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/relays.json": ""
+  },
+  "mullvad_rejected": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"xx-xxx-wg-999\", \"target_key\": \"00000000000000000000000000000000\", \"state\": \"rejected\", \"outcome\": \"rejected\", \"message\": \"Requested server is not in a fresh trusted relay catalogue; no change applied.\", \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 0, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": null, \"mutation_certainty\": null, \"generation\": null, \"rejected\": {\"key\": \"00000000000000000000000000000000\", \"reason\": \"Requested server is not in a fresh trusted relay catalogue; no change applied.\", \"why\": \"catalogue\", \"release\": \"b8e77bbb8c81737baf8d10d43a5240d220d5e621c31912f7fe31953857e19426\"}, \"extra\": {\"why\": \"catalogue\", \"release\": \"b8e77bbb8c81737baf8d10d43a5240d220d5e621c31912f7fe31953857e19426\"}}",
+    "applier/relays.json": ""
+  },
+  "mullvad_switch": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"se-sto-wg-001\", \"target_key\": \"00000000000000000000000000000000\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 0.0, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/location.json": "{\"server\": \"se-sto-wg-001\", \"city\": \"Example City\", \"country\": \"Example\", \"port_forward\": false, \"replacement\": null}",
+    "applier/relays.json": ""
+  },
+  "nord_switch": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"us9001.nordvpn.com\", \"target_key\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 0.0, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/location.json": "{\"server\": \"us9001.nordvpn.com\", \"city\": \"Dallas\", \"country\": \"United States\", \"port_forward\": false, \"replacement\": null}",
+    "applier/relays.json": ""
+  },
+  "pia_forward_bound": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"ex_example\", \"target_key\": \"11111111111111111111111111111111\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 0.0, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/location.json": "{\"server\": \"ex_example\", \"city\": \"Example City\", \"country\": \"EX\", \"port_forward\": true, \"replacement\": null}",
+    "applier/relays.json": "",
+    "applier/tunnel.json": "{\"region\": \"ex_example\", \"cn\": \"example401\", \"server_ip\": \"198.51.100.20\", \"server_port\": 1337, \"server_key\": \"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=\", \"peer_ip\": \"10.0.0.2\", \"server_vip\": \"10.0.0.1\", \"registered_at\": \"\u003ctime\u003e\"}"
+  },
+  "pia_switch": {
+    "applier/attempt.json": "{\"attempt_id\": \"\u003cid\u003e\", \"source\": \"panel\", \"target\": \"ex_example\", \"target_key\": \"11111111111111111111111111111111\", \"state\": \"idle\", \"outcome\": \"verified\", \"message\": null, \"boot_id\": \"00000000-0000-4000-8000-0000000000aa\", \"started_at\": \"\u003ctime\u003e\", \"attempts\": 1, \"backoff_step\": 0, \"next_action\": null, \"next_action_at\": null, \"last_mutation_at\": 0.0, \"mutation_certainty\": null, \"generation\": null, \"rejected\": null, \"extra\": {}}",
+    "applier/location.json": "{\"server\": \"ex_example\", \"city\": \"Example City\", \"country\": \"EX\", \"port_forward\": true, \"replacement\": null}",
+    "applier/relays.json": "",
+    "applier/tunnel.json": "{\"region\": \"ex_example\", \"cn\": \"example401\", \"server_ip\": \"198.51.100.20\", \"server_port\": 1337, \"server_key\": \"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=\", \"peer_ip\": \"10.0.0.2\", \"server_vip\": \"10.0.0.1\", \"registered_at\": \"\u003ctime\u003e\"}"
+  }
+}

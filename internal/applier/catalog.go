@@ -23,6 +23,12 @@ func NativeCatalog(directory, provider string, portForwardOnly bool, now func() 
 	return &nativeCatalog{inner: providers.NewRelayCatalog(directory, provider, portForwardOnly, now)}
 }
 
+// NativeCatalogFiles is NativeCatalog with the snapshot and its error record
+// at the paths given (a multi-provider exit's per-provider files).
+func NativeCatalogFiles(path, errorPath, provider string, portForwardOnly bool, now func() time.Time) Catalog {
+	return &nativeCatalog{inner: providers.NewRelayCatalogFiles(path, errorPath, provider, portForwardOnly, now)}
+}
+
 func (c *nativeCatalog) Usable() bool                   { return c.inner.Usable() }
 func (c *nativeCatalog) Relays() *providers.Entries     { return c.inner.Relays }
 func (c *nativeCatalog) Snapshot() map[string]any       { return c.inner.Snapshot }
