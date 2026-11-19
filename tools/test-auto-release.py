@@ -138,6 +138,33 @@ class Results(unittest.TestCase):
         self.assertIsNone(ar.parse_result("", rc))
 
 
+class Coverage(unittest.TestCase):
+    GOOD = {"platforms": ["kubernetes"], "providers": ["mullvad"], "kinds": ["native"],
+            "drills": [{"id": "tunnel-loss", "result": "passed"}]}
+
+    def test_good(self):
+        self.assertEqual(ar.coverage_problems(self.GOOD, ["notes 1"]), [])
+
+    def test_drills_as_names_refused(self):
+        cov = dict(self.GOOD, drills=["tunnel-loss", "client-switch"])
+        problems = ar.coverage_problems(cov, ["notes 1"])
+        self.assertEqual(len(problems), 1)
+        self.assertIn('"tunnel-loss"', problems[0])
+
+    def test_names_in_a_passed_result_expand(self):
+        cov = ar.expand_drills(dict(self.GOOD, drills=["tunnel-loss", {"id": "x", "result": "failed"}]))
+        self.assertEqual(cov["drills"][0], {"id": "tunnel-loss", "result": "passed"})
+        self.assertEqual(cov["drills"][1], {"id": "x", "result": "failed"})
+        self.assertEqual(len(ar.coverage_problems(cov, ["n"])), 1)
+        self.assertIsNone(ar.expand_drills(None))
+
+    def test_failed_drill_and_bad_evidence(self):
+        cov = dict(self.GOOD, drills=[{"id": "tunnel-loss", "result": "failed"}])
+        self.assertEqual(len(ar.coverage_problems(cov, [])), 2)
+        self.assertTrue(ar.coverage_problems(dict(self.GOOD, kinds=[]), ["x"]))
+        self.assertTrue(ar.coverage_problems(None, ["x"]))
+
+
 class Release(unittest.TestCase):
     def test_digests_from_notes(self):
         body = (f"Image index: `ghcr.io/irashack/molebridge:v0.12.0-rc.1@{D1}`\n"

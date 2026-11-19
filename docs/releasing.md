@@ -277,6 +277,8 @@ the repository stands:
     "evidence":["<reference>"]}
    ```
 
+   In a `passed` result a drill may be given by its id alone
+   (`"tunnel-loss"`), which stands for `{"id":"tunnel-loss","result":"passed"}`.
    It may also carry a fenced `markdown` block, the record of what ran, for
    [testing](testing.md). `result` is `passed`, `failed` or
    `needs-attended`. Only comments from the accepted author

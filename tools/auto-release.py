@@ -228,6 +228,46 @@ def parse_result(body: str, rc: str):
     return data
 
 
+NAME = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+def expand_drills(coverage):
+    """In a passed result a drill may be named alone: it passed. Give it the
+    {"id","result"} form acceptance.yml takes; anything else stays as it is."""
+    if isinstance(coverage, dict) and isinstance(coverage.get("drills"), list):
+        coverage = dict(coverage, drills=[{"id": d, "result": "passed"} if isinstance(d, str)
+                                          else d for d in coverage["drills"]])
+    return coverage
+
+
+def coverage_problems(coverage, evidence) -> list[str]:
+    """Why acceptance.yml would refuse this coverage and evidence (docs/releasing.md,
+    step 4), or [] when it takes them."""
+    out = []
+    if not isinstance(coverage, dict):
+        return ["`coverage` is not an object"]
+    for key in ("platforms", "providers", "kinds"):
+        v = coverage.get(key)
+        if not isinstance(v, list) or not v or \
+                not all(isinstance(x, str) and NAME.match(x) for x in v):
+            out.append(f"`coverage.{key}` must be a non-empty array of names")
+    drills = coverage.get("drills")
+    if not isinstance(drills, list) or not drills:
+        out.append("`coverage.drills` must be a non-empty array")
+    else:
+        bad = [d for d in drills if not (isinstance(d, dict) and isinstance(d.get("id"), str)
+                                         and NAME.match(d["id"])
+                                         and d.get("result") == "passed")]
+        if bad:
+            out.append("each drill must be an object like "
+                       '`{"id":"tunnel-loss","result":"passed"}`, and these are not: '
+                       + ", ".join(json.dumps(d) for d in bad[:5]))
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= 50 or \
+            not all(isinstance(e, str) and 1 <= len(e) <= 500 and e.isprintable() for e in evidence):
+        out.append("`evidence` must be 1 to 50 printable strings of 1 to 500 characters")
+    return out
+
+
 def compose_pin(compose: str):
     m = re.search(rf"{re.escape(IMAGE)}:(v\d+\.\d+\.\d+)@({DIGEST})", compose)
     return (m[1], m[2]) if m else None
@@ -542,6 +582,18 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
         raise Blocked(f"{BLOCKED}{rc} result digests do not match",
                       f"The result {note['html_url']} names digests {json.dumps(got)}, but "
                       f"`{rc}` is {json.dumps(digests)}. Nothing was attested.")
+    result["coverage"] = expand_drills(result.get("coverage"))
+    problems = coverage_problems(result.get("coverage"), result.get("evidence"))
+    if problems:
+        # acceptance.yml would refuse it: ask once for a corrected result.
+        asked = f"Live acceptance result for {rc} not usable"
+        if not any(c["body"].startswith(asked) for c in notes):
+            comment(w, HANDOFF_ISSUE,
+                    f"{asked} ({note['html_url']}): " + "; ".join(problems) + ". Nothing was "
+                    "attested. Post a new `Live acceptance result` comment in the shape "
+                    "docs/releasing.md gives; the newest one counts.")
+        print(f"{rc}: result not usable ({'; '.join(problems)}); waiting for a corrected one")
+        return LONG
     mark = f"accept-{rc}-{note['id']}"
     disp = state(mark)
     if not disp:
@@ -594,6 +646,7 @@ def step_record(w: World, stable: str) -> str:
                       "result to record. Write the record by hand (docs/releasing.md, step 6).")
     note = w.api(f"repos/{REPO}/issues/comments/{acc['comment']}")
     result = parse_result(note["body"], acc["rc"])
+    result["coverage"] = expand_drills(result.get("coverage"))
     root = w.dir
     files = {}
     changelog = (root / "CHANGELOG.md").read_text()
