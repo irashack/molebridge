@@ -486,10 +486,11 @@ func (r *proxyRig) startProxy() {
 exec setpriv --reuid=` + fmt.Sprint(rigProxyUID) + ` --regid=` + fmt.Sprint(rigProxyUID) +
 		` --clear-groups --inh-caps=-all --bounding-set=-all --no-new-privs "$2" proxy`
 	cmd := exec.Command("ip", "netns", "exec", r.exit.Name, "sh", "-c", script, "sh", filepath.Join(r.stateDir, "applier"), r.bin)
-	// The proxy service's environment in init's Compose file; NETBIRD_INTERFACE
-	// and PROXY_DNS are left to their defaults.
+	// The proxy service's environment in compose.proxy.yaml, PROXY_DNS empty
+	// (Mullvad's own resolver, 10.64.0.1:53).
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "TZ=UTC", "STATE_DIR=" + r.stateDir, "PROVIDER=mullvad",
-		"TUNNEL_INTERFACE=" + dExit, "PROXY_LISTEN=" + rigProxyListen, "PROXY_MAX_CONNS=512", "PROXY_PASSWORD_FILE=" + pw}
+		"TUNNEL_INTERFACE=" + dExit, "PROXY_LISTEN=" + rigProxyListen, "OVERLAY_IF=" + dOverlay, "PROXY_MAX_CONNS=512",
+		"PROXY_PASSWORD_FILE=" + pw, "PROXY_DNS="}
 	r.out = &syncBuf{}
 	cmd.Stdout, cmd.Stderr = r.out, r.out
 	if err := cmd.Start(); err != nil {
