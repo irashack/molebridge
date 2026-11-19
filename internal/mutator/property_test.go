@@ -213,3 +213,100 @@ func failureSequences(t *testing.T, guard bool) {
 	}
 	t.Logf("%d cases, %d with refused requests, %d where the owner kept a rule it judged unsafe to delete", cases, withFailures, refused)
 }
+
+// The same property for the whole-tunnel replacement: from a safe state with
+// some faults in it, a replacement between random tunnels under random
+// request failures, unstable and unreadable snapshots, never lets the policy
+// model see an escape at any instant (the live tunnel addresses being the only
+// return-path addresses it protects), and once the kernel cooperates the new
+// tunnel comes up with the contract verified: by recovery after a failure
+// that removed the link, by the caller's retry after one that could not.
+func TestNoFailureDuringAReplacementOpensAProtectedClass(t *testing.T) {
+	rng := rand.New(rand.NewSource(20261119))
+	pool := addrs(tunnel4, tunnel6, "203.0.113.5", "2001:db8:3::9")
+	pick := func() []netip.Addr {
+		var out []netip.Addr
+		for _, a := range pool {
+			if rng.Intn(2) == 0 {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	var cases, failedCases, retried int
+	for i := 0; i < draws(600); i++ {
+		sc := tunnelScenario{name: fmt.Sprintf("case %d", i), old: pick(), next: pick()}
+		h := newTunnelHarness(t, sc)
+		spec := h.m.Expected()
+		var faults []string
+		for n := rng.Intn(3); n > 0; n-- {
+			before := saveState(h.k)
+			f := randomFault(rng, h.k, spec)
+			for _, fam := range families {
+				sortRules(h.k.rules[fam])
+			}
+			if len(h.k.escapes(spec)) > 0 {
+				before.restore(h.k)
+				continue
+			}
+			faults = append(faults, f)
+		}
+		if rng.Intn(5) == 0 {
+			// The old tunnel was lost before the replacement.
+			_ = h.k.delTunnelLink("mullvad")
+			faults = append(faults, "tunnel lost")
+		}
+		cases++
+		rate := []float64{0, 0.1, 0.3, 0.7}[rng.Intn(4)]
+		h.k.fail = func(string) error {
+			if rng.Float64() < rate {
+				return []error{syscall.ENOMEM, syscall.EIO, syscall.EBUSY}[rng.Intn(3)]
+			}
+			return nil
+		}
+		unstableRate := []float64{0, 0.2, 0.5}[rng.Intn(3)]
+		h.k.unstableFn = func(int) bool { return rng.Float64() < unstableRate }
+		if rng.Intn(4) == 0 {
+			h.k.takeFail = func(int) error {
+				if rng.Float64() < 0.2 {
+					return errors.New("the dump failed")
+				}
+				return nil
+			}
+		}
+		err := h.replace()
+		h.k.hook = nil
+		h.k.fail, h.k.unstableFn, h.k.takeFail = nil, nil, nil
+		if h.violation != "" {
+			t.Fatalf("%s %v -> %v, faults %v, rate %v, unstable %v: %s\n%v", sc.name, sc.old, sc.next, faults, rate, unstableRate, h.violation, h.k.log)
+		}
+		if err == nil {
+			h.newTunnelChecks(sc.name, false)
+			continue
+		}
+		failedCases++
+		h.k.mu.Lock()
+		hasLink := h.k.hasLink("mullvad")
+		h.k.mu.Unlock()
+		h.k.hook = h.observe
+		if hasLink {
+			retried++
+			if err := h.m.ReplaceTunnel(context.Background(), h.change()); err != nil {
+				t.Fatalf("%s %v -> %v, faults %v: the retry failed: %v", sc.name, sc.old, sc.next, faults, err)
+			}
+		} else {
+			if res, err := h.m.ReconcileNow(context.Background(), "event"); err != nil || !res.ContractHolds {
+				t.Fatalf("%s: the pass after the failure: %v %+v", sc.name, err, res)
+			}
+			if err := h.k.newTunnelLink("mullvad", 51821, sc.next); err != nil {
+				t.Fatal(err)
+			}
+			if res, err := h.m.ReconcileNow(context.Background(), "tunnel up"); err != nil || !res.Verified {
+				t.Fatalf("%s %v -> %v, faults %v: recovery did not verify: %v %+v", sc.name, sc.old, sc.next, faults, err, res)
+			}
+		}
+		h.k.hook = nil
+		h.newTunnelChecks(sc.name+" after recovery", false)
+	}
+	t.Logf("%d replacements, %d failed (%d retried by the caller, the rest recovered)", cases, failedCases, retried)
+}

@@ -1,10 +1,12 @@
 # Design: one exit for several providers
 
-Status: **proposed** (2026-11-19). This is the working contract for the
+Status: **proposed** (2026-11-19); piece 1, [whole-tunnel
+replacement](#whole-tunnel-replacement), is built and nothing calls it yet.
+This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
 shape, the pieces, their boundaries and the interfaces between them, the
-order they are built in and how each is tested. Nothing here is built. The
+order they are built in and how each is tested. Nothing else here is built. The
 choices marked **(owner)** are product decisions, gathered with a
 recommended default in [decisions for the owner](#decisions-for-the-owner).
 When the feature ships, its user documentation replaces this file.
@@ -120,6 +122,29 @@ remembered-peer rule (Mullvad and NordVPN come back on the last peer; PIA
 with none, and restores its registration itself). A multi-provider exit's
 source returns the config of the provider in `tunnel-provider.json`
 (below), so recovery never resurrects the previous provider.
+
+**As built (piece 1).** `Manager.Replace(ctx, owner, from, to)` takes the
+mutation owner as well, and hands the steps to its operation
+`mutator.ReplaceTunnel`, which runs them in one transaction. Three
+departures from the steps above, each to keep the invariant they state:
+the new rules 94 and 98 are installed and confirmed in step 1, with the
+expected state, rather than in step 4, so a new address is never live
+without its pair (the model refuses that state:
+`internal/policy/replace_test.go`); the old link's default route is
+deleted, as an approved deletion, just before the link; and the old pair
+leaves the expected state as soon as its rules are gone, in step 3. Both
+`from` and `to` must name the exit interface the contract expects. On a
+failure the owner removes whatever link exists, keeps the pairs of every
+address still live and of the new config, and withdraws readiness until a
+pass verifies; when the kernel can't be read after the failure, it keeps
+every pair it expected (extra rules, harmless, until the next replacement
+or a restart). If the kernel also refuses to remove the old link, the
+error says so and the old tunnel stays up with its pairs; the caller
+retries. Recovery's bring-up doesn't confirm the new pairs itself: they
+are in the expected state, and the repairer's pass after a failure puts
+them back if they went, before the tunnel loop's next attempt. The worker
+reads its tunnel from a `TunnelSource`; nothing sets one yet, so every exit
+uses the single-provider source, which is today's code moved.
 
 ## The provider set
 
