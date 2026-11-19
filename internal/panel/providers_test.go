@@ -373,7 +373,7 @@ func TestPageGroupsServersByCountryAndCityAndLabelsVirtualLocations(t *testing.T
 func TestProviderStyleColours(t *testing.T) {
 	h := newHarness(t, map[string]string{"PANEL_STYLE": "provider", "PANEL_THEME": "auto"}, nil)
 	meta := h.srv.Settings.themeColorMeta("nordvpn")
-	mustContain(t, meta, `content="#161b26" media="(prefers-color-scheme: dark)"`, `content="#eef2f8" media="(prefers-color-scheme: light)"`)
+	mustContain(t, meta, `content="#030c1b" media="(prefers-color-scheme: dark)"`, `content="#f6f3ec" media="(prefers-color-scheme: light)"`)
 	css, err := readStatic("panel.css")
 	if err != nil {
 		t.Fatal(err)
@@ -416,7 +416,7 @@ func TestGluetunStyleTakesTheProviderAsItsAccent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mustContain(t, string(css), `:root[data-style="provider"]:is([data-provider="gluetun"], :not([data-provider])) {`)
+	mustContain(t, string(css), `:root[data-style="provider"][data-provider="gluetun"] {`)
 	for _, id := range providers.IDs() {
 		spec, _ := providers.Lookup(id)
 		if spec.Backend != providers.BackendGluetun {

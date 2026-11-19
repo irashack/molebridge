@@ -154,16 +154,23 @@ every time.
 
 ## Looks
 
-By default each exit is drawn in its provider's colors, using system fonts:
+By default the panel uses Molebridge's navy and cream with system fonts, and
+each exit is drawn in its provider's color: its tab's arch, the selection, and
+the current server.
 
-- Mullvad: navy and yellow;
-- PIA: charcoal and green, with a ring around the current flag that shows the
-  state;
-- NordVPN: dark blue and a lighter blue;
+- Mullvad: yellow;
+- PIA: green, with a ring around the current flag that shows the state;
+- NordVPN: a light blue;
 - an exit on the [gluetun backend](providers.md#the-gluetun-backend): gluetun's
   dark slate, with the provider behind it as the accent, such as Mullvad's
-  yellow or Surfshark's teal, so a gluetun exit and a native exit of the same
+  yellow or Surfshark's teal. Its tab has a dashed edge and a dotted second
+  arch around the provider's, so a gluetun exit and a native exit of the same
   provider look different.
+
+The tabs hang from a line with a node for each exit. The selected exit's node
+lights in its color, and switching to another exit sends a pulse along the
+line from the exit you left. When the tabs wrap onto more than one row, only
+the bottom row reaches the line.
 
 <p align="center">
   <img src="assets/switchyard-gluetun.png" alt="Switchyard with a native Mullvad exit, Mullvad through gluetun (selected, on gluetun's slate with Mullvad's yellow) and Surfshark through gluetun" width="900">

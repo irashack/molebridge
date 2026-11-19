@@ -820,7 +820,7 @@ func TestManifestAndIconsAreDeclared(t *testing.T) {
 	mustContain(t, h.get("/", "", nil).Header.Get("Content-Security-Policy"), "manifest-src 'self'")
 	// The same bytes json.dumps(WEB_MANIFEST) wrote.
 	want := `{"name": "Switchyard", "short_name": "Switchyard", "start_url": "/", "scope": "/", "display": "standalone", ` +
-		`"background_color": "#232638", "theme_color": "#232638", "icons": [{"src": "/static/icon-192.png", ` +
+		`"background_color": "#030c1b", "theme_color": "#030c1b", "icons": [{"src": "/static/icon-192.png", ` +
 		`"sizes": "192x192", "type": "image/png"}, {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}]}`
 	if got := h.get("/manifest.webmanifest", "", nil).Body; got != want {
 		t.Errorf("manifest bytes:\n got %s\nwant %s", got, want)

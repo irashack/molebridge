@@ -1015,6 +1015,59 @@
     tab.querySelector('[data-exit-place]').textContent = place;
   }
 
+  // -- the circuit under the tabs ----------------------------------------------
+  // Only the bottom row of tabs reaches the line: a stem from a row above
+  // would cross the tabs under it. Without this script every tab has one.
+
+  const yard = page.querySelector('.exit-tabs');
+  const FROM_KEY = 'switchyard-from';
+
+  function markRows() {
+    const list = Array.from(tabs.values());
+    const bottom = Math.max(...list.map((t) => t.offsetTop));
+    for (const t of list) t.classList.toggle('on-wire', t.offsetTop === bottom);
+    yard.classList.toggle('has-rows', list.some((t) => t.offsetTop !== bottom));
+  }
+
+  // A switch of exit sends a pulse along the line, in the new exit's colour,
+  // from the node of the exit you left to the one you chose.
+  function pulseFrom(fromID) {
+    const from = tabs.get(fromID);
+    const to = page.querySelector('.exit-tab.is-selected');
+    if (!from || !to || from === to || lessMotion?.matches) return;
+    if (!from.classList.contains('on-wire') || !to.classList.contains('on-wire')) return;
+    const centre = (t) => t.offsetLeft + t.offsetWidth / 2;
+    const a = centre(from), b = centre(to);
+    const pulse = document.createElement('span');
+    pulse.className = 'wire-pulse' + (b < a ? ' is-leftward' : '');
+    pulse.setAttribute('aria-hidden', 'true');
+    pulse.style.left = `${Math.min(a, b)}px`;
+    pulse.style.width = `${Math.abs(b - a)}px`;
+    pulse.style.setProperty('--pulse-color', getComputedStyle(to).getPropertyValue('--exit-accent'));
+    pulse.style.setProperty('--pulse-from', b < a ? 'right' : 'left');
+    pulse.addEventListener('animationend', () => pulse.remove());
+    yard.append(pulse);
+  }
+
+  if (yard && tabs.size) {
+    markRows();
+    if (typeof ResizeObserver === 'function') new ResizeObserver(markRows).observe(yard);
+    let fromID = null;
+    try {
+      fromID = sessionStorage.getItem(FROM_KEY);
+      sessionStorage.removeItem(FROM_KEY);
+    } catch {
+      // Storage refused: no pulse, nothing else changes.
+    }
+    const current = page.querySelector('.exit-tab.is-selected')?.dataset.exit;
+    for (const t of tabs.values()) {
+      t.addEventListener('click', () => {
+        try { if (current) sessionStorage.setItem(FROM_KEY, current); } catch { /* no pulse */ }
+      });
+    }
+    if (fromID) pulseFrom(fromID);
+  }
+
   async function pollExits() {
     if (!tabs.size) return;
     const controller = new AbortController();
