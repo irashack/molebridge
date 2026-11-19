@@ -1996,6 +1996,13 @@ A record whose server stands in for a retired one also has `moved`, with
 retires](#a-server-the-provider-retires)); other records don't have the
 member.
 
+A record of an exit with [automatic failover](design/failover.md)
+(experimental, being built) may have `failover`: `from` (the server it
+stands in for), `to` (the backup, `null` once no backup verified), `phase`
+(`trying`, `on-backup`, `returning` or `exhausted`), `reason`, `since`,
+`next_return_at` and `tried`. No exit writes it yet; the verdict reads it
+(below).
+
 ### The verdict
 
 `internal/verdict` judges a record for one exit, against the
@@ -2049,6 +2056,16 @@ at that moment, then the restore target.
   `moved.to` is its own `server` agrees too
   ([a server the provider retires](#a-server-the-provider-retires)); a
   connected verdict then carries the reason code `server-moved`.
+- In both cases, and for any other target, a record on a backup agrees when
+  all four hold: `failover.from` is that server (or the server that replaces
+  it, the record's `moved.to`), `failover.to` is its own `server`,
+  `failover.phase` is `on-backup` or `trying`, and `selection.source` is
+  `failover`. The connected verdict is then `ok`, "connected to backup",
+  with the reason code `failover`, so `/readyz`, the proxy and PIA's port
+  forwarding keep working on a verified tunnel. A reader older than
+  failover finds `server` isn't its target and says "verification failed".
+  A failed or unknown verdict on a record whose episode is `exhausted`
+  carries `failover-exhausted` after its other reasons.
 - For any other target: `server` is the target.
 - With no target, the record's own `selection.target` must match for a
   `restore`, `reconverge`, `retry` or `operator-retry` record; an observed

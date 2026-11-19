@@ -6,6 +6,16 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- The verdict reads the status record's new `failover` member
+  ([design](docs/design/failover.md)): a record on a backup that stands in
+  for the reader's target is `ok`, "connected to backup", with the reason
+  code `failover` and the episode for the panel; a failed or unknown
+  verdict during an exhausted episode adds `failover-exhausted`. No exit
+  writes the member yet, so nothing changes for an installation. Readers
+  from before this change judge such a record "verification failed", never
+  connected; a golden test of every phase keeps it so. Tested by unit tests
+  only.
+
 - New package `internal/failover`, the policy of automatic failover
   ([design](docs/design/failover.md)): when the selected server has kept
   failing long enough to move to a backup, which backups (same city, same

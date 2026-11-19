@@ -24,6 +24,12 @@
 // that check, never an extension: a record without it is judged as in 0.7.0; a
 // malformed one, or one that has passed, fails the check.
 //
+// Automatic failover (docs/design/failover.md): a record whose server is a
+// backup standing in for the reader's target says so in its "failover"
+// member, and is connected only with all four of its conditions
+// (failoverFor); a reader from before failover finds the record's server is
+// not its target and says failed, never connected.
+//
 // The package offers Assess (with ExitConfig, Target and Verdict), StatusView,
 // LegacyProjection, RequiredChecks, FixedChecks, BackendOf, OrderRecord (the
 // member order the supervisor writes), and the schema's constants; and, in
@@ -56,6 +62,24 @@ var (
 	Families     = []string{"4", "6"}
 	NotCheckedBy = map[string]string{"traffic_protection": "gluetun's firewall", "app_attachment": "the host doctor"}
 )
+
+// A verdict on a backup (the owner's decision 5, pending: each one place).
+const (
+	// BackupState is the state of a connected verdict on a backup: the
+	// traffic is verified in the tunnel, so /readyz, the proxy and port
+	// forwarding keep working.
+	BackupState = "ok"
+	// BackupLabel is its label, which says whose choice the server isn't.
+	BackupLabel = "connected to backup"
+	// ReasonFailover is its reason code.
+	ReasonFailover = "failover"
+	// ReasonFailoverExhausted follows the other reasons of a failed or
+	// unknown verdict while no backup verified.
+	ReasonFailoverExhausted = "failover-exhausted"
+)
+
+// FailoverPhases are the phases of the record's failover member.
+var FailoverPhases = []string{"trying", "on-backup", "returning", "exhausted"}
 
 const (
 	// EvidenceMaxAge: a record, and each measured check in it, counts for this
@@ -242,6 +266,15 @@ type Verdict struct {
 	ConfiguredServer string // empty for none
 	NextAction       string // "recheck", "reapply" or empty
 	NextActionAt     string // a timestamp, or empty
+	// Failover is set on a connected verdict on a backup.
+	Failover *FailoverView
+}
+
+// FailoverView is a backup standing in, for the panel: the server it
+// stands in for, the backup, when the episode started and when the selected
+// server is tried again ("" for none or unreadable).
+type FailoverView struct {
+	From, To, Since, NextReturnAt string
 }
 
 func orNull(s string) any {
@@ -265,10 +298,17 @@ func (v Verdict) AsJSON() validate.Obj {
 	if v.Schema != 0 {
 		schema = v.Schema
 	}
-	return validate.Members("state", v.State, "label", v.Label, "reasons", reasons, "message", message,
+	out := validate.Members("state", v.State, "label", v.Label, "reasons", reasons, "message", message,
 		"tier", orNull(v.Tier), "checks", v.Checks.JSONObject(), "schema", schema, "kind", orNull(v.Kind),
 		"configured_server", orNull(v.ConfiguredServer), "next_action", orNull(v.NextAction),
 		"next_action_at", orNull(v.NextActionAt))
+	if f := v.Failover; f != nil {
+		// Only on a verdict on a backup, so every other verdict keeps the
+		// members it always had.
+		out = out.Set("failover", validate.Members("from", f.From, "to", f.To, "since", orNull(f.Since),
+			"next_return_at", orNull(f.NextReturnAt)))
+	}
+	return out
 }
 
 // JSONObject implements validate.ObjectMarshaler.
@@ -297,16 +337,21 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 	// 1. The configured lock, independently: it holds when the record is stale.
 	configured, _ := state.ConfiguredServer(result)
 	base := Verdict{ConfiguredServer: configured, Kind: exit.Kind}
+	record, ok := object(result)
 	with := func(v Verdict) Verdict {
 		v.ConfiguredServer, v.Kind, v.Schema = base.ConfiguredServer, base.Kind, base.Schema
 		v.NextAction, v.NextActionAt = base.NextAction, base.NextActionAt
 		if v.Reasons == nil {
 			v.Reasons = []string{}
 		}
+		if (v.State == "failed" || v.State == "unknown") && base.Schema == Schema {
+			if _, _, phase, has := Failover(record); has && phase == "exhausted" {
+				v.Reasons = append(v.Reasons, ReasonFailoverExhausted)
+			}
+		}
 		return v
 	}
 	// 2. Nothing readable yet.
-	record, ok := object(result)
 	if !ok {
 		return with(Verdict{State: "unknown", Label: "awaiting status", Reasons: []string{"no-status"}})
 	}
@@ -406,7 +451,7 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 		allChecks, _ := object(record["checks"])
 		egress, _ := object(allChecks["egress"])
 		tier, _ := egress["tier"].(string)
-		if disagreement := targetDisagreement(record, target, selection, configured, configuredPresent(configured)); disagreement != "" {
+		if disagreement := agreement(record, target, selection, configured, configuredPresent(configured)); disagreement != "" {
 			return with(Verdict{State: "failed", Label: "verification failed", Reasons: []string{disagreement}, Message: message, Checks: checks})
 		}
 		var note []string
@@ -416,6 +461,12 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 		}
 		if _, _, moved := Moved(record); moved {
 			note = append(note, "server-moved")
+		}
+		if from, to, backup := onBackup(record, selection); backup {
+			member, _ := object(record["failover"])
+			view := &FailoverView{From: from, To: to, Since: timeText(member["since"]), NextReturnAt: timeText(member["next_return_at"])}
+			return with(Verdict{State: BackupState, Label: BackupLabel, Reasons: append(note, ReasonFailover), Tier: tier,
+				Checks: checks, Failover: view})
 		}
 		return with(Verdict{State: "ok", Label: "connected", Reasons: note, Tier: tier, Checks: checks})
 	}
@@ -440,6 +491,10 @@ func unacknowledged(record map[string]any, target Target, now time.Time) (state_
 	return "unknown", "request not acknowledged", "request-not-acknowledged", true
 }
 
+// agreement is targetDisagreement; the old-readers test swaps in the rules
+// as they were before failover.
+var agreement = targetDisagreement
+
 // targetDisagreement is why the record's server isn't the reader's target, or
 // "".
 func targetDisagreement(record map[string]any, target Target, selection map[string]any, configured string, hasConfigured bool) string {
@@ -449,19 +504,20 @@ func targetDisagreement(record map[string]any, target Target, selection map[stri
 		if target.Source == "configured" {
 			expected = target.Server
 		}
-		if server == expected || movedFrom(record, expected) {
+		if server == expected || movedFrom(record, expected) || failoverFor(record, selection, expected) {
 			return ""
 		}
 		return "not-configured-server"
 	}
 	if target.Source == "panel" {
-		if record["requested_server"] == target.Server && (server == target.Server || movedFrom(record, target.Server)) {
+		if record["requested_server"] == target.Server && (server == target.Server || movedFrom(record, target.Server) ||
+			failoverFor(record, selection, target.Server)) {
 			return ""
 		}
 		return "not-requested-server"
 	}
 	if target.Server != "" {
-		if server == target.Server {
+		if server == target.Server || failoverFor(record, selection, target.Server) {
 			return ""
 		}
 		return "not-target-server"
@@ -502,6 +558,66 @@ func Moved(record map[string]any) (from, to string, ok bool) {
 		return "", "", false
 	}
 	return from, to, true
+}
+
+// onBackup is the record's backup standing in, as (from, to): all of
+// failover.to its own server, failover.phase "on-backup" or "trying", and
+// selection.source "failover"; ok false otherwise.
+func onBackup(record, selection map[string]any) (from, to string, ok bool) {
+	member, isObject := object(record["failover"])
+	if !isObject {
+		return "", "", false
+	}
+	from, _ = member["from"].(string)
+	to, _ = member["to"].(string)
+	phase := member["phase"]
+	if from == "" || to == "" || from == to || record["server"] != to || (phase != "on-backup" && phase != "trying") ||
+		selection["source"] != "failover" {
+		return "", "", false
+	}
+	return from, to, true
+}
+
+// failoverFor is true when the record's server is a backup standing in for
+// expected: onBackup, with failover.from the expected server, or the server
+// that replaces it while the provider doesn't list it (the record's "moved",
+// from expected to failover.from).
+func failoverFor(record, selection map[string]any, expected string) bool {
+	from, _, ok := onBackup(record, selection)
+	if !ok || expected == "" {
+		return false
+	}
+	if from == expected {
+		return true
+	}
+	moved, isObject := object(record["moved"])
+	return isObject && moved["from"] == expected && moved["to"] == from
+}
+
+// Failover is the record's failover member as (from, to, phase), ok false
+// when it has none or it doesn't read: from must be a name and phase one of
+// FailoverPhases. to is "" while the episode is exhausted.
+func Failover(record map[string]any) (from, to, phase string, ok bool) {
+	member, isObject := object(record["failover"])
+	if !isObject {
+		return "", "", "", false
+	}
+	from, _ = member["from"].(string)
+	to, _ = member["to"].(string)
+	phase, _ = member["phase"].(string)
+	if from == "" || !contains(FailoverPhases, phase) {
+		return "", "", "", false
+	}
+	return from, to, phase, true
+}
+
+// timeText is a record's timestamp as written, "" when it isn't one.
+func timeText(value any) string {
+	if _, ok := validate.ParseTime(value); !ok {
+		return ""
+	}
+	text, _ := value.(string)
+	return text
 }
 
 type issues struct{ failed, expired, unmeasured []string }
