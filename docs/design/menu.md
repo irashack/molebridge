@@ -124,7 +124,7 @@ Role `molebridge proxy`, package `internal/proxy`, standard library only.
   `proxy.Serve(ctx, proxy.Config)`; the role and its Compose service come
   next. Details it settles: a location is 1 to 63 of `[a-z0-9_-]` (a PIA
   region has underscores), so it never holds a dot; the password file must
-  not be readable by its group or others, and one trailing newline is
+  not be readable by others (its group may read it), and one trailing newline is
   dropped; a failed dial is SOCKS reply `0x05`, `0x04` or `0x03` when the
   Upstream's error wraps `ECONNREFUSED`, `EHOSTUNREACH` (or a timeout) or
   `ENETUNREACH`, else `0x01`, and HTTP 504 for a timeout, else 502; other

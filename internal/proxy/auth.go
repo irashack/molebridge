@@ -14,9 +14,11 @@ import (
 const maxPasswordBytes = 255
 
 // ReadPassword reads the proxy's password from path. It refuses a missing
-// file, anything but a regular file, a file readable by its group or by
-// others, an empty password and one longer than 255 bytes. One trailing
-// newline ("\n" or "\r\n") is not part of the password.
+// file, anything but a regular file, a file anyone may read, an empty
+// password and one longer than 255 bytes. Its group may read it: the proxy
+// runs as a non-root user that is often given the file through a group, as
+// Kubernetes' fsGroup does. One trailing newline ("\n" or "\r\n") is not
+// part of the password.
 func ReadPassword(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("proxy: no password file (PROXY_PASSWORD_FILE)")
@@ -33,8 +35,8 @@ func ReadPassword(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("proxy: the password file is not a regular file")
 	}
-	if info.Mode().Perm()&0o044 != 0 {
-		return nil, fmt.Errorf("proxy: the password file is readable by others (mode %04o); make it 0600 or 0400",
+	if info.Mode().Perm()&0o004 != 0 {
+		return nil, fmt.Errorf("proxy: the password file is readable by others (mode %04o); make it 0600, 0640 or 0440",
 			info.Mode().Perm())
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxPasswordBytes+3))
