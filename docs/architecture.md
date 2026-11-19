@@ -344,9 +344,16 @@ the readiness loop, the profile checks before each start and after
 `netbird up`, the loop that follows the supervisor's reports about each launch,
 the gluetun backend's NetBird monitors (`gluetun_linux.go`) and the failed
 record published while NetBird is held back (`NetBirdHeldRecord`, in
-`netbird.go`). Still outside it: the settings' NetBird checks at start, the
-"no NetBird identity" notice, the applier's `netbird` check in a measured
-record and the supervisor's failure record.
+`netbird.go`), and the "no NetBird identity" notice, which the way in logs
+before the worker's own start notices. The applier has its own (`wayIn` in
+`internal/applier/wayin.go`): its gate, inspections and health check ask
+whether the way in is ready, and NetBird's side says what ready means (kernel
+WireGuard with NetBird's kernel firewall) and sets the record's `netbird`
+check; a sidecar's does nothing and its check stays `n/a`. The checks the
+supervisor's failure record fails for the way in come from the same side
+(`wayInChecks`), and the settings' NetBird checks are their own stage of
+`LoadSettings` (`internal/exit/netbird_settings.go`), called at the same two
+points as before.
 
 ### The lease
 

@@ -598,6 +598,9 @@ func (m *nbManager) Left() string { return "NetBird" }
 
 // -- NetBird's record ------------------------------------------------------------
 
+// netbirdChecks are the status record's checks NetBird owns.
+var netbirdChecks = []string{"netbird"}
+
 // heldReportChars is the longest reason a held-NetBird record's message
 // carries: the same bound as the unready message's reason.
 const heldReportChars = 900

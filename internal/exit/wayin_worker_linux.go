@@ -16,7 +16,8 @@ import (
 // (noWorkerWayIn).
 //
 // The worker's core keeps its start order, its loops and the lease, and asks
-// the way in only at these points: Announce after its own start notices;
+// the way in only at these points: Preface before its own start notices and
+// Announce after them;
 // Start once the kernel watcher runs, before the contract is installed;
 // Loops once the pipeline exists, beside its own; Report for every message
 // the supervisor sends about the way in; Cycle before each control cycle;
@@ -25,6 +26,9 @@ import (
 // checks first, and the record published while it is held back are the
 // implementation's.
 type workerWayIn interface {
+	// Preface logs what the way in says first at start, before the worker's
+	// own notices.
+	Preface()
 	// Announce logs what the way in warns about at start.
 	Announce()
 	// Start begins the way in's loops that run under the lease from the start,
@@ -73,6 +77,7 @@ type workerWayInHost struct {
 // sidecars): the control cycle runs from the start and nothing is held.
 type noWorkerWayIn struct{}
 
+func (noWorkerWayIn) Preface()                                         {}
 func (noWorkerWayIn) Announce()                                        {}
 func (noWorkerWayIn) Start(*tunnel.Manager) error                      { return nil }
 func (noWorkerWayIn) Loops() []func()                                  { return nil }

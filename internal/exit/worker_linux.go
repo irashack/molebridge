@@ -18,7 +18,6 @@ import (
 	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/contract"
 	"github.com/irashack/molebridge/internal/mutator"
-	"github.com/irashack/molebridge/internal/nbprofile"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnel"
 	"github.com/irashack/molebridge/internal/validate"
@@ -293,9 +292,7 @@ func (noKernel) DelRoute(rtnl.Route) error                  { return errors.New(
 // repair.
 func (w *worker) run() int {
 	s := w.s
-	if s.NoIdentity {
-		w.logf("%s", nbprofile.NoIdentityNotice)
-	}
+	w.way.Preface()
 	if s.OtherConfs > 0 {
 		w.logf("warning: %d other .conf file(s) in %s are ignored; only %s.conf is used", s.OtherConfs, s.ConfDir, s.Routing.ExitIf)
 	}

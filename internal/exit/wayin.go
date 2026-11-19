@@ -73,3 +73,13 @@ func (s *Supervisor) host() wayInHost {
 		tell:  func(m Msg) { m.Gen = s.gen; s.send(m) },
 		again: s.maybeStartWayIn}
 }
+
+// wayInChecks are the status record's checks the way in of an exit with these
+// settings owns, which the supervisor's failure record fails (FailureRecord):
+// NetBird's for an overlay exit, none for a sidecar.
+func wayInChecks(s *Settings) []string {
+	if !s.Overlay() {
+		return nil
+	}
+	return netbirdChecks
+}

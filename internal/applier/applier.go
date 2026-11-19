@@ -64,8 +64,10 @@ import (
 // Applier owns the relay catalogue, admits selections, switches peers and
 // reports health for one exit.
 type Applier struct {
-	sys        System
-	hooks      Provider
+	sys   System
+	hooks Provider
+	// way is the exit's way in (wayin.go).
+	way        wayIn
 	spec       *providers.Provider
 	exit       Exit
 	gatus      Gatus
@@ -169,6 +171,7 @@ func New(cfg Config) (*Applier, error) {
 	if a.exit.Kind == "" {
 		a.exit.Kind = "overlay"
 	}
+	a.way = a.newWayIn()
 	if a.clock == nil {
 		a.clock = BootClock
 	}
@@ -392,17 +395,6 @@ func (a *Applier) DefaultRoutingStatus(ctx context.Context, requireAddress bool)
 
 func (a *Applier) routingStatus(ctx context.Context, requireAddress bool) (bool, bool) {
 	return a.hooks.RoutingStatus(ctx, a, requireAddress)
-}
-
-// netbirdNative is true when NetBird runs kernel WireGuard on the overlay
-// interface and its own kernel firewall is in place, as Molebridge requires.
-func (a *Applier) netbirdNative(ctx context.Context) bool {
-	native, err := a.sys.OverlayKernelWireGuard(ctx)
-	if err != nil || !native {
-		return false
-	}
-	present, err := a.sys.NetbirdFirewallPresent(ctx)
-	return err == nil && present
 }
 
 func (a *Applier) peers(ctx context.Context) ([]string, error) {
@@ -670,7 +662,7 @@ func (a *Applier) saveAttempt() error {
 // -- inspection --------------------------------------------------------------------------
 
 // DefaultMeasureGuards fills the routing contract and traffic protection
-// checks, with NetBird's kernel mode on an overlay or the firewall on a native
+// checks, with the way in's check on an overlay or the firewall on a native
 // sidecar. The overlay's owner record is the supervisor's check, left unknown
 // here.
 func (a *Applier) DefaultMeasureGuards(ctx context.Context, at string, f *Finding) {
@@ -692,18 +684,14 @@ func (a *Applier) DefaultMeasureGuards(ctx context.Context, at string, f *Findin
 		f.Checks = f.Checks.Set("traffic_protection", validate.Members("state", protection, "at", at, "from", from))
 		return
 	}
-	native := a.netbirdNative(ctx)
+	ready := a.way.Ready(ctx)
 	f.Checks = f.Checks.Set("traffic_protection", validate.Members("state", routing, "at", at, "from", "routing"))
-	nb := "fail"
-	if native {
-		nb = "pass"
-	}
-	f.Checks = f.Checks.Set("netbird", validate.Members("state", nb, "at", at))
-	f.Safe = protected && native
+	f.Checks = a.way.Record(f.Checks, ready, at)
+	f.Safe = protected && ready
 	if !protected {
 		f.Guard = RoutingFailed
-	} else if !native {
-		f.Guard = NetbirdModeFailed
+	} else if !ready {
+		f.Guard = a.way.Failed()
 	}
 }
 
@@ -1634,9 +1622,8 @@ func (a *Applier) gate(ctx context.Context, target *Selection) *gateResult {
 			return &gateResult{"pending", "Waiting for tunnel and overlay routing; request will retry automatically. " +
 				"If this persists, recreate the exit (docs/operations.md#recovery).", ""}
 		}
-		if !a.netbirdNative(ctx) {
-			return &gateResult{"pending", "Waiting for NetBird to run kernel WireGuard with its kernel firewall; " +
-				"request will retry automatically.", ""}
+		if !a.way.Ready(ctx) {
+			return &gateResult{"pending", a.way.Waiting(), ""}
 		}
 	}
 	if a.nativeSidecar() {
@@ -1993,5 +1980,5 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 		firewall, _, err := a.sys.SidecarFirewall(ctx)
 		return protected && firewall && err == nil
 	}
-	return protected && a.netbirdNative(ctx)
+	return protected && a.way.Ready(ctx)
 }

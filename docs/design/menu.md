@@ -189,6 +189,23 @@ holds, stop when the lease lapses) moves behind one boundary in
 record) doesn't name NetBird outside it. No behavior, setting or record
 changes; every drill and the system rig must pass unchanged.
 
+The boundary now covers, each with a sidecar form that does nothing:
+
+- the supervisor: starting, stopping and reaping NetBird, and the record
+  checks its failure record fails (`wayIn`, `internal/exit/wayin.go`);
+- the worker: readiness, the profile checks, the launch reports, the gluetun
+  monitors, the held record and the start notices (`workerWayIn`,
+  `wayin_worker_linux.go`);
+- the applier: whether the way in is ready for the gate, an inspection and
+  the health check, and the record's `netbird` check (`wayIn`,
+  `internal/applier/wayin.go`);
+- the settings: NetBird's checks, a stage of `LoadSettings` in
+  `internal/exit/netbird_settings.go`.
+
+Still NetBird's by name: the `Settings` fields the stage fills, the
+`netbird` check in the record schema (`internal/verdict`) and the
+`netbird_native` view readers derive from it.
+
 ## Testing
 
 Each piece brings its unit tests. The proxy adds a system rig drill: fake

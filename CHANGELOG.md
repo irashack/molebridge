@@ -28,6 +28,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   the role end to end on loopback with no tunnel, status and health) and
   CI's Compose checks; the system rig and live drills have not run, so it
   has carried no traffic through a real tunnel.
+- Internal: the rest of NetBird moves behind the way in. The applier asks
+  its own way in (`internal/applier/wayin.go`) whether NetBird runs as
+  required and has it set the record's `netbird` check; the supervisor's
+  failure record takes the way in's checks from it; the worker's way in logs
+  the "no NetBird identity" notice; and the settings' NetBird checks are one
+  stage of `LoadSettings` (`internal/exit/netbird_settings.go`). No behavior
+  change: records, log lines and their order, settings and timing are as
+  before ([design](docs/design/menu.md), "NetBird as a module").
 - Internal: the supervisor reaches NetBird through one boundary, the exit's
   way in (`internal/exit/wayin.go`), with NetBird's supervision in
   `internal/exit/netbird.go` and a way in that does nothing for the sidecars.

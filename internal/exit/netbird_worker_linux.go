@@ -46,6 +46,14 @@ func newNetBirdWorker(s *Settings, h workerWayInHost) *nbWorker {
 	return &nbWorker{s: s, h: h, netbirdCh: make(chan Msg, 64)}
 }
 
+// Preface says when NetBird will enroll a new peer: settings found no stored
+// identity.
+func (n *nbWorker) Preface() {
+	if n.s.NoIdentity {
+		n.h.logf("%s", nbprofile.NoIdentityNotice)
+	}
+}
+
 // Announce warns when a gluetun overlay lacks the return-path sysctl.
 func (n *nbWorker) Announce() {
 	if !n.s.Native() && returnPathPrecondition() != nil {

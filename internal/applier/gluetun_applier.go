@@ -852,7 +852,7 @@ func (g *gluetunProvider) MeasureGuards(ctx context.Context, a *Applier, at stri
 	if err != nil {
 		safe, ready = false, false
 	}
-	native := a.netbirdNative(ctx)
+	wayReady := a.way.Ready(ctx)
 	routing := "fail"
 	if ready {
 		routing = "pass"
@@ -863,16 +863,12 @@ func (g *gluetunProvider) MeasureGuards(ctx context.Context, a *Applier, at stri
 	}
 	f.Checks = f.Checks.Set("routing", check)
 	f.Checks = f.Checks.Set("traffic_protection", validate.Members("state", routing, "at", at, "from", "routing"))
-	nb := "fail"
-	if native {
-		nb = "pass"
-	}
-	f.Checks = f.Checks.Set("netbird", validate.Members("state", nb, "at", at))
-	f.Safe = safe && native
+	f.Checks = a.way.Record(f.Checks, wayReady, at)
+	f.Safe = safe && wayReady
 	if !ready {
 		f.Guard = RoutingFailed
-	} else if !native {
-		f.Guard = NetbirdModeFailed
+	} else if !wayReady {
+		f.Guard = a.way.Failed()
 	}
 }
 
