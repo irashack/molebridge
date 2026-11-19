@@ -82,7 +82,13 @@ Kubernetes cluster and rootless Podman Quadlet unit (Podman 5.8.9) as for
 - **Network exchange:** trial panel and exchange (on the candidate) on one
   node, the NordVPN exit on another: `last_contact_at` 2 s before the read,
   clock offset 0.0 s, `/api/exits` `ok`; the 409 and failed-switch drills ran
-  through it.
+  through it. After the release, the same images (the candidate's digest) ran
+  the exchange on the deployment's permanent panel rather than the trial one,
+  2026-11-19 04:27–04:29 UTC: `last_contact_at` 5 s old, clock offset 0 s;
+  a switch to another NordVPN server through the panel verified 7 s after the
+  request and the switch back 8 s after it, each `result.json` back on the
+  panel's side with `selection.outcome` `verified`; `/api/status` `ok` before
+  and after.
 - **A retired server**, on the gluetun overlay exit on Kubernetes (NordVPN,
   IPv4) with a client probing: `ok` and verified on the next server of the
   city 19 s after the removal, `moved` with `left-catalogue`; back on the

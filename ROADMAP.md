@@ -60,8 +60,9 @@ Two decisions shape the work (maintainer, 2026-11-19):
   candidate. No rewrite happens alongside the change of core.
 
 The order of work: exchanging requests and status over the network first,
-so that more ways in don't mean more shared directories (built in 0.10.0, not
-yet run live: [the network exchange](docs/architecture.md#the-network-exchange));
+so that more ways in don't mean more shared directories (built in 0.10.0 and
+run live in every release's acceptance since:
+[the network exchange](docs/architecture.md#the-network-exchange));
 then [an image without NetBird](#an-image-without-netbird), which needs no
 other change; then a status record that can
 describe a way in using many servers at once; then [the
