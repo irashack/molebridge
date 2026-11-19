@@ -104,8 +104,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   over SOCKS5 and HTTP `CONNECT`, sessions, benching and recovery, refusal
   while the exit switches or its tunnel is stopped, a wrong password, and an
   nftables counter showing no packet from the proxy's uid outside the tunnel.
-  A real Mullvad relay proxy
-  is still untested.
+  A real Mullvad relay proxy is still untested.
 
 ## 0.13.0 — unreleased
 
