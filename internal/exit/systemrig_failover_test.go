@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,9 +17,10 @@ import (
 // The drills of automatic failover (docs/design/failover.md, system rig
 // drills) on the native Mullvad exit, with the rig's two relays in one city,
 // FAILOVER=same-city and the policy's timings shortened by the drill binary's
-// hook (failover_hook_drill.go): FAILOVER_AFTER 30 s, returns 45 s apart.
-// The handshake still goes stale only after 180 s and a settled selection is
-// checked every 60 s, so a failover takes a few minutes.
+// hook (failover_hook_drill.go): returns 45 s apart, FAILOVER_AFTER its
+// minimum, 120 s. The failures still come from the pipeline's own checks
+// (one every 60 s; the first after the drop asks twice, up to 90 s) and
+// every switch waits out the 90-second reapply guard.
 
 // The applier's lines (internal/applier/failover.go).
 const (
@@ -31,7 +33,19 @@ const (
 	logTryingPrimary = "applier: trying the selected server again"
 )
 
-var rigFailoverNote = regexp.MustCompile(`<p class="note" data-failover>([^<]*)</p>`)
+var (
+	rigFailoverNote = regexp.MustCompile(`<p class="note" data-failover>([^<]*)</p>`)
+	rigKeptFailing  = regexp.MustCompile(regexp.QuoteMeta(logFailingOver) + `(\d+) s`)
+)
+
+// drillAfter is the drills' FAILOVER_AFTER. A dropped server must count
+// from the first check after the drop, which ends within detectWithin (the
+// next periodic check, 60 s, and its two tries of up to 100 s, on 5-second
+// passes), and the failover come within drillAfter and a minute of that.
+const (
+	drillAfter   = 120 * time.Second
+	detectWithin = 170 * time.Second
+)
 
 // failoverRig is a system rig whose exit runs the drill binary with failover
 // on.
@@ -39,7 +53,7 @@ func failoverRig(t *testing.T) *systemRig {
 	r := newSystemRig(t)
 	r.bin = filepath.Join(filepath.Dir(r.bin), "molebridge-drill")
 	r.exitExtra = append(r.exitExtra, "FAILOVER=same-city", "FAILOVER_RETURN=auto",
-		"MOLEBRIDGE_DRILL_FAILOVER_AFTER=30", "MOLEBRIDGE_DRILL_FAILOVER_RETURN=45,45,45")
+		"MOLEBRIDGE_DRILL_FAILOVER_AFTER="+strconv.Itoa(int(drillAfter.Seconds())), "MOLEBRIDGE_DRILL_FAILOVER_RETURN=45,45,45", "MOLEBRIDGE_DRILL_FAILOVER_TRACE=1")
 	return r
 }
 
@@ -88,6 +102,18 @@ func (r *systemRig) dropUplink(dropped bool) {
 	}
 }
 
+// linesSince is the exit's applier and drill lines after the first mark
+// bytes of its output.
+func linesSince(p *exitProc, mark int) string {
+	var out []string
+	for _, line := range strings.Split(p.out.String()[mark:], "\n") {
+		if strings.Contains(line, "applier:") || strings.Contains(line, "drill:") {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
 // failoverMember is result.json's failover member, nil when there is none.
 func failoverMember(res map[string]any) map[string]any {
 	m, _ := res["failover"].(map[string]any)
@@ -125,14 +151,30 @@ func (r *systemRig) selectedAndVerified(p *exitProc, a *rigRelay) string {
 	return id
 }
 
+// waitRunning waits for cond while the exit runs; on a timeout it logs the
+// applier's lines and result.json before failing.
 func (r *systemRig) waitRunning(p *exitProc, d time.Duration, what string, cond func() bool) {
 	r.t.Helper()
-	r.waitFor(d, what, func() bool {
+	deadline := time.Now().Add(d)
+	for !cond() {
 		if !p.running() {
 			r.t.Fatalf("the exit stopped:\n%s", p.out.String())
 		}
-		return cond()
-	})
+		if time.Now().After(deadline) {
+			var lines []string
+			for _, line := range strings.Split(p.out.String(), "\n") {
+				if strings.Contains(line, "applier:") {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) > 120 {
+				lines = lines[len(lines)-120:]
+			}
+			r.t.Fatalf("timed out after %v waiting for %s\nthe applier's lines:\n%s\nresult.json: %s", d, what,
+				strings.Join(lines, "\n"), jsonText(r.result()))
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // TestSystemRigFailover is drills 1 to 3: the primary's UDP dropped, the exit
@@ -148,10 +190,30 @@ func TestSystemRigFailover(t *testing.T) {
 
 	// 1. A drops: the exit moves to B and both verdicts say so.
 	r.dropRelay(a, true)
-	dropped := time.Now()
-	r.waitRunning(p, 360*time.Second, "the exit to fail over to "+b.host, func() bool { return r.onBackup(a, b, id) })
+	dropped, mark := time.Now(), len(p.out.String())
+	var decided time.Duration
+	r.waitRunning(p, 600*time.Second, "the exit to fail over to "+b.host, func() bool {
+		if decided == 0 && strings.Contains(p.out.String()[mark:], logFailingOver) {
+			decided = time.Since(dropped)
+		}
+		return r.onBackup(a, b, id)
+	})
 	movedAfter := time.Since(dropped)
 	res := r.result()
+	t.Logf("the exit's lines from the drop to the failover:\n%s", linesSince(p, mark))
+	// The policy's bound: the failover within FAILOVER_AFTER and a minute
+	// of the first eligible failure, and that failure the first check
+	// after the drop.
+	m := rigKeptFailing.FindStringSubmatch(p.out.String()[mark:])
+	if m == nil {
+		t.Fatalf("no %q line after the drop", logFailingOver)
+	}
+	failing, _ := strconv.Atoi(m[1])
+	counted := time.Duration(failing) * time.Second
+	if counted > drillAfter+time.Minute || decided-counted > detectWithin || movedAfter > decided+time.Minute {
+		t.Errorf("the failover came %v after the drop (decided at %v, %v after the first eligible failure; on the backup at %v), want within %v of a first eligible failure at most %v after the drop",
+			decided.Round(time.Second), decided.Round(time.Second), counted, movedAfter.Round(time.Second), drillAfter+time.Minute, detectWithin)
+	}
 	if !strings.Contains(p.out.String(), logFailingOver) || !strings.Contains(p.out.String(), "moving to backup "+b.host) {
 		t.Errorf("no failover line in the log:\n%s", p.out.String())
 	}
@@ -172,13 +234,13 @@ func TestSystemRigFailover(t *testing.T) {
 		t.Errorf("the panel's note: %q, want it to start %q", note, wantNote)
 	}
 	r.clientVia(b, 30*time.Second)
-	t.Logf("%s dropped: on backup %s %v later; failover %s; panel %s %v", a.host, b.host,
-		movedAfter.Round(time.Second), jsonText(res["failover"]), v["label"], v["reasons"])
+	t.Logf("%s dropped: failover decided %v later, %v after the first eligible failure; on backup %s %v after the drop; failover %s; panel %s %v",
+		a.host, decided.Round(time.Second), counted, b.host, movedAfter.Round(time.Second), jsonText(res["failover"]), v["label"], v["reasons"])
 
 	// 3. The first return, A still dropped: back on B.
-	r.waitRunning(p, 120*time.Second, "a return to "+a.host, func() bool { return strings.Contains(p.out.String(), logTryingPrimary) })
+	r.waitRunning(p, 240*time.Second, "a return to "+a.host, func() bool { return strings.Contains(p.out.String(), logTryingPrimary) })
 	returned := time.Now()
-	r.waitRunning(p, 240*time.Second, "the exit back on "+b.host, func() bool {
+	r.waitRunning(p, 360*time.Second, "the exit back on "+b.host, func() bool {
 		return strings.Contains(p.out.String(), logBackOnBackup+b.host) && r.onBackup(a, b, id)
 	})
 	t.Logf("a return to %s, still dropped: on %s again %v later", a.host, b.host, time.Since(returned).Round(time.Second))
@@ -186,7 +248,7 @@ func TestSystemRigFailover(t *testing.T) {
 	// 2. A answers again: the next return ends the episode.
 	r.dropRelay(a, false)
 	restored := time.Now()
-	r.waitRunning(p, 300*time.Second, "the exit to return to "+a.host, func() bool {
+	r.waitRunning(p, 420*time.Second, "the exit to return to "+a.host, func() bool {
 		res := r.result()
 		sel, _ := res["selection"].(map[string]any)
 		return r.verified(a, id) && failoverMember(res) == nil && sel["source"] == "panel"
@@ -221,14 +283,14 @@ func TestSystemRigFailoverUplinkAndPanel(t *testing.T) {
 	// 4. A drops and the uplink is down: no failover.
 	r.dropUplink(true)
 	r.dropRelay(a, true)
-	r.waitRunning(p, 360*time.Second, "the uplink probe to hold the failover", func() bool {
+	r.waitRunning(p, 600*time.Second, "the uplink probe to hold the failover", func() bool {
 		return strings.Contains(p.out.String(), logUplinkDown)
 	})
 	if res := r.result(); res["server"] != a.host || failoverMember(res) != nil {
 		t.Fatalf("failed over with the uplink down: %s", jsonText(res))
 	}
 	r.dropUplink(false)
-	r.waitRunning(p, 240*time.Second, "the exit to fail over to "+b.host, func() bool { return r.onBackup(a, b, id) })
+	r.waitRunning(p, 540*time.Second, "the exit to fail over to "+b.host, func() bool { return r.onBackup(a, b, id) })
 	t.Logf("the uplink down held the failover; once it answered, on %s", b.host)
 
 	// 6. A panel request during the episode: applied at once, the episode
@@ -260,7 +322,7 @@ func TestSystemRigFailoverExhausted(t *testing.T) {
 	r.dropRelay(a, true)
 	r.dropRelay(b, true)
 	dropped := time.Now()
-	r.waitRunning(p, 540*time.Second, "an exhausted episode", func() bool {
+	r.waitRunning(p, 720*time.Second, "an exhausted episode", func() bool {
 		fo := failoverMember(r.result())
 		return fo["phase"] == "exhausted" && fo["from"] == a.host && strings.Contains(p.out.String(), logNoBackup)
 	})

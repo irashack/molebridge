@@ -599,7 +599,12 @@ minimum stays 120 seconds):
 
 1. Drop the primary's UDP in the fake network: the exit moves to the backup,
    verifies, and the record and both verdicts (panel's and exit's) say
-   "connected to backup".
+   "connected to backup". With `FAILOVER_AFTER` at its minimum, 120 seconds,
+   the first check after the drop must count (it ends within 170 seconds of
+   the drop) and the failover come within `FAILOVER_AFTER` plus a minute of
+   it; the drill logs the times. The drill binary also logs each pass the
+   policy sees and the bytes the tunnel received during each failed check
+   (`MOLEBRIDGE_DRILL_FAILOVER_TRACE`).
 2. Restore the primary: the exit returns at the scheduled time and the
    `failover` member goes.
 3. Keep the primary dropped during a return: the exit is back on the backup

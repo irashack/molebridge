@@ -168,7 +168,7 @@ jobs:
   system-rig:
     name: System rig
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,11 +188,11 @@ jobs:
         # of the runner, a disposable VM (CONTRIBUTING.md, "The system rig").
         # Every drill has a rig of its own and they run at once; the failover
         # drills, which wait out a stale handshake and the reapply guard
-        # several times, are the longest (about 10 minutes).
+        # several times, are the longest (about 15 minutes).
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
           sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
-            go test -count=1 -v -timeout 20m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+            go test -count=1 -v -timeout 25m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 
   image:
     name: Image (amd64 and arm64)

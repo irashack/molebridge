@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/failover"
 )
 
@@ -14,10 +15,17 @@ import (
 // drills, below what the settings accept: MOLEBRIDGE_DRILL_FAILOVER_AFTER
 // (seconds) replaces FAILOVER_AFTER and MOLEBRIDGE_DRILL_FAILOVER_RETURN
 // (comma-separated seconds) the return schedule. It exists only in binaries
-// built with the drill tag.
-func drillFailover(env map[string]string, c failover.Config) failover.Config {
+// built with the drill tag. MOLEBRIDGE_DRILL_FAILOVER_TRACE=1 logs each pass
+// the policy observes, with the inspection it classified, and the bytes the
+// tunnel moved during each failed egress check.
+func drillFailover(env map[string]string, cfg *applier.Config) {
+	c := &cfg.Failover
 	if !c.On() {
-		return c
+		return
+	}
+	if env["MOLEBRIDGE_DRILL_FAILOVER_TRACE"] == "1" && cfg.Log != nil {
+		log := cfg.Log
+		cfg.FailoverTrace = func(line string) { log("drill: " + line) }
 	}
 	if n, err := strconv.Atoi(env["MOLEBRIDGE_DRILL_FAILOVER_AFTER"]); err == nil && n > 0 && n <= 3600 {
 		c.After = time.Duration(n) * time.Second
@@ -27,11 +35,10 @@ func drillFailover(env map[string]string, c failover.Config) failover.Config {
 		for _, field := range strings.Split(list, ",") {
 			n, err := strconv.Atoi(field)
 			if err != nil || n <= 0 || n > 7200 {
-				return c
+				return
 			}
 			schedule = append(schedule, time.Duration(n)*time.Second)
 		}
 		failover.ReturnSchedule = schedule
 	}
-	return c
 }
