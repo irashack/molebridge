@@ -218,6 +218,9 @@ gluetun exits are out of scope: gluetun owns their tunnel. Everyone using a
 multi-provider exit shares its current provider. To put different devices on
 different providers at the same time, run single-provider exits beside it.
 
+The contract for building it, with the choices that are the maintainer's to
+make, is [its design](docs/design/multi-provider.md).
+
 ### Automatic failover
 
 Today Molebridge never picks another server: it retries the one you chose.
@@ -227,6 +230,9 @@ choice (the primary target) from the server it applies, so a backup would
 go through the same gates and checks. What it takes: rules for when to fail
 over and when to return, which backups are acceptable, how the panel shows
 it, and a live pass.
+
+The rules, the pieces and the choices that are the maintainer's to make are
+in [its design](docs/design/failover.md).
 
 ### Verifying a sidecar's tunnel-tier egress
 
