@@ -16,6 +16,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   the egress-check failure and its recheck, the 409 for a second switch, a
   failed switch followed by Retry, and a stopped exit with the panel's
   `/readyz` and `/healthz` ([contributing](CONTRIBUTING.md#the-system-rig)).
+- And the network exchange: the panel and the real exchange role on a node
+  of their own, the exit reaching it over HTTPS with no shared directory;
+  the link state, a switch shown verified on the panel's side, the 409 and
+  Retry drills through it, and the exchange restarted with an empty volume
+  ([contributing](CONTRIBUTING.md#the-system-rig)).
 
 ## 0.12.0 — unreleased
 

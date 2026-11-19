@@ -158,8 +158,16 @@ exit's egress check dropped in its namespace (failed, `applied-unverified`, `rec
 again), a second switch through the panel while the first is held applying (409), a switch to a
 relay that drops WireGuard (failed on the handshake, Retry offered, then verified as
 `operator-retry`), and a stopped exit (the panel's `/readyz` 503 and `/healthz` 200, then 200 again
-after a restart). Every drill runs at once; the stopped exit, which waits out the 150-second evidence
-age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
+after a restart). `TestSystemRigExchange` runs the [network exchange](docs/configuration.md#the-network-exchange)
+the same way: the panel and the real `molebridge exchange` role (uid 65534, no capabilities, HTTPS
+with a certificate from the rig's authority) in a "panelnode" namespace with
+`PANEL_NETWORK_EXITS`, and the exit reaching the exchange by its host path with `EXCHANGE_URL`,
+`EXCHANGE_CA_FILE` and `EXCHANGE_TLS_NAME`, with no directory shared between the two. It checks the
+link state (`last_contact_at` fresh, `clock_offset_s` about 0), `/api/exits` `ok`, a switch shown
+verified on the panel's side, the 409 and the failed switch with Retry through the exchange, and
+the exchange restarted with an empty volume ("exit unreachable", then the copies back, the server
+kept and the panel driving the exit again). Every drill runs at once; the stopped exit, which waits
+out the 150-second evidence age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
