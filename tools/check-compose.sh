@@ -405,15 +405,19 @@ pass "one image tag, no 0.7 leftovers"
 # its services resolves exactly as the same service of the shipped form it
 # comes from (resolved with init's .env, mount paths taken relative to each
 # file's directory, `build:` and profiles set aside): so every check above
-# holds for init's services too. The proxy, which no shipped file has yet,
-# gets its own checks. Combinations init refuses must say why and write
-# nothing. Needs Go to build the binary.
+# holds for init's services too. Combinations init refuses must say why and
+# write nothing. Needs Go to build the binary. init refuses the proxy until a
+# release has the proxy role; a second binary, built with the switch on
+# (internal/tools/initmenu, proxyAvailable), writes the proxy outputs too,
+# which get their own checks.
 if ! command -v go >/dev/null 2>&1; then
     echo "SKIP init: go not found"
     echo "all Compose checks passed"
     exit 0
 fi
 go build -o "$work/molebridge" ./cmd/molebridge || fail "molebridge does not build"
+go build -ldflags "-X github.com/irashack/molebridge/internal/tools/initmenu.proxyAvailable=true" \
+    -o "$work/molebridge-proxy" ./cmd/molebridge || fail "molebridge does not build with the proxy switch on"
 core_image=$(jq -c .services.exit.image "$work/nsc.json")
 # check_init <n> <shipped file> <expected services>: init's output in $work/init-<n>.
 check_init() {
@@ -466,30 +470,41 @@ check_init() {
     esac
 }
 n=0
-accepted=0
-for provider in mullvad pia nordvpn gluetun-fastestvpn gluetun-ivpn gluetun-mullvad gluetun-nordvpn \
-        gluetun-surfshark gluetun-windscribe gluetun-airvpn gluetun-protonvpn wireguard; do
-    for ways in '"netbird-exit"' '"sidecar"' '"proxy"' '"netbird-exit","sidecar"' '"netbird-exit","proxy"' \
-            '"sidecar","proxy"' '"netbird-exit","sidecar","proxy"'; do
-        for extras in '' '"switchyard"' '"port-sync"' '"switchyard","port-sync"'; do
-            n=$((n + 1))
-            printf '{"schema":1,"provider":"%s","ways_in":[%s],"extras":[%s]}\n' "$provider" "$ways" "$extras" > "$work/answers-$n.json"
-            if ! "$work/molebridge" init --out "$work/init-$n" --answers "$work/answers-$n.json" > "$work/init-$n.log" 2>&1; then
-                grep -q '^molebridge init: ' "$work/init-$n.log" || fail "init-$n: failed without saying why"
-                [ ! -e "$work/init-$n/compose.yaml" ] && [ ! -e "$work/init-$n/.env" ] || fail "init-$n: a refused combination wrote files"
-                continue
-            fi
-            accepted=$((accepted + 1))
-            src=$(sed -n 's/.*: the services of \(compose[a-z.-]*\) with .*/\1/p' "$work/init-$n.log")
-            want=$(sed -n 's/.*: the services of compose[a-z.-]* with \(.*\)[.]$/\1/p' "$work/init-$n.log" | sed 's/, / /g')
-            [ -n "$src" ] && [ -n "$want" ] || fail "init-$n: init did not say what it wrote"
-            check_init "$n" "$src" "$want"
+# init_all <binary> <combinations it must accept>: every set of answers.
+init_all() {
+    bin=$1; expect=$2; accepted=0
+    for provider in mullvad pia nordvpn gluetun-fastestvpn gluetun-ivpn gluetun-mullvad gluetun-nordvpn \
+            gluetun-surfshark gluetun-windscribe gluetun-airvpn gluetun-protonvpn wireguard; do
+        for ways in '"netbird-exit"' '"sidecar"' '"proxy"' '"netbird-exit","sidecar"' '"netbird-exit","proxy"' \
+                '"sidecar","proxy"' '"netbird-exit","sidecar","proxy"'; do
+            for extras in '' '"switchyard"' '"port-sync"' '"switchyard","port-sync"'; do
+                n=$((n + 1))
+                printf '{"schema":1,"provider":"%s","ways_in":[%s],"extras":[%s]}\n' "$provider" "$ways" "$extras" > "$work/answers-$n.json"
+                if ! "$bin" init --out "$work/init-$n" --answers "$work/answers-$n.json" > "$work/init-$n.log" 2>&1; then
+                    grep -q '^molebridge init: ' "$work/init-$n.log" || fail "init-$n: failed without saying why"
+                    [ ! -e "$work/init-$n/compose.yaml" ] && [ ! -e "$work/init-$n/.env" ] || fail "init-$n: a refused combination wrote files"
+                    continue
+                fi
+                accepted=$((accepted + 1))
+                src=$(sed -n 's/.*: the services of \(compose[a-z.-]*\) with .*/\1/p' "$work/init-$n.log")
+                want=$(sed -n 's/.*: the services of compose[a-z.-]* with \(.*\)[.]$/\1/p' "$work/init-$n.log" | sed 's/, / /g')
+                [ -n "$src" ] && [ -n "$want" ] || fail "init-$n: init did not say what it wrote"
+                case " $want " in *" proxy "*)
+                    [ "$bin" = "$work/molebridge-proxy" ] || fail "init-$n: init wrote a proxy with the switch off" ;;
+                esac
+                check_init "$n" "$src" "$want"
+            done
         done
     done
-done
-# TestEveryCombination (internal/tools/initmenu) counts the same 52.
-[ "$accepted" = 52 ] || fail "init accepted $accepted combinations, want 52"
+    # TestEveryCombination (internal/tools/initmenu) counts the same.
+    [ "$accepted" = "$expect" ] || fail "$bin accepted $accepted combinations, want $expect"
+}
+init_all "$work/molebridge" 38
 "$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
     fail "init overwrote an earlier output without --force"
-pass "init: $accepted combinations written, each resolving as the shipped forms' services, the proxy hardened"
+grep -qx 'molebridge init: the proxy is being built and init does not offer it yet; see docs/design/menu.md.' "$work/init-9.log" ||
+    fail "init-9 (mullvad with only the proxy): not refused as being built"
+pass "init: 38 combinations written, each resolving as the shipped forms' services; the proxy refused"
+init_all "$work/molebridge-proxy" 52
+pass "init with the proxy switch on: 52 combinations, the proxy hardened"
 echo "all Compose checks passed"

@@ -6,7 +6,8 @@ has it, without the `build:` key (init writes no Dockerfile beside it), with
 three deliberate differences: port-sync has no profile (it is written only
 when chosen), compose.gluetun.yaml's switchyard is written out instead of
 extending compose.yaml, and the proxy, which no shipped file has yet, is
-init's own. TestBlocksMatchShippedFiles fails when a block and its shipped
+init's own (written only with the proxy switch on, proxyAvailable in
+initmenu.go). TestBlocksMatchShippedFiles fails when a block and its shipped
 service drift apart in anything but comments, so change the shipped file and
 the block together. The release automation rewrites the image pins here as in
 the shipped files (tools/auto-release.py, PIN_FILES).
