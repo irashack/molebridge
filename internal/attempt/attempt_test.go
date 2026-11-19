@@ -290,3 +290,32 @@ func FuzzLoad(f *testing.F) {
 		}
 	})
 }
+
+// A multi-provider exit's attempt names its target's provider, after the
+// target; every other attempt has no such member.
+func TestTheProviderIsWrittenOnlyWhenSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "applier", "attempt.json")
+	a := newAttempt(boot)
+	a.Provider = "nordvpn"
+	if err := a.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), `"target": "`+host+`", "provider": "nordvpn", "target_key"`) {
+		t.Fatalf("%s", raw)
+	}
+	if loaded := Load(path, boot, 100); loaded.Provider != "nordvpn" {
+		t.Fatalf("%+v", loaded)
+	}
+	a.Provider = ""
+	if err := a.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(path)
+	if strings.Contains(string(raw), "provider") {
+		t.Fatalf("%s", raw)
+	}
+	if New(time.Now(), NewParams{Provider: "pia"}).Provider != "pia" {
+		t.Fatal("New dropped the provider")
+	}
+}

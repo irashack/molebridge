@@ -243,3 +243,60 @@ func TestFileHelpersAreTheSharedOnes(t *testing.T) {
 		t.Error("ValidServerName")
 	}
 }
+
+// A multi-provider exit's request (docs/design/multi-provider.md, step 3).
+func TestDesiredRequestForReadsTheProvider(t *testing.T) {
+	ids := []string{"mullvad", "pia", "nordvpn"}
+	at := `"requested_at": "2026-11-19T10:00:00Z"`
+	id := `"request_id": "` + strings.Repeat("0", 32) + `"`
+	cases := []struct {
+		input, provider, server string
+		ok                      bool
+	}{
+		{`{"provider": "nordvpn", "server": "us9001.nordvpn.com", ` + at + `, ` + id + `}`, "nordvpn", "us9001.nordvpn.com", true},
+		{`{"provider": "mullvad", "server": "se-sto-wg-001", ` + at + `}`, "mullvad", "se-sto-wg-001", true},
+		// No provider: the active provider's, which the caller checks.
+		{`{"server": "se-sto-wg-001", ` + at + `, ` + id + `}`, "", "se-sto-wg-001", true},
+		// A server another provider's names can't be.
+		{`{"provider": "nordvpn", "server": "se-sto-wg-001", ` + at + `}`, "", "", false},
+		// A provider outside the set, or not a string.
+		{`{"provider": "protonvpn", "server": "se-sto-wg-001", ` + at + `}`, "", "", false},
+		{`{"provider": 1, "server": "se-sto-wg-001", ` + at + `}`, "", "", false},
+		{`{"provider": "", "server": "se-sto-wg-001", ` + at + `}`, "", "", false},
+		// Every other member is checked as before.
+		{`{"provider": "mullvad", "server": "se-sto-wg-001", ` + at + `, "extra": 1}`, "", "", false},
+		{`{"provider": "mullvad", "server": "se-sto-wg-001"}`, "", "", false},
+		{`["mullvad"]`, "", "", false},
+	}
+	for _, c := range cases {
+		got, ok := DesiredRequestFor(decode(t, c.input), ids)
+		if ok != c.ok || (ok && (got.Provider != c.provider || got.Server != c.server)) {
+			t.Errorf("%s: %+v %v", c.input, got, ok)
+		}
+	}
+	// A provider outside the exit's own set.
+	if _, ok := DesiredRequestFor(decode(t, `{"provider": "pia", "server": "us_texas", `+at+`}`), []string{"mullvad", "nordvpn"}); ok {
+		t.Error("accepted a provider outside the set")
+	}
+}
+
+// A single-provider exit reads a request that names a provider as an
+// invalid desired-state file, as it always has read an unknown member.
+func TestDesiredRequestRefusesAProvider(t *testing.T) {
+	input := decode(t, `{"provider": "mullvad", "server": "se-sto-wg-001", "requested_at": "2026-11-19T10:00:00Z"}`)
+	if got, ok := DesiredRequest(input, "mullvad"); ok {
+		t.Fatalf("accepted %+v", got)
+	}
+}
+
+func TestARequestWithAProviderWritesItFirst(t *testing.T) {
+	r := Request{Provider: "pia", Server: "us_texas", RequestedAt: "2026-11-19T10:00:00Z"}
+	raw, err := validate.MarshalJSON(r)
+	if err != nil || string(raw) != `{"provider": "pia", "server": "us_texas", "requested_at": "2026-11-19T10:00:00Z"}` {
+		t.Fatalf("%s %v", raw, err)
+	}
+	r.Provider = ""
+	if raw, _ := validate.MarshalJSON(r); string(raw) != `{"server": "us_texas", "requested_at": "2026-11-19T10:00:00Z"}` {
+		t.Fatalf("%s", raw)
+	}
+}

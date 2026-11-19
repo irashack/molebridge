@@ -195,27 +195,27 @@ func TestAWallClockStepAfterARefreshIsRefreshedWithinTheUnusableBound(t *testing
 // added in place or a new catalogue changes it, the same names do not.
 func TestCatalogueSignatureFollowsTheCatalogue(t *testing.T) {
 	a, _, _ := mullvadSetup(t)
-	first := a.releaseSignature("catalogue")
-	if first == "" || a.releaseSignature("catalogue") != first {
+	first := a.releaseSignature("", "catalogue")
+	if first == "" || a.releaseSignature("", "catalogue") != first {
 		t.Fatalf("signature %q", first)
 	}
 	addRelay(a, "se-got-wg-001", testKey)
-	second := a.releaseSignature("catalogue")
+	second := a.releaseSignature("", "catalogue")
 	if second == first || second == "" {
 		t.Fatalf("a new name: %q", second)
 	}
 	// The same names in a new catalogue sign the same.
 	copied := snapshot(a).Relays.Filter(func(string, *providers.Relay) bool { return true })
 	snapshot(a).Relays = copied
-	if got := a.releaseSignature("catalogue"); got != second {
+	if got := a.releaseSignature("", "catalogue"); got != second {
 		t.Fatalf("same names: %q, want %q", got, second)
 	}
 	snapshot(a).Relays = copied.Filter(func(name string, _ *providers.Relay) bool { return name == testHost })
-	if got := a.releaseSignature("catalogue"); got != first {
+	if got := a.releaseSignature("", "catalogue"); got != first {
 		t.Fatalf("back to one name: %q, want %q", got, first)
 	}
 	staleCatalogue(a)
-	if got := a.releaseSignature("catalogue"); got != "" {
+	if got := a.releaseSignature("", "catalogue"); got != "" {
 		t.Fatalf("stale: %q", got)
 	}
 }
@@ -224,7 +224,7 @@ func TestCatalogueSignatureFollowsTheCatalogue(t *testing.T) {
 func TestCatalogueSignatureHoldsNoOldCatalogue(t *testing.T) {
 	a, _, _ := mullvadSetup(t)
 	old := weak.Make(snapshot(a).Relays)
-	if a.releaseSignature("catalogue") == "" {
+	if a.releaseSignature("", "catalogue") == "" {
 		t.Fatal("no signature")
 	}
 	snapshot(a).Relays = snapshot(a).Relays.Filter(func(string, *providers.Relay) bool { return true })

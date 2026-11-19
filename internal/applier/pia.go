@@ -390,16 +390,15 @@ func privateAddress(address netip.Addr) bool {
 // register registers the interface key on one of the region's servers. An
 // expired or revoked token looks like any other refusal, so a refusal with a
 // reused token is asked once more with a freshly minted one.
-func (p *piaProvider) register(ctx context.Context, a *Applier, region *providers.Relay) (registration, error) {
+// register registers key, the tunnel's public key, with one of region's
+// servers.
+func (p *piaProvider) register(ctx context.Context, a *Applier, region *providers.Relay, key string) (registration, error) {
 	if len(region.Servers) == 0 {
 		return registration{}, errors.New("region has no servers")
 	}
 	server := region.Servers[p.cfg.Choose(len(region.Servers))]
-	key, err := publicKey(ctx, a)
-	if err != nil {
-		return registration{}, err
-	}
 	var data map[string]any
+	var err error
 	for try := 0; try < 2; try++ {
 		reused := p.token != ""
 		data, err = p.addKey(ctx, a, server, key)
@@ -610,7 +609,11 @@ func returnPathExact(rule Rule, priority int, address string, table int) bool {
 // ApplyRelay registers first, so a refused registration changes nothing. Then
 // it replaces the peer, the tunnel address and its return-path rule.
 func (p *piaProvider) ApplyRelay(ctx context.Context, a *Applier, relay *providers.Relay, keys []string) error {
-	reg, err := p.register(ctx, a, relay)
+	key, err := publicKey(ctx, a)
+	if err != nil {
+		return err
+	}
+	reg, err := p.register(ctx, a, relay, key)
 	if err != nil {
 		return err
 	}
@@ -628,6 +631,13 @@ func (p *piaProvider) ApplyRelay(ctx context.Context, a *Applier, relay *provide
 			return err
 		}
 	}
+	return p.install(ctx, a, reg)
+}
+
+// install puts a registration in place on the tunnel, its old peers gone:
+// the forwarded port is dropped, the address and its return-path rule
+// replaced, the server's peer set, and tunnel.json written.
+func (p *piaProvider) install(ctx context.Context, a *Applier, reg registration) error {
 	p.forward, p.nextForward = nil, 0
 	// A failure here is not the switch's, but it is logged.
 	if err := p.removeForwardRules(ctx, a); err != nil {
@@ -656,6 +666,44 @@ func (p *piaProvider) ApplyRelay(ctx context.Context, a *Applier, relay *provide
 		return wrapIO(err)
 	}
 	return nil
+}
+
+// CredentialsReadable implements CredentialChecker: both credential files
+// read as valid now.
+func (p *piaProvider) CredentialsReadable() error {
+	for _, name := range []string{"username", "password"} {
+		if _, err := readSecret(filepath.Join(p.cfg.SecretsDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnterTunnel implements Provider. The config's key is registered first,
+// outside the mutation owner, so a refused login or a registration that
+// fails leaves the previous provider's tunnel as it was. Then the tunnel is
+// replaced with PIA's config, which has no address and no peer, and the
+// registration installed on it as a switch would.
+func (p *piaProvider) EnterTunnel(ctx context.Context, a *Applier, relay *providers.Relay, replace func(PeerConfig) error) error {
+	key, err := a.publicKeyOf("pia")
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrMutationRefused, err)
+	}
+	reg, err := p.register(ctx, a, relay, key)
+	if err != nil {
+		return err
+	}
+	if err := replace(PeerConfig{}); err != nil {
+		return err
+	}
+	return p.install(ctx, a, reg)
+}
+
+// Leave implements Provider: the port forward must go with PIA, and that is
+// the design's step 4. Until it is built a change away from PIA is refused,
+// leaving PIA's tunnel as it is.
+func (p *piaProvider) Leave(context.Context, *Applier) error {
+	return fmt.Errorf("%w: leaving PIA is not built yet", ErrMutationRefused)
 }
 
 // recordedRegistration is the recorded registration, only while it matches the

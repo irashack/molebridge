@@ -140,8 +140,13 @@ type Attempt struct {
 	// its server and TargetKey its identity: a panel request's token,
 	// "configured:<server>" or "restore:<server>". A new identity is a new
 	// target.
-	Source    string
-	Target    string
+	Source string
+	Target string
+	// Provider is the target's provider on a multi-provider exit
+	// (docs/design/multi-provider.md), "" everywhere else: a record without
+	// it is the active provider's, which is what a single-provider exit
+	// always wrote, and a single-provider exit never writes it.
+	Provider  string
 	TargetKey string
 	State     string
 	// Outcome is the last outcome published for this target (verdict.Outcomes).
@@ -188,19 +193,25 @@ func (a *Attempt) JSONObject() validate.Obj {
 	if a.Rejected != nil {
 		rejected = *a.Rejected
 	}
-	return validate.Members("attempt_id", a.AttemptID, "source", orNull(a.Source), "target", orNull(a.Target),
+	o := validate.Members("attempt_id", a.AttemptID, "source", orNull(a.Source), "target", orNull(a.Target))
+	if a.Provider != "" {
+		o = append(o, validate.Pair{Key: "provider", Value: a.Provider})
+	}
+	return append(o, validate.Members(
 		"target_key", orNull(a.TargetKey), "state", a.State, "outcome", orNull(a.Outcome), "message", orNull(a.Message),
 		"boot_id", a.BootID, "started_at", orNull(a.StartedAt), "attempts", a.Attempts, "backoff_step", a.BackoffStep,
 		"next_action", orNull(a.NextAction), "next_action_at", orNullTime(a.NextActionAt),
 		"last_mutation_at", orNullTime(a.LastMutationAt), "mutation_certainty", orNull(a.MutationCertainty),
-		"generation", orNull(a.Generation), "rejected", rejected, "extra", a.Extra)
+		"generation", orNull(a.Generation), "rejected", rejected, "extra", a.Extra)...)
 }
 
 // NewParams are the arguments of New.
 type NewParams struct {
 	Source, Target, TargetKey, BootID string
-	Rejected                          *Rejected
-	Generation                        string
+	// Provider is the target's provider on a multi-provider exit.
+	Provider   string
+	Rejected   *Rejected
+	Generation string
 }
 
 // New starts an attempt for a new target at now (the wall clock, for the
@@ -208,7 +219,7 @@ type NewParams struct {
 func New(now time.Time, p NewParams) *Attempt {
 	id := make([]byte, 8)
 	rand.Read(id)
-	return &Attempt{AttemptID: hex.EncodeToString(id), Source: p.Source, Target: p.Target, TargetKey: p.TargetKey,
+	return &Attempt{AttemptID: hex.EncodeToString(id), Source: p.Source, Target: p.Target, Provider: p.Provider, TargetKey: p.TargetKey,
 		State: "idle", BootID: p.BootID, StartedAt: validate.FormatTime(now), Rejected: p.Rejected, Generation: p.Generation}
 }
 
@@ -262,7 +273,8 @@ func Load(path, bootID string, now float64) *Attempt {
 		into *string
 	}{{"attempt_id", &a.AttemptID}, {"source", &a.Source}, {"target", &a.Target}, {"target_key", &a.TargetKey},
 		{"outcome", &a.Outcome}, {"message", &a.Message}, {"boot_id", &a.BootID}, {"started_at", &a.StartedAt},
-		{"next_action", &a.NextAction}, {"mutation_certainty", &a.MutationCertainty}, {"generation", &a.Generation}} {
+		{"next_action", &a.NextAction}, {"mutation_certainty", &a.MutationCertainty}, {"generation", &a.Generation},
+		{"provider", &a.Provider}} {
 		value, ok := text(raw, field.key)
 		if !ok {
 			return idle(bootID)

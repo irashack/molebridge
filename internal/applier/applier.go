@@ -82,6 +82,9 @@ type Applier struct {
 	schedules  map[string]catalogSchedule
 	locations  map[string]location
 	refreshing *providers.Provider
+	// tunnels changes the tunnel to another provider's (target.go); nil on
+	// a single-provider exit.
+	tunnels ProviderTunnels
 	// way is the exit's way in (wayin.go).
 	way        wayIn
 	spec       *providers.Provider
@@ -239,6 +242,10 @@ func New(cfg Config) (*Applier, error) {
 	}
 	a.hooks = a.set.hooks[a.set.active]
 	a.spec, _ = providers.Get(a.set.active)
+	a.tunnels = cfg.Tunnels
+	if a.set.multi && a.tunnels == nil {
+		return nil, errors.New("applier: a multi-provider exit needs its tunnel configs")
+	}
 	a.live.Store(liveHooks{a.hooks})
 	// Only the active provider's catalogue is resident.
 	a.catalog = a.hooks.MakeCatalog(a)
@@ -253,6 +260,11 @@ func New(cfg Config) (*Applier, error) {
 		a.bootID = attempt.ReadBootID(attempt.BootIDFile)
 	}
 	a.attempt = attempt.Load(a.attemptPath, a.bootID, a.clock())
+	if a.set.hooks[a.attempt.Provider] == nil || !a.set.multi {
+		// Only a multi-provider exit's attempts name a provider, one of its
+		// own.
+		a.attempt.Provider = ""
+	}
 	a.location = a.loadLocation()
 	a.failover = cfg.Failover
 	if trace := cfg.FailoverTrace; trace != nil {
@@ -324,6 +336,20 @@ func (a *Applier) RequestPath() string { return a.desiredPath }
 func (a *Applier) Attempt() *attempt.Attempt { return a.attempt }
 
 func (a *Applier) configuredRequest() *state.Request {
+	if a.multiProvider() {
+		// SERVER is <provider>/<server>: it locks the exit to that
+		// provider's server.
+		provider, server, ok := a.configuredTarget()
+		if !ok {
+			return nil
+		}
+		request, ok := state.DesiredRequest(map[string]any{"server": server, "requested_at": a.configuredAt}, provider)
+		if !ok {
+			return nil
+		}
+		request.Provider = provider
+		return &request
+	}
 	request, ok := state.DesiredRequest(map[string]any{"server": a.configuredServer, "requested_at": a.configuredAt},
 		a.hooks.ID())
 	if !ok {
@@ -341,10 +367,12 @@ func (a *Applier) configurationError() string {
 	// Quote untrusted text without allowing control characters into status/logs.
 	raw, _ := validate.MarshalJSON(truncateChars(a.configuredServer, ServerReportChars))
 	quoted := string(raw)
-	if a.configuredRequest() == nil {
+	request := a.configuredRequest()
+	if request == nil {
 		return "Invalid SERVER " + quoted + "; no change applied."
 	}
-	if a.catalog.Usable() && !a.catalog.Relays().Has(a.configuredServer) && a.replacementFor(a.configuredServer) == "" {
+	catalog := a.set.Catalog(a.providerOfRequest(request))
+	if catalog.Usable() && !catalog.Relays().Has(request.Server) && a.replacementOf(request.Provider, request.Server) == "" {
 		return "Unknown SERVER " + quoted + "; not in a fresh trusted relay catalogue; no change applied."
 	}
 	return ""
@@ -376,11 +404,11 @@ func (a *Applier) DefaultFetchCatalog(ctx context.Context) ([]byte, error) {
 // pass, and the names of 6,500 servers take about a millisecond and 300 kB
 // to sort and hash. Entries only ever gains names, so the same Entries with
 // the same length has the same names.
-func (a *Applier) catalogSignature() string {
-	if !a.catalog.Usable() {
+func (a *Applier) catalogSignature(catalog Catalog) string {
+	if !catalog.Usable() {
 		return ""
 	}
-	relays := a.catalog.Relays()
+	relays := catalog.Relays()
 	key := weak.Make(relays)
 	if key != a.signature.relays || relays.Len() != a.signature.count || a.signature.hash == "" {
 		names := relays.Names()
@@ -559,7 +587,7 @@ func (a *Applier) StartPeer() (string, PeerConfig, bool) {
 		return "", PeerConfig{}, false
 	}
 	target := a.resolve(true)
-	if target == nil || !a.catalog.Usable() {
+	if target == nil || !a.onActive(target) || !a.catalog.Usable() {
 		return "", PeerConfig{}, false
 	}
 	relay, ok := a.catalog.Relays().Get(target.Server)
@@ -612,7 +640,7 @@ func (a *Applier) requestRejected() bool {
 		return true
 	}
 	rejected := a.attempt.Rejected
-	return a.request != nil && rejected != nil && rejected.Key == state.RequestToken(*a.request)
+	return a.request != nil && rejected != nil && rejected.Key == a.requestKey(*a.request)
 }
 
 func (a *Applier) rejectionMessage() string {
@@ -658,6 +686,7 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 	}
 	var requested, requestID any
 	if a.request != nil {
+		// The request's own id, never prefixed with its provider.
 		requested, requestID = a.request.Server, state.RequestToken(*a.request)
 	}
 	members := validate.Members("schema", verdict.Schema, "kind", a.kind(), "backend", a.backend(),
@@ -798,6 +827,9 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 	if selected != nil {
 		target = selected.Server
 	}
+	// A target on another provider than the tunnel's is not met by any live
+	// server (a multi-provider exit after an interrupted change).
+	elsewhere := !a.onActive(selected)
 	if message := a.configurationError(); message != "" {
 		f.Message = message
 		return f
@@ -829,7 +861,7 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 		peer = peer.Set("reason", "catalogue-stale")
 	case server == "":
 		peer = peer.Set("reason", "unidentified")
-	case target != "" && server != target:
+	case target != "" && (server != target || elsewhere):
 		peer = peer.Set("reason", "not-target")
 	default:
 		peer = peer.Set("state", "pass")
@@ -963,7 +995,7 @@ func (a *Applier) measure(ctx context.Context, applying bool) *Finding {
 		}
 	case !a.catalog.Usable() || server == "":
 		failure = "Current peer cannot be verified against a fresh relay catalogue."
-	case target != "" && server != target:
+	case target != "" && (server != target || elsewhere):
 		if a.configuredServer != "" {
 			failure = "The configured SERVER is not the current server; waiting for convergence."
 		} else {
@@ -1138,7 +1170,7 @@ func (a *Applier) check(ctx context.Context) (*Record, error) {
 		return a.runPipeline(ctx, target, "retry", false, true)
 	}
 	if target != nil && at.State != "pending" && at.State != "rejected" && at.State != "attempting" {
-		onTarget := f.Server == target.Server
+		onTarget := f.Server == target.Server && a.onActive(target)
 		switch {
 		case f.Status == "ok" && onTarget:
 			if at.State != "idle" || at.Outcome != "verified" {
@@ -1210,7 +1242,7 @@ func (a *Applier) resolvePrimary(peek bool) *Selection {
 		return a.configuredSelection()
 	}
 	raw := a.readJSON(a.desiredPath, 4096)
-	request, ok := state.DesiredRequest(raw, a.hooks.ID())
+	request, ok := a.desiredRequest(raw)
 	invalid := !ok && (raw != nil || a.exists(a.desiredPath))
 	if !peek {
 		if ok {
@@ -1221,12 +1253,13 @@ func (a *Applier) resolvePrimary(peek bool) *Selection {
 		a.invalidDesired = invalid
 	}
 	if ok {
-		if replacement := a.replacementFor(request.Server); replacement != "" {
-			return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server}
+		if replacement := a.replacementOf(request.Provider, request.Server); replacement != "" {
+			return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server,
+				Provider: request.Provider}
 		}
 	}
 	if ok && !a.refused(request) {
-		return &Selection{Server: request.Server, Source: "panel", Request: &request}
+		return &Selection{Server: request.Server, Source: "panel", Request: &request, Provider: request.Provider}
 	}
 	restore := a.hooks.RestoreTarget(a)
 	if restore != nil {
@@ -1240,6 +1273,16 @@ func (a *Applier) resolvePrimary(peek bool) *Selection {
 }
 
 func (a *Applier) configuredSelection() *Selection {
+	if a.multiProvider() {
+		request := a.configuredRequest()
+		if request == nil {
+			return &Selection{Server: truncateChars(a.configuredServer, ServerReportChars), Source: "configured"}
+		}
+		if replacement := a.replacementOf(request.Provider, request.Server); replacement != "" {
+			return &Selection{Server: replacement, Source: "configured", Replaces: request.Server, Provider: request.Provider}
+		}
+		return &Selection{Server: request.Server, Source: "configured", Provider: request.Provider}
+	}
 	if replacement := a.replacementFor(a.configuredServer); replacement != "" {
 		return &Selection{Server: replacement, Source: "configured", Replaces: a.configuredServer}
 	}
@@ -1251,21 +1294,40 @@ func (a *Applier) configuredSelection() *Selection {
 // changed that could let it pass.
 func (a *Applier) refused(request state.Request) bool {
 	rejected := a.attempt.Rejected
-	return rejected != nil && rejected.Key == state.RequestToken(request) &&
-		rejected.Release == a.releaseSignature(rejected.Why)
+	return rejected != nil && rejected.Key == a.requestKey(request) &&
+		rejected.Release == a.releaseSignature(request.Provider, rejected.Why)
 }
 
 // releaseSignature is what a rejection waits for: the catalogue for an
 // unlisted server, the credentials for a refused login. Others are never
-// released.
-func (a *Applier) releaseSignature(why string) string {
-	if signature, ok := a.hooks.ReleaseSignature(a, why); ok {
-		return signature
+// released. On a multi-provider exit it is the target provider's, and
+// begins with that provider: a refused PIA login waits for PIA's files, not
+// another provider's catalogue. provider is ignored on a single-provider
+// exit.
+func (a *Applier) releaseSignature(provider, why string) string {
+	hooks, catalog, prefix := a.hooks, a.catalog, ""
+	if a.multiProvider() {
+		if provider == "" {
+			provider = a.set.active
+		}
+		hooks, catalog, prefix = a.set.Hooks(provider), a.set.Catalog(provider), provider+":"
+	}
+	if signature, ok := hooks.ReleaseSignature(a, why); ok {
+		return prefix + signature
 	}
 	if why == "catalogue" {
-		return a.catalogSignature()
+		return prefix + a.catalogSignature(catalog)
 	}
-	return why
+	return prefix + why
+}
+
+// providerOfRequest is a request's provider, the active one's for a request
+// that names none.
+func (a *Applier) providerOfRequest(r *state.Request) string {
+	if r != nil && r.Provider != "" {
+		return r.Provider
+	}
+	return a.set.active
 }
 
 // -- admission -------------------------------------------------------------------------------
@@ -1322,13 +1384,26 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	if err := a.hooks.MaintainCatalog(ctx, a); err != nil {
 		return nil, err
 	}
-	if err := a.maintainInactive(ctx, ""); err != nil {
+	// The target is resolved after the catalogues' upkeep, as it always
+	// was; an inactive catalogue the last pass's target needed is kept.
+	keep := ""
+	if a.target != nil {
+		keep = a.target.Provider
+	}
+	if err := a.maintainInactive(ctx, keep); err != nil {
 		return nil, err
 	}
 	a.passMutated, a.passRepaired = false, false
 	a.target = a.resolve(false)
-	// Inactive catalogues read for this pass leave memory at its end.
-	defer a.set.release("")
+	// Inactive catalogues read for this pass leave memory at its end, all
+	// but the target provider's, which its gate reads on every pass.
+	defer func() {
+		keep := ""
+		if a.target != nil && !a.onActive(a.target) {
+			keep = a.target.Provider
+		}
+		a.set.release(keep)
+	}()
 	var result *Record
 	var err error
 	// An attempt saved as attempting is inspected first: at start, the one a
@@ -1466,7 +1541,7 @@ func (a *Applier) resume(ctx context.Context) (*Record, error) {
 	a.log("applier: an interrupted switch is inspected before anything else")
 	f := a.measure(ctx, false)
 	a.measurement = f
-	if at.Target != "" && f.Server == at.Target {
+	if at.Target != "" && f.Server == at.Target && a.attemptOnActive(at) {
 		if f.Status == "ok" {
 			at.Settle()
 			if err := a.verified(at.Target); err != nil {
@@ -1529,10 +1604,15 @@ func (a *Applier) admit(ctx context.Context, target *Selection) (*Record, error)
 		}
 		return a.runPipeline(ctx, target, source(), !a.askedNow(target), false)
 	case "rejected":
-		if at.Extra.Release != a.releaseSignature(at.Extra.Why) {
+		if at.Extra.Release != a.releaseSignature(at.Provider, at.Extra.Why) {
 			return a.runPipeline(ctx, target, source(), true, false)
 		}
 		return nil, nil
+	}
+	if !a.onActive(target) && isRestState(at.State) && at.GuardPassed(now) {
+		// The tunnel in place is another provider's than the target's: no
+		// live peer for the target, which is applied again.
+		return a.runPipeline(ctx, target, "reconverge", true, false)
 	}
 	keys, err := a.peers(ctx)
 	if err != nil {
@@ -1603,7 +1683,7 @@ func (a *Applier) registrationLapsed(now float64) bool {
 	if f == nil || now-f.At > 2*RefreshSec || a.target == nil {
 		return false
 	}
-	return f.Server == a.target.Server && a.handshakeStale(f, &now)
+	return f.Server == a.target.Server && a.onActive(a.target) && a.handshakeStale(f, &now)
 }
 
 // lapseRepairDue: a lapse of live's registration may be repaired now. The
@@ -1611,7 +1691,7 @@ func (a *Applier) registrationLapsed(now float64) bool {
 // rest, and the backoff since the last mutation has passed (D15).
 func (a *Applier) lapseRepairDue(live string, now float64) bool {
 	at := a.attempt
-	return a.spec.RegistrationLapses && a.target != nil && live != "" && live == a.target.Server &&
+	return a.spec.RegistrationLapses && a.target != nil && live != "" && live == a.target.Server && a.onActive(a.target) &&
 		isRestState(at.State) && (at.LastMutationAt == nil || now >= *at.LastMutationAt+float64(attempt.Backoff(at.BackoffStep)))
 }
 
@@ -1689,14 +1769,14 @@ func (a *Applier) start(ctx context.Context, target *Selection) (*Record, error)
 		return nil, nil
 	}
 	source := target.Source
-	if source == "panel" && previous.Target == target.Server &&
+	if source == "panel" && previous.Target == target.Server && previous.Provider == target.Provider &&
 		(previous.State == "failed" || previous.State == "rejected" || previous.State == "unverified" ||
 			previous.State == "pending") {
 		source = "operator-retry"
 	}
 	fresh := a.askedNow(target)
 	a.attempt = attempt.New(a.wall(), attempt.NewParams{Source: source, Target: target.Server, TargetKey: target.Key(),
-		BootID: a.bootID, Rejected: previous.Rejected, Generation: previous.Generation})
+		Provider: target.Provider, BootID: a.bootID, Rejected: previous.Rejected, Generation: previous.Generation})
 	return a.runPipeline(ctx, target, source, !fresh, false)
 }
 
@@ -1715,7 +1795,8 @@ func (a *Applier) Switch(ctx context.Context, request map[string]any) (*Record, 
 	}
 	target := a.target
 	a.attempt = attempt.New(a.wall(), attempt.NewParams{Source: target.Source, Target: target.Server,
-		TargetKey: target.Key(), BootID: a.bootID, Rejected: a.attempt.Rejected, Generation: a.attempt.Generation})
+		TargetKey: target.Key(), Provider: target.Provider, BootID: a.bootID, Rejected: a.attempt.Rejected,
+		Generation: a.attempt.Generation})
 	return a.runPipeline(ctx, target, target.Source, false, false)
 }
 
@@ -1728,7 +1809,7 @@ func (a *Applier) resolveRequest(raw map[string]any) *Selection {
 	if raw != nil {
 		value = raw
 	}
-	request, ok := state.DesiredRequest(value, a.hooks.ID())
+	request, ok := a.desiredRequest(value)
 	if ok {
 		a.request = &request
 	} else {
@@ -1738,10 +1819,11 @@ func (a *Applier) resolveRequest(raw map[string]any) *Selection {
 	if !ok {
 		return nil
 	}
-	if replacement := a.replacementFor(request.Server); replacement != "" {
-		return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server}
+	if replacement := a.replacementOf(request.Provider, request.Server); replacement != "" {
+		return &Selection{Server: replacement, Source: "panel", Request: &request, Replaces: request.Server,
+			Provider: request.Provider}
 	}
-	return &Selection{Server: request.Server, Source: "panel", Request: &request}
+	return &Selection{Server: request.Server, Source: "panel", Request: &request, Provider: request.Provider}
 }
 
 type gateResult struct{ state, message, why string }
@@ -1757,11 +1839,17 @@ func (a *Applier) gate(ctx context.Context, target *Selection) *gateResult {
 		}
 		return &gateResult{"rejected", message, why}
 	}
-	if !a.catalog.Usable() {
+	// The target provider's catalogue: on a multi-provider exit another
+	// provider's is read from disk for the gate.
+	catalog := a.catalogOf(target)
+	if !catalog.Usable() {
 		return &gateResult{"pending", "Waiting for a fresh trusted relay catalogue; request will retry automatically.", ""}
 	}
-	if !a.catalog.Relays().Has(target.Server) {
+	if !catalog.Relays().Has(target.Server) {
 		return &gateResult{"rejected", Unlisted, "catalogue"}
+	}
+	if message := a.credentialsGate(a.providerOf(target)); message != "" {
+		return &gateResult{"pending", message, ""}
 	}
 	if a.kind() == "overlay" {
 		if protected, _ := a.routingStatus(ctx, a.spec.AddressBeforeSwitch); !protected {
@@ -1795,7 +1883,7 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 		at.NextAction, at.NextActionAt = "", nil
 		at.Extra = attempt.Extra{}
 		if gate.state == "rejected" {
-			at.Extra = attempt.Extra{Why: gate.why, Release: a.releaseSignature(gate.why)}
+			at.Extra = attempt.Extra{Why: gate.why, Release: a.releaseSignature(target.Provider, gate.why)}
 			if target.Source == "panel" {
 				at.Rejected = &attempt.Rejected{Key: target.Key(), Reason: gate.message, Why: gate.why,
 					Release: at.Extra.Release}
@@ -1820,7 +1908,7 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 			f = a.measure(ctx, false)
 			a.measurement = f
 		}
-		if f.Server == target.Server {
+		if f.Server == target.Server && a.onActive(target) {
 			if f.Status == "ok" {
 				at.Settle()
 				if err := a.saveAttempt(); err != nil {
@@ -1858,6 +1946,9 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 }
 
 func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error) {
+	if !a.onActive(target) {
+		return a.changeProvider(ctx, target)
+	}
 	at := a.attempt
 	relay, _ := a.catalog.Relays().Get(target.Server)
 	keys, err := a.peers(ctx)
@@ -1897,14 +1988,20 @@ func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error
 	if _, err := a.publishRecord("applying", message, current, nil, nil); err != nil {
 		return nil, err
 	}
-	err = a.hooks.ApplyRelay(ctx, a, relay, keys)
+	return a.afterMutation(ctx, target, a.hooks.ApplyRelay(ctx, a, relay, keys))
+}
+
+// afterMutation is the pipeline's step after a mutation's I/O: verify it, or
+// record its failure.
+func (a *Applier) afterMutation(ctx context.Context, target *Selection, err error) (*Record, error) {
+	at := a.attempt
 	switch {
 	case err == nil:
 		return a.verify(ctx, target)
 	case errors.Is(err, ErrCredentialRejected):
 		at.State, at.Outcome, at.MutationCertainty = "rejected", "rejected", "definite"
-		at.Message = a.credentialsMessage()
-		at.Extra = attempt.Extra{Why: "credentials", Release: a.releaseSignature("credentials")}
+		at.Message = a.credentialsMessage(a.providerOf(target))
+		at.Extra = attempt.Extra{Why: "credentials", Release: a.releaseSignature(target.Provider, "credentials")}
 		if target.Source == "panel" {
 			at.Rejected = &attempt.Rejected{Key: target.Key(), Reason: at.Message, Why: at.Extra.Why, Release: at.Extra.Release}
 		}
@@ -1930,8 +2027,8 @@ func (a *Applier) mutate(ctx context.Context, target *Selection) (*Record, error
 	return nil, err
 }
 
-func (a *Applier) credentialsMessage() string {
-	return a.spec.Label + " refused the login; correct the credentials, or retry."
+func (a *Applier) credentialsMessage(provider string) string {
+	return a.specOf(provider).Label + " refused the login; correct the credentials, or retry."
 }
 
 // verify inspects until the target verifies or the provider's timeout. A lost
@@ -1947,7 +2044,7 @@ func (a *Applier) verify(ctx context.Context, target *Selection) (*Record, error
 		for a.clock() < deadline {
 			f = a.measure(ctx, true)
 			a.measurement = f
-			if f.Status == "ok" && f.Server == target.Server {
+			if f.Status == "ok" && f.Server == target.Server && a.onActive(target) {
 				at.Settle()
 				if err := a.saveAttempt(); err != nil {
 					return true, nil, err
@@ -1992,7 +2089,7 @@ func (a *Applier) verify(ctx context.Context, target *Selection) (*Record, error
 		f = a.measure(ctx, false)
 		a.measurement = f
 	}
-	if f.Server == target.Server {
+	if f.Server == target.Server && a.onActive(target) {
 		if err := a.hooks.OnApplied(a, target.Server); err != nil {
 			return nil, err
 		}

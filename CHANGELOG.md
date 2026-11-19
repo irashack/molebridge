@@ -101,6 +101,21 @@ what changed is below.
   (that comes with `PROVIDERS`); a single-provider exit is a set of one, and
   a new test locks its files byte for byte beside the golden records.
   Tested with fakes only.
+- Internal, no user-visible change: piece 3 of the [multi-provider
+  exit](docs/design/multi-provider.md), the (provider, server) target. On a
+  multi-provider applier a request may name its provider (`desired.json`'s
+  `provider` member, read by `state.DesiredRequestFor`), `SERVER` is
+  `<provider>/<server>`, the gate reads the target provider's catalogue and
+  credentials, and a target on another provider changes the tunnel's
+  provider: the active one leaves, the target one enters (PIA registers
+  first), the target is persisted as active and the exit replaces the whole
+  tunnel; a failure stays on the target provider, never going back by
+  itself. `attempt.json` names the provider, and rejection keys and release
+  signatures include it, on a multi-provider exit only. Leaving PIA is
+  refused until piece 4. Still no setting builds such an applier, and the
+  exit's side of the change (its per-provider configs) is not built:
+  tested with fakes only; single-provider files and records stay byte for
+  byte as before.
 - Internal: the rest of NetBird moves behind the way in. The applier asks
   its own way in (`internal/applier/wayin.go`) whether NetBird runs as
   required and has it set the record's `netbird` check; the supervisor's

@@ -167,7 +167,10 @@ type Config struct {
 	// alone) is a single-provider exit. The exit's settings never set it
 	// yet: PROVIDERS comes with the design's step 6.
 	Providers []Provider
-	System    System
+	// Tunnels are the exit's tunnel configs, one per provider: required
+	// with Providers, unused without (target.go).
+	Tunnels ProviderTunnels
+	System  System
 	// Server is the SERVER setting: when set it is the only server the exit
 	// serves and the panel's request is never read.
 	Server string
@@ -223,6 +226,9 @@ type Selection struct {
 	// backup standing in for the primary, or the primary while the exit
 	// returns to it. Source is then "failover".
 	Failover *FailoverOf
+	// Provider is the target's provider on a multi-provider exit, "" on a
+	// single-provider exit, whose selections are its one provider's.
+	Provider string
 }
 
 // primary is the selection a failover target stands in for.
@@ -230,7 +236,8 @@ func (s *Selection) primary() *Selection {
 	if s.Failover == nil {
 		return s
 	}
-	return &Selection{Server: s.Failover.Primary, Source: s.Failover.Source, Request: s.Request, Replaces: s.Replaces}
+	return &Selection{Server: s.Failover.Primary, Source: s.Failover.Source, Request: s.Request, Replaces: s.Replaces,
+		Provider: s.Provider}
 }
 
 // Key identifies the selection. A replacement is another target than the
@@ -248,6 +255,10 @@ func (s *Selection) Key() string {
 	}
 	if s.Replaces != "" {
 		key += "|moved:" + s.Server
+	}
+	if s.Provider != "" {
+		// The same server name on two providers is two targets.
+		key = s.Provider + "/" + key
 	}
 	return key
 }
