@@ -174,17 +174,44 @@ func (r *systemRig) link() map[string]any {
 	return m
 }
 
+// dumpExchange logs what each side holds, for a failure.
+func (r *systemRig) dumpExchange() {
+	t := r.t
+	out, _ := exec.Command("ls", "-laR", r.panelState(), filepath.Join(r.stateDir, "panel")).CombinedOutput()
+	t.Logf("state on the panel's side and the exit's request:\n%s", out)
+	t.Logf("exchange.json: %s", jsonText(r.link()))
+	ps, _ := exec.Command("ps", "-eo", "pid,ppid,user,args").CombinedOutput()
+	var mine []string
+	for _, line := range strings.Split(string(ps), "\n") {
+		if strings.Contains(line, "molebridge") {
+			mine = append(mine, line)
+		}
+	}
+	t.Logf("processes:\n%s", strings.Join(mine, "\n"))
+	probe, err := r.exit.Exec("sh", "-c", "wget -q -O- --no-check-certificate https://"+rigExchange4+":"+rigExchangePort+"/v1/exits/"+rigExitID+" 2>&1; ip route get "+rigExchange4)
+	t.Logf("from the exit: %v\n%s", err, probe)
+}
+
 // bringUpExchange starts the exchange, then the exit, its overlay and the
 // panel, and waits for the exit verified on relay A on both sides.
 func (r *systemRig) bringUpExchange() (*exitProc, *exchangeProc) {
 	x := r.startExchange()
 	p := r.bringUp()
 	a := r.relays[0]
-	r.waitFor(30*time.Second, "the panel to show "+a.host+" ok through the exchange", func() bool {
-		res := r.panelResult()
-		return r.panelStatus()["state"] == "ok" && res["server"] == a.host
-	})
-	return p, x
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		payload := r.panelPayload()
+		res, _ := payload["result"].(map[string]any)
+		v, _ := payload["verdict"].(map[string]any)
+		if v["state"] == "ok" && res["server"] == a.host {
+			return p, x
+		}
+		if time.Now().After(deadline) {
+			r.dumpExchange()
+			r.t.Fatalf("the panel does not show %s ok through the exchange: verdict %s, result %s", a.host, jsonText(v), fmtStatus(res))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // TestSystemRigExchange is the network exchange's live record
