@@ -4,6 +4,15 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- CI's new "System rig" job runs the release build of the exit and the
+  panel against fake Mullvad servers and two WireGuard relays in network
+  namespaces. Its first drill, client-switch, switches a client's exit
+  through the panel and back and checks that the client's traffic leaves
+  only by the selected relay ([contributing](CONTRIBUTING.md#the-system-rig),
+  [#54](https://github.com/irashack/molebridge/issues/54)).
+
 ## 0.12.0 — unreleased
 
 **Experimental.** Upgrade from 0.11.1 by moving to the new image;
