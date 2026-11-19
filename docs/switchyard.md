@@ -360,6 +360,43 @@ only controls who may use the panel. Which devices send traffic to which exit
 is still set in NetBird, and switching an exit still moves every device that
 uses it.
 
+## The proxy view
+
+If the exit has a [proxy](design/menu.md) beside it, Switchyard
+can show the proxy's state under the exit, on the full page (not in `/embed`). It
+is off unless you name the proxy's status file in `PANEL_PROXY_STATUS`
+([configuration](configuration.md#the-proxy-view)) and mount it read-only.
+
+The view states the proxy's guarantee first: **Opt-in: connections sent to the
+proxy leave through the tunnel or fail; nothing else is covered.** Then:
+
+- the proxy's state: **serving**, **refusing** (the exit's verdict isn't ok,
+  so the proxy refuses new connections), **listener down**, or unknown with the
+  reason: no status file yet (or one the panel can't read), a status more than 30
+  seconds old, a malformed file, another provider's status, or a version this
+  panel doesn't read;
+- the address it listens on, its sessions, and its open, total and failed
+  connections;
+- how many servers it knows, and the benched ones with when the bench ends
+  (UTC) and why. Up to 50 are listed, then "and N more".
+
+While the status is unknown, nothing from the file is shown. The view updates
+with the exit's status (every 30 seconds) and has no controls. It is the proxy's
+own record, `proxy.json`, judged on its own: it never changes the exit's state,
+label, tabs, `/readyz`, metrics or switching, whatever the file says.
+`/api/status` gives it as `proxy` ([endpoints](configuration.md#panel-endpoints)).
+
+The panel stays as isolated as before: it only reads the file, holds no
+capabilities, and the isolation check is unchanged (it doesn't check this mount, so
+mount it `:ro` yourself). The proxy runs only beside an exit of a native
+provider, so the panel refuses the setting for a `gluetun-*` exit, and for an
+exit in `PANEL_NETWORK_EXITS`, whose files the exchange copies without
+`proxy.json`.
+
+There is no `molebridge proxy` role in a release yet. The view has been tested
+against fixture files only (`internal/panel/testdata/proxy`), not against a
+running proxy.
+
 ## Privilege isolation
 
 The panel holds no capabilities, runs no subprocess and writes only the

@@ -134,6 +134,9 @@ func ConfigFromEnv(env map[string]string) (*Config, error) {
 	if err := markNetworkExits(env["PANEL_NETWORK_EXITS"], exits, stateDir); err != nil {
 		return nil, err
 	}
+	if err := setProxyStatus(env["PANEL_PROXY_STATUS"], exits, &single); err != nil {
+		return nil, err
+	}
 	return &Config{Settings: settings, StateDir: stateDir, Exits: exits, Single: single}, nil
 }
 
@@ -158,4 +161,72 @@ func markNetworkExits(raw string, exits []Exit, stateDir string) error {
 		}
 	}
 	return nil
+}
+
+// setProxyStatus reads PANEL_PROXY_STATUS, the proxy status files the panel
+// shows beside their exits: for a single-exit panel the absolute path of
+// proxy.json, and with PANEL_EXITS comma-separated `id=path` entries. Only an
+// exit of a native provider has a proxy, and an exit reached through the
+// network exchange cannot: the exchange does not carry proxy.json.
+func setProxyStatus(raw string, exits []Exit, single *Exit) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	native := func(id, provider string) error {
+		if verdict.BackendOf(provider) != providers.BackendNative {
+			return fmt.Errorf("PANEL_PROXY_STATUS: the proxy runs only beside an exit of a native provider (mullvad, pia, nordvpn), and %s is %s", id, pystr.Repr(provider))
+		}
+		return nil
+	}
+	if len(exits) == 0 {
+		path := pystr.Strip(raw)
+		if !proxyPathOK(path) {
+			return fmt.Errorf("PANEL_PROXY_STATUS: the path of proxy.json must be absolute and clean, in %s", pystr.Repr(path))
+		}
+		if err := native("this exit", single.Provider); err != nil {
+			return err
+		}
+		single.ProxyPath = path
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, piece := range strings.Split(raw, ",") {
+		entry := pystr.Strip(piece)
+		if entry == "" {
+			continue
+		}
+		id, path, sep := strings.Cut(entry, "=")
+		id, path = pystr.Strip(id), pystr.Strip(path)
+		if !sep || !proxyPathOK(path) {
+			return fmt.Errorf("PANEL_PROXY_STATUS: with PANEL_EXITS, entries are id=/absolute/path/proxy.json, in %s", pystr.Repr(entry))
+		}
+		if seen[id] {
+			return fmt.Errorf("PANEL_PROXY_STATUS: duplicate exit id %s", pystr.Repr(id))
+		}
+		seen[id] = true
+		found := false
+		for i := range exits {
+			if exits[i].ID != id {
+				continue
+			}
+			found = true
+			if err := native(pystr.Repr(id), exits[i].Provider); err != nil {
+				return err
+			}
+			if exits[i].Network {
+				return fmt.Errorf("PANEL_PROXY_STATUS: %s is reached through the network exchange, which does not carry proxy.json", pystr.Repr(id))
+			}
+			exits[i].ProxyPath = path
+		}
+		if !found {
+			return fmt.Errorf("PANEL_PROXY_STATUS: %s is not an exit in PANEL_EXITS", pystr.Repr(id))
+		}
+	}
+	return nil
+}
+
+// proxyPathOK: an absolute, clean path of printable characters.
+func proxyPathOK(path string) bool {
+	return strings.HasPrefix(path, "/") && filepath.Clean(path) == path && path != "/" &&
+		len(path) <= 4096 && pystr.IsPrintable(path)
 }

@@ -25,6 +25,11 @@ type Exit struct {
 	// the exchange's link state, decides whether they may be judged at all.
 	Network  bool
 	LinkPath string
+
+	// ProxyPath is the proxy's status file beside this exit
+	// (PANEL_PROXY_STATUS), read only for the proxy view; "" when none is
+	// configured. It never feeds the exit's verdict.
+	ProxyPath string
 }
 
 // ExitUnder is Exit.under: the exit whose state is stateDir/panel and
