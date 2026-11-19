@@ -4,7 +4,7 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.11.1 — unreleased
+## 0.11.1 — 2026-11-19
 
 **Experimental.** A security rebuild: no change to Molebridge's code or
 behaviour. Upgrade from 0.11.0 by moving to the new image; nothing else
