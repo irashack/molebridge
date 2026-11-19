@@ -1,9 +1,12 @@
 # Design: automatic failover
 
-Status: **proposed** (2026-11-19). This is the working contract for the
+Status: **being built** (2026-11-19). This is the working contract for the
 roadmap's [automatic failover](../../ROADMAP.md#automatic-failover): the
 rules, the pieces, their boundaries and the interfaces between them, so that
-they can be built in parallel. Nothing here is built. The choices marked
+they can be built in parallel. Built so far: [the failover
+policy](#the-failover-policy) (`internal/failover`, unit-tested; no role
+uses it yet). The owner's decisions are pending; the code takes the
+recommended defaults, each one named constant. The choices marked
 **(owner)** are product decisions, gathered with a recommended default in
 [decisions for the owner](#decisions-for-the-owner); the rest follows from
 the code as it is. When the feature ships, its user documentation replaces
@@ -69,7 +72,7 @@ starts, like every other setting: a refusal exits with status 1 and one line.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `FAILOVER` | `off` **(owner)** | `off`; `same-city` or `same-country` (backups from the catalog, [which backups](#which-backups)); `servers` (the list in `FAILOVER_SERVERS`). Anything else is refused. |
+| `FAILOVER` | `off` **(owner)** | `off`; `same-city` or `same-country` (backups from the catalog, [which backups](#which-backups)); `servers` (the list in `FAILOVER_SERVERS`); `on`, the default backups (`same-city` **(owner)**). Anything else is refused. |
 | `FAILOVER_SERVERS` | empty | With `FAILOVER=servers`, required: 1 to 8 server names valid for the provider, comma-separated, in order of preference, none equal to `SERVER`. Refused with any other mode. Names not in a fresh catalog are skipped when a backup is chosen, never refused at start: catalogs change. |
 | `FAILOVER_AFTER` | `300` **(owner)** | Seconds the primary must keep failing ([below](#when-it-keeps-failing)). 120 to 3600. |
 | `FAILOVER_RETURN` | `auto` **(owner)** | `auto` (try the primary again on a schedule) or `manual` (stay on the backup until the operator picks a server, or the backup itself keeps failing). |
@@ -269,12 +272,15 @@ const (
 
 type Observation struct {
 	Now      float64 // boot clock, seconds
+	BootID   string  // the boot's id: a new one is a reboot
+	Wall     time.Time // the wall clock, for State.Since
 	Primary  string  // the effective primary: the target, or the retired server's replacement
 	Live     string  // the server the inspection found live, "" for none
 	Outcome  Outcome
 	Reason   string // "switch-failed", "handshake-failed", "tunnel-silent", "repair-failed"
 	Fresh    bool   // the target is a panel request younger than FreshRequestSec
 	Uplink   func() bool // asked only when a decision needs it
+	ReturnReady func() bool // asked only when a return is due: the checks before a return
 }
 
 type Candidate struct {
@@ -323,6 +329,11 @@ func (s *State) Observe(cfg Config, o Observation, candidates func() []Candidate
 // Reset ends the episode: a new target, a changed configuration.
 func (s *State) Reset()
 
+// Target is the server to apply and whether its source is failover: the
+// backup while trying or on it, the primary while returning, else the
+// primary with its own source.
+func (s *State) Target() (server string, failover bool)
+
 // Candidates orders the backups for cfg from a fresh catalog's entries,
 // given the primary's remembered location.
 func Candidates(cfg Config, primary Location, entries []Entry, tried []string) []Candidate
@@ -330,6 +341,13 @@ func Candidates(cfg Config, primary Location, entries []Entry, tried []string) [
 type Location struct{ Server, City, Country string; PortForward bool }
 type Entry struct{ Server, City, Country string; PortForward bool }
 ```
+
+As built, three additions to the interface above: `Observation.BootID` and
+`Observation.Wall` (the policy has no clock, so the boot's id and the wall
+time come in with the observation), `Observation.ReturnReady` (the checks
+[before a return](#returning-to-the-primary), which the applier owns), and
+`State.Target`. `FAILOVER=on` is accepted as `DefaultOnMode` (`same-city`),
+so the owner's second decision is one constant.
 
 Deadlines are on the boot clock with the boot's id, as `attempt.json`'s are:
 after a reboot, a due return runs at once, a running `FAILOVER_AFTER` window

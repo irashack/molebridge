@@ -60,6 +60,8 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   experimental `init` menu, whose service blocks must match the shipped Compose files; `internal/state/`, `internal/validate/`,
   `internal/jsonfile/`, `internal/netx/` and `internal/bootclock/` are the shared
   strict I/O, validation, HTTP client and boot clock.
+- `internal/failover/` is the automatic failover policy, pure rules with no I/O
+  ([design](docs/design/failover.md)).
 - `internal/tunneldial/` (connections and DNS bound to the tunnel interface) and
   `internal/relayproxy/` (Mullvad's relay proxies as a catalogue, choosing and benching)
   are pieces of the proxy being built ([design](docs/design/menu.md)); no role uses them yet.

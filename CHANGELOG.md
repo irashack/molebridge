@@ -6,6 +6,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- New package `internal/failover`, the policy of automatic failover
+  ([design](docs/design/failover.md)): when the selected server has kept
+  failing long enough to move to a backup, which backups (same city, same
+  country or a list), the limits of one episode, and the schedule for trying
+  the selected server again. Pure rules with no I/O; nothing uses it yet, so
+  nothing changes for an installation. Tested by unit tests and a property
+  test only. The defaults are the design's recommendations, pending the
+  owner's decisions.
+
 - New, experimental, and untested on a real tunnel: the proxy way in,
   `molebridge proxy` ([the proxy](docs/proxy.md)). Its guarantee: every
   connection the proxy opens leaves through the tunnel, or fails; it promises
