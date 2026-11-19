@@ -101,7 +101,9 @@ first argument of the image's entrypoint picks the role, and the role is never
 guessed from the environment. The same Dockerfile also builds the binary
 without NetBird (`--target core`) for the sidecars, which never start NetBird;
 on that image the exit refuses a NetBird exit before reading any other setting.
-It is not published yet
+Each release publishes it beside the image with NetBird as
+`ghcr.io/irashack/molebridge-core` ([releasing](releasing.md)); the sidecar
+Compose files move to it once a release carries it
 ([#47](https://github.com/irashack/molebridge/issues/47)).
 
 | Container | Role | What it is |

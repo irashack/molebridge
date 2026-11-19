@@ -1,14 +1,18 @@
 name: Release
 
 # One dispatch table. Nothing on a branch push publishes (CI builds and tests).
-#   workflow_dispatch   a signing rehearsal against a throwaway package
-#                       (ghcr.io/irashack/molebridge-ci), never the release one
-#   tag v*-rc.*         build, push, sign and attest a release candidate
+#   workflow_dispatch   a signing rehearsal against throwaway packages
+#                       (ghcr.io/irashack/molebridge-ci and molebridge-core-ci),
+#                       never the release ones
+#   tag v*-rc.*         build, push, sign and attest a release candidate: both
+#                       images, ghcr.io/irashack/molebridge (with NetBird) and
+#                       ghcr.io/irashack/molebridge-core (the Dockerfile's
+#                       `core` target), from one run
 #   tag v* (no -rc)     promote the accepted candidate for the same commit,
-#                       without rebuilding; also move the floating minor tag
-#                       (`:0.10`, no v), a mutable pull convenience the
-#                       Compose files never use (docs/setup.md, "Which tags
-#                       exist")
+#                       both images together, without rebuilding; also move
+#                       the floating minor tag (`:0.10`, no v), a mutable pull
+#                       convenience the Compose files never use
+#                       (docs/setup.md, "Which tags exist")
 # The jobs' `if:` conditions are mutually exclusive. Each job has the
 # permissions it uses and no others.
 
@@ -26,6 +30,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/irashack/molebridge
+  CORE_IMAGE: ghcr.io/irashack/molebridge-core
   OIDC_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
@@ -41,6 +46,7 @@ jobs:
       attestations: write
     env:
       REHEARSAL_IMAGE: ghcr.io/irashack/molebridge-ci
+      REHEARSAL_CORE_IMAGE: ghcr.io/irashack/molebridge-core-ci
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -52,14 +58,25 @@ jobs:
         with:
           image: ${{ env.REHEARSAL_IMAGE }}
           tag: rehearsal-${{ github.run_id }}
-      - name: The image reports the tag it was built as
+      - name: Build, push, sign and attest molebridge-core to its throwaway package
+        id: core
+        uses: ./.github/actions/publish-image
+        with:
+          image: ${{ env.REHEARSAL_CORE_IMAGE }}
+          tag: rehearsal-${{ github.run_id }}
+          target: core
+          sbom-prefix: sbom-core
+      - name: The images report the tag they were built as
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
           TAG: rehearsal-${{ github.run_id }}
         run: |
           set -euo pipefail
-          got=$(docker run --rm --network none --platform linux/amd64 "$REHEARSAL_IMAGE@$DIGEST" version)
-          [ "$got" = "molebridge $TAG" ] || { echo "::error::the image says '$got', want 'molebridge $TAG'"; exit 1; }
+          for ref in "$REHEARSAL_IMAGE@$DIGEST" "$REHEARSAL_CORE_IMAGE@$CORE_DIGEST"; do
+            got=$(docker run --rm --network none --platform linux/amd64 "$ref" version)
+            [ "$got" = "molebridge $TAG" ] || { echo "::error::$ref says '$got', want 'molebridge $TAG'"; exit 1; }
+          done
       - name: Bundle, signed and attested (once the Compose files name the image)
         id: bundle
         env:
@@ -80,19 +97,24 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/molebridge-v0.0.0-rc.0.tar.gz
-      - name: Write a synthetic live-acceptance predicate for the rehearsal digest
+      - name: Write synthetic live-acceptance predicates for the rehearsal digests
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
         run: |
           set -euo pipefail
           jq '{platforms, providers, kinds, drills: (.drills | map({id: ., result: "passed"}))}' tools/acceptance-policy.json > coverage.json
           echo '["rehearsal"]' > evidence.json
           # The predicate writer wants a candidate tag and a bundle name; the
           # values are placeholders for the rehearsal.
-          sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
-            --tag v0.0.0-rc.0 --image "$REHEARSAL_IMAGE" --digest "$DIGEST" \
-            --bundle-name molebridge-v0.0.0-rc.0.tar.gz --bundle-sha256 "$(printf '0%.0s' $(seq 1 64))" \
-            --coverage coverage.json --evidence evidence.json > predicate.json
+          for pair in "predicate.json $REHEARSAL_IMAGE $DIGEST" "predicate-core.json $REHEARSAL_CORE_IMAGE $CORE_DIGEST"; do
+            # shellcheck disable=SC2086
+            set -- $pair
+            sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" \
+              --tag v0.0.0-rc.0 --image "$2" --digest "$3" \
+              --bundle-name molebridge-v0.0.0-rc.0.tar.gz --bundle-sha256 "$(printf '0%.0s' $(seq 1 64))" \
+              --coverage coverage.json --evidence evidence.json > "$1"
+          done
       - name: Attest the synthetic predicate
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -102,40 +124,54 @@ jobs:
           predicate-path: predicate.json
           push-to-registry: true
           create-storage-record: false
+      - name: Attest the synthetic predicate for molebridge-core
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.REHEARSAL_CORE_IMAGE }}
+          subject-digest: ${{ steps.core.outputs.digest }}
+          predicate-type: https://github.com/irashack/molebridge/attestations/live-acceptance/v1
+          predicate-path: predicate-core.json
+          push-to-registry: true
+          create-storage-record: false
       - name: Verify what was signed and attested, with the promotion policy
         env:
           GH_TOKEN: ${{ github.token }}
-          DIGEST: ${{ steps.pub.outputs.digest }}
-          AMD64: ${{ steps.pub.outputs.amd64 }}
-          ARM64: ${{ steps.pub.outputs.arm64 }}
+          PUB: ${{ env.REHEARSAL_IMAGE }} ${{ steps.pub.outputs.digest }} ${{ steps.pub.outputs.amd64 }} ${{ steps.pub.outputs.arm64 }}
+          CORE: ${{ env.REHEARSAL_CORE_IMAGE }} ${{ steps.core.outputs.digest }} ${{ steps.core.outputs.amd64 }} ${{ steps.core.outputs.arm64 }}
         run: |
           set -euo pipefail
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}"
-          cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$OIDC_ISSUER" \
-            --certificate-github-workflow-sha "$GITHUB_SHA" "$REHEARSAL_IMAGE@$DIGEST" >/dev/null
-          gh attestation verify "oci://$REHEARSAL_IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
-            --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
-            --source-digest "$GITHUB_SHA" --predicate-type https://slsa.dev/provenance/v1 --format json > provenance.json
-          sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$REHEARSAL_IMAGE"
-          gh attestation verify "oci://$REHEARSAL_IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
-            --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
-            --predicate-type https://github.com/irashack/molebridge/attestations/live-acceptance/v1 --format json > acceptance.json
-          sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$REHEARSAL_IMAGE"
-          # The policy must refuse the same material under another identity.
-          if sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/acceptance.yml@refs/heads/main" \
-            --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$REHEARSAL_IMAGE" >/dev/null 2>&1; then
-            echo "::error::the policy accepted the wrong identity"
-            exit 1
-          fi
-          for manifest in "$AMD64" "$ARM64"; do
-            gh attestation verify "oci://$REHEARSAL_IMAGE@$manifest" --repo "$GITHUB_REPOSITORY" \
+          for images in "$PUB" "$CORE"; do
+            # shellcheck disable=SC2086
+            set -- $images
+            image=$1 DIGEST=$2 AMD64=$3 ARM64=$4
+            echo "Verifying $image@$DIGEST"
+            cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$OIDC_ISSUER" \
+              --certificate-github-workflow-sha "$GITHUB_SHA" "$image@$DIGEST" >/dev/null
+            gh attestation verify "oci://$image@$DIGEST" --repo "$GITHUB_REPOSITORY" \
               --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
-              --predicate-type https://spdx.dev/Document/v2.3 >/dev/null
+              --source-digest "$GITHUB_SHA" --predicate-type https://slsa.dev/provenance/v1 --format json > provenance.json
+            sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
+              --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$image"
+            gh attestation verify "oci://$image@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+              --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
+              --predicate-type https://github.com/irashack/molebridge/attestations/live-acceptance/v1 --format json > acceptance.json
+            sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
+              --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$image"
+            # The policy must refuse the same material under another identity.
+            if sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
+              --identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/acceptance.yml@refs/heads/main" \
+              --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$GITHUB_SHA" --image "$image" >/dev/null 2>&1; then
+              echo "::error::the policy accepted the wrong identity"
+              exit 1
+            fi
+            for manifest in "$AMD64" "$ARM64"; do
+              gh attestation verify "oci://$image@$manifest" --repo "$GITHUB_REPOSITORY" \
+                --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
+                --predicate-type https://spdx.dev/Document/v2.3 >/dev/null
+            done
           done
-          echo "Rehearsal verified: signature, provenance, acceptance policy, both SBOMs." >> "$GITHUB_STEP_SUMMARY"
+          echo "Rehearsal verified for both images: signature, provenance, acceptance policy, both SBOMs." >> "$GITHUB_STEP_SUMMARY"
 
   candidate:
     name: Release candidate
@@ -168,13 +204,24 @@ jobs:
         with:
           image: ${{ env.IMAGE }}
           tag: ${{ github.ref_name }}
-      - name: The image reports the tag it was built as
+      - name: Build, push, sign and attest molebridge-core
+        id: core
+        uses: ./.github/actions/publish-image
+        with:
+          image: ${{ env.CORE_IMAGE }}
+          tag: ${{ github.ref_name }}
+          target: core
+          sbom-prefix: sbom-core
+      - name: The images report the tag they were built as
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
         run: |
           set -euo pipefail
-          got=$(docker run --rm --network none --platform linux/amd64 "$IMAGE@$DIGEST" version)
-          [ "$got" = "molebridge $GITHUB_REF_NAME" ] || { echo "::error::the image says '$got', want 'molebridge $GITHUB_REF_NAME'"; exit 1; }
+          for ref in "$IMAGE@$DIGEST" "$CORE_IMAGE@$CORE_DIGEST"; do
+            got=$(docker run --rm --network none --platform linux/amd64 "$ref" version)
+            [ "$got" = "molebridge $GITHUB_REF_NAME" ] || { echo "::error::$ref says '$got', want 'molebridge $GITHUB_REF_NAME'"; exit 1; }
+          done
       - name: Build and sign the bundle
         env:
           DIGEST: ${{ steps.pub.outputs.digest }}
@@ -192,9 +239,13 @@ jobs:
           DIGEST: ${{ steps.pub.outputs.digest }}
           AMD64: ${{ steps.pub.outputs.amd64 }}
           ARM64: ${{ steps.pub.outputs.arm64 }}
+          CORE_DIGEST: ${{ steps.core.outputs.digest }}
+          CORE_AMD64: ${{ steps.core.outputs.amd64 }}
+          CORE_ARM64: ${{ steps.core.outputs.arm64 }}
         run: |
           sh tools/release-notes.sh --kind candidate --tag "$GITHUB_REF_NAME" --commit "$GITHUB_SHA" \
-            --digest "$DIGEST" --amd64 "$AMD64" --arm64 "$ARM64" > release-notes.md
+            --digest "$DIGEST" --amd64 "$AMD64" --arm64 "$ARM64" \
+            --core-digest "$CORE_DIGEST" --core-amd64 "$CORE_AMD64" --core-arm64 "$CORE_ARM64" > release-notes.md
       - name: Upload the bundle and SBOMs as a workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -258,33 +309,41 @@ jobs:
           set -euo pipefail
           wf="https://github.com/${GITHUB_REPOSITORY}/.github/workflows"
           accept_type=https://github.com/irashack/molebridge/attestations/live-acceptance/v1
-          found=
-          # Highest candidate number first; the first one that passes every
-          # check is the one promoted. A candidate tag that does not point at
-          # this commit is never considered.
-          for rc in $(git tag --points-at "$GITHUB_SHA" --list "${TAG}-rc.*" | sort -V -r); do
-            echo "Considering $rc"
-            digest=$(crane digest "$IMAGE:$rc") || { echo "  no image for $rc"; continue; }
-            build_id="$wf/release.yml@refs/tags/$rc"
+          # accepted IMAGE DIGEST RC (sh has no locals, hence a_*): the candidate's own signed build of this
+          # commit, with provenance and a live-acceptance attestation that
+          # meet the policy. Prints why not, and fails, otherwise.
+          accepted() {
+            a_image=$1 a_digest=$2 a_rc=$3
+            build_id="$wf/release.yml@refs/tags/$a_rc"
             cosign verify --certificate-identity "$build_id" --certificate-oidc-issuer "$OIDC_ISSUER" \
-              --certificate-github-workflow-sha "$GITHUB_SHA" "$IMAGE@$digest" >/dev/null ||
-              { echo "  the image signature does not verify for $rc"; continue; }
-            gh attestation verify "oci://$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-sha "$GITHUB_SHA" "$a_image@$a_digest" >/dev/null ||
+              { echo "  the signature of $a_image does not verify for $a_rc"; return 1; }
+            gh attestation verify "oci://$a_image@$a_digest" --repo "$GITHUB_REPOSITORY" \
               --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" \
               --source-digest "$GITHUB_SHA" --predicate-type https://slsa.dev/provenance/v1 \
               --format json > provenance.json ||
-              { echo "  no verifiable build provenance for $rc"; continue; }
+              { echo "  no verifiable build provenance for $a_image at $a_rc"; return 1; }
             sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
-              --identity "$build_id" --issuer "$OIDC_ISSUER" --digest "$digest" --commit "$GITHUB_SHA" --image "$IMAGE" ||
-              continue
-            gh attestation verify "oci://$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" \
+              --identity "$build_id" --issuer "$OIDC_ISSUER" --digest "$a_digest" --commit "$GITHUB_SHA" --image "$a_image" ||
+              return 1
+            gh attestation verify "oci://$a_image@$a_digest" --repo "$GITHUB_REPOSITORY" \
               --cert-identity "$wf/acceptance.yml@refs/heads/main" --cert-oidc-issuer "$OIDC_ISSUER" \
               --predicate-type "$accept_type" --format json > acceptance.json ||
-              { echo "  no verifiable acceptance attestation for $rc"; continue; }
+              { echo "  no verifiable acceptance attestation for $a_image at $a_rc"; return 1; }
             sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
-              --identity "$wf/acceptance.yml@refs/heads/main" --issuer "$OIDC_ISSUER" --digest "$digest" \
-              --commit "$GITHUB_SHA" --image "$IMAGE" --predicate-type "$accept_type" ||
-              continue
+              --identity "$wf/acceptance.yml@refs/heads/main" --issuer "$OIDC_ISSUER" --digest "$a_digest" \
+              --commit "$GITHUB_SHA" --image "$a_image" --predicate-type "$accept_type"
+          }
+          found=
+          # Highest candidate number first; the first one whose two images
+          # both pass every check is the one promoted. A candidate tag that
+          # does not point at this commit is never considered.
+          for rc in $(git tag --points-at "$GITHUB_SHA" --list "${TAG}-rc.*" | sort -V -r); do
+            echo "Considering $rc"
+            digest=$(crane digest "$IMAGE:$rc") || { echo "  no image for $rc"; continue; }
+            core_digest=$(crane digest "$CORE_IMAGE:$rc") || { echo "  no molebridge-core image for $rc"; continue; }
+            accepted "$IMAGE" "$digest" "$rc" || continue
+            accepted "$CORE_IMAGE" "$core_digest" "$rc" || continue
             found=$rc
             break
           done
@@ -292,37 +351,48 @@ jobs:
             echo "::error::no accepted release candidate for $TAG at $GITHUB_SHA; run live acceptance (acceptance.yml) for a candidate of this commit"
             exit 1
           fi
-          echo "rc=$found" >> "$GITHUB_OUTPUT"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-      - name: Promote by digest and sign
+          {
+            echo "rc=$found"
+            echo "digest=$digest"
+            echo "core_digest=$core_digest"
+          } >> "$GITHUB_OUTPUT"
+      - name: Promote both images by digest and sign
         env:
           TAG: ${{ github.ref_name }}
           RC: ${{ steps.rc.outputs.rc }}
           DIGEST: ${{ steps.rc.outputs.digest }}
+          CORE_DIGEST: ${{ steps.rc.outputs.core_digest }}
         run: |
           set -euo pipefail
-          # A release tag is immutable: absent, or already this digest.
-          if existing=$(crane digest "$IMAGE:$TAG" 2>/dev/null) && [ "$existing" != "$DIGEST" ]; then
-            echo "::error::$IMAGE:$TAG already exists with a different digest"
-            exit 1
-          fi
-          crane copy "$IMAGE@$DIGEST" "$IMAGE:$TAG"
           minor=${TAG#v}
           minor=${minor%.*}
           highest=$(git tag --list "v${minor}.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
-          if [ "$highest" = "$TAG" ]; then
-            crane copy "$IMAGE@$DIGEST" "$IMAGE:$minor"
-          else
-            echo "$IMAGE:$minor stays where it is: $highest is newer than $TAG"
-          fi
-          cosign sign --yes "$IMAGE@$DIGEST"
-          [ "$(crane digest "$IMAGE:$TAG")" = "$DIGEST" ] || { echo "::error::release tag digest differs from the candidate"; exit 1; }
-          if [ "$highest" = "$TAG" ]; then
-            [ "$(crane digest "$IMAGE:$minor")" = "$DIGEST" ] || { echo "::error::floating tag digest differs from the candidate"; exit 1; }
-          fi
-          cosign verify --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
-            --certificate-oidc-issuer "$OIDC_ISSUER" --certificate-github-workflow-sha "$GITHUB_SHA" "$IMAGE@$DIGEST" >/dev/null
-          echo "Promoted $RC to $TAG: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          # A release tag is immutable: absent, or already this digest. Both
+          # images are checked before either is tagged.
+          for pair in "$IMAGE $DIGEST" "$CORE_IMAGE $CORE_DIGEST"; do
+            image=${pair% *} digest=${pair#* }
+            if existing=$(crane digest "$image:$TAG" 2>/dev/null) && [ "$existing" != "$digest" ]; then
+              echo "::error::$image:$TAG already exists with a different digest"
+              exit 1
+            fi
+          done
+          for pair in "$IMAGE $DIGEST" "$CORE_IMAGE $CORE_DIGEST"; do
+            image=${pair% *} digest=${pair#* }
+            crane copy "$image@$digest" "$image:$TAG"
+            if [ "$highest" = "$TAG" ]; then
+              crane copy "$image@$digest" "$image:$minor"
+            else
+              echo "$image:$minor stays where it is: $highest is newer than $TAG"
+            fi
+            cosign sign --yes "$image@$digest"
+            [ "$(crane digest "$image:$TAG")" = "$digest" ] || { echo "::error::$image release tag digest differs from the candidate"; exit 1; }
+            if [ "$highest" = "$TAG" ]; then
+              [ "$(crane digest "$image:$minor")" = "$digest" ] || { echo "::error::$image floating tag digest differs from the candidate"; exit 1; }
+            fi
+            cosign verify --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@${GITHUB_REF}" \
+              --certificate-oidc-issuer "$OIDC_ISSUER" --certificate-github-workflow-sha "$GITHUB_SHA" "$image@$digest" >/dev/null
+            echo "Promoted $RC to $image:$TAG: $digest" >> "$GITHUB_STEP_SUMMARY"
+          done
       - name: Build and sign the bundle
         env:
           DIGEST: ${{ steps.rc.outputs.digest }}
@@ -339,14 +409,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RC: ${{ steps.rc.outputs.rc }}
           DIGEST: ${{ steps.rc.outputs.digest }}
+          CORE_DIGEST: ${{ steps.rc.outputs.core_digest }}
         run: |
           set -euo pipefail
+          # Both images' SBOMs: sbom-linux-*.spdx.json and sbom-core-linux-*.spdx.json.
           gh release download "$RC" --pattern 'sbom-*.spdx.json' --dir dist
-          crane manifest "$IMAGE@$DIGEST" > index.json
-          amd64=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest' index.json)
-          arm64=$(jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest' index.json)
+          manifest() {
+            crane manifest "$1" | jq -r --arg arch "$2" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest'
+          }
           sh tools/release-notes.sh --kind release --tag "$GITHUB_REF_NAME" --build-tag "$RC" --commit "$GITHUB_SHA" \
-            --digest "$DIGEST" --amd64 "$amd64" --arm64 "$arm64" > release-notes.md
+            --digest "$DIGEST" --amd64 "$(manifest "$IMAGE@$DIGEST" amd64)" --arm64 "$(manifest "$IMAGE@$DIGEST" arm64)" \
+            --core-digest "$CORE_DIGEST" --core-amd64 "$(manifest "$CORE_IMAGE@$CORE_DIGEST" amd64)" \
+            --core-arm64 "$(manifest "$CORE_IMAGE@$CORE_DIGEST" arm64)" > release-notes.md
       - name: Upload the bundle as a workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

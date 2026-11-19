@@ -1,10 +1,12 @@
 name: Acceptance
 
 # Run by a maintainer after live acceptance of a release candidate (D19). It
-# attests, against the candidate's index digest, that acceptance passed, with
-# the project's own predicate type. The release workflow promotes a candidate
-# only when it finds this attestation, signed by this workflow on main, naming
-# the tagged commit and complete coverage (tools/acceptance-policy.json).
+# attests, against each of the candidate's two index digests (the image with
+# NetBird and molebridge-core), that acceptance passed, with the project's own
+# predicate type: one run, one coverage, two attestations. The release
+# workflow promotes a candidate only when it finds this attestation on both
+# images, signed by this workflow on main, naming the tagged commit and
+# complete coverage (tools/acceptance-policy.json).
 #
 # Everything this job runs comes from main, the ref its identity names: the
 # local action, the predicate writer and the verifier. From the candidate it
@@ -42,6 +44,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/irashack/molebridge
+  CORE_IMAGE: ghcr.io/irashack/molebridge-core
   OIDC_ISSUER: https://token.actions.githubusercontent.com
 
 jobs:
@@ -111,13 +114,17 @@ jobs:
           set -euo pipefail
           commit=$COMMIT
           digest=$(crane digest "$IMAGE:$RC_TAG")
+          core_digest=$(crane digest "$CORE_IMAGE:$RC_TAG")
           build_id="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/tags/$RC_TAG"
-          # The digest must be the candidate's own build of this commit.
-          gh attestation verify "oci://$IMAGE@$digest" --repo "$GITHUB_REPOSITORY" \
-            --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" \
-            --source-digest "$commit" --predicate-type https://slsa.dev/provenance/v1 --format json > provenance.json
-          sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "$build_id" --issuer "$OIDC_ISSUER" --digest "$digest" --commit "$commit" --image "$IMAGE"
+          # Each digest must be the candidate's own build of this commit.
+          for pair in "$IMAGE $digest" "$CORE_IMAGE $core_digest"; do
+            image=${pair% *} d=${pair#* }
+            gh attestation verify "oci://$image@$d" --repo "$GITHUB_REPOSITORY" \
+              --cert-identity "$build_id" --cert-oidc-issuer "$OIDC_ISSUER" \
+              --source-digest "$commit" --predicate-type https://slsa.dev/provenance/v1 --format json > provenance.json
+            sh tools/verify-acceptance.sh provenance --results provenance.json --repo "$GITHUB_REPOSITORY" \
+              --identity "$build_id" --issuer "$OIDC_ISSUER" --digest "$d" --commit "$commit" --image "$image"
+          done
           # The bundle that was tested is the candidate's release asset.
           gh release download "$RC_TAG" --pattern "molebridge-$RC_TAG.tar.gz" --dir bundle
           gh attestation verify "bundle/molebridge-$RC_TAG.tar.gz" --repo "$GITHUB_REPOSITORY" \
@@ -125,9 +132,10 @@ jobs:
           bundle_sha=$(sha256sum "bundle/molebridge-$RC_TAG.tar.gz" | cut -d' ' -f1)
           {
             echo "digest=$digest"
+            echo "core_digest=$core_digest"
             echo "bundle_sha=$bundle_sha"
           } >> "$GITHUB_OUTPUT"
-      - name: Write the predicate
+      - name: Write the predicates
         env:
           RC_TAG: ${{ inputs.rc_tag }}
           COVERAGE: ${{ inputs.coverage }}
@@ -135,15 +143,22 @@ jobs:
           COMMIT: ${{ steps.source.outputs.commit }}
           POLICY: ${{ steps.source.outputs.policy }}
           DIGEST: ${{ steps.rc.outputs.digest }}
+          CORE_DIGEST: ${{ steps.rc.outputs.core_digest }}
           BUNDLE_SHA: ${{ steps.rc.outputs.bundle_sha }}
         run: |
           set -euo pipefail
           printf '%s' "$COVERAGE" > coverage.json
           printf '%s' "$EVIDENCE" > evidence.json
-          sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --tag "$RC_TAG" \
-            --image "$IMAGE" --digest "$DIGEST" --bundle-name "molebridge-$RC_TAG.tar.gz" --bundle-sha256 "$BUNDLE_SHA" \
-            --coverage coverage.json --evidence evidence.json --policy "$POLICY" > predicate.json
-          jq . predicate.json
+          # The same coverage and evidence for both images: one acceptance run
+          # tests the release, the exits on one image and the sidecars on the other.
+          for out in "predicate.json $IMAGE $DIGEST" "predicate-core.json $CORE_IMAGE $CORE_DIGEST"; do
+            # shellcheck disable=SC2086
+            set -- $out
+            sh tools/make-acceptance-predicate.sh --repo "$GITHUB_REPOSITORY" --commit "$COMMIT" --tag "$RC_TAG" \
+              --image "$2" --digest "$3" --bundle-name "molebridge-$RC_TAG.tar.gz" --bundle-sha256 "$BUNDLE_SHA" \
+              --coverage coverage.json --evidence evidence.json --policy "$POLICY" > "$1"
+            jq . "$1"
+          done
       - name: Attest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -153,26 +168,39 @@ jobs:
           predicate-path: predicate.json
           push-to-registry: true
           create-storage-record: false
+      - name: Attest molebridge-core
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.CORE_IMAGE }}
+          subject-digest: ${{ steps.rc.outputs.core_digest }}
+          predicate-type: https://github.com/irashack/molebridge/attestations/live-acceptance/v1
+          predicate-path: predicate-core.json
+          push-to-registry: true
+          create-storage-record: false
       - name: Verify what was just attested, with the promotion policy
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ steps.source.outputs.commit }}
           POLICY: ${{ steps.source.outputs.policy }}
           DIGEST: ${{ steps.rc.outputs.digest }}
+          CORE_DIGEST: ${{ steps.rc.outputs.core_digest }}
         run: |
           set -euo pipefail
           identity="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/acceptance.yml@refs/heads/main"
-          # The attestation can take a moment to become searchable.
-          for attempt in 1 2 3 4 5; do
-            if gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
-              --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
-              --predicate-type https://github.com/irashack/molebridge/attestations/live-acceptance/v1 \
-              --format json > acceptance.json; then
-              break
-            fi
-            [ "$attempt" -lt 5 ] || { echo "::error::the attestation cannot be verified"; exit 1; }
-            sleep 10
+          for pair in "$IMAGE $DIGEST" "$CORE_IMAGE $CORE_DIGEST"; do
+            image=${pair% *} digest=${pair#* }
+            # The attestation can take a moment to become searchable.
+            for attempt in 1 2 3 4 5; do
+              if gh attestation verify "oci://$image@$digest" --repo "$GITHUB_REPOSITORY" \
+                --cert-identity "$identity" --cert-oidc-issuer "$OIDC_ISSUER" \
+                --predicate-type https://github.com/irashack/molebridge/attestations/live-acceptance/v1 \
+                --format json > acceptance.json; then
+                break
+              fi
+              [ "$attempt" -lt 5 ] || { echo "::error::the attestation on $image cannot be verified"; exit 1; }
+              sleep 10
+            done
+            sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
+              --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$digest" --commit "$COMMIT" --image "$image" \
+              --policy "$POLICY"
           done
-          sh tools/verify-acceptance.sh acceptance --results acceptance.json --repo "$GITHUB_REPOSITORY" \
-            --identity "$identity" --issuer "$OIDC_ISSUER" --digest "$DIGEST" --commit "$COMMIT" --image "$IMAGE" \
-            --policy "$POLICY"
