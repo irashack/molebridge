@@ -6,6 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Acceptance policy 15: rule-drift repair and the lease lapse are no longer
+  live drills. CI's namespace drills, required on the tag, test both on a
+  real kernel for every commit. The tunnel-loss drill stays live
+  ([releasing](docs/releasing.md#3-run-the-live-acceptance),
+  [#54](https://github.com/irashack/molebridge/issues/54)).
 - The Molebridge logo, including the panel's icons, is all rights reserved
   and not covered by the MIT License ([the logo notice](docs/assets/brand/NOTICE.md)).
 - The Dockerfile builds a second image without NetBird (`--target core`),

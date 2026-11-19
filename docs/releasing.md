@@ -97,9 +97,8 @@ candidate's digest. Then run what the policy names:
   changelog's **Breaking** items for this release ask for
   (`upgrade-from-0.9.4`; for 0.10.0, `net.ipv4.icmp_errors_use_inbound_ifaddr`
   on Kubernetes, and check that a native exit without it doesn't start
-  NetBird); rule drift repaired (`live-drift-repair`); the tunnel deleted and
-  recovered (`tunnel-loss`); the worker frozen until the lease lapses and the
-  exit restarts (`lease-lapse`); a client on the exit while the panel switches
+  NetBird); the tunnel deleted and recovered (`tunnel-loss`); a client on the
+  exit while the panel switches
   its server ([from a client](verification.md#from-a-client), `client-switch`);
   the required [status drills](verification.md#status-drills)
   (`status-drills`: a stopped exit showing stale with `/readyz` 503, the
@@ -110,9 +109,21 @@ candidate's digest. Then run what the policy names:
   a panel on different nodes (`network-exchange`); since 0.11.0, a selected
   server taken out of gluetun's server list and put back
   ([a retired server](verification.md#a-retired-server),
-  `retired-server-move`); and CI's namespace drills on the tag. The procedures are in [verification](verification.md). The policy
+  `retired-server-move`); and CI's namespace drills on the tag
+  (`ci-namespace-drills`). The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
+
+  Since policy 15, rule-drift repair and the lease lapse are no longer run
+  by hand: CI's namespace drills test both on a real kernel for every
+  commit and on the tag (rule drift: `internal/drill` `drift_drill_test.go`,
+  `guard_drill_test.go` and `partial_drill_test.go`; the lease:
+  `TestDrillFrozenWorkerStopsNetBirdWithinGraceAndBudget` and
+  `TestDrillWedgedMutatorLapsesTheLeaseEvenWithRenewalsRunnable` in
+  `internal/exit`), and they count through `ci-namespace-drills`. The tunnel
+  loss stays live, because it is the policy's one check that nothing leaves
+  off the tunnel on a real host with a real provider
+  ([#54](https://github.com/irashack/molebridge/issues/54)).
 
 Write down what ran, where and with which results as you go. The record goes
 into [testing](testing.md) afterwards, in the form of the earlier candidates'
@@ -142,8 +153,6 @@ For the policy above, the coverage is:
  "providers":["mullvad","pia","nordvpn"],
  "kinds":["native","gluetun","sidecar","native-sidecar"],
  "drills":[{"id":"ci-namespace-drills","result":"passed"},
-           {"id":"live-drift-repair","result":"passed"},
-           {"id":"lease-lapse","result":"passed"},
            {"id":"tunnel-loss","result":"passed"},
            {"id":"upgrade-from-0.9.4","result":"passed"},
            {"id":"client-switch","result":"passed"},

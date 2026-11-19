@@ -102,8 +102,10 @@ written out in full; in short:
   gluetun sidecar with NordVPN, which has also run on rootless Podman 5.8 with
   Quadlet units. Each release candidate is upgraded from the release before
   it and comes back `ok` before it is released, and the native overlay exits
-  pass the rule-drift, tunnel-loss and lease-lapse drills, run from inside the exit's
-  namespace with no client device held on it. A Linux client was last held on
+  pass the tunnel-loss drill, run from inside the exit's namespace with no
+  client device held on it. Rule-drift repair and the lease lapse were run
+  live the same way through 0.11.1; since then CI's namespace drills test
+  them on every commit instead ([releasing](docs/releasing.md#3-run-the-live-acceptance)). A Linux client was last held on
   an exit through those drills at 0.7.0, whose routing the Go exit ports
   ([testing](docs/testing.md#070-on-rootless-podman-at-d5a234a)).
 - **Run in CI:** unit, fuzz and namespace-drill suites and the release checks
