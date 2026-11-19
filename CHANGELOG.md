@@ -28,6 +28,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   the role end to end on loopback with no tunnel, status and health) and
   CI's Compose checks; the system rig and live drills have not run, so it
   has carried no traffic through a real tunnel.
+- Internal, no user-visible change: piece 1 of the [multi-provider
+  exit](docs/design/multi-provider.md), the
+  whole-tunnel replacement. `tunnel.Manager.Replace` and the mutation owner's
+  `ReplaceTunnel` swap the tunnel's whole configuration fail-closed, and the
+  worker reads the tunnel it brings up from a `TunnelSource` (today's config
+  and remembered peer). Nothing calls `Replace` yet. Tested with fakes, with
+  the policy model judging every state, and in namespace drills (CI); not on
+  the system rig or a real tunnel.
 - Internal: the rest of NetBird moves behind the way in. The applier asks
   its own way in (`internal/applier/wayin.go`) whether NetBird runs as
   required and has it set the record's `netbird` check; the supervisor's

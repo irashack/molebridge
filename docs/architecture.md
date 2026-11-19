@@ -261,6 +261,19 @@ replaced, and forwarded traffic hits the exit table's fallback. The log says
 `molebridge-exit: tunnel bring-up failed (<reason>); retrying in <n> s`, with
 the failing step and the kernel's error as the reason.
 
+**Replacing the whole tunnel.** `tunnel.Manager.Replace` swaps the tunnel's
+key, addresses, MTU, peer and default route in one operation of the mutation
+owner (`mutator.ReplaceTunnel`), for the [multi-provider
+exit](design/multi-provider.md); nothing calls it
+yet. The expected state takes the new rules 94 and 98 beside the old ones and
+they are installed; the old link's exit-table route and then the old link are
+deleted, so forwarded traffic meets the fallback; the old pairs are removed,
+each deletion asked of the policy model; the new link is created. A failure
+leaves no link, keeps the pairs of the new config, and withdraws readiness;
+the recovery loop then brings up whatever the worker's `TunnelSource` names.
+A single-provider exit's source is its one config with the remembered peer
+above.
+
 **The peer it comes up with.** With Mullvad and NordVPN, whose one key reaches
 every server, the tunnel comes up on the last peer the exit set: at start, the
 target's (`SERVER`, else the panel's accepted request) when the cached server

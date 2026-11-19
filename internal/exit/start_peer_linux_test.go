@@ -6,6 +6,7 @@ import (
 
 	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnelconf"
 )
 
@@ -83,5 +84,52 @@ func TestTunnelPeerRefusesBadValues(t *testing.T) {
 	w.sys = &KernelSystem{}
 	if err := w.sys.SetStartPeer(applier.PeerConfig{PublicKey: "nope"}); err == nil || w.sys.lastPeer() != nil {
 		t.Fatal("a bad start peer was kept")
+	}
+}
+
+type fixedSource struct {
+	provider string
+	conf     *tunnelconf.Conf
+}
+
+func (s fixedSource) Current() (string, *tunnelconf.Conf) { return s.provider, s.conf }
+
+// A tunnel source set for the worker names what recovery brings up, in place
+// of the settings' config and its remembered peer; without one the worker is
+// the single-provider exit it was.
+func TestTunnelComesUpOnTheSourcesConfig(t *testing.T) {
+	w := mullvadWorker(t, true)
+	if p, c := w.tunnelSource().Current(); p != "mullvad" || c != w.s.Conf {
+		t.Fatalf("single source: %s %p", p, c)
+	}
+	other := &tunnelconf.Conf{Provider: "nordvpn", Addr4: netip.MustParseAddr("203.0.113.7")}
+	w.src = fixedSource{"nordvpn", other}
+	w.sys.rememberPeer(applier.PeerConfig{PublicKey: otherKey, Endpoint: "198.51.100.10:51820", AllowedIPs: []string{"0.0.0.0/0"}})
+	if p := w.tunnelParams(); p.Conf != other || p.ExitIf != "mullvad" {
+		t.Fatalf("source not used: %+v", p)
+	}
+}
+
+// The starting expected state takes its return path from the config as it
+// did before tunnel.ReturnPathOf.
+func TestSpecReturnPathFromTheConfig(t *testing.T) {
+	a4, a6 := netip.MustParseAddr("203.0.113.2"), netip.MustParseAddr("2001:db8:3::2")
+	for name, tc := range map[string]struct {
+		conf   *tunnelconf.Conf
+		v4, v6 int
+		leave  bool
+	}{
+		"both":    {&tunnelconf.Conf{Provider: "mullvad", Addr4: a4, Addr6: a6}, 1, 1, false},
+		"v4 only": {&tunnelconf.Conf{Provider: "nordvpn", Addr4: a4}, 1, 0, false},
+		"none":    {&tunnelconf.Conf{Provider: "pia"}, 0, 0, true},
+		"no conf": {nil, 0, 0, false},
+	} {
+		w := mullvadWorker(t, false)
+		w.s.Conf = tc.conf
+		sp := w.spec()
+		if len(sp.ReturnPath[rtnl.V4]) != tc.v4 || len(sp.ReturnPath[rtnl.V6]) != tc.v6 ||
+			sp.LeaveReturnPath[rtnl.V4] != tc.leave || sp.LeaveReturnPath[rtnl.V6] != tc.leave || sp.TempGuard == nil {
+			t.Errorf("%s: %+v", name, sp)
+		}
 	}
 }

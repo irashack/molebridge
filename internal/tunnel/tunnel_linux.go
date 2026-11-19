@@ -16,6 +16,7 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/mutator"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnel/wgnl"
 	"github.com/irashack/molebridge/internal/tunnelconf"
@@ -445,6 +446,88 @@ func (m *Manager) configure(ctx context.Context, p Params) error {
 		return fmt.Errorf("tunnel: configure %s: %w", p.ExitIf, err)
 	}
 	return nil
+}
+
+// Replace swaps the tunnel's whole configuration: key, addresses, MTU,
+// peer and the exit table's default route. It runs as one operation of the
+// mutation owner, within its 10-second bound, and never across a provider
+// HTTP call (registration happens before it is queued).
+//
+// The owner runs the steps (mutator.ReplaceTunnel): the expected state takes
+// the new return path, keeping the old one meanwhile, and the new rules 94
+// and 98 go in; the old link is deleted, its routes in the exit table first;
+// the old rules are removed, each deletion asked of internal/policy; then the
+// new link is created as Up creates it. A failure at any step leaves no link
+// (the old one, or a half-built new one), the expected state naming the new
+// return path and whatever is still live, and the exit table's fallback in
+// place: the exit has no tunnel and fails closed until recovery brings up
+// the configuration its TunnelSource names. Only a kernel that refuses even
+// the link's removal leaves the old link up; the error says so, and the
+// caller retries.
+//
+// from and to name the same interface: a tunnel's name never changes while
+// the exit runs. from's addresses are added to what the owner already
+// protects; its link, whatever it holds, is the one deleted.
+func (m *Manager) Replace(ctx context.Context, owner *mutator.Mutator, from, to Params) error {
+	if to.Conf == nil {
+		return errors.New("tunnel: no config to replace the tunnel with")
+	}
+	if owner == nil {
+		return errors.New("tunnel: no mutation owner")
+	}
+	exit := owner.Expected().Config.ExitIf
+	if from.ExitIf != to.ExitIf || to.ExitIf != exit {
+		return fmt.Errorf("tunnel: a replacement keeps the interface name %s (from %q, to %q)", exit, from.ExitIf, to.ExitIf)
+	}
+	rp, leave := ReturnPathOf(to.Conf)
+	var old []netip.Addr
+	if from.Conf != nil {
+		for _, a := range []netip.Addr{from.Conf.Addr4, from.Conf.Addr6} {
+			if a.IsValid() {
+				old = append(old, a)
+			}
+		}
+	}
+	return owner.ReplaceTunnel(ctx, mutator.TunnelChange{
+		ReturnPath: rp, LeaveReturnPath: leave, Old: old,
+		RemoveLink: func(tx *mutator.Tx) error { return m.removeLink(tx.Context(), exit) },
+		CreateLink: func(tx *mutator.Tx) error { return m.UpContext(tx.Context(), to) },
+	})
+}
+
+// removeLink deletes the named link, if there is one, and confirms it is gone.
+// Its addresses and routes go with it. Like a failed Up's cleanup, it runs
+// even when ctx has ended: it then gets cleanupBudget of its own.
+func (m *Manager) removeLink(ctx context.Context, name string) error {
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), cleanupBudget)
+		defer cancel()
+	} else {
+		var cancel context.CancelFunc
+		ctx, cancel = budgeted(ctx)
+		defer cancel()
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	return m.rtDo(ctx, func(r routeAPI) error {
+		l, err := r.LinkByName(name)
+		if err != nil {
+			if notFound(err) {
+				return nil
+			}
+			return fmt.Errorf("tunnel: look up %s: %w", name, err)
+		}
+		if err := r.DelLink(l.Index); err != nil && !notFound(err) {
+			return fmt.Errorf("tunnel: delete %s: %w", name, err)
+		}
+		if _, err := r.LinkByName(name); err == nil {
+			return fmt.Errorf("tunnel: %s remains after its deletion", name)
+		} else if !notFound(err) {
+			return fmt.Errorf("tunnel: look up %s: %w", name, err)
+		}
+		return nil
+	})
 }
 
 // Down is `wg-quick down`; see DownContext.

@@ -20,6 +20,7 @@ import (
 	"github.com/irashack/molebridge/internal/mutator"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnel"
+	"github.com/irashack/molebridge/internal/tunnelconf"
 	"github.com/irashack/molebridge/internal/validate"
 	"github.com/irashack/molebridge/internal/watch"
 )
@@ -90,6 +91,9 @@ type worker struct {
 	watcher *watch.Watcher
 	sys     *KernelSystem
 	pipe    Pipeline
+	// src is the tunnel configuration recovery rebuilds; nil is the
+	// single-provider exit's (singleSource). Nothing sets it yet.
+	src tunnel.TunnelSource
 
 	// drillStop is set by the drill-only hook (worker_hook_drill_linux.go).
 	drillStop func()
@@ -262,18 +266,10 @@ func (w *worker) renewLoop() {
 func (w *worker) spec() contract.Spec {
 	sp := contract.Spec{Config: w.s.Routing, ReturnPath: map[rtnl.Family][]netip.Addr{},
 		LeaveReturnPath: map[rtnl.Family]bool{}, TempGuard: map[rtnl.Family]bool{}}
-	if c := w.s.Conf; c != nil {
-		if c.Addr4.IsValid() {
-			sp.ReturnPath[rtnl.V4] = []netip.Addr{c.Addr4}
-		}
-		if c.Addr6.IsValid() {
-			sp.ReturnPath[rtnl.V6] = []netip.Addr{c.Addr6}
-		}
-		if c.RuleOwner() == "applier" {
-			// A config with no address leaves rules 94 and 98 to the
-			// transaction that sets the address (PIA).
-			sp.LeaveReturnPath[rtnl.V4], sp.LeaveReturnPath[rtnl.V6] = true, true
-		}
+	if w.s.Conf != nil {
+		// A config with no address leaves rules 94 and 98 to the
+		// transaction that sets the address (PIA).
+		sp.ReturnPath, sp.LeaveReturnPath = tunnel.ReturnPathOf(w.s.Conf)
 	}
 	return sp
 }
@@ -508,25 +504,46 @@ func (w *worker) publish(r validate.ObjectMarshaler) error {
 	return w.send.send(Msg{Type: TypeStatus, Rec: r})
 }
 
+// tunnelParams is the tunnel the tunnel loop brings up, at start and after a
+// loss: the configuration the tunnel source names.
 func (w *worker) tunnelParams() tunnel.Params {
-	p := tunnel.Params{ExitIf: w.s.Routing.ExitIf, Conf: w.s.Conf}
-	// The tunnel comes up on the last peer set, the selected server's, when
-	// there is one: at start (StartPeer) and after a tunnel loss. Otherwise a
-	// Mullvad tunnel would leave through its config's starting server, and a
-	// NordVPN one pass nothing, until the next switch.
-	if w.rememberedPeerApplies() {
-		if peer := w.sys.lastPeer(); peer != nil {
-			conf := *w.s.Conf
-			conf.Peer = peer
-			p.Conf = &conf
-		}
-	}
+	_, conf := w.tunnelSource().Current()
+	p := tunnel.Params{ExitIf: w.s.Routing.ExitIf, Conf: conf}
 	if w.s.Routing.IsNativeSidecar() {
 		// Rule 93 sends the device's own UDP to the host by this mark;
 		// everything else the namespace sends goes to the exit table.
 		p.FirewallMark = w.s.Routing.TunnelMark()
 	}
 	return p
+}
+
+// tunnelSource is what recovery rebuilds: the source set for the worker, or
+// a single-provider exit's.
+func (w *worker) tunnelSource() tunnel.TunnelSource {
+	if w.src != nil {
+		return w.src
+	}
+	return singleSource{w}
+}
+
+// singleSource is a single-provider exit's TunnelSource: its one config.
+type singleSource struct{ w *worker }
+
+// Current is the config on the last peer set, the selected server's, when
+// there is one: at start (StartPeer) and after a tunnel loss. Otherwise a
+// Mullvad tunnel would leave through its config's starting server, and a
+// NordVPN one pass nothing, until the next switch.
+func (s singleSource) Current() (string, *tunnelconf.Conf) {
+	w := s.w
+	conf := w.s.Conf
+	if w.rememberedPeerApplies() {
+		if peer := w.sys.lastPeer(); peer != nil {
+			c := *w.s.Conf
+			c.Peer = peer
+			conf = &c
+		}
+	}
+	return w.s.Provider, conf
 }
 
 // rememberedPeerApplies is whether the tunnel is brought up on the last peer
