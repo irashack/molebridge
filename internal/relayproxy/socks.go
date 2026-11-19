@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // The client side of SOCKS5 (RFC 1928) for a relay proxy: no
@@ -47,6 +48,21 @@ func (e *ReplyError) Error() string {
 		return "relayproxy: relay proxy replied " + text
 	}
 	return fmt.Sprintf("relayproxy: relay proxy replied code %d", e.Code)
+}
+
+// Unwrap is the errno the proxy maps to its own reply: "connection refused"
+// is ECONNREFUSED, "host unreachable" EHOSTUNREACH, "network unreachable"
+// ENETUNREACH; other codes wrap nothing.
+func (e *ReplyError) Unwrap() error {
+	switch e.Code {
+	case ReplyConnectionRefused:
+		return syscall.ECONNREFUSED
+	case ReplyHostUnreachable:
+		return syscall.EHOSTUNREACH
+	case ReplyNetworkUnreachable:
+		return syscall.ENETUNREACH
+	}
+	return nil
 }
 
 // Target reports whether the reply is about the target, not the relay
@@ -120,11 +136,11 @@ func connectRequest(host string, port uint16) []byte {
 // reply is a *ReplyError; anything else malformed is ErrHandshake.
 func socksConnect(conn net.Conn, host string, port uint16) error {
 	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
-		return fmt.Errorf("%w: %v", ErrHandshake, err)
+		return fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	var choice [2]byte
 	if _, err := io.ReadFull(conn, choice[:]); err != nil {
-		return fmt.Errorf("%w: %v", ErrHandshake, err)
+		return fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	if choice[0] != 5 {
 		return ErrHandshake
@@ -133,11 +149,11 @@ func socksConnect(conn net.Conn, host string, port uint16) error {
 		return ErrNoAuth
 	}
 	if _, err := conn.Write(connectRequest(host, port)); err != nil {
-		return fmt.Errorf("%w: %v", ErrHandshake, err)
+		return fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	var head [4]byte
 	if _, err := io.ReadFull(conn, head[:]); err != nil {
-		return fmt.Errorf("%w: %v", ErrHandshake, err)
+		return fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	if head[0] != 5 {
 		return ErrHandshake
@@ -159,7 +175,7 @@ func socksConnect(conn net.Conn, host string, port uint16) error {
 	case 3:
 		var n [1]byte
 		if _, err := io.ReadFull(conn, n[:]); err != nil {
-			return fmt.Errorf("%w: %v", ErrHandshake, err)
+			return fmt.Errorf("%w: %w", ErrHandshake, err)
 		}
 		if n[0] == 0 {
 			return ErrHandshake
@@ -170,7 +186,7 @@ func socksConnect(conn net.Conn, host string, port uint16) error {
 	}
 	// The bound address is read and dropped: nothing here needs it.
 	if _, err := io.ReadFull(conn, make([]byte, rest)); err != nil {
-		return fmt.Errorf("%w: %v", ErrHandshake, err)
+		return fmt.Errorf("%w: %w", ErrHandshake, err)
 	}
 	return nil
 }

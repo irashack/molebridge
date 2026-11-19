@@ -61,7 +61,7 @@ func TestDirectDialUsesTheExitsCurrentServer(t *testing.T) {
 	g.dialer.handle("192.0.2.11:443", echo)
 	g.dialer.handle("192.0.2.5:22", echo)
 	ctx := context.Background()
-	for _, location := range []string{"any", "se", "se-gothenburg", "se123.nordvpn.com", "SE"} {
+	for _, location := range []string{"any", "se", "se-gothenburg", "se123", "SE"} {
 		conn, server, err := g.relays.Dial(ctx, location, "de45.nordvpn.com", "example.net:443")
 		if err != nil || server != "se123.nordvpn.com" {
 			t.Fatalf("%s: %s %v", location, server, err)
@@ -107,7 +107,7 @@ func TestDirectDialRefusals(t *testing.T) {
 		}
 	}
 	g.setResult(t, `{"server": "se123.nordvpn.com"}`)
-	for _, location := range []string{"de", "de-frankfurt", "de45.nordvpn.com", "se-stockholm"} {
+	for _, location := range []string{"de", "de-frankfurt", "de45", "se12", "se-stockholm"} {
 		if _, _, err := g.relays.Dial(ctx, location, "", "192.0.2.5:22"); !errors.Is(err, ErrNoServer) {
 			t.Errorf("%s: %v", location, err)
 		}

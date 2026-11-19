@@ -122,14 +122,15 @@ func (c *catalog) stale(path string) bool {
 }
 
 // location is a parsed location: "any", a country ("se"), a city ("se-got")
-// or a server name ("se-got-wg-001", a PIA region id, a NordVPN host name),
-// which only the catalogue tells apart.
+// or a server name ("se-got-wg-001", a PIA region id, a NordVPN host name's
+// first label, "se123"), which only the catalogue tells apart. A location
+// never holds a dot: the proxy's username puts one before the session.
 type location struct {
 	any   bool
 	value string
 }
 
-var locationRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+var locationRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // parseLocation checks a location and lowercases it (ASCII only, checked
 // first, so no other character can fold into a match).
@@ -145,10 +146,15 @@ func parseLocation(text string) (location, error) {
 }
 
 // matches reports whether s is in the location: every server for "any", the
-// country's for a country code, the server itself for its name, and the
-// city's for a location code.
+// country's for a country code, the server itself for its name (a NordVPN
+// server for its host name's first label), and the city's for a location
+// code.
 func (l location) matches(s server) bool {
-	return l.any || s.name == l.value || s.city == l.value || s.country == l.value
+	if l.any || s.name == l.value || s.city == l.value || s.country == l.value {
+		return true
+	}
+	first, _, dotted := strings.Cut(s.name, ".")
+	return dotted && first == l.value
 }
 
 // currentServer is the exit's current server from its result.json, when it
