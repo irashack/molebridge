@@ -163,8 +163,10 @@ func fakeWorker(mode string) {
 					go func() {
 						time.Sleep(700 * time.Millisecond)
 						renew()
-						_ = send.Send(Msg{Type: TypeReady, Gen: gen})
+						// Traced before it is sent: the supervisor may act on
+						// it before a trace written afterwards lands.
 						trace("worker ready again")
+						_ = send.Send(Msg{Type: TypeReady, Gen: gen})
 					}()
 				}
 			}
@@ -191,8 +193,10 @@ func fakeWorker(mode string) {
 	status()
 	time.Sleep(100 * time.Millisecond)
 	renew()
-	_ = send.Send(Msg{Type: TypeReady, Gen: gen})
+	// Traced before it is sent, so the trace's order is the order the
+	// supervisor saw: it may start NetBird before a later write lands.
 	trace("worker ready")
+	_ = send.Send(Msg{Type: TypeReady, Gen: gen})
 	for {
 		time.Sleep(200 * time.Millisecond)
 		if mode == "freeze" && time.Since(start) > time.Second {
