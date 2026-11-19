@@ -19,6 +19,50 @@ var update = flag.Bool("update", false, "rewrite the golden files in testdata/")
 // root is the repository root, where the shipped Compose files are.
 const root = "../../.."
 
+// withProxy turns the proxy switch on for one test, as a release with the
+// proxy role will.
+func withProxy(t *testing.T) {
+	t.Helper()
+	old := proxyAvailable
+	proxyAvailable = "true"
+	t.Cleanup(func() { proxyAvailable = old })
+}
+
+// TestProxyRefusedWhileOff: until the switch is on, the proxy is refused
+// in an answers file and on the terminal, whatever it is combined with, and
+// the prompt doesn't offer it.
+func TestProxyRefusedWhileOff(t *testing.T) {
+	for _, a := range []Answers{
+		{"mullvad", []string{WayNetBird, WayProxy}, nil},
+		{"pia", []string{WaySidecar, WayProxy}, []string{ExtraPortSync}},
+		{"mullvad", []string{WayProxy}, nil},
+		{"gluetun-nordvpn", []string{WayNetBird, WayProxy}, nil},
+	} {
+		if _, err := a.Plan(); err == nil || err.Error() != proxyRefusal {
+			t.Errorf("%+v: %v", a, err)
+		}
+	}
+	answers := writeAnswers(t, `{"schema":1,"provider":"mullvad","ways_in":["netbird-exit","proxy"]}`)
+	dir := t.TempDir()
+	code, _, stderr := run(t, "", false, "--out", dir, "--answers", answers)
+	if code != 1 || stderr != "molebridge init: the proxy is being built and init does not offer it yet; see docs/design/menu.md.\n" {
+		t.Errorf("answers file: exit %d, %q", code, stderr)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("a refusal wrote %v", entries)
+	}
+	code, stdout, stderr := run(t, "mullvad\nnetbird-exit proxy\nnetbird-exit\n\n", true, "--out", t.TempDir())
+	if code != 0 || !strings.Contains(stdout, proxyRefusal) {
+		t.Errorf("prompt: exit %d, %s %s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Ways in, comma-separated (netbird-exit, sidecar): ") {
+		t.Errorf("the prompt offers the proxy: %s", stdout)
+	}
+	if code, out, _ := run(t, "", false, "--help"); code != 0 || strings.Contains(out, `"proxy"`) {
+		t.Errorf("--help offers the proxy: %s", out)
+	}
+}
+
 func TestParseAnswers(t *testing.T) {
 	a, err := ParseAnswers([]byte(`{"schema": 1, "provider": "pia", "ways_in": ["sidecar", "proxy"], "extras": ["port-sync"]}`))
 	if err != nil {
@@ -62,6 +106,7 @@ func TestParseAnswers(t *testing.T) {
 }
 
 func TestPlanRefusals(t *testing.T) {
+	withProxy(t)
 	for _, c := range []struct {
 		a    Answers
 		want string
@@ -111,12 +156,23 @@ func allProviders() []string {
 }
 
 // TestEveryCombination tries every provider and every set of ways in and
-// extras: init accepts exactly 52 combinations (each native provider with
-// netbird-exit or sidecar, each with or without the proxy, with or without
-// Switchyard: 24; PIA's sidecar with port-sync: 4 more; each of the six
-// gluetun providers with netbird-exit or sidecar, with or without
-// Switchyard: 24), the number tools/check-compose.sh checks too.
+// extras. With the proxy switch on, init accepts exactly 52 combinations
+// (each native provider with netbird-exit or sidecar, each with or without
+// the proxy, with or without Switchyard: 24; PIA's sidecar with port-sync:
+// 4 more; each of the six gluetun providers with netbird-exit or sidecar,
+// with or without Switchyard: 24). With it off, the 14 with the proxy go:
+// 38. tools/check-compose.sh checks the same numbers.
 func TestEveryCombination(t *testing.T) {
+	if got := combinations(t); got != 38 {
+		t.Fatalf("init accepts %d combinations with the proxy off, want 38", got)
+	}
+	withProxy(t)
+	if got := combinations(t); got != 52 {
+		t.Fatalf("init accepts %d combinations with the proxy on, want 52", got)
+	}
+}
+
+func combinations(t *testing.T) int {
 	accepted := 0
 	for _, prov := range allProviders() {
 		for _, ways := range subsets(Ways) {
@@ -173,9 +229,7 @@ func TestEveryCombination(t *testing.T) {
 			}
 		}
 	}
-	if accepted != 52 {
-		t.Fatalf("init accepts %d combinations, want 52", accepted)
-	}
+	return accepted
 }
 
 // shippedBlocks splits a Compose file's services into their blocks of
@@ -354,6 +408,7 @@ func envSettings(text string) map[string]string {
 // form's example, with the example's values except the ones the answers
 // decide, and nothing else but the proxy's.
 func TestEnvMatchesExamples(t *testing.T) {
+	withProxy(t)
 	examples := map[string]string{
 		FormOverlay: ".env.example", FormGluetunOverlay: ".env.gluetun.example",
 		FormGluetunSidecar: ".env.sidecar.example", FormNativeSidecar: ".env.native-sidecar.example",
@@ -422,6 +477,7 @@ func TestEnvMatchesExamples(t *testing.T) {
 // (the release automation moves them; TestBlocksMatchShippedFiles checks
 // them). go test -run TestGolden -update rewrites the files.
 func TestGolden(t *testing.T) {
+	withProxy(t)
 	for name, a := range map[string]Answers{
 		"mullvad-netbird-switchyard":   {"mullvad", []string{WayNetBird}, []string{ExtraSwitchyard}},
 		"nordvpn-netbird-proxy":        {"nordvpn", []string{WayNetBird, WayProxy}, nil},
@@ -544,7 +600,7 @@ func TestMainRefusals(t *testing.T) {
 		{[]string{"--out", dir}, 2, "no terminal to ask on; pass --answers FILE"},
 		{[]string{"--out", dir, "--answers", filepath.Join(dir, "missing.json")}, 1, "can't read the answers file"},
 		{[]string{"--out", dir, "--answers", writeAnswers(t, `{"schema":1,"provider":"gluetun-nordvpn","ways_in":["proxy","netbird-exit"]}`)}, 1,
-			"molebridge init: the proxy needs a native provider"},
+			"molebridge init: the proxy is being built"},
 		{[]string{"--out", dir, "--answers", writeAnswers(t, `{"schema":1}`)}, 1, "provider must be a name"},
 	} {
 		code, _, stderr := run(t, "", false, c.args...)
@@ -564,6 +620,7 @@ func TestMainRefusals(t *testing.T) {
 func TestMainAsks(t *testing.T) {
 	out := t.TempDir()
 	// An unknown name is asked again; then the same answers as a file.
+	withProxy(t)
 	code, stdout, stderr := run(t, "expressvpn\nPIA\nsidecar, vpn\nsidecar proxy\n\n", true, "--out", out)
 	if code != 0 {
 		t.Fatalf("exit %d: %s %s", code, stdout, stderr)

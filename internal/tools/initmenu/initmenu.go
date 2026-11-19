@@ -42,6 +42,27 @@ var (
 	Extras = []string{ExtraSwitchyard, ExtraPortSync}
 )
 
+// proxyAvailable is the switch for the proxy way in. It stays "false" until
+// a release has the proxy role (docs/design/menu.md): until then init refuses
+// the proxy rather than write a service that can't run. The tests set it,
+// and tools/check-compose.sh builds a binary with
+// -ldflags "-X <this package>.proxyAvailable=true" to check the proxy's
+// output; no release is built that way.
+var proxyAvailable = "false"
+
+func proxyOn() bool { return proxyAvailable == "true" }
+
+// proxyRefusal is the refusal while the switch is off.
+const proxyRefusal = "the proxy is being built and init does not offer it yet; see docs/design/menu.md."
+
+// offeredWays are the ways in init offers now.
+func offeredWays() []string {
+	if proxyOn() {
+		return Ways
+	}
+	return []string{WayNetBird, WaySidecar}
+}
+
 // The forms: which shipped Compose file a plan's services come from.
 const (
 	FormOverlay        = "overlay"         // compose.yaml
@@ -124,14 +145,14 @@ release. It never overwrites a file unless --force is given.
   provider   mullvad, pia, nordvpn, or gluetun-<id> for a provider gluetun
              drives (gluetun-fastestvpn, gluetun-ivpn, gluetun-mullvad,
              gluetun-nordvpn, gluetun-surfshark, gluetun-windscribe)
-  ways in    one or more of netbird-exit, sidecar, proxy
-             (proxy: native providers only, beside netbird-exit or sidecar)
+  ways in    one or more of netbird-exit, sidecar (the proxy is being
+             built and not offered yet: docs/design/menu.md)
   extras     none, or switchyard, port-sync (port-sync: PIA with sidecar)
 
 The answers file is JSON, at most 4096 bytes, with exactly these members
 (extras may be left out):
 
-  {"schema": 1, "provider": "pia", "ways_in": ["sidecar", "proxy"],
+  {"schema": 1, "provider": "pia", "ways_in": ["sidecar"],
    "extras": ["switchyard", "port-sync"]}
 
 docs/setup.md#molebridge-init says what to do with the result.
@@ -172,7 +193,10 @@ func (a Answers) Plan() (Plan, error) {
 		return p, err
 	}
 	if len(a.WaysIn) == 0 {
-		return p, refuse("choose at least one way in: %s.", strings.Join(Ways, ", "))
+		return p, refuse("choose at least one way in: %s.", strings.Join(offeredWays(), ", "))
+	}
+	if slices.Contains(a.WaysIn, WayProxy) && !proxyOn() {
+		return p, Refusal(proxyRefusal)
 	}
 	netbird := slices.Contains(a.WaysIn, WayNetBird)
 	sidecar := slices.Contains(a.WaysIn, WaySidecar)
@@ -586,10 +610,13 @@ func ask(o Options) (Answers, error) {
 		return a, err
 	}
 	a.Provider = strings.ToLower(prov)
-	ways, err := question("Ways in, comma-separated ("+strings.Join(Ways, ", ")+"): ", func(s string) error {
+	ways, err := question("Ways in, comma-separated ("+strings.Join(offeredWays(), ", ")+"): ", func(s string) error {
 		list := splitList(s)
 		if len(list) == 0 {
 			return refuse("choose at least one way in.")
+		}
+		if slices.Contains(list, WayProxy) && !proxyOn() {
+			return Refusal(proxyRefusal)
 		}
 		return checkNames("way in", list, Ways)
 	})
