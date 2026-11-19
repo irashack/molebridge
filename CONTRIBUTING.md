@@ -208,20 +208,21 @@ carry the socket of the packet inside, so they are counted apart). The live dril
 the rig. `TestSystemRigFailover*` run [automatic failover's](docs/configuration.md#automatic-failover)
 drills (`systemrig_failover_test.go`) with `FAILOVER=same-city`, the two relays in one city, and a
 binary built with the `drill` tag, whose hook (`internal/exit/failover_hook_drill.go`) shortens
-`FAILOVER_AFTER` to 30 seconds and the returns to 45 seconds apart; the production build has no
-such hook and the settings keep their 120-second minimum. Relay A drops WireGuard: the exit moves
-to B (`source` `failover`, the `failover` member, the log line, `location.json` unchanged, the
-panel's "connected to backup" and its note, the client by B); a return while A still drops goes
+`FAILOVER_AFTER` to its 120-second minimum and the returns to 45 seconds apart, and logs what
+the policy sees on each pass; the production build has no such hook. Relay A drops WireGuard: the
+first check after the drop must count and the exit move to B within `FAILOVER_AFTER` plus a
+minute of it (`source` `failover`, the `failover` member, the log line, `location.json` unchanged,
+the panel's "connected to backup" and its note, the client by B); a return while A still drops goes
 back to B; once A answers, the next return ends the episode. With the relay API also unreachable
 over the host path the uplink probe holds the failover until it answers; a panel request during
 the episode is applied at once and ends it; and with both relays dropping, the episode is exhausted
 (`failover-exhausted` in the panel, "No backup verified"). The leak counter must stay at zero. The
-handshake goes stale only after 180 seconds and a settled exit is checked every 60, so these are
-the longest drills, about ten minutes. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
+failures still come from the pipeline's own checks and re-applies, and every switch waits out the
+90-second reapply guard, so these are the longest drills, about fifteen minutes. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
-go test -count=1 -v -timeout 20m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+go test -count=1 -v -timeout 25m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 ```
 
 A stopped container takes its namespace with it; on the rig the exit's namespace stays, so the stopped
