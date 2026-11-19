@@ -250,7 +250,8 @@ grep -rn 'ghcr.io/irashack/molebridge:' compose*.yaml README.md docs/setup.md .g
 `tools/auto-release.py` runs these steps without a person. The maintainer
 runs it hourly against a clean clone of the repository, with a token of the
 release bot (`MOLEBRIDGE_RELEASE_TOKEN_COMMAND`, a command that prints one,
-else `GH_TOKEN`). A tag pushed with a workflow's own `GITHUB_TOKEN` doesn't
+run again for a fresh token every two minutes and after a 401; else
+`GH_TOKEN`). A tag pushed with a workflow's own `GITHUB_TOKEN` doesn't
 start `release.yml`, so this can't run as a workflow. Each run picks up where
 the repository stands:
 

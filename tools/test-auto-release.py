@@ -171,6 +171,35 @@ class Pins(unittest.TestCase):
         self.assertEqual(out, "v0.12.0 v0.11.10 v0.12.0-rc.1 v0.12.0.")
 
 
+class Token(unittest.TestCase):
+    def test_minted_again_when_old(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            counter = Path(d) / "n"
+            script = Path(d) / "mint"
+            script.write_text(f"#!/bin/sh\necho x >> {counter}\nwc -l < {counter}\n")
+            script.chmod(0o755)
+            old = os.environ.get(ar.TOKEN_ENV)
+            os.environ[ar.TOKEN_ENV] = str(script)
+            try:
+                w = ar.World(Path(d), dry_run=True)
+                w.login()
+                first = w.env["GH_TOKEN"]
+                w.login()
+                self.assertEqual(w.env["GH_TOKEN"], first)
+                w.minted -= ar.TOKEN_AGE + 1
+                w.login()
+                self.assertNotEqual(w.env["GH_TOKEN"], first)
+                w.login(force=True)
+                self.assertEqual(w.env["GH_TOKEN"].strip(), "3")
+            finally:
+                if old is None:
+                    del os.environ[ar.TOKEN_ENV]
+                else:
+                    os.environ[ar.TOKEN_ENV] = old
+
+
 class Record(unittest.TestCase):
     def test_insert_into_real_testing(self):
         text = (ROOT / "docs/testing.md").read_text()
