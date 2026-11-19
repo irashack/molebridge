@@ -76,7 +76,8 @@ candidate` job of `release.yml`, which:
    `sbom-core-linux-<arch>.spdx.json` for molebridge-core).
 
 CI also runs on the tag push. The `ci-namespace-drills` drill in the
-acceptance policy is CI's namespace-drill job passing on the tag:
+acceptance policy is CI's namespace-drill step passing on the tag, and
+`ci-system-rig` is its System rig job passing there:
 
 ```sh
 gh run list --workflow ci.yml --branch v0.10.0-rc.1
@@ -97,20 +98,15 @@ candidate's digest. Then run what the policy names:
   changelog's **Breaking** items for this release ask for
   (`upgrade-from-0.9.4`; for 0.10.0, `net.ipv4.icmp_errors_use_inbound_ifaddr`
   on Kubernetes, and check that a native exit without it doesn't start
-  NetBird); the tunnel deleted and recovered (`tunnel-loss`); a client on the
-  exit while the panel switches
-  its server ([from a client](verification.md#from-a-client), `client-switch`);
-  the required [status drills](verification.md#status-drills)
-  (`status-drills`: a stopped exit showing stale with `/readyz` 503, the
-  egress-check failure and recheck, the 409 for a second switch, and a
-  failed switch retried; the rest of that section is recorded when it runs,
-  not required); the
-  [network exchange](verification.md#the-network-exchange) between an exit and
-  a panel on different nodes (`network-exchange`); since 0.11.0, a selected
-  server taken out of gluetun's server list and put back
+  NetBird); the tunnel deleted and recovered (`tunnel-loss`); a short
+  [network exchange](verification.md#the-network-exchange) run between an
+  exit and a panel on different nodes (`network-exchange-smoke`: the exit
+  `ok` through the exchange, one switch verified with its result back on the
+  panel, and a wrong exchange token refused with 401); since 0.11.0, a
+  selected server taken out of gluetun's server list and put back
   ([a retired server](verification.md#a-retired-server),
-  `retired-server-move`); and CI's namespace drills on the tag
-  (`ci-namespace-drills`). The procedures are in [verification](verification.md). The policy
+  `retired-server-move`); and CI's namespace drills and system rig on the tag
+  (`ci-namespace-drills`, `ci-system-rig`). The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
 
@@ -124,6 +120,19 @@ candidate's digest. Then run what the policy names:
   loss stays live, because it is the policy's one check that nothing leaves
   off the tunnel on a real host with a real provider
   ([#54](https://github.com/irashack/molebridge/issues/54)).
+
+  Since policy 16, the client switch, the four required status drills and
+  the full network exchange are no longer run by hand either: CI's System
+  rig job runs them on every commit and on the tag, with the release build
+  of the binary against fake Mullvad servers and kernel WireGuard relays
+  (`TestSystemRigClientSwitch`, `TestSystemRigStatus` and
+  `TestSystemRigExchange` in `internal/exit`;
+  [CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)), and they count through
+  `ci-system-rig`. What stays live is what the rig cannot fake: real
+  providers and relays, a real network between two nodes for the exchange,
+  the container runtimes, the signed image, and real gluetun's reconnection
+  when a server leaves its list (the rig covers that move only for
+  Mullvad's own tunnel, `TestSystemRigRetiredServer`).
 
 Write down what ran, where and with which results as you go. The record goes
 into [testing](testing.md) afterwards, in the form of the earlier candidates'
@@ -153,11 +162,11 @@ For the policy above, the coverage is:
  "providers":["mullvad","pia","nordvpn"],
  "kinds":["native","gluetun","sidecar","native-sidecar"],
  "drills":[{"id":"ci-namespace-drills","result":"passed"},
+           {"id":"ci-system-rig","result":"passed"},
            {"id":"tunnel-loss","result":"passed"},
            {"id":"upgrade-from-0.9.4","result":"passed"},
-           {"id":"client-switch","result":"passed"},
-           {"id":"status-drills","result":"passed"},
-           {"id":"network-exchange","result":"passed"}]}
+           {"id":"network-exchange-smoke","result":"passed"},
+           {"id":"retired-server-move","result":"passed"}]}
 ```
 
 Dispatch the workflow on `main`: the attestation is signed with the identity

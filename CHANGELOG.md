@@ -6,6 +6,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Acceptance policy 16: the client switch, the status drills and the full
+  network exchange are no longer live drills. CI's System rig job, required
+  on the tag, runs them with the release build against fake Mullvad servers
+  (`ci-system-rig`). A short cross-node exchange run stays live
+  (`network-exchange-smoke`), as do the tunnel loss, the upgrade and the
+  retired-server move for gluetun
+  ([releasing](docs/releasing.md#3-run-the-live-acceptance),
+  [#54](https://github.com/irashack/molebridge/issues/54)).
 - CI's new "System rig" job runs the release build of the exit and the
   panel against fake Mullvad servers and two WireGuard relays in network
   namespaces. Its first drill, client-switch, switches a client's exit

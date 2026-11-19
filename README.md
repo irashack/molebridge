@@ -110,11 +110,15 @@ written out in full; in short:
   pass the tunnel-loss drill, run from inside the exit's namespace with no
   client device held on it. Rule-drift repair and the lease lapse were run
   live the same way through 0.11.1; since then CI's namespace drills test
-  them on every commit instead ([releasing](docs/releasing.md#3-run-the-live-acceptance)). A Linux client was last held on
+  them on every commit instead ([releasing](docs/releasing.md#3-run-the-live-acceptance)). The client switch, the status
+  drills and the full network exchange were run live through 0.12.0; since
+  then CI's system rig runs them on every commit with the release build
+  against fake Mullvad servers, and a short exchange run between two nodes
+  stays live. A Linux client was last held on
   an exit through those drills at 0.7.0, whose routing the Go exit ports
   ([testing](docs/testing.md#070-on-rootless-podman-at-d5a234a)).
-- **Run in CI:** unit, fuzz and namespace-drill suites and the release checks
-  on amd64; the image checks on amd64 and arm64.
+- **Run in CI:** unit, fuzz, namespace-drill and system-rig suites and the
+  release checks on amd64; the image checks on amd64 and arm64.
 - **Not tested:** Docker Engine, podman-compose and NetBird Cloud; running the
   shipped Compose files on any engine (CI validates them with
   `docker compose config`; the live exits ran from Quadlet units and
