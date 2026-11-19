@@ -573,7 +573,8 @@ def step_record(w: World, stable: str) -> str:
     root = w.dir
     files = {}
     changelog = (root / "CHANGELOG.md").read_text()
-    files["CHANGELOG.md"] = date_changelog(changelog, stable, acc["day"])
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    files["CHANGELOG.md"] = date_changelog(changelog, stable, today)
     policy = json.loads((root / "tools/acceptance-policy.json").read_text())
     files["docs/testing.md"] = insert_record(
         (root / "docs/testing.md").read_text(),
@@ -708,6 +709,8 @@ def main() -> int:
                 print(f"held: {why}")
                 return 0
             outcome = step(w)
+            if not w.dry:
+                save("failures", 0)
             if outcome in (LONG, IDLE) or w.dry or time.monotonic() > deadline:
                 return 0
             if outcome == SHORT:
@@ -718,11 +721,13 @@ def main() -> int:
         print(f"blocked: {b.title} (#{n})", file=sys.stderr)
         return 1
     except Exception as e:  # noqa: BLE001 - one place reports any failure
-        title = f"{BLOCKED}the automation failed"
-        try:
-            file_issue(w, title, f"`tools/auto-release.py` stopped: {e}")
-        finally:
-            print(f"failed: {e}", file=sys.stderr)
+        # One failure may be the network; the second in a row files an issue.
+        print(f"failed: {e}", file=sys.stderr)
+        failures = (state("failures") or 0) + 1
+        save("failures", failures)
+        if failures >= 2:
+            file_issue(w, f"{BLOCKED}the automation failed",
+                       f"`tools/auto-release.py` failed {failures} runs in a row; the last: {e}")
         return 1
 
 

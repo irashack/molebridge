@@ -282,7 +282,8 @@ the repository stands:
 
 It stops and opens an issue titled `Release blocked: ...` on a **Breaking**
 item in the changelog, a failed workflow or CI, a failed live acceptance, or
-digests that don't match. While that issue, or any issue or pull request
+digests that don't match, and when the script itself fails two runs in a row.
+While that issue, or any issue or pull request
 labeled `hold-release`, is open, it does nothing. Close the issue to let it go
 on. After a failed acceptance it tags the next candidate from `main` once
 `main` has moved on and CI passes. A `needs-attended` result waits for a later
