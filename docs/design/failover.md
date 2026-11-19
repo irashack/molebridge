@@ -9,12 +9,13 @@ verdict](#the-verdict) (`internal/verdict` reads the `failover` member),
 and the applier's wiring, `failover.json`, the settings, the uplink probe
 and the panel's wording (fake-kernel and panel tests; the user
 documentation is [automatic failover](../configuration.md#automatic-failover),
-experimental). Still to come: the system rig drills; the live drill has not
-run. The choices marked **(owner)** are product decisions, gathered in
-[decisions for the owner](#decisions-for-the-owner): the owner took every
-recommended default (2026-11-19, issue #90), and the code keeps each one a
-named constant; the rest follows from the code as it is. When the feature
-ships, its user documentation replaces
+experimental), and the [system rig drills](#system-rig-drills) 1 to 6
+(`internal/exit/systemrig_failover_test.go`, run in CI only). The live
+drill has not run. The choices marked **(owner)** are product decisions,
+gathered in [decisions for the owner](#decisions-for-the-owner): the owner
+took every recommended default (2026-11-19, issue #90), and the code keeps
+each one a named constant; the rest follows from the code as it is. When
+the feature ships, its user documentation replaces
 this file.
 
 ## What it is
