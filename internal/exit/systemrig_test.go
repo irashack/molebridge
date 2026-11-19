@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"math/big"
@@ -156,6 +157,27 @@ type systemRig struct {
 
 	mu     sync.Mutex
 	served []string
+	// hold, while not nil, keeps Mullvad check answers on port 443 (the
+	// exit's, never the client's probes) waiting until it is closed.
+	hold chan struct{}
+}
+
+// holdChecks makes the exit's Mullvad check requests wait; the returned
+// function releases them.
+func (r *systemRig) holdChecks() func() {
+	ch := make(chan struct{})
+	r.mu.Lock()
+	r.hold = ch
+	r.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			r.hold = nil
+			r.mu.Unlock()
+			close(ch)
+		})
+	}
 }
 
 func (r *systemRig) logServed(format string, a ...any) {
@@ -501,6 +523,20 @@ func (r *systemRig) startServers() {
 		src = src.Unmap()
 		rl := r.relayBySNAT(src)
 		r.logServed("check %s%s from %s (relay %v)", req.Host, req.URL.Path, src, rl != nil)
+		if local, _ := req.Context().Value(http.LocalAddrContextKey).(net.Addr); local != nil && req.URL.Path == "/json" &&
+			!strings.HasSuffix(local.String(), ":"+rigClientPort) {
+			r.mu.Lock()
+			hold := r.hold
+			r.mu.Unlock()
+			if hold != nil {
+				r.logServed("check held")
+				select {
+				case <-hold:
+				case <-req.Context().Done():
+					return
+				}
+			}
+		}
 		if req.URL.Path != "/json" {
 			// An IP echo service: the caller's address as plain text.
 			fmt.Fprintln(w, src.String())
@@ -671,57 +707,120 @@ exec setpriv --reuid=` + fmt.Sprint(rigPanelUID) + ` --regid=` + fmt.Sprint(rigP
 	}
 }
 
-var rigCSRF = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
+var rigHidden = regexp.MustCompile(`<input type="hidden" name="([a-z_]+)" value="([^"]*)">`)
 
-// panelSwitch asks the panel for a server as a browser would: the page for
-// the CSRF cookie and token, then the form post. It returns the request id
-// the panel wrote and when the post was answered.
-func (r *systemRig) panelSwitch(host string) (string, time.Time) {
-	t := r.t
-	client := nsClient(r.panelNS, nil, "", 10*time.Second)
-	resp, err := client.Get("http://127.0.0.1:8080/")
+// panelGet fetches a panel path and returns the status and body.
+func (r *systemRig) panelGet(path string) (int, []byte, *http.Response) {
+	r.t.Helper()
+	resp, err := nsClient(r.panelNS, nil, "", 10*time.Second).Get("http://127.0.0.1:8080" + path)
 	if err != nil {
-		t.Fatal(err)
+		r.t.Fatalf("GET %s: %v", path, err)
 	}
-	page, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	m := rigCSRF.FindSubmatch(page)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, resp
+}
+
+// panelStatus is the panel's /api/status verdict.
+func (r *systemRig) panelStatus() map[string]any {
+	r.t.Helper()
+	code, body, _ := r.panelGet("/api/status")
+	var payload map[string]any
+	if code != 200 || json.Unmarshal(body, &payload) != nil {
+		r.t.Fatalf("/api/status: %d %s", code, body)
+	}
+	v, _ := payload["verdict"].(map[string]any)
+	return v
+}
+
+// panelPost submits the page's server form as a browser would: the page's
+// CSRF cookie and the form's hidden fields, with server set to host (a
+// server's button, or Retry, which names the server the same way). It
+// returns the answer's status and body, when it came, and the page it posted
+// from.
+func (r *systemRig) panelPost(host string) (int, string, time.Time, string) {
+	t := r.t
+	code, page, resp := r.panelGet("/")
 	var nonce string
 	for _, c := range resp.Cookies() {
 		if c.Name == "csrf_nonce" {
 			nonce = c.Value
 		}
 	}
-	if resp.StatusCode != 200 || m == nil || nonce == "" {
-		t.Fatalf("panel page: %d, token %v, nonce %q", resp.StatusCode, m != nil, nonce)
+	form := url.Values{}
+	if start := bytes.Index(page, []byte(`id="select-form">`)); start >= 0 {
+		for _, m := range rigHidden.FindAllSubmatch(page[start:], 3) {
+			form.Set(string(m[1]), html.UnescapeString(string(m[2])))
+		}
 	}
-	form := url.Values{"server": {host}, "csrf_token": {string(m[1])}}.Encode()
-	req, err := http.NewRequest("POST", "http://127.0.0.1:8080/select", strings.NewReader(form))
+	if code != 200 || nonce == "" || form.Get("csrf_token") == "" {
+		t.Fatalf("panel page: %d, nonce %q, form %v", code, nonce, form)
+	}
+	form.Set("server", host)
+	req, err := http.NewRequest("POST", "http://127.0.0.1:8080/select", strings.NewReader(form.Encode()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(&http.Cookie{Name: "csrf_nonce", Value: nonce})
-	resp, err = client.Do(req)
+	resp, err = nsClient(r.panelNS, nil, "", 10*time.Second).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	at := time.Now()
-	if resp.StatusCode != http.StatusSeeOther {
-		t.Fatalf("switch to %s: %d %s", host, resp.StatusCode, body)
+	return resp.StatusCode, string(body), time.Now(), string(page)
+}
+
+// panelSwitch asks the panel for a server and requires the 303. It returns
+// the request id the panel wrote and when the post was answered.
+func (r *systemRig) panelSwitch(host string) (string, time.Time) {
+	t := r.t
+	code, body, at, _ := r.panelPost(host)
+	if code != http.StatusSeeOther {
+		t.Fatalf("switch to %s: %d %s", host, code, body)
 	}
+	return r.requestID(host), at
+}
+
+// requestID is the request id of the panel's desired.json, which must name
+// host.
+func (r *systemRig) requestID(host string) string {
+	t := r.t
 	raw, err := os.ReadFile(filepath.Join(r.stateDir, "panel", "desired.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var desired map[string]any
 	if err := json.Unmarshal(raw, &desired); err != nil || desired["server"] != host {
-		t.Fatalf("desired.json after the switch: %s", raw)
+		t.Fatalf("desired.json: %s", raw)
 	}
 	id, _ := desired["request_id"].(string)
-	return id, at
+	return id
+}
+
+// bringUp starts the exit, keys the overlay, starts the panel and waits for
+// the exit to be verified on relay A.
+func (r *systemRig) bringUp() *exitProc {
+	p := r.start()
+	r.waitReady(p)
+	r.connectOverlay()
+	r.startPanel()
+	started := time.Now()
+	r.waitVerified(p, r.relays[0], "", 120*time.Second)
+	r.t.Logf("verified on %s %v after NetBird was up; selection %s", r.relays[0].host, time.Since(started).Round(time.Millisecond), jsonText(r.result()["selection"]))
+	return p
+}
+
+// waitVerified waits for verified (see verified) while the exit runs.
+func (r *systemRig) waitVerified(p *exitProc, rl *rigRelay, requestID string, d time.Duration) {
+	r.t.Helper()
+	r.waitFor(d, "result.json verified on "+rl.host+" (request "+requestID+")", func() bool {
+		if !p.running() {
+			r.t.Fatalf("the exit stopped (%d):\n%s", p.code, p.out.String())
+		}
+		return r.verified(rl, requestID)
+	})
 }
 
 // verified reports whether result.json is ok on host with a provider-tier

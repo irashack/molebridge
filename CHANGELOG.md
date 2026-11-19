@@ -12,6 +12,10 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   through the panel and back and checks that the client's traffic leaves
   only by the selected relay ([contributing](CONTRIBUTING.md#the-system-rig),
   [#54](https://github.com/irashack/molebridge/issues/54)).
+- The system rig also runs the four status drills of the live acceptance:
+  the egress-check failure and its recheck, the 409 for a second switch, a
+  failed switch followed by Retry, and a stopped exit with the panel's
+  `/readyz` and `/healthz` ([contributing](CONTRIBUTING.md#the-system-rig)).
 
 ## 0.12.0 — unreleased
 

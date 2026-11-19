@@ -174,10 +174,12 @@ jobs:
         # The release build of molebridge, the exit and the panel, against
         # fake Mullvad servers and two WireGuard relays in network namespaces
         # of the runner, a disposable VM (CONTRIBUTING.md, "The system rig").
+        # Every drill has a rig of its own and they run at once; the stopped
+        # exit's, which waits out the 150-second evidence age, is the longest.
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
           sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
-            go test -count=1 -v -tags drill,systemrig -run TestSystemRig ./internal/exit/
+            go test -count=1 -v -timeout 12m -parallel 8 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 
   image:
     name: Image (amd64 and arm64)

@@ -152,12 +152,23 @@ and trusts a certificate authority made at run time through `SSL_CERT_FILE`; no 
 knows about the rig. `TestSystemRigClientSwitch` puts a client behind the overlay, switches the
 exit through the panel from relay A to B and back, and requires each switch to end verified with
 the client's traffic leaving by the new relay in both families and none of it by the host path.
-It logs the switch times. CI runs it in the "System rig" job; on a disposable Linux machine with
-kernel WireGuard, nftables, iproute2 and util-linux you can run it as root:
+It logs the switch times. `TestSystemRigStatus` runs the four [status
+drills](docs/verification.md#status-drills) of the live acceptance, each on a rig of its own: the
+exit's egress check dropped in its namespace (failed, `applied-unverified`, `recheck`, then `ok`
+again), a second switch through the panel while the first is held applying (409), a switch to a
+relay that drops WireGuard (failed on the handshake, Retry offered, then verified as
+`operator-retry`), and a stopped exit (the panel's `/readyz` 503 and `/healthz` 200, then 200 again
+after a restart). Every drill runs at once; the stopped exit, which waits out the 150-second evidence
+age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
+WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
-go test -count=1 -v -tags drill,systemrig -run TestSystemRig ./internal/exit/
+go test -count=1 -v -timeout 12m -parallel 8 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 ```
+
+A stopped container takes its namespace with it; on the rig the exit's namespace stays, so the stopped
+exit drill runs the exit's own cleanup role (`molebridge exit --cleanup`) and resets the fake NetBird
+before starting the exit again.
 
 It writes `/etc/netns/<namespace>/hosts` for the time it runs, so run it only where the namespace
 drills may run. It does not cover the real provider APIs, real relays, the real NetBird overlay
