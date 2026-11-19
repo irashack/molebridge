@@ -699,11 +699,29 @@ func (p *piaProvider) EnterTunnel(ctx context.Context, a *Applier, relay *provid
 	return p.install(ctx, a, reg)
 }
 
-// Leave implements Provider: the port forward must go with PIA, and that is
-// the design's step 4. Until it is built a change away from PIA is refused,
-// leaving PIA's tunnel as it is.
-func (p *piaProvider) Leave(context.Context, *Applier) error {
-	return fmt.Errorf("%w: leaving PIA is not built yet", ErrMutationRefused)
+// Leave implements Provider: before another provider's tunnel replaces
+// PIA's, the forwarded port goes, so it can never point into another
+// provider's tunnel. The forwarding table (the native sidecar firewall's
+// port) is removed first: if that fails the change is refused and nothing
+// else is touched. Then forwarding stops (no new bind; the next record has no
+// forwarded_port and no port_forward_error, and the leftover cleanup runs
+// again should PIA come back) and the registration in tunnel.json is
+// forgotten: the server forgets it by itself, and PIA's next tunnel starts
+// from no recorded address. Its return-path rules go with the tunnel, in the
+// exit's Replace.
+func (p *piaProvider) Leave(ctx context.Context, a *Applier) error {
+	if err := p.removeForwardRules(ctx, a); err != nil {
+		a.stepFailed(ctx, "pia-leave", "applier: removing the forwarded port before leaving PIA failed", err)
+		return fmt.Errorf("%w: the forwarded port could not be removed: %v", ErrMutationRefused, err)
+	}
+	if err := os.Remove(tunnelPath(a)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		a.stepFailed(ctx, "pia-leave", "applier: forgetting PIA's registration before leaving it failed", err)
+		return fmt.Errorf("%w: PIA's registration could not be forgotten: %v", ErrMutationRefused, err)
+	}
+	a.stepSucceeded("pia-leave", "")
+	p.forward, p.nextForward, p.forwardError = nil, 0, ""
+	p.forwardReconciled = false
+	return nil
 }
 
 // recordedRegistration is the recorded registration, only while it matches the

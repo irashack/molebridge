@@ -42,6 +42,8 @@ type fakeTunnels struct {
 	// active is what the applier had persisted as active when Replace ran.
 	active []string
 	a      *Applier
+	// before runs first in Replace.
+	before func()
 }
 
 func (f *fakeTunnels) PublicKey(provider string) (string, error) {
@@ -54,6 +56,9 @@ func (f *fakeTunnels) PublicKey(provider string) (string, error) {
 func (f *fakeTunnels) Replace(_ context.Context, provider string, peer PeerConfig) error {
 	f.k.record("Replace %s", provider)
 	f.replaced = append(f.replaced, provider)
+	if f.before != nil {
+		f.before()
+	}
 	if f.a != nil {
 		f.active = append(f.active, f.a.set.active)
 	}
@@ -125,6 +130,12 @@ func tunnelAs(k *kernel, provider string) {
 // dir (a fresh one when empty). configure may change the Config first.
 func newMulti(t testing.TB, dir string, start string, ids []string, configure func(*Config)) *multiExit {
 	t.Helper()
+	return newMultiPIA(t, dir, start, ids, nil, configure)
+}
+
+// newMultiPIA is newMulti with PIA's settings changed by pia.
+func newMultiPIA(t testing.TB, dir string, start string, ids []string, pia func(*PIAConfig), configure func(*Config)) *multiExit {
+	t.Helper()
 	if dir == "" {
 		dir = t.TempDir()
 		multiCatalogues(t, dir)
@@ -157,7 +168,11 @@ func newMulti(t testing.TB, dir string, start string, ids []string, configure fu
 		case "nordvpn":
 			p = NewNordVPN()
 		case "pia":
-			p = NewPIA(PIAConfig{SecretsDir: secrets, Choose: func(int) int { return 0 }, RootCAs: api.pool})
+			cfg := PIAConfig{SecretsDir: secrets, Choose: func(int) int { return 0 }, RootCAs: api.pool}
+			if pia != nil {
+				pia(&cfg)
+			}
+			p = NewPIA(cfg)
 		}
 		m.providers[id] = p
 		list = append(list, p)

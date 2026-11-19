@@ -3,7 +3,8 @@
 Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
 replacement](#whole-tunnel-replacement), piece 2, [the provider
 set](#the-provider-set), and the applier's side of piece 3, [the
-target](#the-target), are built; no setting reaches a multi-provider exit
+target](#the-target), and piece 4, [leaving a
+provider](#leaving-a-provider), are built; no setting reaches a multi-provider exit
 yet (that is piece 6). This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
@@ -271,11 +272,10 @@ implements it outside the tests yet: the per-provider configs, the
 (a refused PIA login or registration, a `Leave` that fails) leaves the
 previous provider's tunnel as it was; a failure after it leaves the target
 provider active, and the retry, once the exit's recovery has brought up
-that provider's config, is a switch on it through its `ApplyRelay`. Until
-piece 4, PIA's `Leave` refuses (`ErrMutationRefused`), so a change away
-from PIA is refused. The status record names no provider yet (piece 5).
+that provider's config, is a switch on it through its `ApplyRelay`. PIA's
+`Leave` is piece 4's ([below](#leaving-a-provider)). The status record names no provider yet (piece 5).
 Tested with a fake kernel and a fake `ProviderTunnels`: every change
-between Mullvad, NordVPN and PIA except away from PIA, failures before and
+between Mullvad, NordVPN and PIA, failures before and
 after `SetActive`, interrupted changes resumed after a restart, rejections
 per provider, both gates and `SERVER=<provider>/<server>`
 (`internal/applier/target_test.go`); no rig, namespace or live test.
@@ -312,6 +312,25 @@ Leave(ctx context.Context, a *Applier) error
 
 The ingress guard (`inet molebridge_guard`) is per interface name, not per
 provider, and stays.
+
+**As built (piece 4).** PIA's `Leave` removes the forwarding table (on a
+native sidecar, which a multi-provider exit is not, the firewall's
+forwarded port) first; a failure is logged and refuses the change
+(`ErrMutationRefused`, a definite failure retried on the backoff) with
+nothing else touched, PIA's tunnel and registration included. Then it
+deletes `tunnel.json` (a failure there refuses the change too), stops
+forwarding and clears its error, so no record after it has
+`forwarded_port` or `port_forward_error` (the next provider's record has
+neither member) and no bind runs while another provider is active; should
+PIA come back, its leftover-port cleanup runs again before it forwards.
+PIA's return-path rules are left to the exit's `Replace`, which is piece
+6's to wire. Tested with the fake kernel
+(`internal/applier/leave_test.go`: the table is gone and the registration
+forgotten before the tunnel is replaced, a table that can't be removed
+refuses the change and is retried, and the port is forwarded again after
+coming back to PIA) and a namespace drill that removes a real forwarding
+table (`internal/exit/pia_leave_drill_test.go`, in CI); not on the rig or a
+real tunnel.
 
 ## One interface name
 
