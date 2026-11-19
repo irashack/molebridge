@@ -157,9 +157,17 @@ type Config struct {
 	// What stays in StateDir/applier is published and rebuilt by the exit.
 	PrivateDir string
 	Exit       Exit
-	// Provider is the hooks for the provider the exit serves.
+	// Provider is the hooks for the provider the exit serves. On a
+	// multi-provider exit it is the provider the tunnel starts on the first
+	// time; later starts use the one in tunnel-provider.json.
 	Provider Provider
-	System   System
+	// Providers, with two or three native providers, makes a
+	// multi-provider exit (docs/design/multi-provider.md): every provider's
+	// hooks, in PROVIDERS order, Provider among them. Empty (or Provider
+	// alone) is a single-provider exit. The exit's settings never set it
+	// yet: PROVIDERS comes with the design's step 6.
+	Providers []Provider
+	System    System
 	// Server is the SERVER setting: when set it is the only server the exit
 	// serves and the panel's request is never read.
 	Server string

@@ -1,14 +1,16 @@
 # Design: one exit for several providers
 
-Status: **proposed** (2026-11-19); piece 1, [whole-tunnel
-replacement](#whole-tunnel-replacement), is built and nothing calls it yet.
-This is the working contract for the
+Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
+replacement](#whole-tunnel-replacement), and piece 2, [the provider
+set](#the-provider-set), are built; no setting reaches a multi-provider
+exit yet (that is piece 6). This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
 shape, the pieces, their boundaries and the interfaces between them, the
 order they are built in and how each is tested. Nothing else here is built. The
-choices marked **(owner)** are product decisions, gathered with a
-recommended default in [decisions for the owner](#decisions-for-the-owner).
+choices marked **(owner)** are product decisions; the owner took every
+recommended default on 2026-11-19 ([decisions for the
+owner](#decisions-for-the-owner)).
 When the feature ships, its user documentation replaces this file.
 
 ## What it is
@@ -167,6 +169,27 @@ provider's; the gates use the **target's** provider's catalog and hooks.
 Each provider keeps its own state: PIA's `tunnel.json` (its registration),
 `location.json` (as `location-<id>.json`), its catalog's refresh schedule
 and backoff. A single-provider exit is a set of one, with today's file names.
+
+**As built (piece 2).** `applier.Config.Providers` (two or three native
+providers, `Provider` among them) makes a multi-provider applier; nothing
+sets it before piece 6, so no setting of the release binary reaches it.
+`New` refuses more than three, a repeat, a gluetun provider, the sidecar
+kind and automatic failover (decision 7: failover is for single-provider
+exits for now, so on a set it is refused rather than reworked). The
+applier's `hooks`, `catalog` and `spec` fields stay, always the active
+provider's: `SetActive` writes `tunnel-provider.json` (private, `{"provider":
+id}`) and then re-points them, with the provider's refresh schedule and
+location memory, so the code that inspects the tunnel in place is
+unchanged. `Healthy`, on another goroutine, reads the active hooks through
+an atomic copy. The catalogues are `relays-<id>.json` and
+`relay-error-<id>.json`; only the active one's is resident, another's is
+read from disk when asked for (`ProviderSet.Catalog`) and dropped at the
+end of the pass, and the inactive ones are refreshed on their own
+schedules, at most one per pass, then dropped. A start reads
+`tunnel-provider.json` (anything but one of the set's ids is ignored) and
+falls back to `Provider`. A single-provider exit's files and records are
+locked byte for byte by `internal/applier/single_provider_test.go` and the
+golden records.
 
 ## The target
 
@@ -446,7 +469,11 @@ The results go in [testing](../testing.md), with what wasn't run.
 
 ## Decisions for the owner
 
-| # | Decision | Recommended default |
+The owner took every recommended default below on 2026-11-19
+([irashack/molebridge#90](https://github.com/irashack/molebridge/issues/90)).
+The marks **(owner)** above refer to these decisions.
+
+| # | Decision | Decided (the recommended default) |
 |---|---|---|
 | 1 | Status record schema | **Stay on schema 2** with the new members: old readers see "provider mismatch" or a true record of their provider; schema 3 would blind every older reader for no safety gain |
 | 2 | Kinds | **Overlay exit only** for now; the native sidecar later if asked for |

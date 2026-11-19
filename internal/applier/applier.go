@@ -49,6 +49,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"weak"
 
@@ -65,8 +66,22 @@ import (
 // Applier owns the relay catalogue, admits selections, switches peers and
 // reports health for one exit.
 type Applier struct {
-	sys   System
-	hooks Provider
+	sys System
+	// hooks, catalog and spec are the active provider's (providerset.go);
+	// set holds every provider's. live is hooks for Healthy, which runs on
+	// another goroutine; backendName is the backend, the same for every
+	// provider in the set.
+	hooks       Provider
+	set         *providerSet
+	live        atomic.Value
+	backendName string
+	// schedules and locations are the inactive providers' catalogue
+	// refresh state and location memory on a multi-provider exit;
+	// refreshing is the provider whose catalogue an inactive refresh is
+	// downloading, nil otherwise.
+	schedules  map[string]catalogSchedule
+	locations  map[string]location
+	refreshing *providers.Provider
 	// way is the exit's way in (wayin.go).
 	way        wayIn
 	spec       *providers.Provider
@@ -191,7 +206,8 @@ func New(cfg Config) (*Applier, error) {
 	}
 	a := &Applier{sys: cfg.System, hooks: cfg.Provider, spec: spec, exit: cfg.Exit, gatus: cfg.Gatus,
 		publish: cfg.Publish, ownerCheck: cfg.OwnerCheck, logf: cfg.Log, clock: cfg.Monotonic, wallNow: cfg.Wall, sleeper: cfg.Sleep,
-		readJSON: state.ReadJSON, exists: fileExists, activity: cfg.RoutingActivity}
+		readJSON: state.ReadJSON, exists: fileExists, activity: cfg.RoutingActivity,
+		backendName: verdict.BackendOf(spec.ID), schedules: map[string]catalogSchedule{}, locations: map[string]location{}}
 	if a.exit.Kind == "" {
 		a.exit.Kind = "overlay"
 	}
@@ -218,6 +234,13 @@ func New(cfg Config) (*Applier, error) {
 	}
 	a.attemptPath = filepath.Join(a.privateDir, "attempt.json")
 	a.desiredPath = filepath.Join(cfg.StateDir, "panel", "desired.json")
+	if a.set, err = newProviderSet(a, cfg); err != nil {
+		return nil, err
+	}
+	a.hooks = a.set.hooks[a.set.active]
+	a.spec, _ = providers.Get(a.set.active)
+	a.live.Store(liveHooks{a.hooks})
+	// Only the active provider's catalogue is resident.
 	a.catalog = a.hooks.MakeCatalog(a)
 	// Making the catalogue read the last snapshot, up to 16 MiB of JSON
 	// decoded whole; when there was one, return that garbage now, as after
@@ -283,7 +306,7 @@ func (a *Applier) log(message string) { a.logf(message) }
 
 func (a *Applier) kind() string { return a.exit.Kind }
 
-func (a *Applier) backend() string { return verdict.BackendOf(a.hooks.ID()) }
+func (a *Applier) backend() string { return a.backendName }
 
 func (a *Applier) nativeSidecar() bool { return a.kind() == "sidecar" && a.backend() == "native" }
 
@@ -331,6 +354,10 @@ func (a *Applier) configurationError() string {
 // is refused, not followed.
 func (a *Applier) DefaultFetchCatalog(ctx context.Context) ([]byte, error) {
 	spec := a.spec
+	if a.refreshing != nil {
+		// An inactive provider's catalogue (maintainInactive).
+		spec = a.refreshing
+	}
 	response, err := a.sys.Fetch(ctx, netx.Request{
 		URL: spec.CatalogURL, UserAgent: "molebridge-applier/0.2", MaxBytes: int64(spec.CatalogMaxBytes),
 		Timeout: time.Duration(spec.CatalogTimeoutS) * time.Second, ConnectTimeout: 10 * time.Second})
@@ -1295,8 +1322,13 @@ func (a *Applier) tick(ctx context.Context) (*Record, error) {
 	if err := a.hooks.MaintainCatalog(ctx, a); err != nil {
 		return nil, err
 	}
+	if err := a.maintainInactive(ctx, ""); err != nil {
+		return nil, err
+	}
 	a.passMutated, a.passRepaired = false, false
 	a.target = a.resolve(false)
+	// Inactive catalogues read for this pass leave memory at its end.
+	defer a.set.release("")
 	var result *Record
 	var err error
 	// An attempt saved as attempting is inspected first: at start, the one a
@@ -1349,8 +1381,22 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 	if now < due {
 		return nil
 	}
-	a.catalogTried = now
-	refreshed, err := a.catalog.Refresh(ctx, func() ([]byte, error) { return a.hooks.FetchCatalog(ctx, a) })
+	s := catalogSchedule{next: a.nextCatalog, retry: a.catalogRetry, tried: a.catalogTried, failure: a.catalogFailure}
+	err := a.refreshCatalog(ctx, a.catalog, func() ([]byte, error) { return a.hooks.FetchCatalog(ctx, a) }, &s, "")
+	a.nextCatalog, a.catalogRetry, a.catalogTried, a.catalogFailure = s.next, s.retry, s.tried, s.failure
+	return err
+}
+
+// refreshCatalog refreshes one catalogue now and schedules its next refresh
+// in s. label names the provider in the log lines of an inactive provider's
+// catalogue on a multi-provider exit, "" for the active one's.
+func (a *Applier) refreshCatalog(ctx context.Context, catalog Catalog, fetch func() ([]byte, error), s *catalogSchedule, label string) error {
+	named := ""
+	if label != "" {
+		named = " (" + label + ")"
+	}
+	s.tried = a.clock()
+	refreshed, err := catalog.Refresh(ctx, fetch)
 	// A provider's server list is megabytes of JSON parsed into a much smaller
 	// catalogue; hand the parse's garbage back to the kernel now rather than
 	// keep it as idle heap until the next refresh.
@@ -1360,28 +1406,28 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 		// unwritable state volume): the pass ends on the I/O failure, but the
 		// next download still waits its backoff, or every pass would fetch
 		// the list again.
-		a.catalogRetry = math.Min(math.Max(2*a.catalogRetry, CatalogRetrySec), CatalogRetryMaxSec)
-		a.nextCatalog = a.clock() + a.catalogRetryWait()
+		s.retry = math.Min(math.Max(2*s.retry, CatalogRetrySec), CatalogRetryMaxSec)
+		s.next = a.clock() + a.catalogRetryWait(catalog, s.retry)
 		return wrapIO(err)
 	}
 	if refreshed {
-		if a.catalogFailure != "" {
-			a.log("applier: relay catalogue refreshed again")
+		if s.failure != "" {
+			a.log("applier: relay catalogue" + named + " refreshed again")
 		}
-		a.catalogRetry, a.catalogFailure = 0, ""
-		a.nextCatalog = a.clock() + providers.RefreshIntervalS
+		s.retry, s.failure = 0, ""
+		s.next = a.clock() + providers.RefreshIntervalS
 		return nil
 	}
 	cause := "unknown error"
-	if failure := a.catalog.RefreshFailure(); failure != nil {
+	if failure := catalog.RefreshFailure(); failure != nil {
 		cause = failure.Error()
 	}
-	if cause != a.catalogFailure {
-		a.log("applier: relay catalogue refresh failed: " + cause)
-		a.catalogFailure = cause
+	if cause != s.failure {
+		a.log("applier: relay catalogue" + named + " refresh failed: " + cause)
+		s.failure = cause
 	}
-	a.catalogRetry = math.Min(math.Max(2*a.catalogRetry, CatalogRetrySec), CatalogRetryMaxSec)
-	a.nextCatalog = a.clock() + a.catalogRetryWait()
+	s.retry = math.Min(math.Max(2*s.retry, CatalogRetrySec), CatalogRetryMaxSec)
+	s.next = a.clock() + a.catalogRetryWait(catalog, s.retry)
 	return nil
 }
 
@@ -1390,12 +1436,11 @@ func (a *Applier) DefaultMaintainCatalog(ctx context.Context) error {
 // being fresh, so a list that can be downloaded again is not missed for up to
 // an hour at that moment. With no usable catalogue (none yet, or a stale one)
 // nothing can be switched, so the wait is at most CatalogRetryUnusableMaxSec.
-func (a *Applier) catalogRetryWait() float64 {
-	wait := a.catalogRetry
-	if !a.catalog.Usable() {
+func (a *Applier) catalogRetryWait(catalog Catalog, wait float64) float64 {
+	if !catalog.Usable() {
 		return math.Min(wait, CatalogRetryUnusableMaxSec)
 	}
-	age, ok := validate.AgeSeconds(a.catalog.Snapshot()["fetched_at"], a.wall())
+	age, ok := validate.AgeSeconds(catalog.Snapshot()["fetched_at"], a.wall())
 	if left := providers.CatalogMaxAge - age; ok && left < wait {
 		wait = math.Max(left, CatalogRetrySec)
 	}
@@ -2069,7 +2114,7 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 		return false
 	}
 	if a.kind() == "sidecar" && a.backend() == "gluetun" {
-		if !a.hooks.ControlAnswers(ctx, a) {
+		if !a.live.Load().(liveHooks).ControlAnswers(ctx, a) {
 			return false
 		}
 		keys, err := a.peers(ctx)
@@ -2078,7 +2123,10 @@ func (a *Applier) Healthy(ctx context.Context) bool {
 	if _, err := a.peers(ctx); err != nil { // the tunnel interface exists
 		return false
 	}
-	protected, _ := a.routingStatus(ctx, true)
+	// The active provider's hooks as last stored: a change of provider
+	// re-points a.hooks on the applier's goroutine.
+	hooks := a.live.Load().(liveHooks).Provider
+	protected, _ := hooks.RoutingStatus(ctx, a, true)
 	if a.nativeSidecar() {
 		firewall, _, err := a.sys.SidecarFirewall(ctx)
 		return protected && firewall && err == nil

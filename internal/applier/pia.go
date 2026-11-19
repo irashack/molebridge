@@ -196,7 +196,7 @@ func tunnelPath(a *Applier) string { return filepath.Join(a.privateDir, "tunnel.
 
 // MakeCatalog: with port forwarding on, only forwarding regions are selectable.
 func (p *piaProvider) MakeCatalog(a *Applier) Catalog {
-	return NativeCatalog(a.directory, "pia", p.cfg.PortForward, a.wall)
+	return a.nativeCatalog("pia", p.cfg.PortForward)
 }
 
 // ResultDefaults: the forwarded port, once bound.

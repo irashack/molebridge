@@ -169,7 +169,7 @@ func (api *piaAPI) fetch(req netx.Request) (netx.Response, error) {
 		}
 		return jsonBody(map[string]any{"token": piaToken}), nil
 	case PIAStatusURL:
-		if req.BindInterface != "pia" || req.Family != 4 {
+		if req.BindInterface != api.k.exit.ExitIf || req.Family != 4 {
 			t.Errorf("status request %+v", req)
 		}
 		if api.statusDown {
@@ -198,7 +198,7 @@ func (api *piaAPI) fetch(req netx.Request) (netx.Response, error) {
 			return netx.Response{}, errInjected
 		}
 	case strings.HasPrefix(req.URL, "https://example401:19999/"):
-		if req.ConnectAddr != "10.0.0.1:19999" || req.BindInterface != "pia" {
+		if req.ConnectAddr != "10.0.0.1:19999" || req.BindInterface != api.k.exit.ExitIf {
 			t.Errorf("%s connects to %s via %q", req.URL, req.ConnectAddr, req.BindInterface)
 		}
 	default:

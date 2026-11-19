@@ -146,7 +146,7 @@ func (BaseProvider) SwitchTimeout() float64 { return SwitchTimeoutSec }
 
 // MakeCatalog implements Provider.
 func (b BaseProvider) MakeCatalog(a *Applier) Catalog {
-	return NativeCatalog(a.directory, b.Name, false, a.wall)
+	return a.nativeCatalog(b.Name, false)
 }
 
 // FetchCatalog implements Provider.
