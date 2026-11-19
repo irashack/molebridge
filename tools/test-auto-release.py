@@ -7,6 +7,7 @@ import sys
 import unittest
 from pathlib import Path
 
+sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location("auto_release", ROOT / "tools/auto-release.py")
 ar = importlib.util.module_from_spec(spec)
