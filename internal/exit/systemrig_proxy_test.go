@@ -169,20 +169,25 @@ func newProxyRig(t *testing.T) *proxyRig {
 	// Every packet of the proxy's uid that leaves by anything but the
 	// tunnel, its answers on its own listener over loopback aside; and the
 	// ones by the tunnel, which show the counter matches the uid at all.
+	// The tunnel's own WireGuard packets to the relays keep the socket of
+	// the packet they carry, so they show the uid too: they are counted
+	// apart, and only to a relay's endpoint and WireGuard port.
 	_, listenPort, _ := net.SplitHostPort(rigProxyListen)
 	counters := fmt.Sprintf(`table inet proxyrig {
   counter leak {}
   counter tunnel {}
   counter listener {}
-  set leakif { typeof oifname; flags dynamic; size 64; }
+  counter wireguard {}
+  set leakif { typeof oifname . meta l4proto; flags dynamic; size 64; }
   chain out {
     type filter hook output priority raw; policy accept;
     meta skuid %[1]d oifname %[2]q counter name tunnel accept
     meta skuid %[1]d oifname "lo" tcp sport %[3]s counter name listener accept
-    meta skuid %[1]d counter name leak add @leakif { oifname }
+    meta skuid %[1]d oifname "eth0" ip daddr { %[4]s, %[5]s } udp dport 51820 counter name wireguard accept
+    meta skuid %[1]d counter name leak add @leakif { oifname . meta l4proto }
   }
 }
-`, rigProxyUID, dExit, listenPort)
+`, rigProxyUID, dExit, listenPort, sr.relays[0].endpoint, sr.relays[1].endpoint)
 	if out, err := sr.exit.ExecInput(counters, "nft", "-f", "-"); err != nil {
 		t.Fatalf("nft: %v\n%s", err, out)
 	}
@@ -748,7 +753,7 @@ func (r *proxyRig) uidCounted(name string) int {
 // some by the tunnel, and none of the client's by the host path.
 func (r *proxyRig) noLeak(when string) {
 	r.t.Helper()
-	leak, tunnel, listener := r.uidCounted("leak"), r.uidCounted("tunnel"), r.uidCounted("listener")
+	leak, tunnel, listener, wg := r.uidCounted("leak"), r.uidCounted("tunnel"), r.uidCounted("listener"), r.uidCounted("wireguard")
 	if leak != 0 {
 		out, _ := r.exit.Exec("nft", "list", "table", "inet", "proxyrig")
 		r.t.Errorf("%s: %d packets of the proxy's uid left by an interface other than %s:\n%s", when, leak, dExit, out)
@@ -759,7 +764,8 @@ func (r *proxyRig) noLeak(when string) {
 	if n := r.counted("leak"); n != 0 {
 		r.t.Errorf("%s: %d client packets by the host path", when, n)
 	}
-	r.t.Logf("%s: packets of the proxy's uid: %d by %s, %d answering clients on its listener, %d by anything else", when, tunnel, dExit, listener, leak)
+	r.t.Logf("%s: packets of the proxy's uid: %d by %s (%d WireGuard packets carrying them to the relays), %d answering clients on its listener, %d by anything else",
+		when, tunnel, dExit, wg, listener, leak)
 }
 
 // waitRefused waits until a new connection is refused because of the
