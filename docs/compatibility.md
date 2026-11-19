@@ -33,7 +33,10 @@ before 2.0.
   (since 0.9.3) is on the list too, but no reader judges it. `moved` (since
   0.11.0) is present only while the exit's server stands in for a retired
   one; a reader older than 0.11.0 judges such a record "verification failed",
-  because `server` isn't the requested server.
+  because `server` isn't the requested server. `failover` ([automatic
+  failover](design/failover.md), being built) is present only during a
+  failover episode; a reader from before it judges a record on a backup
+  "verification failed" for the same reason, never connected.
 - The eight checks (`routing`, `traffic_protection`, `netbird`,
   `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`), their five
   states (`pass`, `fail`, `unknown`, `n/a`, `not-checked`), and which of them

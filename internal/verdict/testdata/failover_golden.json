@@ -1,0 +1,1225 @@
+{
+ "desired": {
+  "server": "se-got-wg-001",
+  "requested_at": "2026-10-11T11:59:50Z",
+  "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+ },
+ "cases": [
+  {
+   "name": "on-backup, panel request",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-server"
+    ]
+   }
+  },
+  {
+   "name": "on-backup, manual return",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-server"
+    ]
+   }
+  },
+  {
+   "name": "trying, verified",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "trying",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-server"
+    ]
+   }
+  },
+  {
+   "name": "on-backup, configured server",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": null,
+    "configured_server": "se-got-wg-001",
+    "request_id": null,
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "configured",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-configured-server"
+    ]
+   }
+  },
+  {
+   "name": "on-backup for a retired server's replacement",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-003",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-003",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "moved": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-004",
+     "reason": "left-catalogue"
+    },
+    "failover": {
+     "from": "se-got-wg-004",
+     "to": "se-got-wg-003",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-003"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-server"
+    ]
+   }
+  },
+  {
+   "name": "on the second backup",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-003",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-003",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-003",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-003",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-002",
+      "se-got-wg-003"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-server"
+    ]
+   }
+  },
+  {
+   "name": "on-backup, no target (the proxy)",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "none",
+   "want": {
+    "state": "ok",
+    "label": "connected to backup",
+    "reasons": [
+     "failover"
+    ]
+   },
+   "old": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   }
+  },
+  {
+   "name": "trying, switching",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "applying",
+    "message": "Switching.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-001",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": null,
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "trying",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   },
+   "old": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   }
+  },
+  {
+   "name": "returning, switching",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "applying",
+    "message": "Switching.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": null,
+     "attempt": 1,
+     "target": "se-got-wg-001",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "returning",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   },
+   "old": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   }
+  },
+  {
+   "name": "returning, verified on the selected server",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-001",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-001",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "returning",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   }
+  },
+  {
+   "name": "exhausted",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "failed",
+    "message": "Tunnel inspection or egress check failed.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-001",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "applied-unverified",
+     "attempt": 3,
+     "target": "se-got-wg-001",
+     "next_action": "reapply",
+     "next_action_at": "2026-10-11T12:04:00Z"
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-001"
+     },
+     "handshake": {
+      "state": "fail",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-001",
+      "age_s": null
+     },
+     "egress": {
+      "state": "unknown"
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": null,
+    "egress_ips": {},
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": null,
+     "phase": "exhausted",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": null,
+     "tried": [
+      "se-got-wg-002",
+      "se-got-wg-003",
+      "se-got-wg-004"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "handshake-failed",
+     "failover-exhausted"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "handshake-failed"
+    ]
+   }
+  },
+  {
+   "name": "on-backup, the backup failing",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "status": "failed",
+    "message": "Tunnel inspection or egress check failed.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-got-wg-002",
+    "requested_server": "se-got-wg-001",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "failover",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-got-wg-002",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002"
+     },
+     "handshake": {
+      "state": "fail",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "age_s": 200
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-got-wg-002",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": "Gothenburg",
+    "egress_country": "Sweden",
+    "failover": {
+     "from": "se-got-wg-001",
+     "to": "se-got-wg-002",
+     "phase": "on-backup",
+     "reason": "handshake-failed",
+     "since": "2026-10-11T11:55:00Z",
+     "next_return_at": "2026-10-11T12:15:00Z",
+     "tried": [
+      "se-got-wg-002"
+     ]
+    }
+   },
+   "target": "panel",
+   "want": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "handshake-failed"
+    ]
+   },
+   "old": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "handshake-failed"
+    ]
+   }
+  }
+ ]
+}

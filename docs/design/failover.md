@@ -5,7 +5,8 @@ roadmap's [automatic failover](../../ROADMAP.md#automatic-failover): the
 rules, the pieces, their boundaries and the interfaces between them, so that
 they can be built in parallel. Built so far: [the failover
 policy](#the-failover-policy) (`internal/failover`, unit-tested; no role
-uses it yet). The owner's decisions are pending; the code takes the
+uses it yet) and [the verdict](#the-verdict) (`internal/verdict` reads the
+`failover` member; no exit writes it yet). The owner's decisions are pending; the code takes the
 recommended defaults, each one named constant. The choices marked
 **(owner)** are product decisions, gathered with a recommended default in
 [decisions for the owner](#decisions-for-the-owner); the rest follows from
@@ -460,7 +461,9 @@ vocabulary, there is no `moved`, and `server` is not the requested or
 configured server, so its verdict is `failed`, "verification failed"
 (`not-requested-server` or `not-configured-server`). Never connected. That is
 loud but true from what it knows, and it is why no schema change is needed.
-A golden test keeps it so ([testing](#testing)).
+A golden test keeps it so ([testing](#testing)). The one reader that says
+connected is one with no target of its own, which holds the record to
+itself, before failover as now: the proxy, which is newer than failover.
 
 ## The panel
 
