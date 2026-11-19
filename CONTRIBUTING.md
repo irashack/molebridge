@@ -184,12 +184,30 @@ live procedure: relay A, requested through the panel, leaves the fake relay API'
 is restarted (the native exit reads the list at start and every six hours), so it moves to relay B
 with `moved` (`left-catalogue`), the log line, `location.json` and the panel's `server-moved` note;
 with A listed again and another restart it returns to A. The gluetun form's move, where gluetun's
-`servers.json` changes and gluetun itself reconnects, is not on the rig. Every drill runs at once; the stopped exit, which waits
+`servers.json` changes and gluetun itself reconnects, is not on the rig. `TestSystemRigProxy` runs
+the [proxy's](docs/design/menu.md) drill: `molebridge proxy` in the exit's namespace as
+uid 65532 with no capabilities and the applier directory read-only, as its Compose service runs it,
+with the fake Mullvad network grown by a namespace of relay proxies (a SOCKS5 server at a
+`10.124.0.0/16` address for each relay of a five-relay catalogue across two countries and three
+cities), reachable only from the two relays, and a DNS server on `10.64.0.1:53` in each relay
+answering the `*-wg-socks5-*.relays.mullvad.net` names. Each fake relay proxy dials an echo from an
+address of its own and the echo names the relay by it, so a client learns where its traffic left;
+each also records which relay's tunnel its connection came by. On three rigs it checks clients over
+SOCKS5 and HTTP `CONNECT` choosing by `any`, country, city and server name, the target's name sent
+to the relay proxy, a wrong password refused, a session kept across connections and moved when its
+relay proxy fails, that server benched (skipped, refused by name) and chosen again once its minute
+is up; a switch of the exit held applying (new connections refused with SOCKS reply 1 and HTTP
+503, no relay proxy asked), then the proxy's traffic coming by relay B; and the tunnel stopped
+(relay A dropping WireGuard): open and new connections fail, the proxy refuses once the exit's
+verdict leaves `ok`, and serves again after the tunnel is back. Throughout, an nftables counter in
+the exit's namespace on the proxy's uid (`meta skuid`) must see no packet by any interface but the
+tunnel (its answers to clients on loopback aside). The live drill on a real Mullvad exit is not on
+the rig. Every drill runs at once; the stopped exit, which waits
 out the 150-second evidence age, takes longest. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
-go test -count=1 -v -timeout 12m -parallel 9 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+go test -count=1 -v -timeout 12m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 ```
 
 A stopped container takes its namespace with it; on the rig the exit's namespace stays, so the stopped
