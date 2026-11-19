@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.12.0 — unreleased
+
+**Experimental.** Upgrade from 0.11.1 by moving to the new image;
+what changed is below.
 
 - Acceptance policy 15: rule-drift repair and the lease lapse are no longer
   live drills. CI's namespace drills, required on the tag, test both on a
