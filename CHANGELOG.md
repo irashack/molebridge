@@ -6,6 +6,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- The system rig drills automatic failover (`TestSystemRigFailover*`, CI
+  only): a relay that drops WireGuard and the move to the other relay in its
+  city, a return that fails and one that ends the episode, the uplink probe
+  holding a failover, a panel request ending one, and an exhausted episode,
+  with no packet by the host path. A binary built with the `drill` tag
+  shortens the policy's timings for them; the release build has no such
+  hook. The rig's CI job allows 20 minutes for the drills.
+
 - New, experimental, off by default, and not drilled on a real provider:
   automatic failover ([automatic
   failover](docs/configuration.md#automatic-failover)). With `FAILOVER=on`

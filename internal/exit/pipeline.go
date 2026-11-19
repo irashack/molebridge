@@ -83,7 +83,7 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 		return nil, err
 	}
 	a, err := applier.New(applier.Config{
-		StateDir: s.StateDir, PrivateDir: s.PrivateDir, Exit: exit, Provider: prov, System: e.System, Server: s.Server, Failover: s.Failover,
+		StateDir: s.StateDir, PrivateDir: s.PrivateDir, Exit: exit, Provider: prov, System: e.System, Server: s.Server, Failover: drillFailover(s.Env, s.Failover),
 		Publish:    func(r *applier.Record) error { return e.Publish(r) },
 		OwnerCheck: e.OwnerCheck, Log: e.Log, RoutingActivity: e.RoutingActivity,
 		Gatus: applier.Gatus{URL: s.Env["GATUS_URL"], Token: s.Env["GATUS_TOKEN"], Endpoint: orDefault(s.Env["GATUS_ENDPOINT"], "molebridge")},

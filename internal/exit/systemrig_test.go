@@ -114,6 +114,10 @@ func rigBinaries(t *testing.T) string {
 		}{
 			{"github.com/irashack/molebridge/cmd/molebridge", []string{"build", "-trimpath", "-buildvcs=false",
 				"-ldflags=-s -w -X main.version=" + rigVersion, "-o", filepath.Join(rigBinDir, "molebridge")}},
+			// The failover drills' binary: the same, with the drill hooks
+			// (failover_hook_drill.go shortens the policy's timings).
+			{"github.com/irashack/molebridge/cmd/molebridge", []string{"build", "-tags", "drill", "-trimpath", "-buildvcs=false",
+				"-ldflags=-s -w -X main.version=" + rigVersion, "-o", filepath.Join(rigBinDir, "molebridge-drill")}},
 			{"github.com/irashack/molebridge/internal/exit/testdata/fakenetbird", []string{"build", "-tags", "drill",
 				"-o", filepath.Join(rigBinDir, "netbird")}},
 		} {
