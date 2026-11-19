@@ -59,6 +59,9 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `internal/tools/` holds the setup tools' code; `internal/state/`, `internal/validate/`,
   `internal/jsonfile/`, `internal/netx/` and `internal/bootclock/` are the shared
   strict I/O, validation, HTTP client and boot clock.
+- `internal/tunneldial/` (connections and DNS bound to the tunnel interface) and
+  `internal/relayproxy/` (Mullvad's relay proxies as a catalogue, choosing and benching)
+  are pieces of the proxy being built ([design](docs/design/menu.md)); no role uses them yet.
 - `internal/drill/` and `internal/nstest/` are the namespace drills (below).
 - `routing/gluetun-preflight` is the one runtime shell script: it runs inside gluetun's
   container. `routing/embed.go` embeds it in the binary for the `gluetun-preflight` tool. `tools/` holds the release and image scripts (`make-bundle.sh`,

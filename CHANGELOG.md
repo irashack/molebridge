@@ -22,6 +22,19 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   `molebridge proxy` command and no Compose service, so nothing changes for
   an installation. Tested by unit tests only, against a fake upstream on
   loopback; it has not carried traffic through a tunnel.
+- Two packages of the proxy way in now exist, built to the
+  [design](docs/design/menu.md); no role uses them yet, so nothing changes
+  for a running install. `internal/tunneldial` opens connections bound to the
+  tunnel interface with `SO_BINDTODEVICE` (a failed bind fails the dial, with
+  no fallback) and resolves names over DNS sent through it.
+  `internal/relayproxy` reads the exit's catalogue snapshot, derives each
+  Mullvad relay's SOCKS5 proxy name, accepts only answers in
+  `10.124.0.0/16`, chooses a server for a location and benches failed ones
+  (1 minute, doubling to 1 hour); for PIA and NordVPN it offers only the
+  exit's current server. Unit tests cover both with fakes; the dialer's
+  namespace test (interface present, absent and renamed) runs in CI's
+  namespace drills. Neither has run against a real tunnel or a real Mullvad
+  relay proxy.
 
 ## 0.13.0 — unreleased
 
