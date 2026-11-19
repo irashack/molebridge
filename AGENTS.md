@@ -4,7 +4,11 @@ Read `README.md`, `docs/architecture.md` and the layout in `CONTRIBUTING.md`
 first. Molebridge is MIT-licensed; the bundled font keeps its own license, and the
 logo is all rights reserved (`docs/assets/brand/NOTICE.md`): a new logo file
 goes in that notice's list.
-Create releases or tags only when the owner asks: a `v*-rc.N` tag builds,
+Create releases or tags only when the owner asks, or through the release
+automation (`tools/auto-release.py`), which the owner set up to cut and
+promote releases on its own (docs/releasing.md, "Automatic releases"). Keep
+its stops: a Breaking change, a failure or a `hold-release` label hands the
+release to a person. A `v*-rc.N` tag builds,
 signs and publishes a candidate image, and a `vX.Y.Z` tag promotes the
 candidate that live acceptance attested (`.github/workflows/release.yml`).
 `v*` tags cannot be moved or deleted and published releases are immutable, so
