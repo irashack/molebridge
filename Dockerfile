@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 #
-# The single Molebridge image: the molebridge binary (every role) and the
-# pinned NetBird client. Roles are chosen by argument, never guessed from the
-# environment (docs/architecture.md).
+# The two Molebridge images, from one build: the default target is
+# ghcr.io/irashack/molebridge, the molebridge binary (every role) and the pinned
+# NetBird client; `--target core` is ghcr.io/irashack/molebridge-core, the same
+# binary without NetBird, for the sidecars. Roles are chosen by argument, never
+# guessed from the environment (docs/architecture.md).
 #
 # Base images are pinned by tag and by the multi-arch index digest. Rebuild
 # deliberately when one changes, then run docs/verification.md.
@@ -56,12 +58,13 @@ RUN set -eu; \
     find LICENSE LICENSES -type d -exec chmod 0755 '{}' +; \
     find LICENSE LICENSES -type f -exec chmod 0644 '{}' +
 
-# Stage 3: the image. Alpine, the CA bundle, the binary and the client.
-FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
-LABEL org.opencontainers.image.title="Molebridge" \
-      org.opencontainers.image.description="Exit-node supervisor, routing contract and Switchyard panel for a NetBird overlay" \
+# Stage 3: molebridge-core. Alpine, the CA bundle and the binary. A NetBird
+# exit started from it refuses at once and names the image with NetBird.
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS core
+LABEL org.opencontainers.image.title="Molebridge core" \
+      org.opencontainers.image.description="Molebridge without NetBird: the tunnel sidecars and the Switchyard panel" \
       org.opencontainers.image.source="https://github.com/irashack/molebridge" \
-      org.opencontainers.image.licenses="MIT AND BSD-3-Clause"
+      org.opencontainers.image.licenses="MIT"
 # Tools come from the pinned base image's signed Alpine repositories. busybox
 # stays for `docker exec` diagnostics; the binary never starts a shell.
 # `apk upgrade` takes the branch's security fixes that the pinned base image
@@ -69,15 +72,23 @@ LABEL org.opencontainers.image.title="Molebridge" \
 # so a rebuild picks them up without waiting for the next point image.
 RUN apk upgrade --no-cache \
  && apk add --no-cache ca-certificates \
- && install -d -m 0755 -o 0 -g 0 /usr/share/licenses/molebridge /usr/share/licenses/netbird
+ && install -d -m 0755 -o 0 -g 0 /usr/share/licenses/molebridge
 COPY --from=build --chown=0:0 --chmod=0755 /out/molebridge /usr/local/bin/molebridge
-COPY --from=netbird --chown=0:0 --chmod=0755 /netbird/netbird /usr/local/bin/netbird
-# License notices travel with the binaries (THIRD_PARTY.md lists every
-# component; the NetBird client is BSD-3-Clause). The directories are made
-# above because COPY --chmod would create them with a file's mode.
-COPY --from=netbird --chown=0:0 /netbird/LICENSE /usr/share/licenses/netbird/LICENSE
-COPY --from=netbird --chown=0:0 /netbird/LICENSES/ /usr/share/licenses/netbird/LICENSES/
 COPY --chown=0:0 --chmod=0644 LICENSE THIRD_PARTY.md /usr/share/licenses/molebridge/
 COPY --chown=0:0 --chmod=0644 internal/applier/PIA-CA-LICENSE.txt /usr/share/licenses/molebridge/PIA-CA-LICENSE.txt
 COPY --chown=0:0 --chmod=0644 panel/static/JetBrainsMono-OFL.txt /usr/share/licenses/molebridge/JetBrainsMono-OFL.txt
 ENTRYPOINT ["/usr/local/bin/molebridge"]
+
+# Stage 4: the image with NetBird, the default target: molebridge-core and
+# the pinned NetBird client.
+FROM core
+LABEL org.opencontainers.image.title="Molebridge" \
+      org.opencontainers.image.description="Exit-node supervisor, routing contract and Switchyard panel for a NetBird overlay" \
+      org.opencontainers.image.licenses="MIT AND BSD-3-Clause"
+COPY --from=netbird --chown=0:0 --chmod=0755 /netbird/netbird /usr/local/bin/netbird
+# License notices travel with the binaries (THIRD_PARTY.md lists every
+# component; the NetBird client is BSD-3-Clause). The directory is made here
+# because COPY --chmod would create it with a file's mode.
+RUN install -d -m 0755 -o 0 -g 0 /usr/share/licenses/netbird
+COPY --from=netbird --chown=0:0 /netbird/LICENSE /usr/share/licenses/netbird/LICENSE
+COPY --from=netbird --chown=0:0 /netbird/LICENSES/ /usr/share/licenses/netbird/LICENSES/

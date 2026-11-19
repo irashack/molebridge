@@ -175,7 +175,15 @@ type LoadOptions struct {
 	// WriteChecks creates the applier's state directory and probes that it can
 	// be written. check-config leaves it false and changes nothing.
 	WriteChecks bool
+	// NeedNetBird refuses a NetBird exit when the image has no NetBird client
+	// (molebridge-core), before anything changes. Tests leave it false.
+	NeedNetBird bool
 }
+
+// CoreImageRefusal is the one line a NetBird exit started from the image
+// without NetBird prints.
+const CoreImageRefusal = prefix + "EXIT_KIND=overlay (the default) runs NetBird, and this image has no NetBird client: " +
+	"use ghcr.io/irashack/molebridge for a NetBird exit (molebridge-core is for the sidecars)"
 
 // aliasBackend accepts "native" for the contract's "wireguard".
 func aliasBackend(get func(string) string) func(string) string {
@@ -223,6 +231,17 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	// 0.8.0 spelling.
 	if v := get("TUNNEL_BACKEND"); v != "" && v != string(contract.Native) && v != string(contract.Gluetun) {
 		return nil, refuse("TUNNEL_BACKEND must be native or gluetun")
+	}
+	// The image without NetBird says so before any other setting: EXIT_KIND
+	// unset is a NetBird exit too.
+	if kind := get("EXIT_KIND"); (kind == "" || kind == string(contract.Overlay)) && o.NeedNetBird {
+		var path []string
+		if v, ok := env["PATH"]; ok {
+			path = []string{"PATH=" + v}
+		}
+		if _, err := lookPath("netbird", path); err != nil {
+			return nil, &Refusal{Line: CoreImageRefusal}
+		}
 	}
 	cfg, err := contract.ConfigFromEnv(get)
 	if err != nil {

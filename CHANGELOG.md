@@ -4,6 +4,18 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- The Dockerfile builds a second image without NetBird (`--target core`),
+  for the sidecars; the default target is unchanged. CI builds and checks
+  both. It is not published yet: the release workflow publishes it as
+  `ghcr.io/irashack/molebridge-core` in a later change
+  ([#47](https://github.com/irashack/molebridge/issues/47)).
+- `molebridge exit` and `check-config` refuse a NetBird exit
+  (`EXIT_KIND=overlay`, or `EXIT_KIND` unset) when the image has no NetBird
+  client, before reading any other setting, with this line:
+  `molebridge-exit: EXIT_KIND=overlay (the default) runs NetBird, and this image has no NetBird client: use ghcr.io/irashack/molebridge for a NetBird exit (molebridge-core is for the sidecars)`
+
 ## 0.11.1 — 2026-11-19
 
 **Experimental.** A security rebuild: no change to Molebridge's code or

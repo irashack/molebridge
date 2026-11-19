@@ -209,6 +209,52 @@ jobs:
         env:
           VERSION: ci
         run: sh tools/check-image.sh molebridge:ci-arm64 linux/arm64
+      - name: Build molebridge-core, both architectures (not pushed)
+        # The same Dockerfile's core target: the image without NetBird.
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: core
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+          build-args: VERSION=ci
+      - name: Load molebridge-core amd64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: core
+          platforms: linux/amd64
+          load: true
+          tags: molebridge-core:ci-amd64
+          provenance: false
+          sbom: false
+          build-args: VERSION=ci
+      - name: Load molebridge-core arm64
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          target: core
+          platforms: linux/arm64
+          load: true
+          tags: molebridge-core:ci-arm64
+          provenance: false
+          sbom: false
+          build-args: VERSION=ci
+      - name: Check molebridge-core amd64
+        env:
+          VERSION: ci
+          VARIANT: core
+        run: sh tools/check-image.sh molebridge-core:ci-amd64 linux/amd64
+      - name: Check molebridge-core arm64
+        env:
+          VERSION: ci
+          VARIANT: core
+        run: sh tools/check-image.sh molebridge-core:ci-arm64 linux/arm64
       - name: Exit life cycle (amd64)
         # The image's exit role in a namespace a busybox container keeps
         # alive: every refusal with its exact message, the start order,
