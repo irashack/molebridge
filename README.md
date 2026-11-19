@@ -65,8 +65,10 @@ sidecar.
   come from one commit and are released together. The first argument picks
   the role: `exit`, `panel`, `health`, `status`,
   `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
-  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`, `port-sync` and
-  `exchange` (the experimental [network exchange](docs/configuration.md#the-network-exchange)).
+  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`, `port-sync`,
+  `exchange` (the experimental [network exchange](docs/configuration.md#the-network-exchange))
+  and `init` (an experimental [menu](docs/setup.md#molebridge-init) that writes
+  a Compose file).
   GitHub Actions builds and signs
   the image with cosign, with build provenance and SBOMs, and promotes a
   release only after a maintainer's live-acceptance run attested that the

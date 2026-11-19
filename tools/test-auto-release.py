@@ -205,6 +205,22 @@ class Pins(unittest.TestCase):
                 self.assertNotIn(f"ghcr.io/irashack/molebridge-core:v9.9.9@{D1}", out, path)
             self.assertEqual(text.count("molebridge-core"), out.count("molebridge-core"), path)
 
+    def test_init_templates_are_pinned_and_rewritten(self):
+        # molebridge init's service blocks carry both pins, and the release
+        # rewrite moves them with the Compose files.
+        path = "internal/tools/initmenu/compose.tmpl"
+        self.assertIn(path, ar.PIN_FILES)
+        old, old_d = ar.compose_pin((ROOT / "compose.yaml").read_text())
+        _, old_core = ar.compose_pin((ROOT / "compose.sidecar.yaml").read_text(), ar.CORE_IMAGE)
+        text = (ROOT / path).read_text()
+        self.assertIn(f"{ar.IMAGE}:{old}@{old_d}", text)
+        self.assertIn(f"{ar.CORE_IMAGE}:{old}@{old_core}", text)
+        out = ar.rewrite_pins(text, old, old_d, None, "v9.9.9", D1, "v9.9.9-rc.1", (old_core, D2))
+        self.assertIn(f"{ar.IMAGE}:v9.9.9@{D1}", out)
+        self.assertIn(f"{ar.CORE_IMAGE}:v9.9.9@{D2}", out)
+        self.assertNotIn(old_d, out)
+        self.assertNotIn(old_core, out)
+
     def test_rewrite_core_takes_its_own_digest(self):
         d3, d4 = "sha256:" + "c" * 64, "sha256:" + "d" * 64
         text = (f"ghcr.io/irashack/molebridge:v0.12.0@{D1}\n"

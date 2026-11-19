@@ -32,12 +32,22 @@ jobs:
           for script in $scripts; do sh -n "$script"; done
           # shellcheck disable=SC2086
           shellcheck -x -S warning $scripts
+      - name: Set up Go
+        # tools/check-compose.sh builds molebridge to write every Compose file
+        # `molebridge init` can write.
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The toolchain the Dockerfile builds with (golang:1.27.4-alpine).
+          go-version: "1.27.4"
+          cache: false
       - name: Compose files
         # Each form against its own example environment (the native sidecar
         # also with its port-sync profile on), the native form for
         # every provider, then the trust boundary as Compose resolves it
-        # (tools/check-compose.sh). No .env is written: the examples are read
-        # with --env-file.
+        # (tools/check-compose.sh), for the shipped files and for every
+        # combination `molebridge init` writes. No .env is written in the
+        # checkout: the examples are read with --env-file, and init writes
+        # into a temporary directory.
         run: |
           docker compose --env-file .env.example -f compose.yaml config --quiet
           for provider in mullvad pia nordvpn; do

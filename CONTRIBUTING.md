@@ -29,7 +29,7 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
   `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
   `gluetun-auth`, `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`,
-  `port-sync`, `version`); each has a `role_*.go` file.
+  `port-sync`, `exchange`, `init`, `version`); each has a `role_*.go` file.
 - `internal/exit/`: the exit container's process: the supervisor, the worker, the
   lease, the NetBird child, status publication and the stop sequence.
 - `internal/contract/`: the routing contract: expected rules and routes, the diff and
@@ -56,7 +56,8 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   front end is `panel/static/`, dependency-free; `panel/js-tests/` tests
   `panel/static/panel.js` with Node's own runner against the panel's answers for the
   fixture records in `internal/panel/fixtures_test.go`.
-- `internal/tools/` holds the setup tools' code; `internal/state/`, `internal/validate/`,
+- `internal/tools/` holds the setup tools' code, and `internal/tools/initmenu/` the
+  experimental `init` menu, whose service blocks must match the shipped Compose files; `internal/state/`, `internal/validate/`,
   `internal/jsonfile/`, `internal/netx/` and `internal/bootclock/` are the shared
   strict I/O, validation, HTTP client and boot clock.
 - `internal/tunneldial/` (connections and DNS bound to the tunnel interface) and

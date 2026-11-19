@@ -1,0 +1,296 @@
+# Written by `molebridge init` (experimental, docs/setup.md#molebridge-init).
+#   provider: pia
+#   ways in:  sidecar, proxy
+#   extras:   switchyard, port-sync
+# The services are those of compose.native-sidecar.yaml in the Molebridge source
+# of the same release, with its settings and image pins; that file's
+# comments say more.
+# Your settings are in .env beside this file.
+#
+# Secrets live in the mode-0600 files under ./tunnel and ./secrets; never
+# print them or paste `docker compose config` output anywhere.
+name: molebridge-native-sidecar
+
+services:
+  exit:
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-exit"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # NET_ADMIN: the routing contract, the firewall and the tunnel.
+    # NET_RAW: binding egress checks to the tunnel on kernels before 5.7.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and writes state directories your host user owns
+    # (rootful Docker; a rootless engine's container root is that user already).
+    # The applications get none of these, and no capability at all: without
+    # NET_ADMIN they cannot change the rules, and without NET_ADMIN or NET_RAW
+    # (enough for SO_MARK from Linux 5.17, and in Docker's default set) they
+    # cannot mark a socket past the firewall. Hence cap_drop: [ALL] on each.
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence removes the tunnel within 13 seconds; the rules and
+    # the firewall stay.
+    stop_grace_period: 15s
+    # Publish your applications' ports here: they listen in this namespace.
+    # A published port arrives from the engine's network, so name that
+    # network in SIDECAR_LAN_CIDRS or the replies are dropped.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: native
+      PROVIDER: "${PROVIDER:-pia}"
+      EXIT_IF: "${EXIT_IF:-pia}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      HOST_IF: "${HOST_IF:-eth0}"
+      # Where the applications may go outside the tunnel, comma-separated:
+      # the engine's network for published ports and neighbours, a resolver
+      # (docs/native-sidecar.md#dns). Everything else goes through the tunnel
+      # or nowhere.
+      SIDECAR_LAN_CIDRS: "${SIDECAR_LAN_CIDRS:-}"
+      # The exit's own lookups, when the namespace's resolvers are reachable
+      # only through the tunnel (docs/native-sidecar.md#dns).
+      SIDECAR_HOST_RESOLVERS: "${SIDECAR_HOST_RESOLVERS:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default: the forwarded port reaches this namespace;
+      # port-sync below tells qBittorrent which one it is.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
+      - ./tunnel/wg_confs:/config/wg_confs:ro
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: secrets/pia/username and secrets/pia/password, mode 0600.
+      # Create the directory for every provider (docs/setup.md).
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+
+  example-app:
+    # A stand-in for your application: it only sleeps, in the exit's
+    # namespace. It runs only with COMPOSE_PROFILES=example (as
+    # the .env beside this file sets it). Add your own services in a file of
+    # your own, each with `network_mode: service:exit`, and give them no
+    # capabilities.
+    profiles: [example]
+    image: docker.io/library/busybox:<pin>
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-example-app"
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run before the exit has installed its firewall and
+    # rules, with the host's routes open to it. Start the stack at boot with
+    # `docker compose up -d`, which waits for the exit to be healthy
+    # (docs/native-sidecar.md#starting-at-boot). Give your applications the
+    # same policy.
+    restart: "no"
+    network_mode: service:exit
+    init: true
+    command: ["sleep", "2147483647"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted when Compose restarts
+        # or recreates the exit.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 16m
+
+  port-sync:
+    # Keeps qBittorrent's listening port on PIA's forwarded port
+    # (docs/native-sidecar.md#port-forwarding). You chose it, so it has no
+    # profile here. No capabilities, nothing written: it reads the exit's
+    # record and calls qBittorrent's Web API on the namespace's loopback with
+    # the login in ./secrets/port-sync.
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["port-sync"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-port-sync"
+    restart: unless-stopped
+    network_mode: service:exit
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PORT_SYNC_CLIENT: qbittorrent
+      PORT_SYNC_URL: "${PORT_SYNC_URL:-http://127.0.0.1:8080}"
+      PORT_SYNC_USERNAME_FILE: /run/secrets/port-sync/username
+      PORT_SYNC_PASSWORD_FILE: /run/secrets/port-sync/password
+    volumes:
+      - ./state/applier:/state/applier:ro
+      - type: bind
+        source: ./secrets/port-sync
+        target: /run/secrets/port-sync
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      exit:
+        condition: service_started
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+          # One Go process, as the panel.
+          pids: 128
+
+  switchyard:
+    # compose.yaml's panel, repeated here rather than extended: extending it
+    # would make Compose resolve compose.yaml's overlay settings too.
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["panel"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-switchyard"
+    restart: unless-stopped
+    # The user that owns ./state/panel, as the container sees it: your host
+    # user's uid:gid on Docker. Under a rootless engine that remaps uids, set
+    # PANEL_USER=0:0 and PANEL_ALLOW_ROOT=1 beside it (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-pia}"
+      # A single-exit panel reads the kind from here.
+      EXIT_KIND: sidecar
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
+      PANEL_EXITS: "${PANEL_EXITS:-}"
+      PANEL_PUBLIC_HOSTS: "${PANEL_PUBLIC_HOSTS:-}"
+      PANEL_FRAME_ANCESTORS: "${PANEL_FRAME_ANCESTORS:-}"
+      PANEL_TITLE: "${PANEL_TITLE:-Switchyard}"
+      PANEL_SHORT_TITLE: "${PANEL_SHORT_TITLE:-Switchyard}"
+      PANEL_HOST_LABEL: "${PANEL_HOST_LABEL:-this tunnel}"
+      PANEL_HOME_URL: "${PANEL_HOME_URL:-}"
+      PANEL_HOME_LABEL: "${PANEL_HOME_LABEL:-Home}"
+      PANEL_THEME: "${PANEL_THEME:-auto}"
+      PANEL_STYLE: "${PANEL_STYLE:-provider}"
+      PANEL_OIDC_ISSUER: "${PANEL_OIDC_ISSUER:-}"
+      PANEL_OIDC_CLIENT_ID: "${PANEL_OIDC_CLIENT_ID:-}"
+      PANEL_PUBLIC_URL: "${PANEL_PUBLIC_URL:-}"
+      PANEL_ADMIN_GROUPS: "${PANEL_ADMIN_GROUPS:-}"
+      PANEL_SESSION_TTL: "${PANEL_SESSION_TTL:-3600}"
+    ports:
+      # Loopback only. Publish it through an authenticating proxy, or turn on
+      # sign-in (docs/access.md).
+      - "127.0.0.1:${PANEL_PORT:-8095}:8080"
+    volumes:
+      - ./state/panel:/state/panel
+      - ./state/applier:/state/applier:ro
+    networks: [panel]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          # As compose.yaml's panel.
+          pids: 128
+
+  proxy:
+    # EXPERIMENTAL, and in no release yet: the proxy role is being built
+    # (docs/design/menu.md#the-proxy). An image without it exits at once
+    # with "unknown role". Its guarantee: every connection the proxy opens
+    # leaves through the tunnel, or fails. It promises nothing about traffic
+    # not sent to it.
+    # SOCKS5 and HTTP CONNECT on one address in the exit's namespace, for
+    # programs you point at it. No capabilities: binding its connections to
+    # the tunnel interface needs none. It reads the exit's records, read-only,
+    # and writes only its own state.
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["proxy"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-proxy"
+    restart: unless-stopped
+    network_mode: service:exit
+    # The user that owns ./state/proxy and ./secrets/proxy, as the panel's
+    # PANEL_USER (docs/configuration.md).
+    user: "${PANEL_USER:-1000:1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      STATE_DIR: /state
+      PROVIDER: "${PROVIDER:-pia}"
+      TUNNEL_INTERFACE: "${EXIT_IF:-pia}"
+      # Loopback, for the containers in this namespace; anything else is
+      # refused (there is no NetBird interface here).
+      PROXY_LISTEN: "${PROXY_LISTEN:-127.0.0.1:1080}"
+      PROXY_MAX_CONNS: "${PROXY_MAX_CONNS:-512}"
+      # One line, mode 0600, owned by the user above.
+      PROXY_PASSWORD_FILE: /run/secrets/proxy/password
+    volumes:
+      - ./state/applier:/state/applier:ro
+      # Both must exist: Compose then fails instead of creating them owned by
+      # root, where this non-root user could not use them.
+      - type: bind
+        source: ./state/proxy
+        target: /state/proxy
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./secrets/proxy
+        target: /run/secrets/proxy
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted with the exit.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+          # One Go process, as the panel.
+          pids: 128
+
+networks:
+  panel:

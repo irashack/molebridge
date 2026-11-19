@@ -1,0 +1,136 @@
+# Written by `molebridge init` (experimental, docs/setup.md#molebridge-init).
+#   provider: mullvad
+#   ways in:  sidecar
+#   extras:   none
+# The services are those of compose.native-sidecar.yaml in the Molebridge source
+# of the same release, with its settings and image pins; that file's
+# comments say more.
+# Your settings are in .env beside this file.
+#
+# Secrets live in the mode-0600 files under ./tunnel and ./secrets; never
+# print them or paste `docker compose config` output anywhere.
+name: molebridge-native-sidecar
+
+services:
+  exit:
+    image: ghcr.io/irashack/molebridge-core:<pin>
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-exit"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # NET_ADMIN: the routing contract, the firewall and the tunnel.
+    # NET_RAW: binding egress checks to the tunnel on kernels before 5.7.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and writes state directories your host user owns
+    # (rootful Docker; a rootless engine's container root is that user already).
+    # The applications get none of these, and no capability at all: without
+    # NET_ADMIN they cannot change the rules, and without NET_ADMIN or NET_RAW
+    # (enough for SO_MARK from Linux 5.17, and in Docker's default set) they
+    # cannot mark a socket past the firewall. Hence cap_drop: [ALL] on each.
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence removes the tunnel within 13 seconds; the rules and
+    # the firewall stay.
+    stop_grace_period: 15s
+    # Publish your applications' ports here: they listen in this namespace.
+    # A published port arrives from the engine's network, so name that
+    # network in SIDECAR_LAN_CIDRS or the replies are dropped.
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      EXIT_KIND: sidecar
+      TUNNEL_BACKEND: native
+      PROVIDER: "${PROVIDER:-pia}"
+      EXIT_IF: "${EXIT_IF:-pia}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      HOST_IF: "${HOST_IF:-eth0}"
+      # Where the applications may go outside the tunnel, comma-separated:
+      # the engine's network for published ports and neighbours, a resolver
+      # (docs/native-sidecar.md#dns). Everything else goes through the tunnel
+      # or nowhere.
+      SIDECAR_LAN_CIDRS: "${SIDECAR_LAN_CIDRS:-}"
+      # The exit's own lookups, when the namespace's resolvers are reachable
+      # only through the tunnel (docs/native-sidecar.md#dns).
+      SIDECAR_HOST_RESOLVERS: "${SIDECAR_HOST_RESOLVERS:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default: the forwarded port reaches this namespace;
+      # port-sync below tells qBittorrent which one it is.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+    env_file:
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
+      - ./tunnel/wg_confs:/config/wg_confs:ro
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: secrets/pia/username and secrets/pia/password, mode 0600.
+      # Create the directory for every provider (docs/setup.md).
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          # As compose.yaml's exit: the Go processes' threads count too.
+          pids: 512
+
+  example-app:
+    # A stand-in for your application: it only sleeps, in the exit's
+    # namespace. It runs only with COMPOSE_PROFILES=example (as
+    # the .env beside this file sets it). Add your own services in a file of
+    # your own, each with `network_mode: service:exit`, and give them no
+    # capabilities.
+    profiles: [example]
+    image: docker.io/library/busybox:<pin>
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-example-app"
+    # Not restarted by the engine: after a reboot the engine starts
+    # unless-stopped containers without waiting for depends_on, so an
+    # application could run before the exit has installed its firewall and
+    # rules, with the host's routes open to it. Start the stack at boot with
+    # `docker compose up -d`, which waits for the exit to be healthy
+    # (docs/native-sidecar.md#starting-at-boot). Give your applications the
+    # same policy.
+    restart: "no"
+    network_mode: service:exit
+    init: true
+    command: ["sleep", "2147483647"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    depends_on:
+      exit:
+        # Starts once the tunnel is verified; restarted when Compose restarts
+        # or recreates the exit.
+        condition: service_healthy
+        restart: true
+    logging: *logging
+    deploy:
+      resources:
+        limits:
+          memory: 16m

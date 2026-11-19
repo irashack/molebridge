@@ -35,6 +35,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   namespace test (interface present, absent and renamed) runs in CI's
   namespace drills. Neither has run against a real tunnel or a real Mullvad
   relay proxy.
+- New, experimental: `molebridge init`, the menu of ways in. It asks for a
+  provider (Mullvad, PIA, NordVPN, or a provider through gluetun), the ways
+  in (NetBird exit, sidecar, proxy) and the extras (Switchyard, `port-sync`),
+  or reads the same answers from a JSON file (`--answers`), and writes a
+  `compose.yaml` and an `.env` built from the shipped Compose files'
+  services, settings and pins. It refuses the combinations that don't exist,
+  including a NetBird exit and a sidecar together, which would need two
+  exits. The proxy service it writes is for a role that is not built yet.
+  CI resolves every combination it accepts against the shipped files
+  (`tools/check-compose.sh`); none has been started on a host
+  ([setup](docs/setup.md#molebridge-init)).
 
 ## 0.13.0 — unreleased
 

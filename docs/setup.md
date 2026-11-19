@@ -389,6 +389,104 @@ Then run the [client checks](verification.md#from-a-client), and read
 `docker compose exec exit molebridge status`. A passing status isn't a leak
 test; the [verification](verification.md) drills are.
 
+## molebridge init
+
+**Experimental, and in no release yet.** `molebridge init` writes a Compose
+file and an `.env` for the ways in you choose, in place of copying one of the
+shipped Compose files and its example ([the menu](design/menu.md)).
+It has been checked by CI only: every combination it accepts resolves with
+`docker compose config`, and each service it writes resolves exactly as the
+same service of the shipped file it comes from (`tools/check-compose.sh`).
+No stack it wrote has been started on any host.
+
+Until a release has it, run it from a checkout with Go installed:
+
+```sh
+go run ./cmd/molebridge init --out ~/molebridge
+```
+
+On a terminal it asks three questions. `--answers FILE` reads the same
+answers from a JSON file instead, which is how to run it from a script:
+
+```json
+{"schema": 1, "provider": "pia", "ways_in": ["sidecar", "proxy"], "extras": ["switchyard", "port-sync"]}
+```
+
+The file holds one object with exactly these members, at most 4096 bytes:
+`schema` is `1`; `provider` is `mullvad`, `pia`, `nordvpn`, or
+`gluetun-<id>` for a provider gluetun drives (`gluetun-fastestvpn`,
+`gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`,
+`gluetun-windscribe`); `ways_in` lists one or more of `netbird-exit`,
+`sidecar` and `proxy`; `extras`, which may be left out, lists `switchyard`,
+`port-sync` or neither. Unknown members, repeated keys and names listed twice
+are refused.
+
+What it writes comes from the shipped file of the same source, with that
+file's settings and image pins:
+
+| You choose | Services | From |
+|---|---|---|
+| `mullvad`, `pia` or `nordvpn` with `netbird-exit` | `exit` (`EXIT_KIND=overlay`, `TUNNEL_BACKEND=native`) | `compose.yaml` |
+| `mullvad`, `pia` or `nordvpn` with `sidecar` | `exit` (`EXIT_KIND=sidecar`, `TUNNEL_BACKEND=native`) and `example-app` | `compose.native-sidecar.yaml` |
+| `gluetun-<id>` with `netbird-exit` | `gluetun` and `exit` (`EXIT_KIND=overlay`, `TUNNEL_BACKEND=gluetun`) | `compose.gluetun.yaml` |
+| `gluetun-<id>` with `sidecar` | `gluetun`, `exit` (`EXIT_KIND=sidecar`, `TUNNEL_BACKEND=gluetun`) and `example-app` | `compose.sidecar.yaml` |
+| `switchyard` | that form's `switchyard` | the same file |
+| `port-sync` | the native sidecar's `port-sync`, without its profile, and `PIA_PORT_FORWARD=on` in `.env` | `compose.native-sidecar.yaml` |
+| `proxy` | `proxy`, in the exit's namespace | init's own |
+
+`EXIT_KIND` and `TUNNEL_BACKEND` are written as the shipped files write them
+and mean the same. The `.env` holds the settings of the form's example file
+(`.env.example`, `.env.gluetun.example`, `.env.sidecar.example` or
+`.env.native-sidecar.example`) with their example values, your provider in
+`PROVIDER` and `EXIT_IF` (or `GLUETUN_PROVIDER`), the panel's settings only
+with `switchyard`, and `PROXY_LISTEN` with `proxy`. With a gluetun provider it
+also writes `routing/gluetun-preflight`, the script the `gluetun` service
+mounts, as the [`gluetun-preflight`](tools-reference.md#gluetun-preflight)
+tool does.
+
+**The proxy** is a way in that is being built
+([design](design/menu.md)): every connection it opens leaves through
+the tunnel, or fails, and it promises nothing about traffic not sent to it.
+Its `molebridge proxy` role is in no image yet, so its container exits at
+start with `molebridge: unknown role "proxy"` until a release has it. It runs
+`molebridge-core` with no capabilities, a read-only root and your
+`PANEL_USER`, in the exit's network namespace; it mounts `state/applier`
+read-only, `state/proxy` writable and `secrets/proxy/password` (one line,
+mode 0600) read-only. On the NetBird exit, set `PROXY_LISTEN` to the exit's
+NetBird address and a port; beside the sidecar, the default loopback address
+serves the containers in the namespace.
+
+It refuses combinations that don't exist, and writes nothing then:
+
+- `molebridge init: netbird-exit and sidecar can't share one exit: the NetBird
+  exit is EXIT_KIND=overlay and the sidecar EXIT_KIND=sidecar, and init writes
+  one exit. Choose one of them; the other needs a Compose project of its own.`
+- A proxy with a gluetun provider (`the proxy needs a native provider`), or a
+  proxy alone (`the proxy runs in the network namespace of a native exit:
+  choose netbird-exit or sidecar with it.`).
+- `port-sync` with another provider than PIA, or without `sidecar`.
+
+It writes `compose.yaml` and `.env` (and `routing/gluetun-preflight`) into
+the `--out` directory, creating it if needed. If one of them is there
+already it stops with `molebridge init: <path> exists; pass --force to
+replace it, or choose another --out.`; `--force` replaces regular files, never
+a symbolic link.
+
+Then, in that directory, continue with the set-up of the form you chose, from
+its configuration step, with the `.env` init wrote in place of the copied
+example: [step 2](#2-configure) here for the NetBird exit,
+[gluetun as a NetBird exit](gluetun-netbird-exit.md#set-up), [the gluetun
+sidecar](gluetun-sidecar.md) or [the native sidecar](native-sidecar.md). The
+directories are the same (`state/panel`, `state/applier`, `secrets/pia` for
+every native provider); the proxy also needs `state/proxy` and
+`secrets/proxy`, created as your own user, because Compose refuses to create
+them.
+
+The image pins are the ones in the source init was built from. The Compose
+files of a release's source pin the release before it until the release is
+recorded, so check the `image:` lines against the release you want
+([upgrades](operations.md#upgrades)).
+
 ## With the gluetun backend instead
 
 **Experimental.** A gluetun exit with NordVPN has run live on rootless Podman
