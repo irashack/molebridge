@@ -47,6 +47,13 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   CI resolves every combination it accepts against the shipped files
   (`tools/check-compose.sh`); none has been started on a host
   ([setup](docs/setup.md#molebridge-init)).
+- Internal: the worker reaches NetBird through the matching boundary
+  (`internal/exit/wayin_worker_linux.go`): the readiness loop, the profile
+  checks, the reports about each launch, the gluetun NetBird monitors and the
+  record published while NetBird is held back are NetBird's side of it
+  (`internal/exit/netbird_worker_linux.go`). No behavior change: settings, the
+  status record, log lines, timing and the start order are as before
+  ([architecture](docs/architecture.md#netbird-as-a-child)).
 
 ## 0.13.0 — unreleased
 

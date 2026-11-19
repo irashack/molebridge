@@ -17,7 +17,7 @@ const sample = 2 * time.Second
 
 // gluetunMonitors are the two checks the NetBird gate made on the gluetun
 // backend, now loops of the worker under the lease (a stalled monitor lapses
-// it):
+// it), started by NetBird's way in (nbWorker.Start):
 //
 //   - the fwmark monitor reads the overlay interface's fwmark through wgctrl
 //     every 2 seconds. A missing interface, a failed read or a wrong mark
@@ -28,7 +28,7 @@ const sample = 2 * time.Second
 //     and stops NetBird on either line NetBird logs when it falls back from
 //     advanced routing, so its control traffic would be unmarked.
 type gluetunMonitors struct {
-	w         *worker
+	h         workerWayInHost
 	tun       *tunnel.Manager
 	overlayIf string
 	mark      uint32
@@ -48,17 +48,17 @@ type gluetunMonitors struct {
 	scanner  *logScanner
 }
 
-func (w *worker) startGluetunMonitors(tun *tunnel.Manager) error {
-	m := &gluetunMonitors{w: w, tun: tun, overlayIf: w.s.Routing.OverlayIf, mark: w.s.Routing.ControlMark,
-		grace: w.s.FwmarkGrace, logPath: w.s.WatchLog}
-	now := int64(w.clock())
+func (n *nbWorker) startGluetunMonitors(tun *tunnel.Manager) error {
+	m := &gluetunMonitors{h: n.h, tun: tun, overlayIf: n.s.Routing.OverlayIf, mark: n.s.Routing.ControlMark,
+		grace: n.s.FwmarkGrace, logPath: n.s.WatchLog}
+	now := int64(n.h.clock())
 	m.fwProgress.Store(now)
 	m.logProgress.Store(now)
-	w.monitors = m
-	w.loops[LoopFwmark] = loopSource{func() time.Duration { return time.Duration(m.fwProgress.Load()) }, LoopBound}
-	w.loops[LoopLog] = loopSource{func() time.Duration { return time.Duration(m.logProgress.Load()) }, LoopBound}
-	go m.fwmarkLoop(w.ctx)
-	go m.logLoop(w.ctx)
+	n.monitors = m
+	n.h.addLoop(LoopFwmark, loopSource{func() time.Duration { return time.Duration(m.fwProgress.Load()) }, LoopBound})
+	n.h.addLoop(LoopLog, loopSource{func() time.Duration { return time.Duration(m.logProgress.Load()) }, LoopBound})
+	go m.fwmarkLoop(n.h.ctx)
+	go m.logLoop(n.h.ctx)
 	return nil
 }
 
@@ -73,7 +73,7 @@ func (m *gluetunMonitors) newLaunch(launch int, logOffset int64, at time.Duratio
 	if launch < m.cur.launch {
 		return
 	}
-	if now := m.w.clock(); at <= 0 || at > now {
+	if now := m.h.clock(); at <= 0 || at > now {
 		at = now
 	}
 	m.cur = launchInfo{launch: launch, offset: logOffset, at: at}
@@ -118,7 +118,7 @@ func (m *gluetunMonitors) stop(reason string) {
 	m.mu.Lock()
 	m.launched, m.scanner = false, nil
 	m.mu.Unlock()
-	m.w.fatal(fmt.Sprintf("NetBird gate: stopping NetBird: %s (see docs/troubleshooting.md)", reason))
+	m.h.fatal(fmt.Sprintf("NetBird gate: stopping NetBird: %s (see docs/troubleshooting.md)", reason))
 }
 
 func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {
@@ -132,7 +132,7 @@ func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {
 				value = fmt.Sprintf("0x%x", mark)
 			}
 		}
-		now := m.w.clock()
+		now := m.h.clock()
 		m.mu.Lock()
 		if m.launched {
 			if err == nil && mark == m.mark {
@@ -144,7 +144,7 @@ func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {
 				m.mu.Unlock()
 				m.stop(fmt.Sprintf("%s has not carried the control mark 0x%x for %d seconds (last reported: %s)",
 					m.overlayIf, m.mark, int(m.grace/time.Second), seen))
-				m.fwProgress.Store(int64(m.w.clock()))
+				m.fwProgress.Store(int64(m.h.clock()))
 				if !sleepCtx(ctx, sample) {
 					return
 				}
@@ -152,7 +152,7 @@ func (m *gluetunMonitors) fwmarkLoop(ctx context.Context) {
 			}
 		}
 		m.mu.Unlock()
-		m.fwProgress.Store(int64(m.w.clock()))
+		m.fwProgress.Store(int64(m.h.clock()))
 		if !sleepCtx(ctx, sample) {
 			return
 		}
@@ -167,7 +167,7 @@ func (m *gluetunMonitors) logLoop(ctx context.Context) {
 		if sc != nil && sc.step() {
 			m.stop(FallbackMessage)
 		}
-		m.logProgress.Store(int64(m.w.clock()))
+		m.logProgress.Store(int64(m.h.clock()))
 		if !sleepCtx(ctx, sample) {
 			return
 		}

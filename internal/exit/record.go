@@ -90,28 +90,6 @@ func StartingRecord(s *Settings, now time.Time) map[string]any {
 	return toMap(rec)
 }
 
-// heldReportChars is the longest reason a held-NetBird record's message
-// carries: the same bound as the unready message's reason.
-const heldReportChars = 900
-
-// NetBirdHeldRecord is the record of an overlay exit that does not run
-// NetBird, and so never starts the control cycle, for a reason only the
-// operator can fix: the profile check after `netbird up` refused (for the
-// rest of the container's life), or a precondition of the start is missing
-// (net.ipv4.icmp_errors_use_inbound_ifaddr not 1, a profile the pre-start
-// check refuses; held until it is fixed). Nothing else would replace the
-// starting record. It is the starting record failed, with the netbird check
-// failed at now and why as the message; readers give the reason
-// netbird-failed.
-func NetBirdHeldRecord(s *Settings, now time.Time, why string) map[string]any {
-	rec := StartingRecord(s, now)
-	checks, _ := rec["checks"].(map[string]any)
-	checks["netbird"] = map[string]any{"state": "fail", "at": validate.FormatTime(now)}
-	rec["status"] = "failed"
-	rec["message"] = truncateRunes(strings.ToValidUTF8(why, "\uFFFD"), heldReportChars)
-	return rec
-}
-
 // RoutingActivity is the routing_activity member of a record: what the
 // mutation owner and the kernel watcher counted since the worker started.
 // Only exits with a routing contract carry it. No reader judges it.
