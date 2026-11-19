@@ -66,6 +66,8 @@ ME_EMAIL = "351314153+irashack-products[bot]@users.noreply.github.com"
 # A command that prints a GitHub token for the repository, read once a run; without
 # it the token in GH_TOKEN (or gh's own login) is used.
 TOKEN_ENV = "MOLEBRIDGE_RELEASE_TOKEN_COMMAND"
+# Seconds a token from that command is used before the next call mints another.
+TOKEN_AGE = 120
 STATE = Path.home() / ".local/state/molebridge-auto-release"
 PIN_FILES = ["compose.yaml", "compose.gluetun.yaml", "compose.sidecar.yaml",
              "compose.native-sidecar.yaml", "README.md", "docs/setup.md",
@@ -279,18 +281,34 @@ class World:
         self.dir, self.dry = workdir, dry_run
         self.env = dict(os.environ)
         self.env.pop("GITHUB_TOKEN", None)
+        self.minted = float("-inf")
 
-    def login(self):
+    def login(self, force=False):
+        """A token from the token command, minted again once it is TOKEN_AGE old:
+        a minted token can be revoked long before its own expiry (an OpenBao
+        lease ends with the login that created it)."""
         cmd = self.env.get(TOKEN_ENV)
         if cmd:
-            out = subprocess.run(cmd.split(), capture_output=True, text=True, check=True)
-            self.env["GH_TOKEN"] = out.stdout.strip()
+            if force or time.monotonic() - self.minted > TOKEN_AGE:
+                out = subprocess.run(cmd.split(), capture_output=True, text=True, check=True)
+                self.env["GH_TOKEN"] = out.stdout.strip()
+                self.minted = time.monotonic()
         elif not self.env.get("GH_TOKEN"):
-            self.env["GH_TOKEN"] = self.run("gh", "auth", "token").strip()
+            self.env["GH_TOKEN"] = subprocess.run(["gh", "auth", "token"], capture_output=True,
+                                                  text=True, check=True).stdout.strip()
 
     def run(self, *cmd, check=True, input=None) -> str:
+        uses_token = cmd[0] == "gh" or "push" in cmd
+        if uses_token:
+            self.login()
         p = subprocess.run(cmd, cwd=self.dir, env=self.env, capture_output=True,
                            text=True, input=input)
+        if p.returncode and uses_token and self.env.get(TOKEN_ENV) and \
+                re.search(r"Bad credentials|HTTP 401|Authentication failed", p.stderr):
+            # Revoked under us: mint once more and try again.
+            self.login(force=True)
+            p = subprocess.run(cmd, cwd=self.dir, env=self.env, capture_output=True,
+                               text=True, input=input)
         if check and p.returncode:
             raise RuntimeError(f"{cmd[0]} {cmd[1] if len(cmd) > 1 else ''} failed: "
                                f"{p.stderr.strip()[-800:]}")
@@ -699,6 +717,8 @@ def main() -> int:
     ap.add_argument("--workdir", type=Path, default=Path.cwd(),
                     help="a clone of irashack/molebridge to work in (reset to origin/main)")
     args = ap.parse_args()
+    # Lines reach a log file in the order they happened.
+    sys.stdout.reconfigure(line_buffering=True)
     STATE.mkdir(parents=True, exist_ok=True)
     lock = open(STATE / "lock", "w")
     try:
