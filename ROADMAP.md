@@ -31,10 +31,39 @@ Three rules follow, and the project's
 - **The core stays shared.** A way in reuses the provider tunnels, the
   admission pipeline and the verdict rather than growing its own.
 
+The aim is a menu: an operator picks the ways in they want (a NetBird exit,
+a sidecar, a proxy) and the extras (Switchyard, `port-sync`), and the core
+underneath is the same. NetBird becomes one of the choices rather than the
+frame. Each way in is tested once against the core's contracts, not in every
+combination, and is labeled stable or experimental on its own. Today's
+`EXIT_KIND` and `TUNNEL_BACKEND` stay valid and map onto the menu, so existing
+exits need no change. A single setting or file naming the choices, and a
+`molebridge init` that writes the Compose file from a few questions, would
+come after the proxy.
+
+Two decisions shape the work (maintainer, 2026-11-19):
+
+- **[Two images](#an-image-without-netbird)**: one without NetBird, for the
+  sidecars and the proxy, and one with it, for the NetBird exit. Mounting the
+  operator's own NetBird image instead of bundling one is not planned for
+  now, and NetBird is never run as a separate container outside the
+  supervisor's control: the supervisor starting NetBird only when the
+  routing contract holds, and stopping it when the lease lapses, is what
+  makes the exit fail closed.
+- **Go stays the language.** Go is already memory safe, Molebridge builds
+  without cgo, and what the project depends on (the NetBird client, gluetun,
+  wgctrl, netlink and nftables) is Go. The failures that matter here are
+  logic failures, a leaking rule or a lapsed lease shown as live, which no
+  language prevents and the drills and live passes catch. Once the ways in
+  have clean boundaries, one could be rewritten behind its contract if
+  measurements give a reason; a userspace tunnel for the proxy is the likely
+  candidate. No rewrite happens alongside the change of core.
+
 The order of work: exchanging requests and status over the network first,
 so that more ways in don't mean more shared directories (built in 0.10.0, not
 yet run live: [the network exchange](docs/architecture.md#the-network-exchange));
-then a status record that can
+then [an image without NetBird](#an-image-without-netbird), which needs no
+other change; then a status record that can
 describe a way in using many servers at once; then [the
 proxy](#a-proxy-on-the-exit). Meanwhile a device on a Mullvad exit can already
 reach Mullvad's own per-server proxies ([Mullvad's SOCKS5
@@ -239,3 +268,24 @@ would take:
   kept and moved, a benched server, a server switch of the exit, tunnel loss,
   and an nftables counter on every interface but the tunnel showing no
   packet from the proxy.
+
+### An image without NetBird
+
+Every image carries the pinned NetBird client today, so a sidecar, which
+never starts NetBird, still downloads it and inherits its advisories (most of
+what the scheduled scan reports). The plan is two images from one Dockerfile
+and one release: one with NetBird, for the NetBird exit, and one without, for
+the sidecars and later the proxy. What it would take:
+
+- A build target without the NetBird stage, and a binary that refuses
+  `EXIT_KIND=overlay` at startup, with one line naming the other image, when
+  no NetBird client is present, before anything changes.
+- Names that keep existing setups working: `ghcr.io/irashack/molebridge` keeps
+  NetBird, as it has since 0.8.0, and the new image gets a name of its own, so
+  that no upgrade removes NetBird from an exit. Whether the plain name later
+  becomes the image without NetBird goes through the
+  [deprecation rules](docs/compatibility.md).
+- Both images signed, attested and promoted together from one candidate, each
+  with its own SBOM and scan, and the live acceptance covering the sidecars
+  on the new image.
+- The sidecar Compose files and examples pinned to the new image.
