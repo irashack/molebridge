@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 800 430" xmlns="http://www.w3.org/2000/svg">
+<path d="m166 327v-87c0-131 105-208 234-208s234 77 234 208v87" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="48"/>
+<path d="m94 384h612" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
+<circle cx="75" cy="384" r="25" fill="none" stroke="currentColor" stroke-width="13"/>
+<circle cx="725" cy="384" r="25" fill="none" stroke="currentColor" stroke-width="13"/>
+<path d="m181 357c44-29 63-76 100-144 32-59 86-88 144-85 44 2 78 21 102 51" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="15"/>
+<path d="m518 194c22-14 49-13 70 4 17 13 12 35-2 54-14 23-30 40-49 35s-31-21-49-29" fill="currentColor"/>
+<circle cx="580" cy="207" r="19" fill="currentColor" stroke="currentColor" stroke-width="6"/>
+<path d="m569 205c4-8 12-11 19-7" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+<path d="m518 243-47 4m44 10-52 14m53 0-38 21" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+<path d="m399 210q18-23 37 0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="10"/>
+<path d="m286 376c-9-22 0-41 19-47 25-10 48 7 55 25 9 21 13 41 2 48-13 9-21-7-27-25 6 26-8 33-19 23l-11-21c8 26-6 30-18 18-8-9-8-14-1-21z" fill="currentColor"/>
+<path d="m478 376c-11-24 3-42 24-48 24-7 45 8 53 26 8 19 13 41 2 48-13 10-22-6-25-24 4 27-11 31-22 21l-10-19c6 24-10 28-19 17-6-10-6-15-3-21z" fill="currentColor"/>
+</svg>

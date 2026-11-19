@@ -525,7 +525,7 @@ func TestFiltersOfferedOnlyWhenTheyNarrowTheList(t *testing.T) {
 func TestFaviconAndUnbrokenAddress(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	page := h.render(nil, nil, nil, nil)
-	if !regexp.MustCompile(`<link rel="icon" href="/static/icon-192\.png\?v=\w+" type="image/png">`).MatchString(page) {
+	if !regexp.MustCompile(`<link rel="icon" href="/static/favicon\.svg\?v=\w+" type="image/svg\+xml">\n<link rel="icon" href="/static/favicon-32\.png\?v=\w+" sizes="32x32" type="image/png">`).MatchString(page) {
 		t.Error("no favicon link")
 	}
 	mustContain(t, page, `<span class="nowrap">· <span data-current-ip>`)
@@ -805,7 +805,13 @@ func TestHeadIsAnsweredAsGetWithoutABody(t *testing.T) {
 func TestManifestAndIconsAreDeclared(t *testing.T) {
 	h := newSingleHarness(t, nil)
 	page := h.render(nil, nil, nil, nil)
-	mustContain(t, page, `rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"`, `rel="apple-touch-icon"`, "viewport-fit=cover")
+	mustContain(t, page, `rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials"`, `rel="apple-touch-icon"`, "viewport-fit=cover",
+		`<link rel="icon" href="/static/favicon.svg?v=`, `<link rel="icon" href="/static/favicon-32.png?v=`)
+	for path, kind := range map[string]string{"/static/favicon.svg": "image/svg+xml", "/static/favicon-32.png": "image/png"} {
+		if a := h.get(path, "", nil); a.Status != 200 || a.Header.Get("Content-Type") != kind {
+			t.Errorf("%s: %d %q", path, a.Status, a.Header.Get("Content-Type"))
+		}
+	}
 	manifest := jsonBody(t, h.get("/manifest.webmanifest", "", nil))
 	if manifest["start_url"] != "/" || manifest["name"] != "Switchyard" || manifest["display"] != "standalone" {
 		t.Fatalf("manifest = %v", manifest)
@@ -821,7 +827,8 @@ func TestManifestAndIconsAreDeclared(t *testing.T) {
 	// The same bytes json.dumps(WEB_MANIFEST) wrote.
 	want := `{"name": "Switchyard", "short_name": "Switchyard", "start_url": "/", "scope": "/", "display": "standalone", ` +
 		`"background_color": "#030c1b", "theme_color": "#030c1b", "icons": [{"src": "/static/icon-192.png", ` +
-		`"sizes": "192x192", "type": "image/png"}, {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}]}`
+		`"sizes": "192x192", "type": "image/png"}, {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"}, ` +
+		`{"src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}`
 	if got := h.get("/manifest.webmanifest", "", nil).Body; got != want {
 		t.Errorf("manifest bytes:\n got %s\nwant %s", got, want)
 	}

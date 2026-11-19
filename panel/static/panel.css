@@ -672,9 +672,15 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .page-header { padding: 0 2px; align-items: center; margin-bottom: 4px; }
 :root[data-style="provider"] .brand-kicker { display: block; text-transform: uppercase; letter-spacing: .17em; font-size: 1rem; font-weight: 700; color: var(--color-text-subdue); }
 :root[data-style="provider"] h1 { font-size: 3.4rem; font-weight: 750; letter-spacing: -.045em; line-height: 1.15; margin-top: 4px; }
-:root[data-style="provider"] .brand-mark { display: block; width: 64px; height: 48px; flex-shrink: 0; }
-.brand-mark .mark-arch { stroke: var(--brand-teal); stroke-width: 12; }
-.brand-mark :is(.mark-mole, .mark-line, .mark-node) { stroke: var(--brand-cream); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+:root[data-style="provider"] .brand-mark { display: block; width: 76px; height: auto; flex-shrink: 0; overflow: visible; }
+.brand-mark .mk-teal { stroke: var(--brand-teal); }
+.brand-mark .mk-ink-line { stroke: var(--brand-cream); }
+.brand-mark .mk-ink { fill: var(--brand-cream); }
+.brand-mark .mk-ink-dot { fill: var(--brand-cream); stroke: var(--color-background); }
+.brand-mark .mk-bg-line { stroke: var(--color-background); }
+/* The mole looks up when you point at the mark. */
+.brand-mark :is(.mk-mole, .mk-mole-eye) { transition: transform .35s cubic-bezier(.3, 1.4, .5, 1); }
+.brand:hover .brand-mark :is(.mk-mole, .mk-mole-eye) { transform: translateY(-14px); }
 /* The circuit: one line under the tabs with a node at each end, and from
    every tab a stem down to a node of its own on the line. The selected exit's
    stem and node light in its provider's colour; a switch sends a pulse along
@@ -714,7 +720,7 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 :root[data-style="provider"] .exit-label { grid-row: 2; }
 /* Each tab's arch, in its provider's colour: drawn in when the tab is
    selected, lifted on hover. */
-:root[data-style="provider"] .exit-arch { display: block; grid-column: 1 / -1; grid-row: 1; width: 36px; height: 22px; margin: 2px 0 8px -3px; overflow: visible; stroke-linecap: butt; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
+:root[data-style="provider"] .exit-arch { display: block; grid-column: 1 / -1; grid-row: 1; width: 36px; height: 22px; margin: 2px 0 8px -3px; overflow: visible; stroke-linecap: round; transition: transform .25s cubic-bezier(.2, .8, .2, 1); }
 .exit-arch .arch { stroke: var(--exit-accent); stroke-width: 5; }
 .exit-arch .arch-outer { display: none; stroke: var(--exit-gluetun); stroke-width: 1.6; stroke-dasharray: 1.6 2.6; stroke-linecap: round; }
 .exit-tab:not(.is-selected) .exit-arch .arch { opacity: .7; }

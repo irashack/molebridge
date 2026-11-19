@@ -7,5 +7,5 @@ import "embed"
 
 // Files holds every asset the panel serves, plus the font's license text.
 //
-//go:embed panel.css panel.js JetBrainsMono-Regular.woff2 JetBrainsMono-OFL.txt apple-touch-icon.png icon-192.png icon-512.png
+//go:embed panel.css panel.js JetBrainsMono-Regular.woff2 JetBrainsMono-OFL.txt apple-touch-icon.png icon-192.png icon-512.png icon-maskable-512.png favicon.svg favicon-32.png
 var Files embed.FS

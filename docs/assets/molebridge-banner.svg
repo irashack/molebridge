@@ -1,48 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title description">
   <title id="title">Molebridge</title>
-  <desc id="description">Your NetBird network, out through any VPN. NetBird devices on the left cross a bridge to one exit, which fans out to Mullvad, PIA, NordVPN, or a WireGuard provider through gluetun.</desc>
-  <defs>
-    <linearGradient id="background" x2="1" y2="1">
-      <stop stop-color="#24273a"/>
-      <stop offset="1" stop-color="#181b2b"/>
-    </linearGradient>
-    <linearGradient id="bridge">
-      <stop stop-color="#8aadf4"/>
-      <stop offset="1" stop-color="#a6da95"/>
-    </linearGradient>
-    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
-      <path d="M32 0H0V32" fill="none" stroke="#8aadf4" stroke-opacity=".055"/>
-    </pattern>
-  </defs>
-  <rect width="1200" height="300" rx="20" fill="url(#background)"/>
-  <rect width="1200" height="300" rx="20" fill="url(#grid)"/>
-  <path d="M56 244H1144" stroke="#363a4f"/>
+  <desc id="description">Molebridge: your NetBird network, out through any VPN. The mole under its arch sits on a circuit line; NetBird devices on the left reach one exit, which fans out to Mullvad, PIA, NordVPN, or a WireGuard provider through gluetun.</desc>
+  <rect width="1200" height="300" rx="20" fill="#030C1B"/>
+  <path d="M56 244H1144" stroke="#1B2437" stroke-width="2"/>
+  <svg x="48" y="34" width="200" height="107.5" viewBox="0 0 800 430"><path d="m166 327v-87c0-131 105-208 234-208s234 77 234 208v87" fill="none" stroke="#57E5C2" stroke-linecap="round" stroke-linejoin="round" stroke-width="48"/>
+<path d="m94 384h612" fill="none" stroke="#F9F4EC" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/>
+<circle cx="75" cy="384" r="25" fill="none" stroke="#F9F4EC" stroke-width="13"/>
+<circle cx="725" cy="384" r="25" fill="none" stroke="#F9F4EC" stroke-width="13"/>
+<path d="m181 357c44-29 63-76 100-144 32-59 86-88 144-85 44 2 78 21 102 51" fill="none" stroke="#F9F4EC" stroke-linecap="round" stroke-linejoin="round" stroke-width="15"/>
+<path d="m518 194c22-14 49-13 70 4 17 13 12 35-2 54-14 23-30 40-49 35s-31-21-49-29" fill="#F9F4EC"/>
+<circle cx="580" cy="207" r="19" fill="#F9F4EC" stroke="#030C1B" stroke-width="6"/>
+<path d="m569 205c4-8 12-11 19-7" fill="none" stroke="#030C1B" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+<path d="m518 243-47 4m44 10-52 14m53 0-38 21" fill="none" stroke="#F9F4EC" stroke-linecap="round" stroke-linejoin="round" stroke-width="5"/>
+<path d="m399 210q18-23 37 0" fill="none" stroke="#F9F4EC" stroke-linecap="round" stroke-linejoin="round" stroke-width="10"/>
+<path d="m286 376c-9-22 0-41 19-47 25-10 48 7 55 25 9 21 13 41 2 48-13 9-21-7-27-25 6 26-8 33-19 23l-11-21c8 26-6 30-18 18-8-9-8-14-1-21z" fill="#F9F4EC"/>
+<path d="m478 376c-11-24 3-42 24-48 24-7 45 8 53 26 8 19 13 41 2 48-13 10-22-6-25-24 4 27-11 31-22 21l-10-19c6 24-10 28-19 17-6-10-6-15-3-21z" fill="#F9F4EC"/></svg>
+  <svg x="270" y="70" width="400" height="67.3" viewBox="0 0 980 165"><g transform="translate(7) scale(1.2534 1)">
+<g transform="translate(0 13) scale(.72 .73)" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="26">
+<path d="M19 140V77C19 47 36 25 64 25C91 25 105 44 105 74V140 M105 74C105 44 122 25 149 25C177 25 193 46 193 76V140" fill="none" stroke="#F9F4EC" stroke-width="27" stroke-linejoin="round" stroke-linecap="round"/><path d="M149 140V87" fill="none" stroke="#57E5C2" stroke-width="26" stroke-linecap="round"/>
+</g>
+<path d="m194.58 60.29q-6.67 0-10.17 4.79t-3.5 13.81 3.5 13.83q3.5 4.79 10.17 4.79 6.57 0 10.03-4.79 3.48-4.81 3.48-13.83t-3.48-13.81q-3.46-4.79-10.03-4.79zm0-14.35q16.2 0 25.31 8.76 9.11 8.73 9.11 24.19 0 15.48-9.11 24.24-9.11 8.73-25.31 8.73-16.25 0-25.41-8.73-9.17-8.76-9.17-24.24 0-15.46 9.17-24.19 9.16-8.76 25.41-8.76zm49.01-22.94h20.05v87.23h-20.05v-87.23zm102 55.68v5.7h-46.91q0.72 7.07 5.1 10.6 4.37 3.54 12.21 3.54 6.34 0 12.97-1.89 6.66-1.88 13.67-5.68v15.46q-7.12 2.69-14.24 4.07t-14.24 1.38q-17.04 0-26.5-8.66-9.43-8.67-9.43-24.31 0-15.35 9.27-24.14 9.27-8.81 25.54-8.81 14.8 0 23.68 8.92 8.88 8.89 8.88 23.82zm-20.63-6.68q0-5.72-3.33-9.22-3.34-3.51-8.72-3.51-5.83 0-9.47 3.28t-4.54 9.45h26.06zm69.23 25.28q6.44 0 9.83-4.7 3.41-4.72 3.41-13.69t-3.41-13.67q-3.39-4.71-9.83-4.71t-9.9 4.73q-3.44 4.74-3.44 13.65 0 8.92 3.44 13.65 3.46 4.74 9.9 4.74zm-13.34-40.65q4.16-5.49 9.2-8.09t11.6-2.6q11.61 0 19.05 9.22 7.47 9.22 7.47 23.73t-7.47 23.75q-7.44 9.22-19.05 9.22-6.56 0-11.6-2.6-5.04-2.62-9.2-8.11v9.08h-20.06v-87.23h20.06v33.63zm108.76 7.91q-2.64-1.24-5.26-1.81-2.6-0.59-5.24-0.59-7.73 0-11.91 4.97-4.18 4.95-4.18 14.19v28.93h-20.05v-62.78h20.05v10.31q3.88-6.17 8.88-8.98 5.02-2.84 12.04-2.84 1 0 2.17 0.09 1.18 0.07 3.42 0.36l0.08 18.15zm9.97-17.09h20.06v62.78h-20.06v-62.78zm0-24.45h20.06v16.38h-20.06v-16.38zm82.06 33.63v-33.63h20.18v87.23h-20.18v-9.08q-4.14 5.55-9.15 8.13-4.98 2.58-11.53 2.58-11.61 0-19.07-9.22-7.44-9.24-7.44-23.75t7.44-23.73q7.46-9.22 19.07-9.22 6.49 0 11.52 2.6 5.02 2.6 9.16 8.09zm-13.24 40.65q6.46 0 9.85-4.7 3.39-4.72 3.39-13.69t-3.39-13.67q-3.39-4.71-9.85-4.71-6.38 0-9.77 4.71-3.39 4.7-3.39 13.67t3.39 13.69q3.39 4.7 9.77 4.7zm95.42 2.29q-4.15 5.49-9.15 8.08-4.99 2.58-11.54 2.58-11.49 0-19.01-9.04-7.5-9.06-7.5-23.09 0-14.06 7.5-23.05 7.52-9 19.01-9 6.55 0 11.54 2.58 5 2.57 9.15 8.13v-9.31h20.18v56.45q0 15.14-9.57 23.12-9.56 7.98-27.71 7.98-5.88 0-11.39-0.9-5.49-0.89-11.03-2.74v-15.64q5.26 3.03 10.3 4.52 5.05 1.49 10.15 1.49 9.86 0 14.46-4.33 4.61-4.32 4.61-13.5v-4.33zm-13.24-39.06q-6.23 0-9.71 4.61-3.46 4.59-3.46 12.98 0 8.65 3.36 13.1 3.37 4.45 9.81 4.45 6.28 0 9.76-4.6 3.48-4.59 3.48-12.95 0-8.39-3.48-12.98-3.48-4.61-9.76-4.61zm115.36 18.17v5.7h-46.91q0.72 7.07 5.1 10.6 4.37 3.54 12.21 3.54 6.33 0 12.97-1.89 6.65-1.88 13.67-5.68v15.46q-7.12 2.69-14.24 4.07-7.13 1.38-14.25 1.38-17.04 0-26.49-8.66-9.43-8.67-9.43-24.31 0-15.35 9.27-24.14 9.27-8.81 25.54-8.81 14.8 0 23.68 8.92 8.88 8.89 8.88 23.82zm-20.63-6.68q0-5.72-3.34-9.22-3.33-3.51-8.71-3.51-5.83 0-9.48 3.28-3.64 3.28-4.53 9.45h26.06z" fill="#F9F4EC"/>
+</g></svg>
   <g font-family="Arial,Helvetica,sans-serif">
-    <text x="56" y="72" fill="#a5adcb" font-size="13" font-weight="600" letter-spacing="3">SELF-HOSTED NETBIRD EXIT NODE</text>
-    <text x="52" y="146" fill="#cad3f5" font-size="68" font-weight="700" letter-spacing="-2">Molebridge</text>
-    <text x="56" y="192" fill="#b8c0e0" font-size="26">Your NetBird network, out through any VPN.</text>
-    <text x="56" y="272" fill="#a5adcb" font-size="13" letter-spacing="1.4">MULLVAD · PIA · NORDVPN · FOUR MORE VIA GLUETUN</text>
-    <text x="1144" y="272" text-anchor="end" fill="#a5adcb" font-size="13" letter-spacing="1.4">FAILS CLOSED · DOCKER OR PODMAN</text>
+    <text x="56" y="196" fill="#F9F4EC" font-size="26">Your NetBird network, out through any VPN.</text>
+    <text x="56" y="276" fill="#A3ABBD" font-size="13" letter-spacing="1.4">MULLVAD · PIA · NORDVPN · FOUR MORE VIA GLUETUN</text>
+    <text x="1144" y="276" text-anchor="end" fill="#A3ABBD" font-size="13" letter-spacing="1.4">FAILS CLOSED · DOCKER OR PODMAN</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <!-- NetBird devices joining the exit's overlay side -->
-    <path d="M790 120L838 166M778 166H838M790 212L838 166" stroke="#8aadf4" stroke-opacity=".45" stroke-width="2"/>
-    <circle cx="790" cy="120" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
-    <circle cx="778" cy="166" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
-    <circle cx="790" cy="212" r="6" fill="#24273a" stroke="#8aadf4" stroke-width="2.5"/>
-    <!-- The bridge: the exit node's namespace -->
-    <path d="M838 166H1032" stroke="#363a4f" stroke-width="2"/>
-    <path d="M850 166C866 166 870 164 880 138C910 62 960 62 990 138C1000 164 1004 166 1020 166" stroke="url(#bridge)" stroke-width="5"/>
-    <path d="M897 104V166M935 82V166M973 104V166" stroke="#8aadf4" stroke-opacity=".22" stroke-width="2"/>
-    <path d="M858 186H1012" stroke="#363a4f" stroke-dasharray="3 8"/>
-    <circle cx="935" cy="82" r="5" fill="#a6da95" stroke="#24273a" stroke-width="3"/>
-    <circle cx="845" cy="166" r="12" fill="#24273a" stroke="#8aadf4" stroke-width="4"/>
-    <circle cx="1025" cy="166" r="12" fill="#24273a" stroke="#a6da95" stroke-width="4"/>
+    <!-- NetBird devices reach the exit -->
+    <path d="M808 104L858 150M796 150H858M808 196L858 150" stroke="#A3ABBD" stroke-opacity=".45" stroke-width="2"/>
+    <circle cx="808" cy="104" r="6" fill="#030C1B" stroke="#A3ABBD" stroke-width="2.5"/>
+    <circle cx="796" cy="150" r="6" fill="#030C1B" stroke="#A3ABBD" stroke-width="2.5"/>
+    <circle cx="808" cy="196" r="6" fill="#030C1B" stroke="#A3ABBD" stroke-width="2.5"/>
+    <!-- The exit: the arch over the circuit line -->
+    <path d="M876 150H1030" stroke="#F9F4EC" stroke-width="3"/>
+    <path d="M905 146V118a48 48 0 0 1 96 0v28" stroke="#57E5C2" stroke-width="12"/>
+    <circle cx="868" cy="150" r="8" fill="#030C1B" stroke="#F9F4EC" stroke-width="3"/>
+    <circle cx="1038" cy="150" r="8" fill="#030C1B" stroke="#F9F4EC" stroke-width="3"/>
     <!-- Out through the provider: Mullvad, PIA, NordVPN, gluetun -->
-    <path d="M1037 166C1070 166 1080 108 1118 108M1037 166C1070 166 1084 147 1128 147M1037 166C1070 166 1084 185 1128 185M1037 166C1070 166 1080 224 1118 224" stroke="#a6da95" stroke-opacity=".5" stroke-width="2"/>
-    <circle cx="1122" cy="108" r="7" fill="#24273a" stroke="#eed49f" stroke-width="3"/>
-    <circle cx="1132" cy="147" r="7" fill="#24273a" stroke="#a6da95" stroke-width="3"/>
-    <circle cx="1132" cy="185" r="7" fill="#24273a" stroke="#7dc4e4" stroke-width="3"/>
-    <circle cx="1122" cy="224" r="7" fill="#24273a" stroke="#6fcfe0" stroke-width="3" stroke-dasharray="3 3"/>
+    <path d="M1046 150C1078 150 1086 92 1120 92M1046 150C1078 150 1088 131 1130 131M1046 150C1078 150 1088 169 1130 169M1046 150C1078 150 1086 208 1120 208" stroke="#F9F4EC" stroke-opacity=".35" stroke-width="2"/>
+    <circle cx="1124" cy="92" r="7" fill="#030C1B" stroke="#FFD524" stroke-width="3"/>
+    <circle cx="1134" cy="131" r="7" fill="#030C1B" stroke="#78DF70" stroke-width="3"/>
+    <circle cx="1134" cy="169" r="7" fill="#030C1B" stroke="#7FB0FF" stroke-width="3"/>
+    <circle cx="1124" cy="208" r="7" fill="#030C1B" stroke="#6FCFE0" stroke-width="3" stroke-dasharray="3 3"/>
   </g>
 </svg>
