@@ -1610,12 +1610,14 @@ func isRestState(state string) bool { return state == "idle" || state == "unveri
 // admit applies the triggers, in precedence order (docs/architecture.md):
 // 1-2. a new effective target (a new request id is "Retry now");
 // 3. no live peer: on the native backend at once from idle or unverified, and
-// once per new owner generation whatever the state; on gluetun as 7;
+// once per new owner generation whatever the state, both after the shorter
+// no-peer guard; on gluetun as 7;
 // 4. a due re-apply on the backoff;
 // 5. a lapsed registration (D15);
 // 6-7. a live peer that isn't the target, only from idle or unverified; after
 // UnidentifiedSec when the catalogue can't name it.
-// Nothing re-applies within ReapplyGuardSec of the last mutation.
+// Nothing re-applies within ReapplyGuardSec of the last mutation, but for 3
+// with the native backend: within NoPeerGuardSec.
 func (a *Applier) admit(ctx context.Context, target *Selection) (*Record, error) {
 	at := a.attempt
 	now := a.clock()
@@ -1668,10 +1670,18 @@ func (a *Applier) admit(ctx context.Context, target *Selection) (*Record, error)
 		// and once per new owner generation even while a failure backs off.
 		// gluetun leaves its interface without a peer for a moment while it
 		// reconnects by itself, so there no peer is waited out like an
-		// unidentified one.
+		// unidentified one. With the native backend the shorter no-peer guard
+		// applies (attempt.NoPeerGuardSec): the exit's own changes never
+		// leave a native tunnel at rest with no peer, and waiting out the
+		// full guard only held traffic back (a PIA tunnel lost right after
+		// a change came back after 90 seconds).
 		generation := a.currentGeneration(ctx)
 		freshOwner := generation != "" && at.Generation != "" && at.Generation != generation
-		if guard && (freshOwner || (a.backend() == "native" && isRestState(at.State))) {
+		noPeerGuard := guard
+		if a.backend() == providers.BackendNative {
+			noPeerGuard = at.NoPeerGuardPassed(now)
+		}
+		if noPeerGuard && (freshOwner || (a.backend() == "native" && isRestState(at.State))) {
 			if freshOwner {
 				a.log("applier: the exit container started again; applying the selection")
 			}

@@ -36,6 +36,15 @@ var BackoffSec = [5]int{60, 120, 240, 480, 900}
 const (
 	// ReapplyGuardSec: no automatic re-apply within this long of the last mutation.
 	ReapplyGuardSec = 90
+	// NoPeerGuardSec: a native tunnel with no peer at all (the worker brought
+	// a lost interface back from a config without one, as PIA's always is) is
+	// applied again once this long has passed since the last mutation,
+	// rather than ReapplyGuardSec. Nothing else empties a native tunnel at
+	// rest, and a tunnel with no peer passes nothing, so the long guard only
+	// held traffic back; this one spaces re-applies (and PIA's
+	// registrations) under an interface that keeps disappearing, or a worker
+	// that keeps restarting, to one per 10 seconds.
+	NoPeerGuardSec = 10
 	// UnidentifiedSec: a live peer the catalogue can't name is waited out this
 	// long before it counts as drift.
 	UnidentifiedSec = 90
@@ -339,6 +348,11 @@ func (a *Attempt) Save(path string) error {
 // GuardPassed is true when no mutation happened within ReapplyGuardSec.
 func (a *Attempt) GuardPassed(now float64) bool {
 	return a.LastMutationAt == nil || now-*a.LastMutationAt >= ReapplyGuardSec
+}
+
+// NoPeerGuardPassed is true when no mutation happened within NoPeerGuardSec.
+func (a *Attempt) NoPeerGuardPassed(now float64) bool {
+	return a.LastMutationAt == nil || now-*a.LastMutationAt >= NoPeerGuardSec
 }
 
 // Schedule sets the next automatic action on the backoff, and advances it.

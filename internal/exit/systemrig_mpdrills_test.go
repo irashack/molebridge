@@ -109,12 +109,29 @@ func TestSystemRigMultiProviderTunnelLoss(t *testing.T) {
 		r.leakFree("the tunnel lost on " + to.String())
 		t.Logf("tunnel lost on %s: the link back on its server %v after, verified again %v after",
 			to, back.Sub(lost).Round(time.Millisecond), time.Since(lost).Round(time.Millisecond))
+		// Mullvad and NordVPN come back on the remembered peer within
+		// seconds; PIA registers again once the no-peer guard (10 s from
+		// the change) has passed, where it used to wait out the 90-second
+		// re-apply guard (#121).
+		if took := back.Sub(lost); took > tunnelBackWithin {
+			t.Errorf("tunnel lost on %s: the link back on its server only %v after; want within %v", to, took, tunnelBackWithin)
+		}
 		from = to
 	}
 	if _, adds, _, _ := pia.counts(); adds < 2 {
 		t.Errorf("PIA registered %d times; the tunnel lost on PIA must register again", adds)
 	}
 }
+
+// tunnelBackWithin bounds a tunnel's way back after its loss, and
+// replacedWithin an interrupted change's after the worker was killed
+// (restart included): well above what the drills measure (#121: PIA 90 s
+// and 65 s before the no-peer guard, NordVPN 0.4 s and 5 s), well below a
+// re-apply guard or a retry's backoff.
+const (
+	tunnelBackWithin = 30 * time.Second
+	replacedWithin   = 45 * time.Second
+)
 
 // restartCrashed starts the exit again after it stopped on a crashed
 // worker, as a container's restart policy would: the fake NetBird reset,
@@ -201,6 +218,10 @@ func TestSystemRigMultiProviderInterruptedReplace(t *testing.T) {
 		p = r.restartCrashed()
 		r.waitOn(p, step.to, id, 150*time.Second)
 		took := time.Since(killed)
+		if took > replacedWithin {
+			t.Errorf("%s -> %s interrupted between the links: verified only %v after the worker was killed; want within %v",
+				step.from, step.to, took.Round(time.Millisecond), replacedWithin)
+		}
 		r.clientOn(step.to, 30*time.Second)
 		r.onTunnel(step.to)
 		for _, a := range step.old {
