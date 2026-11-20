@@ -581,13 +581,17 @@ tries again at the next interval.
 
 **Experimental.** The menu: it asks for the provider, the ways in and the
 extras, or reads the same answers from a file, and writes a Compose file and
-an `.env` for them. The services, settings and image pins are those of the
-Compose files shipped with the same release. What to do with the result is in
-[setup](setup.md#molebridge-init).
+an `.env` for them. The services and settings are those of the Compose
+files in the source the binary was built from. So are the image pins, unless
+you give the two Molebridge images with `--image` and `--core-image`: that
+source pins the release before it, so its pins may be an older release's.
+What to do with the result is in [setup](setup.md#molebridge-init).
 
 ```sh
 docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out" \
-  ghcr.io/irashack/molebridge:<tag> init --out /out
+  ghcr.io/irashack/molebridge:<tag>@sha256:<digest> init --out /out \
+  --image ghcr.io/irashack/molebridge:<tag>@sha256:<digest> \
+  --core-image ghcr.io/irashack/molebridge-core:<tag>@sha256:<core digest>
 ```
 
 | Argument | Meaning |
@@ -595,6 +599,8 @@ docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out" \
 | `--out DIR` | Required. Writes `DIR/compose.yaml` and `DIR/.env` (mode 0644) and, for a gluetun provider, `DIR/routing/gluetun-preflight` (mode 0755). |
 | `--answers FILE` | Reads the answers from `FILE` instead of asking. Without it, `init` needs a terminal. |
 | `--force` | Replaces files that exist. Without it, `init` refuses with `<path> exists; pass --force to replace it, or choose another --out.` |
+| `--image REF` | The Molebridge image, exactly `ghcr.io/irashack/molebridge:<tag>@sha256:<digest>`. Every `ghcr.io/irashack/molebridge` image `init` writes is `REF`. Needs `--core-image`. |
+| `--core-image REF` | The core image, exactly `ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>`, with the same tag as `--image`. Every `ghcr.io/irashack/molebridge-core` image `init` writes is `REF`. Needs `--image`. |
 
 The answers are a provider (`mullvad`, `pia`, `nordvpn`, or `gluetun-<id>` for
 a provider gluetun drives), one or more ways in (`netbird-exit`, `sidecar`,
@@ -607,13 +613,55 @@ exactly these members (`extras` may be left out):
 {"schema": 1, "provider": "pia", "ways_in": ["sidecar"], "extras": ["switchyard", "port-sync"]}
 ```
 
+The file may also carry both images, as `"image"` and `"core_image"`, with
+the same rules as the flags. If the flags give them too, they must be the
+same.
+
+A tag is a release tag `vX.Y.Z` or a candidate tag `vX.Y.Z-rc.N`, and a
+digest is `sha256:` and 64 lowercase hexadecimal digits: the index digest
+the release notes list. With images, the Compose file's header says
+`# The Molebridge images are not that file's pins: they are the <tag>` and
+`# images init was given (--image and --core-image, or the answers file).`
+A wrong reference is refused, writing nothing, with one of these, where
+`<what>` is `--image`, `--core-image`, `the answers file's image` or
+`the answers file's core_image`:
+
+| Reference | Message |
+|---|---|
+| only one of the two | `molebridge init: --image and --core-image go together: give both, the two images of one release.` (from the file: `the answers file's image and the answers file's core_image go together: …`) |
+| empty | `molebridge init: <what> is empty: give <repository>:<tag>@sha256:<digest>.` |
+| a space, control or non-ASCII character anywhere | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: it holds a space, a control character or a non-ASCII character.` |
+| another repository | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: the repository is <other>, not <repository>.` |
+| no tag | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: it has no tag; give the release's tag, such as v0.14.1, before the digest.` |
+| another tag, such as `0.14` or `latest` | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: the tag <tag> is not a release tag such as v0.14.1 or a candidate tag such as v0.14.1-rc.1.` |
+| no digest | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: it has no digest; init needs the index digest from the release notes, not a tag alone.` |
+| a digest that isn't 64 lowercase hex digits | `molebridge init: <what> "<ref>" is not <repository>:<tag>@sha256:<digest>: the digest must be sha256: and 64 lowercase hexadecimal digits.` |
+| two tags | `molebridge init: --image has tag v0.14.1 but --core-image has tag v0.14.0: give the two images of one release.` (from the file, with its member names) |
+| flags and file differ | `molebridge init: --image and --core-image name other images than the answers file's image and core_image: give them in one place.` |
+| a file member not a string | `molebridge init: the answers file's image must be a string.` (or `core_image`) |
+
+A wrong flag exits `2`; a wrong reference in the answers file, or flags that
+differ from it, exit `1`.
+
 On success it prints `Wrote <files>: the services of <source> with <services>.`
 and then `Next: edit .env, then follow docs/setup.md#molebridge-init for the secrets and state directories.`
 A refused answer or a file it can't write prints `molebridge init: <reason>`
 and exits `1`. With no terminal and no `--answers` it prints
 `molebridge init: no terminal to ask on; pass --answers FILE (docs/setup.md#molebridge-init).`
-and exits `2`, as for a wrong argument (`usage: molebridge init --out DIR [--answers FILE] [--force]`).
+and exits `2`, as for a wrong argument (`usage: molebridge init --out DIR [--answers FILE] [--image REF --core-image REF] [--force]`).
 `init -h` prints its help and exits `0`.
+
+Without `--image` and `--core-image` it writes the pins of the source it was
+built from and, after writing, says so on stderr; it still exits `0`:
+
+`molebridge init: compose.yaml pins the Molebridge images at <pinned tag>, the pins of the source this binary was built from, possibly an older release. To pin the release you verified, pass --image and --core-image (docs/setup.md#molebridge-init).`
+
+When the binary reports a release or candidate tag (`molebridge version`)
+of another release than the pins', the line names both:
+
+`molebridge init: compose.yaml pins the Molebridge images at v0.14.0, the pins of the source this binary was built from: this is v0.14.1 (built as v0.14.1-rc.1); the pins are v0.14.0's. To pin the release you verified, pass --image and --core-image (docs/setup.md#molebridge-init).`
+
+A binary built as a release tag without `-rc.N` says `this is v0.14.1;`.
 
 ## Other roles
 
