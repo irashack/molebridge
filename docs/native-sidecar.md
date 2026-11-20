@@ -1,14 +1,14 @@
 # The native sidecar
 
-Experimental. Use this when your application needs a tunnel
-that Molebridge builds itself, in a network namespace the application shares.
-The exit owns the namespace and the WireGuard tunnel, as a native overlay exit
-does, and keeps the application's traffic in that tunnel with a routing
-contract and an nftables firewall of its own. There is no NetBird peer and
-nothing is forwarded for other devices: that is the NetBird exit, the
-`overlay` kind ([setup](setup.md)). The native sidecar is the `sidecar` kind
-with the native backend: `EXIT_KIND=sidecar` and `TUNNEL_BACKEND=native`,
-`compose.native-sidecar.yaml` and `.env.native-sidecar.example`.
+**Everything the containers in the exit's namespace send leaves through the
+tunnel, or not at all, apart from traffic to the LAN prefixes you list.** The
+exit keeps that with a routing contract and an nftables firewall of its own,
+both installed before the tunnel exists and both left in place when the exit
+stops ([how](#how-it-keeps-traffic-in-the-tunnel)).
+
+**Experimental.** It has run live with PIA, port forwarding included, on
+Kubernetes only; Docker, podman-compose and Mullvad and NordVPN as native
+sidecars are untested ([what was tested](#limits-and-what-wasnt-tested)).
 
 The word "sidecar" has two meanings on this page. The *sidecar kind* is
 Molebridge's name for an exit that other containers share. A *sidecar
@@ -16,15 +16,15 @@ container* is a Kubernetes feature: an init container with
 `restartPolicy: Always`, which the [Kubernetes example](#kubernetes) uses for
 the exit.
 
-**What has been tested.** The namespace drills cover this form, including an
-end-to-end drill of the real binary, and CI runs them. It has run live with
-PIA, port forwarding included, on Kubernetes (k0s with Cilium) beside
-qBittorrent, in the form of the example below, and has been upgraded there to
-each release. Docker Engine, podman-compose, the Compose form on a live
-engine, and Mullvad and NordVPN as native sidecars are untested. Exactly what
-ran, and what did not, is in [testing](testing.md#090).
+## Who it is for
 
-## When to use it
+Use this when your applications, in containers on one host or in one
+Kubernetes pod, need a tunnel that Molebridge builds itself, in a network
+namespace they share (`network_mode: service:exit`). The exit owns the
+namespace and the WireGuard tunnel, as the [NetBird exit](netbird-exit.md)
+does, but there is no NetBird peer and nothing is forwarded for other
+devices. It is the only way in that offers PIA over WireGuard to containers,
+and the only one that forwards PIA's port to them.
 
 | | Native sidecar (`compose.native-sidecar.yaml`) | [gluetun sidecar](gluetun-sidecar.md) (`compose.sidecar.yaml`) |
 |---|---|---|
@@ -39,7 +39,23 @@ Choose the native sidecar for PIA over WireGuard. gluetun supports PIA over
 OpenVPN only, and Molebridge's gluetun forms don't offer PIA. Choose the
 gluetun sidecar when you need one of gluetun's other providers, or want
 gluetun's own firewall and features. Mullvad and NordVPN work in both; only
-the gluetun sidecar has had a live pass.
+the gluetun sidecar has had a live pass with them. For programs that opt in
+rather than whole containers, the [proxy](proxy.md) can run in this
+namespace too. [The menu](menu.md) compares every way in.
+
+## What you run
+
+`compose.native-sidecar.yaml` with `.env.native-sidecar.example`, or the
+same services written by `molebridge init` with the `sidecar` way in and a
+native provider ([setup](setup.md#molebridge-init)). Every service runs the
+`ghcr.io/irashack/molebridge-core` image, the binary without NetBird:
+
+| Service | Role |
+|---|---|
+| `exit` | Owns the namespace, the tunnel, the routing contract and the firewall. `EXIT_KIND=sidecar`, `TUNNEL_BACKEND=native`. Capabilities `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`, every other one dropped |
+| your applications | In a Compose file of your own, with `network_mode: service:exit` and no capabilities ([set up](#set-up)). `example-app`, a busybox that only sleeps, stands in under the `example` profile |
+| `port-sync` | Optional, PIA only, under the `port-sync` profile: keeps qBittorrent's listening port on PIA's forwarded port ([port forwarding](#port-forwarding)) |
+| `switchyard` | The panel, optional ([Switchyard](switchyard.md#a-native-sidecars-tab)) |
 
 ## Prerequisites
 
@@ -70,27 +86,6 @@ Check yours with `kubectl exec <pod> -c exit -- cat
 /proc/sys/net/ipv4/conf/all/rp_filter` and the same path for `eth0`. If the
 warning does not go away, see
 [troubleshooting](troubleshooting.md#a-native-sidecar).
-
-## What is checked, and by whom
-
-| Property | Checked by | How |
-|---|---|---|
-| The routing contract: its rules and the exit table's fallback, in both address families | the exit | Read back from the kernel on every change and on a full pass every `ROUTING_RECONCILE_INTERVAL` seconds, repaired when it differs. The `routing` check |
-| The firewall: tables `inet molebridge_sidecar` and `inet molebridge_sidecar_backstop` are exactly what the exit installed | the exit | Both read back every 2 seconds, both replaced in one transaction when either differs. Part of the `traffic_protection` check, which also needs `routing` to pass |
-| The peer, the handshake and egress through the tunnel | the exit | The peer and handshake through WireGuard's netlink interface, against the provider's server list; egress through the provider's own check, as with a native overlay exit |
-| An application's traffic really stays in the tunnel, including during a reconnect | the contract and the firewall | The exit checks that they are in place; it sends no test traffic from the applications' side. The drills in [verification](verification.md#a-native-sidecar) do |
-| DNS | nothing | Not tunnelled and not checked; see [DNS](#dns) |
-| Your applications are in the exit's current namespace | you, with the attachment procedure | `app_attachment` stays `not-checked`; see [operations](operations.md#checking-that-containers-share-gluetuns-namespace) |
-| The application listens on the forwarded port | `molebridge port-sync` for qBittorrent, otherwise you | [Port forwarding](#port-forwarding) |
-
-Five checks are required for the exit to count as connected: `routing`,
-`traffic_protection`, `peer`, `handshake` and `egress`. `netbird` and
-`owner_record` are `n/a` and `app_attachment` is `not-checked`
-([the status record](architecture.md#the-status-record)). A failed firewall
-shows as `traffic_protection` failed with `from: "firewall"` and the message
-"Sidecar firewall protection is incomplete; see docs/operations.md#recovery."
-A failed contract shows as `routing` and `traffic_protection` both failed,
-with "Routing protection is incomplete; see docs/operations.md#recovery."
 
 ## How it keeps traffic in the tunnel
 
@@ -301,6 +296,27 @@ Kubernetes pod keep its namespace across a container restart. Under Docker, rest
 recreating the exit gives it a new namespace instead; see
 [recovery](#recovery).
 
+## What is checked, and by whom
+
+| Property | Checked by | How |
+|---|---|---|
+| The routing contract: its rules and the exit table's fallback, in both address families | the exit | Read back from the kernel on every change and on a full pass every `ROUTING_RECONCILE_INTERVAL` seconds, repaired when it differs. The `routing` check |
+| The firewall: tables `inet molebridge_sidecar` and `inet molebridge_sidecar_backstop` are exactly what the exit installed | the exit | Both read back every 2 seconds, both replaced in one transaction when either differs. Part of the `traffic_protection` check, which also needs `routing` to pass |
+| The peer, the handshake and egress through the tunnel | the exit | The peer and handshake through WireGuard's netlink interface, against the provider's server list; egress through the provider's own check, as with a native overlay exit |
+| An application's traffic really stays in the tunnel, including during a reconnect | the contract and the firewall | The exit checks that they are in place; it sends no test traffic from the applications' side. The drills in [verification](verification.md#a-native-sidecar) do |
+| DNS | nothing | Not tunnelled and not checked; see [DNS](#dns) |
+| Your applications are in the exit's current namespace | you, with the attachment procedure | `app_attachment` stays `not-checked`; see [operations](operations.md#checking-that-containers-share-gluetuns-namespace) |
+| The application listens on the forwarded port | `molebridge port-sync` for qBittorrent, otherwise you | [Port forwarding](#port-forwarding) |
+
+Five checks are required for the exit to count as connected: `routing`,
+`traffic_protection`, `peer`, `handshake` and `egress`. `netbird` and
+`owner_record` are `n/a` and `app_attachment` is `not-checked`
+([the status record](architecture.md#the-status-record)). A failed firewall
+shows as `traffic_protection` failed with `from: "firewall"` and the message
+"Sidecar firewall protection is incomplete; see docs/operations.md#recovery."
+A failed contract shows as `routing` and `traffic_protection` both failed,
+with "Routing protection is incomplete; see docs/operations.md#recovery."
+
 ## Settings
 
 Compose sets `EXIT_KIND=sidecar` and `TUNNEL_BACKEND=native` itself. All
@@ -412,38 +428,15 @@ Then run the DNS check in [verification](verification.md#a-native-sidecar).
 The exit's lookups through `SIDECAR_HOST_RESOLVERS` have unit tests; the
 Kubernetes form is what the live acceptance runs ([testing](testing.md#090)).
 
-## Port forwarding
-
-With PIA, `PIA_PORT_FORWARD=on` forwards one port to the namespace itself. It
-needs no target. After each healthy switch the exit asks PIA for a port through
-the tunnel and binds it again every ten minutes (PIA drops a port that isn't
-bound for 15), as on an overlay exit, and lists only regions that offer
-forwarding ([providers](providers.md#port-forwarding)). A sidecar has no DNAT
-table (`ip molebridge_forward`) and no ingress guard (`inet molebridge_guard`):
-the firewall's input chain admits the port instead. Each time the port changes
-or goes away, the exit installs the firewall again with the new port, or with
-none.
-
-The port is published in `result.json` as `forwarded_port`, with `port_forward`
-and `port_forward_error`, and Switchyard shows it under Diagnostics. PIA picks
-the number and it can change after a switch, a re-registration or a restart.
-Your application has to listen on that port itself; there is no port
-translation. This opens a port to the Internet: anyone can connect to it, and
-the connection reaches your application.
-
-For qBittorrent the `port-sync` role keeps the listening port in step
-([tools reference](tools-reference.md#port-sync)). It runs as its own container
-in the same namespace, with no capabilities, reads the exit's record from a
-read-only mount and calls qBittorrent's Web API on loopback. In Compose it is
-the `port-sync` service, started by the profile of that name. Any other
-application needs its own way to follow `forwarded_port`.
-
 ## Set up
 
 You need Docker with Compose 2.24 or later, a kernel where the `wireguard`
 module is loaded or loadable, and an account with Mullvad, PIA or NordVPN.
 Rootless Podman with podman-compose is untested for this form. No Python is
-needed.
+needed. [Setup](setup.md) has the steps every way in shares; these are the
+native sidecar's. If `molebridge init` wrote your `compose.yaml` and `.env`,
+skip the copy in step 1 and use its files where the steps name
+`compose.native-sidecar.yaml`.
 
 1. From the verified, extracted bundle ([setup](setup.md#1-download-and-verify)):
 
@@ -586,6 +579,50 @@ With Podman and Quadlet units, give each application's unit `Requires=` and
 `molebridge health --guarded` in the exit container
 ([the startup gate](#the-startup-gate)). Neither form has been tested at boot
 ([testing](testing.md#090)).
+
+## Choosing and switching servers
+
+Choose a server (Mullvad, NordVPN) or a region (PIA) in
+[Switchyard](switchyard.md), or set `SERVER` in `.env` (or the pod's
+environment) to keep the exit on one; the panel then shows it read-only
+([a server set in configuration](configuration.md#a-server-set-in-configuration)).
+With PIA (no tunnel address yet) or NordVPN (no peer yet) the exit has no
+working tunnel until a server is chosen, so it stays unhealthy and the applications, which wait for it, don't
+start; in a pod without a panel, set `SERVER`.
+
+A switch replaces the tunnel's peer (and with PIA its address) inside the
+same namespace, under the routing contract and the firewall, so the
+applications' connections may drop but don't leave outside it, apart from
+your LAN prefixes. With
+PIA a switch also changes the forwarded port. [Automatic
+failover](failover.md) (experimental, off by default) works here as on the
+NetBird exit.
+
+## Port forwarding
+
+With PIA, `PIA_PORT_FORWARD=on` forwards one port to the namespace itself. It
+needs no target. After each healthy switch the exit asks PIA for a port through
+the tunnel and binds it again every ten minutes (PIA drops a port that isn't
+bound for 15), as on an overlay exit, and lists only regions that offer
+forwarding ([providers](providers.md#port-forwarding)). A sidecar has no DNAT
+table (`ip molebridge_forward`) and no ingress guard (`inet molebridge_guard`):
+the firewall's input chain admits the port instead. Each time the port changes
+or goes away, the exit installs the firewall again with the new port, or with
+none.
+
+The port is published in `result.json` as `forwarded_port`, with `port_forward`
+and `port_forward_error`, and Switchyard shows it under Diagnostics. PIA picks
+the number and it can change after a switch, a re-registration or a restart.
+Your application has to listen on that port itself; there is no port
+translation. This opens a port to the Internet: anyone can connect to it, and
+the connection reaches your application.
+
+For qBittorrent the `port-sync` role keeps the listening port in step
+([tools reference](tools-reference.md#port-sync)). It runs as its own container
+in the same namespace, with no capabilities, reads the exit's record from a
+read-only mount and calls qBittorrent's Web API on loopback. In Compose it is
+the `port-sync` service, started by the profile of that name. Any other
+application needs its own way to follow `forwarded_port`.
 
 ## Kubernetes
 
@@ -826,3 +863,31 @@ Nothing here deletes a volume.
 the exit. Add `-v` to also delete any volumes. Delete `secrets/`, `state/`,
 `tunnel/` and `.env`, or keep them if you might reinstall. On Kubernetes, delete
 the pod and the secrets you created for it.
+## Limits and what wasn't tested
+
+**What was tested.** The namespace drills cover this form, including an
+end-to-end drill of the real binary, and CI runs them. It has run live with
+PIA, port forwarding included, on Kubernetes (k0s with Cilium) beside
+qBittorrent, in the form of the [example](#kubernetes), and has been upgraded
+there to each release. Exactly what ran, and what did not, is in
+[testing](testing.md#090).
+
+**Not tested:** Docker Engine, podman-compose, the Compose form on a live
+engine, Mullvad and NordVPN as native sidecars, the boot order in
+[starting at boot](#starting-at-boot), the engine's embedded resolver as the
+namespace's DNS, and the proxy in this namespace ([the proxy](proxy.md)).
+
+- **DNS is not tunnelled for you.** The applications use the namespace's
+  resolver, and nothing checks where their lookups go ([DNS](#dns)).
+- **Attachment is yours to check.** The exit can't see whether your
+  applications are in its current namespace; `app_attachment` stays
+  `not-checked` ([recovery](#recovery)).
+- **Applications must hold no capabilities.** One with `NET_ADMIN`, or
+  `NET_RAW` from Linux 5.17, can mark a socket and leave outside the tunnel
+  ([the firewall](#the-firewall)).
+- **Two faults at once are outside the guarantee**, such as `nft flush
+  ruleset`, which removes both firewall tables
+  ([why two tables](#the-firewall)).
+- **No NetBird.** Nothing is forwarded for other devices; that is the
+  [NetBird exit](netbird-exit.md).
+- **IPv4 only with PIA and NordVPN.**
