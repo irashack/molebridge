@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -82,6 +83,10 @@ type Settings struct {
 	// PrivateDir is PRIVATE_STATE_DIR: where the files only the exit reads
 	// live. Empty means <STATE_DIR>/applier.
 	PrivateDir string
+	// StateGID is STATE_GID, -1 when unset: the group that may read the
+	// published files in <STATE_DIR>/applier (the directory 0750, the files
+	// 0640, both with that group), for readers that run as another user.
+	StateGID int
 	// Server is the SERVER setting.
 	Server string
 	// Failover is FAILOVER, FAILOVER_SERVERS, FAILOVER_AFTER and
@@ -358,6 +363,9 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	s.ConfDir = orDefault(get("TUNNEL_CONF_DIR"), DefaultConfDir)
 	s.RunDir = orDefault(get("MOLEBRIDGE_RUN_DIR"), DefaultRunDir)
 	s.Server = get("SERVER")
+	if s.StateGID, err = parseStateGID(get("STATE_GID")); err != nil {
+		return nil, err
+	}
 	if dir := get("PRIVATE_STATE_DIR"); dir != "" {
 		if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 			return nil, refuse("PRIVATE_STATE_DIR must be an absolute path without . or .. elements or a trailing slash")
@@ -424,6 +432,11 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	}
 	if err := checkStateDir(filepath.Join(s.StateDir, "applier"), 0o755, o.WriteChecks); err != nil {
 		return nil, err
+	}
+	if s.StateGID >= 0 && o.WriteChecks {
+		if err := shareStateDir(filepath.Join(s.StateDir, "applier"), s.StateGID); err != nil {
+			return nil, err
+		}
 	}
 	if s.PrivateDir != "" {
 		if err := checkStateDir(s.PrivateDir, 0o700, o.WriteChecks); err != nil {
@@ -553,6 +566,87 @@ func withDefaults(env map[string]string, defaults map[string]string) map[string]
 		}
 	}
 	return out
+}
+
+// maxStateGID is the largest STATE_GID: a gid that fits a signed 32-bit int,
+// as chown(2) takes it on every platform Go builds the exit for.
+const maxStateGID = 1<<31 - 1
+
+// parseStateGID is STATE_GID: empty is -1 (unset), otherwise a group id in
+// canonical decimal, 0 to maxStateGID.
+func parseStateGID(v string) (int, error) {
+	if v == "" {
+		return -1, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > maxStateGID || strconv.Itoa(n) != v {
+		return -1, refuse("STATE_GID must be a group id, a whole number from 0 to %d", maxStateGID)
+	}
+	return n, nil
+}
+
+// shareStateDir gives the published files in dir (<STATE_DIR>/applier) to
+// group gid, for STATE_GID: the directory becomes mode 0750 with that group,
+// and each regular file there that is mode 0644 or 0640 (a published file:
+// result.json, relays.json, relay-error.json) becomes 0640 with that group.
+// The private files (mode 0600) and anything that is not a regular file are
+// left alone, and no link is followed. jsonfile.SetPublicGroup does the same
+// for every file the exit publishes afterwards. Only the group gains: the
+// directory stays writable by its owner alone, and the readers still only
+// read.
+func shareStateDir(dir string, gid int) error {
+	hint := "; the exit must be a member of that group (Compose: group_add; Kubernetes: supplementalGroups) or hold CHOWN, and own the directory"
+	d, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return refuse("STATE_GID %d: can't open the state directory %s: %v", gid, dir, unwrapPathError(err))
+	}
+	defer d.Close()
+	if err := d.Chown(-1, gid); err != nil {
+		return refuse("STATE_GID %d: can't give the state directory %s to group %d: %v%s", gid, dir, gid, unwrapPathError(err), hint)
+	}
+	if err := d.Chmod(0o750); err != nil {
+		return refuse("STATE_GID %d: can't make the state directory %s mode 0750: %v%s", gid, dir, unwrapPathError(err), hint)
+	}
+	names, err := d.Readdirnames(-1)
+	if err != nil {
+		return refuse("STATE_GID %d: can't list the state directory %s: %v", gid, dir, unwrapPathError(err))
+	}
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 && perm != 0o640 {
+			continue
+		}
+		f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // replaced or removed meanwhile
+			}
+			return refuse("STATE_GID %d: can't open %s: %v", gid, path, unwrapPathError(err))
+		}
+		err = f.Chown(-1, gid)
+		if err == nil {
+			err = f.Chmod(0o640)
+		}
+		f.Close()
+		if err != nil {
+			return refuse("STATE_GID %d: can't give %s to group %d: %v%s", gid, path, gid, unwrapPathError(err), hint)
+		}
+	}
+	return nil
+}
+
+// unwrapPathError is err without the *os.PathError frame, whose path the
+// caller's message already names.
+func unwrapPathError(err error) error {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err
+	}
+	return err
 }
 
 // checkStateDir verifies a state directory the exit writes into

@@ -413,7 +413,8 @@ defaults. NetBird itself is signalled when the lease lapses and gone within
 ### Status publication
 
 The supervisor, not the worker, writes `state/applier/result.json`
-(atomically, mode 0644). That is what lets a hung worker's last good record
+(atomically, mode 0644, or 0640 for the group `STATE_GID` names: [readers in
+another group](configuration.md#readers-in-another-group)). That is what lets a hung worker's last good record
 stop looking good:
 
 - A record larger than 16 KiB, the bound every reader applies, is not

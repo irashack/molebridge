@@ -123,6 +123,28 @@ func (a *Applier) configuredTarget() (provider, server string, ok bool) {
 	return provider, server, true
 }
 
+// targetForm explains a multi-provider exit's SERVER for an invalid one:
+// the <provider>/<server> form, the providers it may name and, when SERVER
+// has no provider and is a valid name for some of them, SERVER with each
+// such provider in front.
+func (a *Applier) targetForm() string {
+	form := "with PROVIDERS set, SERVER is <provider>/<server> with one of " + strings.Join(a.set.ids, ", ")
+	if strings.Contains(a.configuredServer, "/") {
+		return form
+	}
+	var suggestions []string
+	for _, id := range a.set.ids {
+		if state.ValidServerName(a.configuredServer, id) {
+			raw, _ := validate.MarshalJSON(id + "/" + a.configuredServer)
+			suggestions = append(suggestions, string(raw))
+		}
+	}
+	if len(suggestions) == 0 {
+		return form
+	}
+	return form + ", for example " + strings.Join(suggestions, " or ")
+}
+
 // replacementOf is replacementFor for a selection's provider: a retired
 // server is replaced only on the active provider, whose location memory and
 // catalogue are resident. Another provider's retired server stays refused

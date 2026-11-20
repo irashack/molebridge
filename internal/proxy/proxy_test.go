@@ -724,6 +724,20 @@ func TestCheckListen(t *testing.T) {
 			t.Errorf("%s on %q accepted", tc.addr, tc.iface)
 		}
 	}
+	// OVERLAY_IF may be a cluster interface: on Kubernetes, eth0 and the
+	// pod's own address.
+	pod := func(name string) ([]net.Addr, error) {
+		if name != "eth0" {
+			return nil, errors.New("no such interface")
+		}
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("203.0.113.7").To4(), Mask: net.CIDRMask(32, 32)}}, nil
+	}
+	if err := CheckListen("203.0.113.7:1080", "eth0", pod); err != nil {
+		t.Errorf("the pod's address on eth0: %v", err)
+	}
+	if err := CheckListen("203.0.113.8:1080", "eth0", pod); err == nil {
+		t.Error("another address accepted on eth0")
+	}
 }
 
 func TestReadPassword(t *testing.T) {
@@ -763,6 +777,12 @@ func TestServeRefusesABadListenAddress(t *testing.T) {
 		Tunnel: func() TunnelState { return TunnelState{} }, PasswordFile: writePassword(t, "x", 0o600)})
 	if err == nil {
 		t.Fatal("accepted 0.0.0.0")
+	}
+	// A bad listen address and a bad password file are refused together.
+	err = Serve(context.Background(), Config{Listen: "0.0.0.0:1080", Upstream: &fakeUpstream{},
+		Tunnel: func() TunnelState { return TunnelState{} }, PasswordFile: writePassword(t, "x", 0o644)})
+	if err == nil || !strings.Contains(err.Error(), "0.0.0.0:1080") || !strings.Contains(err.Error(), "readable by others") {
+		t.Fatalf("want both refusals: %v", err)
 	}
 }
 

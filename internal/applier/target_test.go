@@ -293,6 +293,19 @@ func TestServerNamesItsProviderOnAMultiProviderExit(t *testing.T) {
 			t.Errorf("%s: %s %v", bad, message(r), m.tunnels.replaced)
 		}
 	}
+	// The message names the form, the providers and, for a bare name, the
+	// providers whose naming it matches.
+	for bad, want := range map[string]string{
+		nordUS:                `Invalid SERVER "` + nordUS + `"; with PROVIDERS set, SERVER is <provider>/<server> with one of mullvad, pia, nordvpn, for example "nordvpn/` + nordUS + `"; no change applied.`,
+		testHost:              `Invalid SERVER "` + testHost + `"; with PROVIDERS set, SERVER is <provider>/<server> with one of mullvad, pia, nordvpn, for example "mullvad/` + testHost + `" or "pia/` + testHost + `"; no change applied.`,
+		"Not A Name":          `Invalid SERVER "Not A Name"; with PROVIDERS set, SERVER is <provider>/<server> with one of mullvad, pia, nordvpn; no change applied.`,
+		"protonvpn/" + nordUS: `Invalid SERVER "protonvpn/` + nordUS + `"; with PROVIDERS set, SERVER is <provider>/<server> with one of mullvad, pia, nordvpn; no change applied.`,
+	} {
+		m := newMulti(t, "", "mullvad", allThree, func(c *Config) { c.Server = bad })
+		if r := mustTick(t, m.a); message(r) != want {
+			t.Errorf("%s:\n got %s\nwant %s", bad, message(r), want)
+		}
+	}
 	// A server the provider's catalogue doesn't list.
 	m = newMulti(t, "", "mullvad", allThree, func(c *Config) { c.Server = "nordvpn/us9999.nordvpn.com" })
 	if r := mustTick(t, m.a); !strings.HasPrefix(message(r), "Unknown SERVER") {

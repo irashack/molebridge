@@ -19,8 +19,10 @@ step 3). Keep a way into the host that doesn't depend on the exit.
 `docker compose`, and `podman run` where it says `docker run`, and leave
 `--user "$(id -u):$(id -g)"` out of the `run` commands: the default mapping
 makes the container's root you ([tools reference](tools-reference.md#running-a-tool)).
-The [rootless Podman notes](prerequisites.md#rootless-podman) list the other
-differences.
+podman-compose doesn't read `COMPOSE_FILE` from `.env`: where a form or
+an add-on sets it, pass the same files with `-f` on every command
+(`podman-compose -f compose.gluetun.yaml up -d`). The [rootless Podman
+notes](prerequisites.md#rootless-podman) list the other differences.
 
 ## 1. Download and verify
 
@@ -515,7 +517,8 @@ installation procedure for this form, and replaces steps 2 to 5 here. Step 1
 way, with these differences:
 
 - Your `.env` comes from `.env.gluetun.example`, which sets
-  `COMPOSE_FILE=compose.gluetun.yaml`; `PROVIDER` doesn't apply
+  `COMPOSE_FILE=compose.gluetun.yaml` (with podman-compose, pass
+  `-f compose.gluetun.yaml` instead, [above](#setup)); `PROVIDER` doesn't apply
   ([configuration](configuration.md#gluetun-backend)).
 - There is no tunnel config. You put the provider's WireGuard private key in a
   file, and the image's `gluetun-auth` and `gluetun-post-rules` tools write

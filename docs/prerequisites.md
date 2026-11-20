@@ -80,7 +80,7 @@ need no NetBird account: read the host, runtime and network parts, and skip
 
 ### Rootless Podman
 
-Three things differ from Docker:
+Four things differ from Docker:
 
 1. **The kernel modules must already be loaded.** A rootless container can't
    load `wireguard`. Load it now and at every boot:
@@ -101,6 +101,23 @@ Three things differ from Docker:
 3. **NET_RAW is not granted by default.** The Compose files add it; an
    override that drops it makes NetBird fail with `failed to create ipv4 raw
    socket: operation not permitted`.
+4. **podman-compose doesn't read `COMPOSE_FILE` from `.env`.** Docker
+   Compose does; a podman-compose run on 2026-11-20 used `compose.yaml`
+   alone with `COMPOSE_FILE` set there. Wherever these docs set
+   `COMPOSE_FILE`, pass each file with `-f` instead, in the same order, on
+   every `podman-compose` command (`up`, `down`, `ps`, `logs`, `config`):
+
+   ```sh
+   podman-compose -f compose.yaml -f compose.proxy.yaml up -d
+   podman-compose -f compose.native-sidecar.yaml -f compose.apps.yaml ps
+   ```
+
+   This holds for a single file too: the gluetun and sidecar examples set
+   `COMPOSE_FILE=compose.gluetun.yaml` (or `compose.sidecar.yaml`,
+   `compose.native-sidecar.yaml`), and without `-f` podman-compose loads
+   `compose.yaml` instead. A command without the same `-f` list falls back
+   to podman-compose's default file, so it doesn't see the other files'
+   services.
 
 For containers to start at boot you also need a lingering systemd user unit,
 shown in [operations](operations.md#rootless-podman).

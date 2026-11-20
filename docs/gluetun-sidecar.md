@@ -118,6 +118,8 @@ podman-compose (untested for this form). No Python is needed.
    ```
 
    Then, in `.env`, set `COMPOSE_FILE=compose.sidecar.yaml:compose.apps.yaml`
+   (podman-compose doesn't read it from `.env`: pass the files with `-f`,
+   [rootless Podman](prerequisites.md#rootless-podman))
    and list every such service in `SIDECAR_APPS`, comma-separated:
    `SIDECAR_APPS=downloader`. Remove `COMPOSE_PROFILES=example` and
    `example-app` once yours are in; until then the example application, a

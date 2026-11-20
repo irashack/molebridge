@@ -4,8 +4,9 @@
 // relay catalogue in internal/providers uses it directly, because state
 // imports providers and the reverse would be a cycle.
 //
-// It offers Read, ReadObject, ReadBytes, Write and WriteBytes (atomic, 0600 or 0644,
-// size-bounded) and ErrSizeLimit.
+// It offers Read, ReadObject, ReadBytes, ReadBytesErr, Write and WriteBytes
+// (atomic, 0600 or 0644, or 0640 for a group after SetPublicGroup;
+// size-bounded), ErrSizeLimit and ErrNotRegular.
 package jsonfile
 
 import (
@@ -13,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/irashack/molebridge/internal/validate"
@@ -51,21 +53,42 @@ func ReadOK(path string, limit int64) (any, bool) {
 // bytes or it cannot be read. A caller that decodes only part of a large
 // document (validate.DecodeJSONMembers) reads it with this.
 func ReadBytes(path string, limit int64) ([]byte, bool) {
+	raw, err := ReadBytesErr(path, limit)
+	return raw, err == nil
+}
+
+// ReadBytesErr is ReadBytes with the reason it failed: the open or read
+// error (an *os.PathError, which names the path), ErrNotRegular or
+// ErrSizeLimit. The reason holds no part of the file's content.
+func ReadBytesErr(path string, limit int64) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > limit {
-		return nil, false
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, ErrNotRegular
+	}
+	if info.Size() > limit {
+		return nil, ErrSizeLimit
 	}
 	raw, err := readSized(io.LimitReader(f, limit+1), info.Size())
-	if err != nil || int64(len(raw)) > limit {
-		return nil, false
+	if err != nil {
+		return nil, err
 	}
-	return raw, true
+	if int64(len(raw)) > limit {
+		return nil, ErrSizeLimit
+	}
+	return raw, nil
 }
+
+// ErrNotRegular is ReadBytesErr's reason for a path that is not a regular
+// file.
+var ErrNotRegular = errors.New("not a regular file")
 
 // readSized reads r to its end into a buffer of size plus one byte, so the
 // read that finds the end needs no larger one (io.ReadAll would allocate
@@ -95,10 +118,29 @@ func ReadObject(path string, limit int64) (map[string]any, bool) {
 	return object, ok
 }
 
+// publicGroup is SetPublicGroup's gid, -1 when unset.
+var publicGroup atomic.Int64
+
+func init() { publicGroup.Store(-1) }
+
+// SetPublicGroup makes every Public file this process writes from now on
+// mode 0640 with group gid, instead of 0644 with the process's own group: the
+// exit's STATE_GID, for readers (the panel, the proxy) that run as another
+// user in that group. A negative gid restores 0644. The process must be able
+// to give a file that group (it is a member of it, or holds CAP_CHOWN), or
+// Write fails. Private (0600) files are not affected.
+func SetPublicGroup(gid int) {
+	if gid < 0 {
+		gid = -1
+	}
+	publicGroup.Store(int64(gid))
+}
+
 // Options are the optional parts of Write.
 type Options struct {
 	// Public makes the file 0644 so a non-root reader can open the applier's
-	// state; otherwise it is 0600.
+	// state (0640 with the group SetPublicGroup names, when it named one);
+	// otherwise it is 0600.
 	Public bool
 	// MaxBytes, when positive, stops the encoder with ErrSizeLimit as soon as
 	// the output passes it. Zero means no bound.
@@ -172,6 +214,13 @@ func writeFile(path string, opts Options, fill func(io.Writer) error) (err error
 	mode := os.FileMode(0o600)
 	if opts.Public {
 		mode = 0o644
+		if gid := publicGroup.Load(); gid >= 0 {
+			// SetPublicGroup: the group reads it, others don't.
+			if err = f.Chown(-1, int(gid)); err != nil {
+				return err
+			}
+			mode = 0o640
+		}
 	}
 	if err = f.Chmod(mode); err != nil {
 		return err

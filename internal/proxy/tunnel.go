@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"errors"
+	"os"
 	"slices"
 	"sync"
 	"time"
@@ -16,6 +18,10 @@ type TunnelState struct {
 	Verdict   string // the exit's verdict state: "ok", "failed", "unknown", "applying", ...
 	Server    string // the exit's server when its record names one, else ""
 	CheckedAt string // the record's checked_at when valid, else ""
+	// Unreadable says why result.json could not be read (which file, and
+	// the reason: permission denied, missing, too large), "" when it was
+	// read. The verdict is then "unknown".
+	Unreadable string
 }
 
 // resultMaxBytes is the bound every reader of result.json uses
@@ -55,6 +61,22 @@ func TunnelFromResult(exit verdict.ExitConfig, result any, now time.Time) Tunnel
 	return t
 }
 
+// unreadable is TunnelState.Unreadable for path and the error reading it:
+// "can't read <path>: permission denied". A permission error adds what
+// usually causes it on Kubernetes, where the exit's state directory is
+// root's: the exit's STATE_GID.
+func unreadable(path string, err error) string {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		err = pe.Err
+	}
+	text := "can't read " + path + ": " + err.Error()
+	if errors.Is(err, os.ErrPermission) {
+		text += " (run the proxy in the exit's STATE_GID group; docs/proxy.md)"
+	}
+	return text
+}
+
 // resultGateEvery is how often ResultGate reads result.json again.
 const resultGateEvery = time.Second
 
@@ -75,7 +97,16 @@ func ResultGate(path string, exit verdict.ExitConfig, now func() time.Time) func
 		defer mu.Unlock()
 		t := now()
 		if readAt.IsZero() || t.Sub(readAt) >= resultGateEvery || t.Before(readAt) {
-			last = TunnelFromResult(exit, jsonfile.Read(path, resultMaxBytes), t)
+			raw, err := jsonfile.ReadBytesErr(path, resultMaxBytes)
+			if err != nil {
+				last = TunnelFromResult(exit, nil, t)
+				last.Unreadable = unreadable(path, err)
+			} else {
+				// A document that doesn't decode is judged as no record,
+				// as jsonfile.Read gives it.
+				result, _ := validate.DecodeJSON(raw)
+				last = TunnelFromResult(exit, result, t)
+			}
 			readAt = t
 		}
 		return last

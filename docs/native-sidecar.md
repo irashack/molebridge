@@ -497,6 +497,8 @@ needed.
    ```
 
    Then, in `.env`, set `COMPOSE_FILE=compose.native-sidecar.yaml:compose.apps.yaml`
+   (podman-compose doesn't read it from `.env`: pass the files with `-f`,
+   [rootless Podman](prerequisites.md#rootless-podman))
    and remove `COMPOSE_PROFILES=example` once yours are in; until then the
    example application, a busybox that only sleeps, stands in. Give the
    applications no capabilities (`cap_drop: [ALL]`; Docker's default set

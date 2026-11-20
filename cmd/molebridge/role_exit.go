@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/irashack/molebridge/internal/exit"
+	"github.com/irashack/molebridge/internal/jsonfile"
 )
 
 func init() {
@@ -28,6 +29,8 @@ func exitMain(args []string, environ []string, stderr io.Writer) int {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+		// STATE_GID: the files the supervisor publishes are its group's.
+		jsonfile.SetPublicGroup(s.StateGID)
 		// The supervisor's first line names the build. It follows the settings
 		// check so that a refusal stays the one line it is documented as.
 		fmt.Fprintf(stderr, "molebridge-exit: molebridge %s\n", version)
