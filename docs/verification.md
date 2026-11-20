@@ -555,7 +555,8 @@ malformed one until you select again; a failed peer update is retried on its bac
 
 ### A retired server
 
-The acceptance drill `retired-server-move` (since 0.11.0) checks that an exit
+This check (the acceptance drill `retired-server-move` from 0.11.0 to policy
+21; since policy 22 CI's system rig counts for it) checks that an exit
 whose server leaves the provider's list
 [moves to another in the same city](architecture.md#a-server-the-provider-retires)
 and returns. It runs on an exit with the gluetun backend, because there the
@@ -564,7 +565,7 @@ provider's API at start and every six hours, and their move has no live
 procedure. CI's [system rig](../CONTRIBUTING.md#the-system-rig) runs the move
 against fake servers on the native Mullvad exit and, with a fake gluetun
 control server, in the gluetun form; real gluetun's own reconnection is
-covered only by this drill.
+covered only when you run this by hand.
 
 1. In the panel pick a standard server (not a dedicated-IP, Onion or other
    special one, which the exit's catalog leaves out) whose city has at least

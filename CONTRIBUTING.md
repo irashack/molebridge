@@ -324,7 +324,8 @@ MOLEBRIDGE_PREVIOUS_BIN=/tmp/previous/molebridge MOLEBRIDGE_PREVIOUS_VERSION=$PR
   go test -count=1 -v -timeout 20m -tags drill,systemrig -run TestUpgradeFromPrevious ./internal/exit/
 ```
 
-It does not replace the live `upgrade-from-<previous>` drill: the previous release runs here as a
+Since acceptance policy 22 it counts as `ci-upgrade-drill`, and the live `upgrade-from-<previous>`
+drill is the image swap only. It does not cover what that swap does: the previous release runs here as a
 binary, not as its signed image under Compose, Podman or Kubernetes, against the rig's fakes, with
 the fake NetBird of the commit under test rather than the NetBird client the previous image pins,
 and on the native Mullvad exit only, with no gluetun, sidecar, PIA, NordVPN or exchange state.
