@@ -6,6 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+## 0.14.3 — unreleased
+
+**Experimental.** Upgrade from 0.14.2 by moving to the new image;
+what changed is below.
+
 - Acceptance policy 22 counts CI for two live drills
   ([#54](https://github.com/irashack/molebridge/issues/54)). The
   retired-server move is no longer run by hand: CI's System rig drills it
