@@ -58,8 +58,6 @@ what changed is below.
   on top of the NetBird exit or the native sidecar (52 combinations). It no
   longer refuses it as being built.
 
-## 0.14.0 — 2026-11-20
-- Experimental, not for use yet: piece 6 of the [multi-provider
 - Built but switched off: piece 6 of the [multi-provider
   exit](docs/configuration.md#multi-provider-exit), its settings, files and
   credentials. This release refuses `PROVIDERS` at start ("multi-provider
@@ -76,7 +74,7 @@ what changed is below.
   single-provider exit is byte for byte as before (a new golden test locks
   its settings, child environments and starting record).
 
-## 0.14.0 — unreleased
+## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
 what changed is below.
