@@ -1,24 +1,15 @@
 # Design: one exit for several providers
 
-Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
-replacement](#whole-tunnel-replacement), piece 2, [the provider
-set](#the-provider-set), the applier's side of piece 3, [the
-target](#the-target), piece 4, [leaving a
-provider](#leaving-a-provider), piece 5, [the status record and the
-verdict](#the-status-record-and-the-verdict), piece 6, [settings, files
-and credentials](#settings-files-and-credentials), and piece 7, [the
-panel](#the-panel), are built: `PROVIDERS`
-reaches a multi-provider exit, experimental and documented as not for use
-until the live pass and piece 0 have run; `molebridge
-init` (8) is not built. This is the working contract for the
-roadmap's [one exit for several
-providers](../../ROADMAP.md#one-exit-for-several-providers): the target
-shape, the pieces, their boundaries and the interfaces between them, the
-order they are built in and how each is tested. Nothing else here is built. The
-choices marked **(owner)** are product decisions; the owner took every
-recommended default on 2026-11-19 ([decisions for the
-owner](#decisions-for-the-owner)).
-When the feature ships, its user documentation replaces this file.
+Status: **built** (2026-11-20). Every piece below, `molebridge init`
+included, is built. Release builds keep the feature switched off, and it
+passed one live pass on a drill image (issue #79). The user documentation is
+[one exit for several providers](../multi-provider.md); where this record and
+the code disagree, the code wins and that page follows the code. This file
+stays as the design: the target shape, the pieces, their boundaries and how
+each is tested, for the roadmap's [one exit for several
+providers](../../ROADMAP.md#one-exit-for-several-providers). The choices
+marked **(owner)** are product decisions; the owner took every recommended
+default on 2026-11-19 ([decisions for the owner](#decisions-for-the-owner)).
 
 ## What it is
 

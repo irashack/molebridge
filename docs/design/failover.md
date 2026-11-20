@@ -1,22 +1,24 @@
 # Design: automatic failover
 
-Status: **being built** (2026-11-19). This is the working contract for the
-roadmap's [automatic failover](../../ROADMAP.md#automatic-failover): the
-rules, the pieces, their boundaries and the interfaces between them, so that
-they can be built in parallel. Built so far: [the failover
-policy](#the-failover-policy) (`internal/failover`, unit-tested), [the
-verdict](#the-verdict) (`internal/verdict` reads the `failover` member),
-and the applier's wiring, `failover.json`, the settings, the uplink probe
-and the panel's wording (fake-kernel and panel tests; the user
-documentation is [automatic failover](../configuration.md#automatic-failover),
-experimental), and the [system rig drills](#system-rig-drills) 1 to 6
-(`internal/exit/systemrig_failover_test.go`, run in CI only). The live
-drill has not run. The choices marked **(owner)** are product decisions,
-gathered in [decisions for the owner](#decisions-for-the-owner): the owner
-took every recommended default (2026-11-19, issue #90), and the code keeps
-each one a named constant; the rest follows from the code as it is. When
-the feature ships, its user documentation replaces
-this file.
+Status: **built** (2026-11-20), experimental. Every piece is built, with
+unit and fake-kernel tests and the [system rig drills](#system-rig-drills)
+1 to 6 in CI. The live drill has not run. The user documentation is
+[automatic failover](../failover.md); where this record and the code
+disagree, the code wins and that page follows the code. This file stays as
+the working contract for the roadmap's [automatic
+failover](../../ROADMAP.md#automatic-failover). The choices marked
+**(owner)** are product decisions, gathered in [decisions for the
+owner](#decisions-for-the-owner): the owner took every recommended default
+(2026-11-19, issue #90), and the code keeps each one a named constant.
+
+As built, three points differ from the text below:
+
+- PIA's port-forwarding filter on backups applies whenever the selected
+  region offers port forwarding, not only when `PIA_PORT_FORWARD=on`.
+- `molebridge init` offers no failover extra; failover is turned on in a
+  `compose.override.yaml` ([automatic failover](../failover.md)).
+- A multi-provider exit refuses `FAILOVER`; backups don't stay within one
+  provider, because there are none.
 
 ## What it is
 
