@@ -607,8 +607,17 @@ settings, files and the exit's provider change are built and covered by unit
 tests and a drill against fake servers; the panel can't pick a provider yet,
 `molebridge init` doesn't offer it, and the Compose files don't pass
 `PROVIDERS`. The live pass on real accounts and the memory measurement of an
-exit holding NordVPN's catalog have **not run**: don't run one for real until
-they have.
+exit holding NordVPN's catalog have **not run**.
+
+**Built but switched off.** This release's exit refuses to start, and
+`check-config` refuses, whenever `PROVIDERS` is set: "multi-provider exits
+are not available in this release yet; see docs/design/multi-provider.md".
+The owner decided it must not ship before NordVPN's memory has been measured
+on a live exit ([its design](design/multi-provider.md), decision 4).
+A later release will switch it on once that measurement and the live pass
+have run; its changelog will say so. Until then only builds with the `drill`
+tag (the drills and the system rig's `molebridge-drill`) accept it. The rest
+of this section describes what that release will do.
 
 ```sh
 PROVIDERS=mullvad,pia,nordvpn   # two or three, comma-separated, each once

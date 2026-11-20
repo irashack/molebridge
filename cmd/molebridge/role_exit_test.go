@@ -306,15 +306,25 @@ func TestCheckConfigAndStatusOfAMultiProviderExit(t *testing.T) {
 	delete(env, "EXIT_IF")
 	env["NB_EXTRA_IFACE_BLACKLIST"] = "vpn"
 	var stdout, stderr bytes.Buffer
-	if code := checkConfigMain(nil, env, &stdout, &stderr); code != 0 {
-		t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())
-	}
-	want := "molebridge-exit: configuration accepted (multi-provider, interface vpn; " + conf + "/mullvad.conf: an IPv4 address; " +
-		conf + "/nordvpn.conf: an IPv4 address)\nNetBird gate: configuration accepted\n"
-	if stdout.String() != want {
-		t.Fatalf("%q\nwant %q", stdout.String(), want)
+	code := checkConfigMain(nil, env, &stdout, &stderr)
+	if !exit.MultiProviderAvailable() {
+		// The release build refuses PROVIDERS until the live measurement;
+		// `go test -tags drill` checks the accepted configuration below.
+		if code == 0 || !strings.Contains(stdout.String()+stderr.String(), exit.MultiProviderUnavailable) {
+			t.Fatalf("the release build's check-config: %d\n%s%s", code, stdout.String(), stderr.String())
+		}
+	} else {
+		if code != 0 {
+			t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())
+		}
+		want := "molebridge-exit: configuration accepted (multi-provider, interface vpn; " + conf + "/mullvad.conf: an IPv4 address; " +
+			conf + "/nordvpn.conf: an IPv4 address)\nNetBird gate: configuration accepted\n"
+		if stdout.String() != want {
+			t.Fatalf("%q\nwant %q", stdout.String(), want)
+		}
 	}
 	stdout.Reset()
+	stderr.Reset()
 	clock := func() time.Duration { return time.Hour }
 	if code := statusMain(nil, env, clock, time.Now, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "state: unknown (awaiting status)") {
 		t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())

@@ -2,6 +2,7 @@ package exit
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,6 +33,9 @@ func multiFixture(t *testing.T, ids []string, start string) *fixture {
 	f.env["PROVIDER"] = start
 	delete(f.env, "EXIT_IF")
 	f.env["NB_EXTRA_IFACE_BLACKLIST"] = "vpn"
+	// Accepted whatever the build's switch says; the switch itself is
+	// TestMultiProviderExitsAreSwitchedOffInTheReleaseBuild's.
+	f.opts.multiProvider = true
 	return f
 }
 
@@ -301,5 +305,41 @@ func TestTheSupervisorAcceptsOnlyThisExitsProviders(t *testing.T) {
 	good["provider"] = "nordvpn"
 	if err := (&Supervisor{s: single}).checkRecord(good); err == nil {
 		t.Error("a single-provider supervisor accepted another provider's record")
+	}
+}
+
+// The switch (multi_available.go): off in the release build, on in the
+// drill build. Off, PROVIDERS is refused before anything else is read.
+func TestMultiProviderExitsAreSwitchedOffInTheReleaseBuild(t *testing.T) {
+	err := multiProviderGate(false)
+	var ref *Refusal
+	if !errors.As(err, &ref) || ref.Line != prefix+MultiProviderUnavailable ||
+		!strings.Contains(ref.Line, "not available in this release yet; see docs/design/multi-provider.md") {
+		t.Fatalf("switched off: %v", err)
+	}
+	if err := multiProviderGate(true); err != nil {
+		t.Fatalf("switched on: %v", err)
+	}
+	// LoadSettings with the build's own value.
+	f := multiFixture(t, []string{"mullvad", "nordvpn"}, "mullvad")
+	f.opts.multiProvider = false
+	s, err := f.load()
+	if multiProviderAvailable {
+		if err != nil || !s.MultiProvider() {
+			t.Fatalf("the drill build refused PROVIDERS: %v", err)
+		}
+	} else if !errors.As(err, &ref) || ref.Line != prefix+MultiProviderUnavailable {
+		t.Fatalf("the release build accepted PROVIDERS: %v", err)
+	}
+	// Refused first, even where PROVIDERS would be refused for another
+	// reason; an empty PROVIDERS is no multi-provider exit.
+	f.env["PROVIDERS"] = "mullvad,gluetun-mullvad"
+	if _, err := f.load(); !multiProviderAvailable && (err == nil || !strings.Contains(err.Error(), "not available in this release")) {
+		t.Fatalf("a bad PROVIDERS: %v", err)
+	}
+	f = newFixture(t)
+	f.env["PROVIDERS"] = ""
+	if _, err := f.load(); err != nil {
+		t.Fatalf("an empty PROVIDERS: %v", err)
 	}
 }

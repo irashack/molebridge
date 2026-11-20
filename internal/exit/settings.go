@@ -223,6 +223,26 @@ type LoadOptions struct {
 	// NeedNetBird refuses a NetBird exit when the image has no NetBird client
 	// (molebridge-core), before anything changes. Tests leave it false.
 	NeedNetBird bool
+	// multiProvider accepts PROVIDERS whatever multiProviderAvailable says:
+	// this package's tests, which cover a multi-provider exit in the
+	// release build too.
+	multiProvider bool
+}
+
+// MultiProviderUnavailable is the refusal of PROVIDERS while multi-provider
+// exits are switched off in this build.
+const MultiProviderUnavailable = "PROVIDERS is set, but multi-provider exits are not available in this release yet; see docs/design/multi-provider.md"
+
+// MultiProviderAvailable reports whether this build accepts PROVIDERS.
+func MultiProviderAvailable() bool { return multiProviderAvailable }
+
+// multiProviderGate refuses PROVIDERS unless multi-provider exits are
+// available.
+func multiProviderGate(available bool) error {
+	if !available {
+		return refuse("%s", MultiProviderUnavailable)
+	}
+	return nil
 }
 
 // aliasBackend accepts "native" for the contract's "wireguard".
@@ -273,6 +293,9 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		return nil, refuse("TUNNEL_BACKEND must be native or gluetun")
 	}
 	if list := env["PROVIDERS"]; list != "" {
+		if err := multiProviderGate(multiProviderAvailable || o.multiProvider); err != nil {
+			return nil, err
+		}
 		ids, err := parseProviders(list, get)
 		if err != nil {
 			return nil, err
