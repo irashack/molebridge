@@ -63,6 +63,9 @@ type pipelineEnv struct {
 	// RoutingActivity is the records' routing_activity member; nil where the
 	// exit has no routing contract.
 	RoutingActivity func() validate.Obj
+	// Tunnels are a multi-provider exit's tunnel configs and its whole-tunnel
+	// replacement; unused on a single-provider exit.
+	Tunnels applier.ProviderTunnels
 }
 
 // newPipeline builds the pipeline for the settings' provider.
@@ -82,8 +85,23 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
+	var set []applier.Provider
+	if s.MultiProvider() {
+		// Every provider's hooks, PROVIDERS order; the starting one is the
+		// same instance as in the set.
+		for _, id := range s.Providers {
+			p := prov
+			if id != s.Provider {
+				if p, err = applier.ProviderFor(id, exit, getenv); err != nil {
+					return nil, err
+				}
+			}
+			set = append(set, p)
+		}
+	}
 	cfg := applier.Config{
 		StateDir: s.StateDir, PrivateDir: s.PrivateDir, Exit: exit, Provider: prov, System: e.System, Server: s.Server, Failover: s.Failover,
+		Providers: set, Tunnels: e.Tunnels,
 		Publish:    func(r *applier.Record) error { return e.Publish(r) },
 		OwnerCheck: e.OwnerCheck, Log: e.Log, RoutingActivity: e.RoutingActivity,
 		Gatus: applier.Gatus{URL: s.Env["GATUS_URL"], Token: s.Env["GATUS_TOKEN"], Endpoint: orDefault(s.Env["GATUS_ENDPOINT"], "molebridge")},

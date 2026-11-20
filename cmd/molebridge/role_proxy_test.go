@@ -96,6 +96,7 @@ func TestProxySettingsRefusals(t *testing.T) {
 		{"PROVIDER", "gluetun-nordvpn", "supports mullvad, pia and nordvpn"},
 		{"PROVIDER", "Mullvad", "supports mullvad, pia and nordvpn"},
 		{"PROVIDER", "ivpn", "supports mullvad, pia and nordvpn"},
+		{"PROVIDERS", "mullvad,pia", "not supported on a multi-provider exit"},
 		{"TUNNEL_INTERFACE", "", "TUNNEL_INTERFACE is required"},
 		{"TUNNEL_INTERFACE", "a/b", "TUNNEL_INTERFACE is not a valid"},
 		{"TUNNEL_INTERFACE", "sixteen-letters0", "TUNNEL_INTERFACE is not a valid"},

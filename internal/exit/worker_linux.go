@@ -92,8 +92,15 @@ type worker struct {
 	sys     *KernelSystem
 	pipe    Pipeline
 	// src is the tunnel configuration recovery rebuilds; nil is the
-	// single-provider exit's (singleSource). Nothing sets it yet.
-	src tunnel.TunnelSource
+	// single-provider exit's (singleSource). A multi-provider exit's is its
+	// multiSource, also in multi.
+	src   tunnel.TunnelSource
+	multi *multiSource
+	// tun is the tunnel manager, set in run.
+	tun *tunnel.Manager
+	// built is the config of the tunnel last brought up or replaced (nil
+	// before the first): a replacement's "from".
+	built atomic.Pointer[tunnelconf.Conf]
 
 	// drillStop is set by the drill-only hook (worker_hook_drill_linux.go).
 	drillStop func()
@@ -266,12 +273,21 @@ func (w *worker) renewLoop() {
 func (w *worker) spec() contract.Spec {
 	sp := contract.Spec{Config: w.s.Routing, ReturnPath: map[rtnl.Family][]netip.Addr{},
 		LeaveReturnPath: map[rtnl.Family]bool{}, TempGuard: map[rtnl.Family]bool{}}
-	if w.s.Conf != nil {
+	if conf := w.s.ConfOf(w.activeProvider()); conf != nil {
 		// A config with no address leaves rules 94 and 98 to the
 		// transaction that sets the address (PIA).
-		sp.ReturnPath, sp.LeaveReturnPath = tunnel.ReturnPathOf(w.s.Conf)
+		sp.ReturnPath, sp.LeaveReturnPath = tunnel.ReturnPathOf(conf)
 	}
 	return sp
+}
+
+// activeProvider is the provider of the tunnel: PROVIDER, or on a
+// multi-provider exit the one tunnel-provider.json names.
+func (w *worker) activeProvider() string {
+	if w.multi != nil {
+		return w.multi.active()
+	}
+	return w.s.Provider
 }
 
 type noKernel struct{}
@@ -289,7 +305,13 @@ func (noKernel) DelRoute(rtnl.Route) error                  { return errors.New(
 func (w *worker) run() int {
 	s := w.s
 	w.way.Preface()
-	if s.OtherConfs > 0 {
+	if s.MultiProvider() {
+		w.multi = newMultiSource(w)
+		w.src = w.multi
+	}
+	if s.OtherConfs > 0 && s.MultiProvider() {
+		w.logf("warning: %d other .conf file(s) in %s are ignored; only %s are used", s.OtherConfs, s.ConfDir, strings.Join(s.ConfNames(), ", "))
+	} else if s.OtherConfs > 0 {
 		w.logf("warning: %d other .conf file(s) in %s are ignored; only %s.conf is used", s.OtherConfs, s.ConfDir, s.Routing.ExitIf)
 	}
 	w.way.Announce()
@@ -335,6 +357,7 @@ func (w *worker) run() int {
 		return 1
 	}
 	defer tun.Close()
+	w.tun = tun
 
 	spec := w.spec()
 	var kernel mutator.Kernel = noKernel{}
@@ -372,6 +395,9 @@ func (w *worker) run() int {
 	}
 
 	w.sys = &KernelSystem{S: s, Spec: spec, Obs: obs, Mut: w.mut, Tun: tun, Generation: w.gen}
+	if w.multi != nil {
+		w.sys.Active = w.multi.active
+	}
 	// The first renewal goes out before the long steps below: the supervisor
 	// gives a new worker only StartupAllowance for it.
 	go w.renewLoop()
@@ -411,8 +437,12 @@ func (w *worker) run() int {
 		w.writeGuarded()
 	}
 
-	pipe, err := newPipeline(pipelineEnv{S: s, System: w.sys, Publish: w.publish, OwnerCheck: w.ownerCheckFor(),
-		Log: func(l string) { w.logf("%s", l) }, RoutingActivity: w.routingActivityFor()})
+	penv := pipelineEnv{S: s, System: w.sys, Publish: w.publish, OwnerCheck: w.ownerCheckFor(),
+		Log: func(l string) { w.logf("%s", l) }, RoutingActivity: w.routingActivityFor()}
+	if w.multi != nil {
+		penv.Tunnels = exitTunnels{w}
+	}
+	pipe, err := newPipeline(penv)
 	if err != nil {
 		w.logf("applier: invalid configuration or unavailable state")
 		w.logf("%v", err)
@@ -549,9 +579,17 @@ func (s singleSource) Current() (string, *tunnelconf.Conf) {
 // rememberedPeerApplies is whether the tunnel is brought up on the last peer
 // set: for Mullvad and NordVPN, whose one key reaches every server. PIA's peer
 // belongs to a registration with its own address, which PIA restores itself.
+// On a multi-provider exit it is the active provider's rule.
 func (w *worker) rememberedPeerApplies() bool {
-	return w.s.Conf != nil && (w.s.Provider == "mullvad" || w.s.Provider == "nordvpn")
+	if w.multi != nil {
+		return remembersPeer(w.multi.active())
+	}
+	return w.s.Conf != nil && remembersPeer(w.s.Provider)
 }
+
+// remembersPeer is whether a provider's tunnel comes back on the last peer
+// set (Mullvad, NordVPN) rather than restoring its own (PIA).
+func remembersPeer(provider string) bool { return provider == "mullvad" || provider == "nordvpn" }
 
 // writeGuarded renews the native sidecar's guard heartbeat while the firewall
 // read back as installed and the routing contract holds: what `molebridge
@@ -641,7 +679,14 @@ func (w *worker) tunnelLoop(tun *tunnel.Manager, obs *rtnl.Conn) {
 		w.tunnelUp.Store(up)
 		if !up && !time.Now().Before(next) {
 			w.logf("bringing the tunnel up")
-			err := w.mut.Do(w.ctx, "bring the tunnel up", func(tx *mutator.Tx) error { return tun.UpContext(tx.Context(), w.tunnelParams()) })
+			err := w.mut.Do(w.ctx, "bring the tunnel up", func(tx *mutator.Tx) error {
+				p := w.tunnelParams()
+				if err := tun.UpContext(tx.Context(), p); err != nil {
+					return err
+				}
+				w.built.Store(p.Conf)
+				return nil
+			})
 			if err != nil {
 				if w.ctx.Err() != nil {
 					return

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/irashack/molebridge/internal/exit"
 )
@@ -27,7 +28,13 @@ func checkConfigMain(args []string, env map[string]string, stdout, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if s.NativeTunnel() {
+	if s.MultiProvider() {
+		parts := make([]string, len(s.Providers))
+		for i, id := range s.Providers {
+			parts[i] = fmt.Sprintf("%s/%s.conf: %s", s.ConfDir, id, s.Confs[id].Families())
+		}
+		fmt.Fprintf(stdout, "molebridge-exit: configuration accepted (multi-provider, interface %s; %s)\n", s.Routing.ExitIf, strings.Join(parts, "; "))
+	} else if s.NativeTunnel() {
 		fmt.Fprintf(stdout, "molebridge-exit: configuration accepted (%s/%s.conf: %s)\n", s.ConfDir, s.Routing.ExitIf, s.Conf.Families())
 	} else {
 		fmt.Fprintln(stdout, "molebridge-exit: configuration accepted")

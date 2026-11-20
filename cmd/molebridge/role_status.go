@@ -41,7 +41,19 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 		provider = "mullvad"
 	}
 	kind := env["EXIT_KIND"]
-	cfg, err := verdict.NewExitConfig(provider, kind, "")
+	var cfg verdict.ExitConfig
+	var err error
+	if list := env["PROVIDERS"]; list != "" {
+		// A multi-provider exit: the record is judged as any of its
+		// providers', the target as (provider, server).
+		var ids []string
+		for _, id := range strings.Split(list, ",") {
+			ids = append(ids, strings.TrimSpace(id))
+		}
+		cfg, err = verdict.NewMultiExitConfig(ids, provider, kind, "")
+	} else {
+		cfg, err = verdict.NewExitConfig(provider, kind, "")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "molebridge status: %v\n", err)
 		return 1
@@ -52,7 +64,7 @@ func statusMain(args []string, env map[string]string, clock bootclock.Clock, wal
 	}
 	result := state.ReadJSON(filepath.Join(stateDir, "applier", "result.json"), 16384)
 	desired := state.ReadJSON(filepath.Join(stateDir, "panel", "desired.json"), 16384)
-	v := verdict.Assess(cfg, result, verdict.TargetForPanel(result, desired, provider), wall())
+	v := verdict.Assess(cfg, result, verdict.TargetFor(cfg, result, desired), wall())
 
 	fmt.Fprintf(stdout, "state: %s (%s)\n", v.State, v.Label)
 	reasons := "none"

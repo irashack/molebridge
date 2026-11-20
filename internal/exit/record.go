@@ -70,6 +70,9 @@ func parseFlag(v string) bool {
 // StartingRecord is the record the Python applier published at start, before
 // its first inspection: status unknown, nothing measured, the seed selection.
 func StartingRecord(s *Settings, now time.Time) map[string]any {
+	if s.MultiProvider() {
+		return startingMultiRecord(s, now)
+	}
 	kind, backend := s.Kind(), s.BackendName()
 	rec := validate.Members(
 		"schema", verdict.Schema, "kind", kind, "backend", backend, "provider", s.Provider,
@@ -81,6 +84,35 @@ func StartingRecord(s *Settings, now time.Time) map[string]any {
 		"checks", BlankChecks(kind, backend),
 		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)
 	if s.Provider == "pia" {
+		forward := parseFlag(s.Env["PIA_PORT_FORWARD"])
+		rec = append(rec, validate.Pair{Key: "port_forward", Value: forward}, validate.Pair{Key: "forwarded_port", Value: nil})
+		if forward {
+			rec = append(rec, validate.Pair{Key: "port_forward_error", Value: nil})
+		}
+	}
+	return toMap(rec)
+}
+
+// startingMultiRecord is a multi-provider exit's starting record: the
+// single-provider one with the members of docs/design/multi-provider.md,
+// step 5 (providers, requested_provider, selection.target_provider), on the
+// provider the tunnel starts on, with PIA's members only when that is PIA.
+func startingMultiRecord(s *Settings, now time.Time) map[string]any {
+	kind, backend := s.Kind(), s.BackendName()
+	ids := make([]any, len(s.Providers))
+	for i, id := range s.Providers {
+		ids[i] = id
+	}
+	rec := validate.Members(
+		"schema", verdict.Schema, "kind", kind, "backend", backend, "provider", s.StartProvider, "providers", ids,
+		"status", "unknown", "message", StartingMessage, "checked_at", validate.FormatTime(now),
+		"server", nil, "requested_server", nil, "requested_provider", nil,
+		"configured_server", nullable(truncateRunes(s.Server, serverReportChars)), "request_id", nil,
+		"selection", validate.Members("source", "seed", "outcome", nil, "attempt", 0, "target", nil, "target_provider", nil,
+			"next_action", nil, "next_action_at", nil),
+		"checks", BlankChecks(kind, backend),
+		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)
+	if s.StartProvider == "pia" {
 		forward := parseFlag(s.Env["PIA_PORT_FORWARD"])
 		rec = append(rec, validate.Pair{Key: "port_forward", Value: forward}, validate.Pair{Key: "forwarded_port", Value: nil})
 		if forward {

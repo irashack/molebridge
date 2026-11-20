@@ -286,3 +286,43 @@ func TestStatusRoleReadsTheRecordAndTheLease(t *testing.T) {
 	}
 	_ = exit.DefaultStateDir
 }
+
+// A multi-provider exit (PROVIDERS): check-config names every provider's
+// config and the one interface, and status judges the record as any of the
+// exit's providers'.
+func TestCheckConfigAndStatusOfAMultiProviderExit(t *testing.T) {
+	env, _ := roleEnv(t)
+	conf := env["TUNNEL_CONF_DIR"]
+	raw, err := os.ReadFile(filepath.Join(conf, "mullvad.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nord := strings.Split(string(raw), "[Peer]")[0]
+	if err := os.WriteFile(filepath.Join(conf, "nordvpn.conf"), []byte(nord), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env["PROVIDERS"] = "mullvad,nordvpn"
+	env["PROVIDER"] = "nordvpn"
+	delete(env, "EXIT_IF")
+	env["NB_EXTRA_IFACE_BLACKLIST"] = "vpn"
+	var stdout, stderr bytes.Buffer
+	if code := checkConfigMain(nil, env, &stdout, &stderr); code != 0 {
+		t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())
+	}
+	want := "molebridge-exit: configuration accepted (multi-provider, interface vpn; " + conf + "/mullvad.conf: an IPv4 address; " +
+		conf + "/nordvpn.conf: an IPv4 address)\nNetBird gate: configuration accepted\n"
+	if stdout.String() != want {
+		t.Fatalf("%q\nwant %q", stdout.String(), want)
+	}
+	stdout.Reset()
+	clock := func() time.Duration { return time.Hour }
+	if code := statusMain(nil, env, clock, time.Now, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "state: unknown (awaiting status)") {
+		t.Fatalf("%d\n%s%s", code, stdout.String(), stderr.String())
+	}
+	env["PROVIDERS"] = "mullvad,gluetun-mullvad"
+	stdout.Reset()
+	stderr.Reset()
+	if code := statusMain(nil, env, clock, time.Now, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "native providers only") {
+		t.Fatalf("%d %q", code, stderr.String())
+	}
+}

@@ -53,6 +53,19 @@ type envView map[string]string
 // get is `${NAME:-}`: unset and empty alike read as "".
 func (e envView) get(name string) string { return e[name] }
 
+// defaultTunnelIF is EXIT_IF's default for a backend: wg0 for gluetun,
+// mullvad for the native backend, and vpn on a multi-provider exit
+// (PROVIDERS set; docs/design/multi-provider.md).
+func (e envView) defaultTunnelIF(backend string) string {
+	switch {
+	case backend == BackendGluetun:
+		return "wg0"
+	case e.get("PROVIDERS") != "":
+		return "vpn"
+	}
+	return "mullvad"
+}
+
 // def is `${NAME:-fallback}`: unset or empty gives the fallback.
 func (e envView) def(name, fallback string) string {
 	if v := e[name]; v != "" {
@@ -113,7 +126,7 @@ func checkCommon(e envView, backend string) (Settings, error) {
 		return s, refuseBare("NetBird gate: TUNNEL_BACKEND must be native or gluetun")
 	}
 	s.StateDir = e.def("NB_STATE_DIR", DefaultStateDir)
-	s.TunnelIF = e.def("EXIT_IF", map[string]string{BackendWireGuard: "mullvad", BackendGluetun: "wg0"}[s.Backend])
+	s.TunnelIF = e.def("EXIT_IF", e.defaultTunnelIF(s.Backend))
 
 	// Supported runtime settings: kernel WireGuard and NetBird's kernel
 	// firewall (client/iface/netstack/env.go:14,33-35;
@@ -328,11 +341,7 @@ func TunnelFromEnv(env map[string]string) (backend, tunnelIF, stateDir string, e
 	default:
 		return "", "", "", refuseBare("NetBird gate: TUNNEL_BACKEND must be native or gluetun")
 	}
-	def := "mullvad"
-	if backend == BackendGluetun {
-		def = "wg0"
-	}
-	tunnelIF = e.def("EXIT_IF", def)
+	tunnelIF = e.def("EXIT_IF", e.defaultTunnelIF(backend))
 	if err := checkTunnelName(tunnelIF); err != nil {
 		return "", "", "", err
 	}

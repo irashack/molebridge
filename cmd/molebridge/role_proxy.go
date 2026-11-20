@@ -81,6 +81,12 @@ func proxySettingsFrom(env map[string]string) (proxySettings, error) {
 	if !filepath.IsAbs(s.StateDir) || filepath.Clean(s.StateDir) != s.StateDir {
 		return s, errors.New("STATE_DIR must be a clean absolute path")
 	}
+	if env["PROVIDERS"] != "" {
+		// The proxy's PROVIDER would be wrong after a provider change (the
+		// design's decision 6); its result gate also closes on any
+		// multi-provider record, which names providers.
+		return s, errors.New("PROVIDERS is set: the proxy is not supported on a multi-provider exit")
+	}
 	switch s.Provider {
 	case "mullvad", "pia", "nordvpn":
 	case "":

@@ -61,11 +61,18 @@ type KernelSystem struct {
 	snapMu sync.Mutex
 	snap   *rtnl.Snapshot
 
+	// Active is a multi-provider exit's active provider (its TunnelSource's);
+	// nil on a single-provider exit.
+	Active func() string
+
 	// peer is the last peer set (by StartPeer at start, then by every
 	// switch): what a Mullvad tunnel is brought up with again, so a recreated
 	// tunnel stays on the server it was on. nil: the tunnel config's peer.
+	// peerOf is the provider it was set for on a multi-provider exit ("" on
+	// a single-provider exit): another provider's tunnel never takes it.
 	peerMu sync.Mutex
 	peer   *tunnelconf.Peer
+	peerOf string
 	snapAt time.Time
 
 	// fwMu guards fwPort, the forwarded port a native sidecar's firewall
@@ -330,28 +337,59 @@ func (k *KernelSystem) SetStartPeer(add applier.PeerConfig) error {
 	if err != nil {
 		return err
 	}
-	k.peerMu.Lock()
-	k.peer = peer
-	k.peerMu.Unlock()
+	k.setPeer(k.active(), peer)
 	return nil
+}
+
+// active is the active provider on a multi-provider exit, "" otherwise.
+func (k *KernelSystem) active() string {
+	if k.Active == nil {
+		return ""
+	}
+	return k.Active()
+}
+
+func (k *KernelSystem) setPeer(provider string, peer *tunnelconf.Peer) {
+	k.peerMu.Lock()
+	k.peer, k.peerOf = peer, provider
+	k.peerMu.Unlock()
 }
 
 // rememberPeer keeps the peer a switch set; a change that only removed peers
 // forgets it.
 func (k *KernelSystem) rememberPeer(add applier.PeerConfig) {
+	k.rememberPeerFor(k.active(), add)
+}
+
+// rememberPeerFor keeps the peer a provider's tunnel was set up with.
+func (k *KernelSystem) rememberPeerFor(provider string, add applier.PeerConfig) {
 	peer, err := tunnelPeer(add)
 	if err != nil {
 		peer = nil
 	}
+	k.setPeer(provider, peer)
+}
+
+// lastPeerFor is a copy of the remembered peer when it was set for
+// provider's tunnel, or nil.
+func (k *KernelSystem) lastPeerFor(provider string) *tunnelconf.Peer {
 	k.peerMu.Lock()
-	k.peer = peer
-	k.peerMu.Unlock()
+	defer k.peerMu.Unlock()
+	if k.peerOf != provider {
+		return nil
+	}
+	return k.peerCopy()
 }
 
 // lastPeer is a copy of the remembered peer, or nil.
 func (k *KernelSystem) lastPeer() *tunnelconf.Peer {
 	k.peerMu.Lock()
 	defer k.peerMu.Unlock()
+	return k.peerCopy()
+}
+
+// peerCopy copies the remembered peer; peerMu is held.
+func (k *KernelSystem) peerCopy() *tunnelconf.Peer {
 	if k.peer == nil {
 		return nil
 	}

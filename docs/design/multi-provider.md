@@ -4,9 +4,12 @@ Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
 replacement](#whole-tunnel-replacement), piece 2, [the provider
 set](#the-provider-set), the applier's side of piece 3, [the
 target](#the-target), piece 4, [leaving a
-provider](#leaving-a-provider), and piece 5, [the status record and the
-verdict](#the-status-record-and-the-verdict), are built; no setting reaches a multi-provider exit
-yet (that is piece 6). This is the working contract for the
+provider](#leaving-a-provider), piece 5, [the status record and the
+verdict](#the-status-record-and-the-verdict), and piece 6, [settings, files
+and credentials](#settings-files-and-credentials), are built: `PROVIDERS`
+reaches a multi-provider exit, experimental and documented as not for use
+until the live pass and piece 0 have run; the panel (7) and `molebridge
+init` (8) are not built. This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
 shape, the pieces, their boundaries and the interfaces between them, the
@@ -148,8 +151,9 @@ error says so and the old tunnel stays up with its pairs; the caller
 retries. Recovery's bring-up doesn't confirm the new pairs itself: they
 are in the expected state, and the repairer's pass after a failure puts
 them back if they went, before the tunnel loop's next attempt. The worker
-reads its tunnel from a `TunnelSource`; nothing sets one yet, so every exit
-uses the single-provider source, which is today's code moved.
+reads its tunnel from a `TunnelSource`; a single-provider exit uses the
+single-provider source, which is today's code moved (piece 6 sets the
+multi-provider one).
 
 ## The provider set
 
@@ -374,6 +378,43 @@ Files:
 provider's key and PIA's password instead of one. The docs say so where the
 multi-provider exit is described, beside the advice to run single-provider
 exits when that matters **(owner)**.
+
+**As built (piece 6).** `exit.LoadSettings` reads `PROVIDERS` (empty is
+unset, as Compose passes it) and refuses the combinations above, plus
+`FAILOVER` on (decision 7) and `EXCHANGE_URL`, whose exchange carries one
+provider's requests and catalogue. With `EXIT_IF` unset it fills `vpn` into
+the environment itself, so the contract, NetBird's gate, `fix-blacklist`
+(`nbprofile.TunnelFromEnv`) and the cleanup child see the same name. Each
+`<provider>.conf` is loaded by `tunnelconf.Load` for its provider into
+`Settings.Confs` (`Settings.Conf` is nil on such an exit), and the start
+provider is the one `tunnel-provider.json` names (read with
+`applier.ReadTunnelProvider`, the applier's own rule), else `PROVIDER`. The
+worker's `multiSource` is the `TunnelSource`: it reads the file on every
+call and keeps the last provider read when the file can't be read, so a
+passing error never brings back another provider's tunnel; the remembered
+peer is kept with the provider it was set for (Mullvad and NordVPN come
+back on it, PIA restores its own). The contract's expected state at a start
+is the start provider's config. `exitTunnels` is the `ProviderTunnels`:
+`PublicKey` derives each config's public key, and `Replace` calls
+`tunnel.Manager.Replace` with the config last brought up as `from` (the
+owner adds every address still live on the link, so PIA's per-registration
+rules 94 and 98 are removed too) and the target's config on the target's
+peer as `to`. The applier gets every provider's hooks, `PROVIDER`'s the
+same instance. The supervisor accepts a record of any of the exit's
+providers with `providers` naming them all in order; the starting record
+carries the piece 5 members, PIA's only when PIA is active. The proxy
+refuses `PROVIDERS`; `molebridge status` judges for the set and
+`check-config` prints each config. Not built here: the Compose files and
+`tools/check-compose.sh` (with piece 8), the exchange, and a check that no
+key is reused across providers (each provider's tunnel uses its own
+config's key, but two configs holding the same key aren't refused).
+Tested: the refusals, the configs, `EXIT_IF`'s default and the restart
+provider (`internal/exit/multi_provider_settings_test.go`), the source,
+remembered peers, keys and the pipeline built from settings
+(`multi_provider_linux_test.go`), and a single-provider exit's settings,
+child environments and starting record byte for byte
+(`single_provider_test.go`, generated before this piece); the replacement
+on a kernel is the rig drill's.
 
 ## The catalogs in one process
 

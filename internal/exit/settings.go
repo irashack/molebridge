@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/contract"
 	"github.com/irashack/molebridge/internal/failover"
 	"github.com/irashack/molebridge/internal/nbprofile"
@@ -59,8 +60,16 @@ func verbatim(err error) error {
 type Settings struct {
 	// Routing is the routing contract's configuration (internal/contract).
 	Routing contract.Config
-	// Provider is the PROVIDER setting.
+	// Provider is the PROVIDER setting: on a multi-provider exit, the
+	// provider the tunnel starts on the first time.
 	Provider string
+	// Providers is the PROVIDERS setting: two or three native providers on a
+	// multi-provider exit (docs/design/multi-provider.md), nil otherwise.
+	Providers []string
+	// StartProvider is the provider the tunnel starts on: Provider, or on a
+	// multi-provider exit the active provider tunnel-provider.json names
+	// when the settings were loaded (Provider when it names none).
+	StartProvider string
 	// Interval is ROUTING_RECONCILE_INTERVAL.
 	Interval time.Duration
 	// Grace is GUARD_GRACE: the lease length (5..30 seconds).
@@ -78,8 +87,12 @@ type Settings struct {
 	// Failover is FAILOVER, FAILOVER_SERVERS, FAILOVER_AFTER and
 	// FAILOVER_RETURN (docs/design/failover.md); off by default.
 	Failover failover.Config
-	// Conf is the native backend's validated tunnel config.
+	// Conf is the native backend's validated tunnel config; nil on a
+	// multi-provider exit, which has Confs.
 	Conf *tunnelconf.Conf
+	// Confs are a multi-provider exit's validated tunnel configs, one per
+	// provider (<provider>.conf), nil otherwise.
+	Confs map[string]*tunnelconf.Conf
 	// NB are NetBird's validated settings (overlay kinds only).
 	NB nbprofile.Settings
 	// NBPaths locate the stored NetBird profile.
@@ -96,6 +109,34 @@ type Settings struct {
 	// Env is the environment the settings were read from. It holds secrets
 	// (NB_SETUP_KEY and the pipeline's): it is never printed or logged.
 	Env map[string]string
+}
+
+// MultiProvider reports a multi-provider exit (PROVIDERS set).
+func (s *Settings) MultiProvider() bool { return len(s.Providers) > 1 }
+
+// ConfOf is the tunnel config of a provider: a multi-provider exit's for
+// that provider, a single-provider exit's own for its provider; nil for any
+// other.
+func (s *Settings) ConfOf(provider string) *tunnelconf.Conf {
+	if s.MultiProvider() {
+		return s.Confs[provider]
+	}
+	if provider == s.Provider {
+		return s.Conf
+	}
+	return nil
+}
+
+// ConfNames are the tunnel config files the exit reads, in order.
+func (s *Settings) ConfNames() []string {
+	if s.MultiProvider() {
+		names := make([]string, len(s.Providers))
+		for i, id := range s.Providers {
+			names[i] = id + ".conf"
+		}
+		return names
+	}
+	return []string{s.Routing.ExitIf + ".conf"}
 }
 
 // Native reports a native-backend overlay exit.
@@ -231,6 +272,22 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	if v := get("TUNNEL_BACKEND"); v != "" && v != string(contract.Native) && v != string(contract.Gluetun) {
 		return nil, refuse("TUNNEL_BACKEND must be native or gluetun")
 	}
+	if list := env["PROVIDERS"]; list != "" {
+		ids, err := parseProviders(list, get)
+		if err != nil {
+			return nil, err
+		}
+		s.Providers = ids
+		if env["EXIT_IF"] == "" {
+			// The one interface name every provider's tunnel uses; the
+			// single-provider default (mullvad) would mislead. Filled into
+			// the environment itself, so the contract, NetBird's gate and
+			// the cleanup child all see the same name.
+			env = withDefaults(env, map[string]string{"EXIT_IF": DefaultMultiExitIf})
+			s.Env = env
+			get = aliasBackend(func(name string) string { return env[name] })
+		}
+	}
 	// The image without NetBird says so before any other setting: EXIT_KIND
 	// unset is a NetBird exit too.
 	if kind := get("EXIT_KIND"); (kind == "" || kind == string(contract.Overlay)) && o.NeedNetBird {
@@ -245,10 +302,19 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	s.Routing = cfg
 
 	provider := get("PROVIDER")
+	if s.MultiProvider() {
+		if provider == "" {
+			return nil, refuse("PROVIDER is required with PROVIDERS: the provider the tunnel starts on the first time")
+		}
+		if !contains(s.Providers, provider) {
+			return nil, refuse("PROVIDER must be one of PROVIDERS")
+		}
+	}
 	if provider == "" {
 		provider = "mullvad"
 	}
 	s.Provider = provider
+	s.StartProvider = provider
 	spec, ok := providers.Lookup(provider)
 	switch {
 	case cfg.Backend == contract.Native && (!ok || spec.Backend != providers.BackendNative):
@@ -283,11 +349,34 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		}
 	}
 
+	if s.MultiProvider() {
+		if mode, err := failover.ParseMode(get("FAILOVER")); err == nil && (failover.Config{Mode: mode}).On() {
+			// Failover stays within one provider (the design's decision 7)
+			// and is built for single-provider exits only.
+			return nil, refuse("FAILOVER is for single-provider exits; a multi-provider exit (PROVIDERS) has none")
+		}
+	}
 	if s.Failover, err = loadFailover(get, provider, s.Server, s.NativeTunnel()); err != nil {
 		return nil, err
 	}
 
-	if s.NativeTunnel() {
+	switch {
+	case s.MultiProvider():
+		// Each provider's own config, <provider>.conf, validated for its
+		// provider; the interface is EXIT_IF whichever is active.
+		s.Confs = map[string]*tunnelconf.Conf{}
+		for _, id := range s.Providers {
+			conf, err := tunnelconf.Load(s.ConfDir, id, tunnelconf.Provider(id), cfg.Table)
+			if err != nil {
+				return nil, refuse("%s", err.Error())
+			}
+			s.Confs[id] = conf
+		}
+		s.OtherConfs = tunnelconf.OtherConfs(s.ConfDir, s.Providers...)
+		if id, ok := applier.ReadTunnelProvider(applier.TunnelProviderPath(s.StateDir, s.PrivateDir), s.Providers); ok {
+			s.StartProvider = id
+		}
+	case s.NativeTunnel():
 		pv := tunnelconf.Provider(provider)
 		conf, err := tunnelconf.Load(s.ConfDir, cfg.ExitIf, pv, cfg.Table)
 		if err != nil {
@@ -305,6 +394,11 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 	if s.Exchange, err = loadExchange(env); err != nil {
 		return nil, err
 	}
+	if s.Exchange != nil && s.MultiProvider() {
+		// The exchange carries one provider's requests and catalogue; a
+		// multi-provider exit's are not built yet.
+		return nil, refuse("EXCHANGE_URL is not supported on a multi-provider exit (PROVIDERS) yet")
+	}
 	if err := checkStateDir(filepath.Join(s.StateDir, "applier"), 0o755, o.WriteChecks); err != nil {
 		return nil, err
 	}
@@ -314,6 +408,52 @@ func LoadSettings(env map[string]string, o LoadOptions) (*Settings, error) {
 		}
 	}
 	return s, nil
+}
+
+// DefaultMultiExitIf is EXIT_IF's default on a multi-provider exit.
+const DefaultMultiExitIf = "vpn"
+
+// providersEnvMax bounds PROVIDERS: three ids, commas and some spaces.
+const providersEnvMax = 64
+
+// parseProviders reads PROVIDERS: two or three of mullvad, pia and nordvpn,
+// comma-separated, no repeats, on the overlay exit with the native backend.
+func parseProviders(list string, get func(string) string) ([]string, error) {
+	bad := refuse("PROVIDERS must be two or three of mullvad, pia and nordvpn, comma-separated, each once")
+	if get("TUNNEL_BACKEND") == string(contract.Gluetun) {
+		return nil, refuse("PROVIDERS needs TUNNEL_BACKEND=native: a gluetun exit carries one provider")
+	}
+	if kind := get("EXIT_KIND"); kind != "" && kind != string(contract.Overlay) {
+		return nil, refuse("PROVIDERS is for the overlay exit (EXIT_KIND=overlay); a sidecar carries one provider")
+	}
+	if len(list) > providersEnvMax {
+		return nil, bad
+	}
+	var ids []string
+	for _, part := range strings.Split(list, ",") {
+		id := strings.TrimSpace(part)
+		spec, ok := providers.Lookup(id)
+		if ok && spec.Backend != providers.BackendNative {
+			return nil, refuse("PROVIDERS takes native providers only (mullvad, pia, nordvpn), not %s", id)
+		}
+		if !ok || contains(ids, id) {
+			return nil, bad
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) < 2 || len(ids) > applier.MaxProviders {
+		return nil, bad
+	}
+	return ids, nil
+}
+
+func contains(list []string, v string) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 // failoverEnvMax bounds FAILOVER_SERVERS: eight long names and commas.

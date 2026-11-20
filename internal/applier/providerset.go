@@ -9,6 +9,7 @@ import (
 
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/providers"
+	"github.com/irashack/molebridge/internal/state"
 	"github.com/irashack/molebridge/internal/validate"
 )
 
@@ -129,7 +130,45 @@ func (a *Applier) Providers() ProviderSet { return a.set }
 func (a *Applier) multiProvider() bool { return a.set != nil && a.set.multi }
 
 func (a *Applier) tunnelProviderPath() string {
-	return filepath.Join(a.privateDir, "tunnel-provider.json")
+	return filepath.Join(a.privateDir, TunnelProviderFile)
+}
+
+// TunnelProviderFile is the file, in the applier's private directory, that
+// names a multi-provider exit's active provider: {"provider": id}.
+const TunnelProviderFile = "tunnel-provider.json"
+
+// TunnelProviderPath is tunnel-provider.json for a state directory and a
+// private directory ("" is <stateDir>/applier), as the applier writes it.
+func TunnelProviderPath(stateDir, privateDir string) string {
+	if privateDir == "" {
+		privateDir = filepath.Join(stateDir, "applier")
+	}
+	return filepath.Join(privateDir, TunnelProviderFile)
+}
+
+// ReadTunnelProvider is the provider tunnel-provider.json at path names,
+// when it is one of ids; ok is false for a missing, unreadable or foreign
+// file, which a multi-provider exit treats as no record (it starts on
+// PROVIDER).
+func ReadTunnelProvider(path string, ids []string) (string, bool) {
+	return tunnelProviderFrom(state.ReadJSON(path, tunnelProviderMaxBytes), func(id string) bool {
+		for _, v := range ids {
+			if v == id {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// tunnelProviderFrom is the provider a decoded tunnel-provider.json names:
+// exactly one member, a provider in the set.
+func tunnelProviderFrom(v any, inSet func(string) bool) (string, bool) {
+	raw, _ := v.(map[string]any)
+	if id, ok := raw["provider"].(string); ok && len(raw) == 1 && inSet(id) {
+		return id, true
+	}
+	return "", false
 }
 
 // newProviderSet checks a configuration's providers and builds the set. One
@@ -182,8 +221,8 @@ func newProviderSet(a *Applier, cfg Config) (*providerSet, error) {
 	s.active = cfg.Provider.ID()
 	// Later starts use the provider the tunnel was last made for, not the
 	// starting one, so a restart doesn't move everyone (decision 8).
-	raw, _ := a.readJSON(a.tunnelProviderPath(), tunnelProviderMaxBytes).(map[string]any)
-	if id, ok := raw["provider"].(string); ok && len(raw) == 1 && s.hooks[id] != nil {
+	if id, ok := tunnelProviderFrom(a.readJSON(a.tunnelProviderPath(), tunnelProviderMaxBytes),
+		func(id string) bool { return s.hooks[id] != nil }); ok {
 		s.active = id
 	}
 	return s, nil

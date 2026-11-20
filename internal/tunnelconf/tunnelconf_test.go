@@ -439,6 +439,10 @@ func TestOtherConfsAreCounted(t *testing.T) {
 	if OtherConfs(dir+"/nope", "mullvad") != 0 {
 		t.Fatal("missing directory")
 	}
+	// A multi-provider exit reads every provider's config.
+	if got := OtherConfs(dir, "mullvad", "pia"); got != 1 {
+		t.Fatal(got)
+	}
 }
 
 // Whatever the generators accept the exit accepts
