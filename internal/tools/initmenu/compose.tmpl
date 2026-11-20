@@ -18,7 +18,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
 */}}
 {{define "overlay/exit"}}
   exit:
-    image: ghcr.io/irashack/molebridge:v0.14.1@sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75
+    image: ghcr.io/irashack/molebridge:v0.14.2@sha256:a324761429033dc3892bf2d664ec70c67642290fa491ca1a9fbe184657e32e6b
     command: ["exit"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
     restart: unless-stopped
@@ -179,7 +179,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
 {{end}}
 {{define "overlay/switchyard"}}
   switchyard:
-    image: ghcr.io/irashack/molebridge:v0.14.1@sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75
+    image: ghcr.io/irashack/molebridge:v0.14.2@sha256:a324761429033dc3892bf2d664ec70c67642290fa491ca1a9fbe184657e32e6b
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
     restart: unless-stopped
@@ -371,7 +371,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     # stop it removes only NetBird's overlay interface, never gluetun's
     # tunnel. NET_ADMIN as with the native exit; the API key is full gluetun
     # administration, part of the same trusted base.
-    image: ghcr.io/irashack/molebridge:v0.14.1@sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75
+    image: ghcr.io/irashack/molebridge:v0.14.2@sha256:a324761429033dc3892bf2d664ec70c67642290fa491ca1a9fbe184657e32e6b
     command: ["exit"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
     restart: unless-stopped
@@ -483,7 +483,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     # compose.gluetun.yaml extends compose.yaml's panel; init writes it out
     # here, for this exit's gluetun provider, as there is no compose.yaml
     # beside this file to extend.
-    image: ghcr.io/irashack/molebridge:v0.14.1@sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75
+    image: ghcr.io/irashack/molebridge:v0.14.2@sha256:a324761429033dc3892bf2d664ec70c67642290fa491ca1a9fbe184657e32e6b
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-switchyard"
     restart: unless-stopped
@@ -651,7 +651,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     # then verifies the peer, the handshake and egress. It runs no NetBird,
     # installs no routes or firewall rules and has no routing contract, so its
     # supervisor has nothing to clean up when it stops.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["exit"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-exit"
     restart: unless-stopped
@@ -776,7 +776,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-switchyard"
     restart: unless-stopped
@@ -838,7 +838,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
 {{end}}
 {{define "native-sidecar/exit"}}
   exit:
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["exit"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-exit"
     restart: unless-stopped
@@ -968,7 +968,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     # profile here. No capabilities, nothing written: it reads the exit's
     # record and calls qBittorrent's Web API on the namespace's loopback with
     # the login in ./secrets/port-sync.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["port-sync"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-port-sync"
     restart: unless-stopped
@@ -1007,7 +1007,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-native-sidecar}-switchyard"
     restart: unless-stopped
@@ -1071,7 +1071,7 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     # programs you point at it. No capabilities: binding its connections to
     # the tunnel interface needs none. It reads the exit's records, read-only,
     # and writes only its own state.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["proxy"]
     container_name: "${COMPOSE_PROJECT_NAME:-{{.Project}}}-proxy"
     restart: unless-stopped

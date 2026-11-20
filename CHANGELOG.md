@@ -17,7 +17,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   are no longer drilled live; [releasing](docs/releasing.md#3-run-the-live-acceptance)
   lists the gaps.
 
-## 0.14.2 — unreleased
+## 0.14.2 — 2026-11-20
 
 **Experimental.** Upgrade from 0.14.1 by moving to the new image;
 what changed is below.

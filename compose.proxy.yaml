@@ -39,7 +39,7 @@ services:
     # programs you point at it. No capabilities: binding its connections to
     # the tunnel interface needs none. It reads the exit's records, read-only,
     # and writes only its own state.
-    image: ghcr.io/irashack/molebridge-core:v0.14.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6
+    image: ghcr.io/irashack/molebridge-core:v0.14.2@sha256:a5f636caaac9fe77fab2e9bd4061136e1e6bc5f24aeb81b7c80e1fc0755f6623
     command: ["proxy"]
     # With compose.native-sidecar.yaml set COMPOSE_PROJECT_NAME in .env if
     # another stack on this host already runs a molebridge-proxy container.
