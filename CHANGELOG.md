@@ -124,6 +124,24 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   drops its untested workaround (a non-root `user:` override) for these
   settings. Not run on rootless Podman.
 
+- Fixed: a provider change you request on a multi-provider exit no longer
+  waits a full minute after a passing failure (closes #134). On homelab,
+  Mullvad → PIA requested right after a Mullvad tunnel-loss recovery took
+  90.9 seconds: PIA's registration failed after 20 seconds, before the
+  tunnel was touched, and the request waited the backoff's first minute.
+  It was not the 90-second re-apply guard, which never holds a request.
+  Now a requested change whose first attempt fails is applied again 10
+  seconds later, once; later failures keep the backoff (1, 2, 4 and 8
+  minutes, then every 15). A single-provider exit keeps the backoff for
+  every failure. A PIA registration server that doesn't answer (no
+  connection, no TLS handshake, no reply in time) is no longer asked a
+  second time with a fresh token: the exit keeps its token and asks the
+  region's next server, once. A failed change's cause is now logged,
+  `applier: the change's mutation failed: …`. A new system rig drill,
+  `TestSystemRigMultiProviderSwitchAfterTunnelLoss`, bounds a switch
+  requested right after a tunnel-loss recovery at 30 seconds; it runs in
+  CI only and has not run yet. Not run live.
+
 ## 0.14.1 — unreleased
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;

@@ -176,7 +176,10 @@ The exit retries by itself
 - **A change that failed** (the peer update, PIA's registration, gluetun's
   control server, or a switch that timed out on another server) is applied
   again after 1, 2, 4 and 8 minutes, then every 15. The panel's note says
-  when: "Retrying at … UTC."
+  when: "Retrying at … UTC." On a [multi-provider
+  exit](multi-provider.md), a change you requested whose first attempt
+  failed is applied again 10 seconds later, once, before that backoff.
+  The exit's log names the cause: `applier: the change's mutation failed: …`.
 - **A change that was applied but not verified** (the handshake, the egress
   check or its service failing while the selected server is live) is
   re-checked about once a minute, not switched again: "Re-checking at …

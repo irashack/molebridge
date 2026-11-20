@@ -69,6 +69,18 @@ type rigPIA struct {
 
 	mu                           sync.Mutex
 	logins, addKeys, sigs, binds int
+	// dropAddKeys is how many of the next registrations the server drops
+	// without an answer (the connection closed), as a server that doesn't
+	// answer would leave them.
+	dropAddKeys, dropped int
+}
+
+// dropRegistrations makes the server drop the next n registrations
+// unanswered.
+func (p *rigPIA) dropRegistrations(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dropAddKeys = n
 }
 
 // counts are the logins, registrations, signatures and binds served so far.
@@ -226,6 +238,14 @@ func (r *systemRig) addPIA() *rigPIA {
 				return
 			}
 			p.mu.Lock()
+			if p.dropAddKeys > 0 {
+				p.dropAddKeys--
+				p.dropped++
+				p.mu.Unlock()
+				// No answer at all: the connection goes, as the
+				// server's would.
+				panic(http.ErrAbortHandler)
+			}
 			p.addKeys++
 			p.mu.Unlock()
 			write(w, map[string]any{"status": "OK", "server_key": p.key.PublicKey().String(), "server_port": rigPIAPort,

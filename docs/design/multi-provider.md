@@ -668,6 +668,12 @@ and every registration hands out the same tunnel address.
 - `TestSystemRigMultiProviderTunnelLoss`: the tunnel link deleted right
   after the changes to PIA, NordVPN and Mullvad; every peer the link shows
   until it is verified again is the new provider's.
+- `TestSystemRigMultiProviderSwitchAfterTunnelLoss` (#134): the tunnel link
+  deleted on Mullvad and, once a record verified after its return is
+  written, Mullvad to PIA requested at once and verified within 30 seconds;
+  then the same with the fake PIA server dropping the change's first
+  registration unanswered, so the request's 10-second early retry carries
+  it. Written for CI; not run outside it yet.
 - `TestSystemRigMultiProviderInterruptedReplace`: Mullvad to PIA, then PIA
   to NordVPN, each `Replace` held between deleting the old link and
   creating the new one (`tunnel.Options.BetweenLinks`, set only by the drill

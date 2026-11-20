@@ -79,10 +79,13 @@ failures:
   `secrets/pia/password` changes (the exit compares the files' identity,
   size and times, never their content), or you press Retry.
 - **A server refuses the key** with a token the exit reused: it is asked
-  once more with a fresh token. A second refusal, a malformed answer or a
-  connection failure fails the attempt with "Peer update failed; retrying
-  automatically.", retried after 1, 2, 4 and 8 minutes, then every 15
-  ([retries](operations.md#retries)).
+  once more with a fresh token. A server that doesn't answer at all (no
+  connection, no TLS handshake, no reply within 15 seconds) says nothing
+  about the token: the exit keeps it and asks the region's next server
+  instead, once, when the region lists more than one. A second refusal, a
+  malformed answer or a second server that doesn't answer fails the attempt
+  with "Peer update failed; retrying automatically.", retried after 1, 2, 4
+  and 8 minutes, then every 15 ([retries](operations.md#retries)).
 
 During a switch, the exit adds rules 94 and 98 for the new address and
 confirms both are there before it changes the address, as one transaction

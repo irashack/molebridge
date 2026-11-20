@@ -2069,7 +2069,11 @@ func (a *Applier) afterMutation(ctx context.Context, target *Selection, err erro
 			at.MutationCertainty = "definite"
 		}
 		at.Message = a.hooks.MutationFailedMessage()
-		at.Schedule("reapply", a.clock())
+		// The record's message stays the provider's; the cause goes to the
+		// log, bounded, so a failed change says what failed.
+		a.log("applier: the change's mutation failed: " +
+			truncateChars(strings.ToValidUTF8(err.Error(), "�"), IOFailureReportChars))
+		at.ScheduleRetry(a.earlyRetry(), a.clock())
 		if err := a.saveAttempt(); err != nil {
 			return nil, err
 		}
@@ -2077,6 +2081,16 @@ func (a *Applier) afterMutation(ctx context.Context, target *Selection, err erro
 		return a.check(ctx)
 	}
 	return nil, err
+}
+
+// earlyRetry: a failed mutation of this attempt gets the one early retry
+// (attempt.RequestRetrySec). Only a requested change (a panel request or
+// the operator's retry of one) on a multi-provider exit: a single-provider
+// exit keeps its attempt record byte for byte (docs/design/multi-provider.md,
+// rule 2), and automatic re-applies keep the backoff.
+func (a *Applier) earlyRetry() bool {
+	source := a.attempt.Source
+	return a.multiProvider() && (source == "panel" || source == "operator-retry")
 }
 
 func (a *Applier) credentialsMessage(provider string) string {

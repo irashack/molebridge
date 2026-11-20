@@ -58,6 +58,18 @@ tracks it. The [design record](design/multi-provider.md) lists the drills.
   Mullvad to PIA interrupted between removing the old tunnel and creating
   the new one needs a second attempt; the system rig bounds it at
   45 seconds. Mullvad and NordVPN come back in about 2 seconds.
+- **The record shows a recovery up to a minute late.** When Mullvad's or
+  NordVPN's tunnel comes back on its last peer, the exit changes nothing,
+  so nothing checks it early: traffic flows again in about 2 seconds, and
+  the status record says verified at the next periodic check, up to 60
+  seconds later (56 seconds live on homelab). A change you request
+  meanwhile doesn't wait for that check.
+- **A requested change that fails is retried after 10 seconds, once.**
+  After that, the usual backoff (1, 2, 4 and 8 minutes, then every 15).
+  The system rig drill `TestSystemRigMultiProviderSwitchAfterTunnelLoss`
+  bounds Mullvad → PIA requested right after a tunnel-loss recovery at 30
+  seconds, with and without PIA dropping the first registration; it runs
+  in CI only ([testing](testing.md)).
 - Two providers' configs holding the same key are not refused.
 
 ## Set it up
@@ -165,7 +177,9 @@ the single-provider views are unchanged. Metrics label the exit's provider
    interface name with the new provider's key, addresses and peer.
 5. The exit verifies the new server with that provider's own egress check,
    for up to 60 seconds. A failure is retried on the usual backoff
-   ([retries](operations.md#retries)), on the new provider.
+   ([retries](operations.md#retries)), on the new provider, except that a
+   change you requested is tried once more 10 seconds after its first
+   failure.
 
 A refusal before step 4 (PIA refusing the login or the registration, or the
 forwarding table that can't be removed) leaves the previous provider's

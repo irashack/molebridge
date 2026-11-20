@@ -399,19 +399,24 @@ func privateAddress(address netip.Addr) bool {
 	return false
 }
 
-// register registers the interface key on one of the region's servers. An
-// expired or revoked token looks like any other refusal, so a refusal with a
-// reused token is asked once more with a freshly minted one.
 // register registers key, the tunnel's public key, with one of region's
-// servers.
+// servers, chosen at random. An expired or revoked token looks like any
+// other refusal, so a refusal with a reused token is asked once more with a
+// freshly minted one. A server that doesn't answer at all (no connection, no
+// TLS handshake, no reply in time) says nothing about the token: the token
+// is kept and the region's next server is asked instead, once, so one
+// unreachable server doesn't fail the change after two timeouts against it
+// (#134).
 func (p *piaProvider) register(ctx context.Context, a *Applier, region *providers.Relay, key string) (registration, error) {
 	if len(region.Servers) == 0 {
 		return registration{}, errors.New("region has no servers")
 	}
-	server := region.Servers[p.cfg.Choose(len(region.Servers))]
+	index := p.cfg.Choose(len(region.Servers))
+	server := region.Servers[index]
 	var data map[string]any
 	var err error
-	for try := 0; try < 2; try++ {
+	freshToken, otherServer := true, len(region.Servers) > 1
+	for {
 		reused := p.token != ""
 		data, err = p.addKey(ctx, a, server, key)
 		if err == nil {
@@ -424,10 +429,21 @@ func (p *piaProvider) register(ctx context.Context, a *Applier, region *provider
 		if !caught(err) {
 			return registration{}, err
 		}
+		var silent *unansweredError
+		if errors.As(err, &silent) {
+			if !otherServer {
+				return registration{}, err
+			}
+			otherServer = false
+			index = (index + 1) % len(region.Servers)
+			server = region.Servers[index]
+			continue
+		}
 		p.token = ""
-		if try > 0 || !reused {
+		if !freshToken || !reused {
 			return registration{}, err
 		}
+		freshToken = false
 	}
 	port, isInt := validate.IsInt(data["server_port"])
 	if !isInt || !(0 < port && port < 65536) || data["server_ip"] != server.IP {
@@ -483,6 +499,13 @@ func (p *piaProvider) register(ctx context.Context, a *Applier, region *provider
 		ServerKey: data["server_key"].(string), PeerIP: peer.String(), ServerVIP: vip.String()}, nil
 }
 
+// unansweredError is a registration server that didn't answer: connecting,
+// the TLS handshake or reading the reply failed or timed out.
+type unansweredError struct{ err error }
+
+func (e *unansweredError) Error() string { return "the PIA server did not answer: " + e.err.Error() }
+func (e *unansweredError) Unwrap() error { return e.err }
+
 // addKey is one registration request with a token (minted if need be).
 func (p *piaProvider) addKey(ctx context.Context, a *Applier, server providers.Server, key string) (map[string]any, error) {
 	token, err := p.piaToken(ctx, a)
@@ -491,6 +514,9 @@ func (p *piaProvider) addKey(ctx context.Context, a *Applier, server providers.S
 	}
 	data, err := p.pinned(ctx, a, server.CN, server.IP, addKeyPort, "addKey", query{"pt", token, "pubkey", key}, false)
 	if err != nil {
+		if errors.Is(err, netx.ErrTimeout) || errors.Is(err, netx.ErrTransport) {
+			return nil, &unansweredError{err}
+		}
 		return nil, err
 	}
 	if data["status"] != "OK" || !validate.ValidKey(data["server_key"]) {
