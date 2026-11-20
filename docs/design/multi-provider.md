@@ -713,6 +713,43 @@ and every registration hands out the same tunnel address.
   rules and routes, a replaced rule 97, the interface down) and its
   250-millisecond bound are not checked per provider.
 
+**Recovery times (issue 121).** The first runs had PIA slow: a tunnel lost
+right after the change to PIA was back on PIA's server after 90.3 s
+(NordVPN 0.4 s, Mullvad 1.3 s), and the interrupted Mullvad to PIA change
+was verified 65.4 s after the kill, on its second attempt with source
+`retry` (PIA to NordVPN: 5.2 s). PIA's login and registration were not the
+cause: the token is kept in memory for 12 hours (the port-forward drill's
+fake PIA served one login for two registrations), and a whole change to PIA,
+registration included, verifies in about 5 s. Mullvad and NordVPN come back
+on the peer the worker remembers; PIA's tunnel comes back with no peer,
+since its peer belongs to a registration, and the applier has to register
+again. That re-apply ("no live peer", trigger 3 in the
+[architecture](../architecture.md)) waited out the 90-second re-apply guard
+from the change. After a worker restart, the new generation's re-apply was
+held by the same guard, so the interrupted change, failed by `resume` with
+no peer live, waited for its one-minute retry. Neither is specific to a
+multi-provider exit: a single-provider PIA exit waits the same whenever its
+tunnel is lost within 90 s of a change (earlier live drills measured PIA
+back in 3 to 6 s, their loss well after the last change; [testing](../testing.md)).
+
+With the native backend, no live peer now waits `attempt.NoPeerGuardSec`
+(10 s) from the last change instead. The exit's own changes never leave a
+native tunnel at rest with no peer, and a tunnel with no peer passes
+nothing, so failing closed is unchanged; the 10 s spaces re-applies (and
+PIA's registrations) under an interface that keeps disappearing or a
+worker that keeps restarting. Drift, unidentified peers and gluetun keep
+the 90 s guard. Nothing about leaving a provider changed: a re-apply on the
+same provider runs no `Leave`. In CI (two runs on the PR) PIA's tunnel was
+back 10.1 s after the loss and verified at 10.2 s, and the interrupted
+Mullvad to PIA change verified 10.25 s after the kill (attempt 2, source
+`reconverge`); PIA to NordVPN 5.1 s, NordVPN's tunnel back in 0.6 s and
+Mullvad's in 1.5 s. The drills fail a tunnel not back within 30 s
+(`tunnelBackWithin`) or an interrupted change not verified within 45 s of
+the kill (`replacedWithin`). Mullvad's and NordVPN's tunnels come back by
+the worker alone, with no pipeline run, so their next verified record comes
+with the periodic check, up to a minute later. Not measured on a real PIA
+tunnel.
+
 ### The live pass
 
 On a live host with all three accounts: switches in both directions between
