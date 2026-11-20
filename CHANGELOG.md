@@ -145,8 +145,9 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 - Acceptance policy 20: every candidate now needs `multi-provider-live` on a
   real three-provider exit (Mullvad, PIA and NordVPN). It needs a switch
   between providers in each direction, one of them through the panel, each
-  verified within 60 seconds. It loses a tunnel on each provider; traffic
-  must be back within 5 seconds and verified within 90 (PIA: 60 and 90).
+  verified within 60 seconds. It loses a tunnel on each provider; the
+  interface must be back within 5 seconds, traffic within 30 (PIA 60) and a
+  verified record within 90.
   No unsafe routing sample and no restart are allowed. The steps are in
   [releasing](docs/releasing.md) (#128).
 
