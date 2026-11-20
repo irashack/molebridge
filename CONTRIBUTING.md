@@ -74,6 +74,8 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   container. `routing/embed.go` embeds it in the binary for the `gluetun-preflight` tool. `tools/` holds the release and image scripts (`make-bundle.sh`,
   `check-bundle.sh`, `check-image.sh`, `check-compose.sh`, `release-notes.sh` and the
   acceptance tooling) and `tools/fixtures/` the data tests share.
+- `tools/screenshots/` retakes the Switchyard screenshots and the social preview in
+  `docs/assets/` from seeded, fictitious state ([how](tools/screenshots/README.md)).
 - `compose.yaml`, `compose.gluetun.yaml`, `compose.sidecar.yaml` and
   `compose.native-sidecar.yaml`: the supported Compose forms, with `.env.example`,
   `.env.gluetun.example`, `.env.sidecar.example` and `.env.native-sidecar.example`;

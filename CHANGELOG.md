@@ -150,6 +150,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   verified record within 90.
   No unsafe routing sample and no restart are allowed. The steps are in
   [releasing](docs/releasing.md) (#128).
+- Docs: the Switchyard screenshots and the social preview are retaken at
+  twice their size (2560×1720 and 2560×1280), so they stay sharp on
+  high-density screens. The screenshots' PIA exit is on a Chicago region
+  instead of the test fixture's "Example City", and every exit's place
+  matches its server. `tools/screenshots/capture.js` retakes them: it seeds
+  fictitious state, serves it with the real panel binary and captures it
+  with Playwright ([how](tools/screenshots/README.md)). The README banner's
+  footer lines fall back to a sans-serif font where Arial is missing.
 
 ## 0.14.1 — unreleased
 
