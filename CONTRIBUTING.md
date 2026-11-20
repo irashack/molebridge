@@ -281,6 +281,42 @@ A stopped container takes its namespace with it; on the rig the exit's namespace
 exit drill runs the exit's own cleanup role (`molebridge exit --cleanup`) and resets the fake NetBird
 before starting the exit again.
 
+`TestUpgradeFromPrevious` (`internal/exit/systemrig_upgrade_test.go`) is the upgrade from the
+previous release on the same rig. CI runs it in its own "Upgrade drill" job. The previous release
+is the newest final tag (`vX.Y.Z`) that is an ancestor of the commit under test and not on it, so
+it moves forward with each release. `tools/previous-release.sh` builds that tag's binary with the
+release flags, the Go release its Dockerfile names and the candidate tag it was promoted from as
+its version, then requires it to hash equal to `/usr/local/bin/molebridge` in the release's
+linux/amd64 image, pulled by the index digest its GitHub release names; it refuses when the release
+notes name another commit. The drill runs the previous release's exit and panel until the exit is
+verified on relay A, asked for A by name, then switched to B. Next the candidate's `status` role
+must read the previous exit's record as `ok`, and the candidate's panel, started first as
+[upgrades](docs/operations.md#upgrades) orders it, must show the previous exit verified on B. Then
+the candidate's exit starts on the same state directory. It must be verified on B for the same
+request with no new one, `desired.json` byte for byte unchanged, `location.json` still naming B
+and its city, no refusal in `attempt.json`, the panel showing it and the client's traffic leaving
+by B. A switch back to A through the panel must verify. Last comes the rollback: the previous
+release's exit, then its panel, on the candidate's state, verified on A for that request. It runs
+twice at once. The `same-settings` case changes no setting. The `state-gid` case sets `STATE_GID`
+on the exit at the upgrade, the panel's group, and requires what
+[readers in another group](docs/configuration.md#readers-in-another-group) says: `state/applier`
+0750 and `result.json` and `relays.json` 0640 with that group, `attempt.json` and `location.json`
+0600, the panel still reading every record. On the rollback, when the previous release doesn't
+know the setting, `result.json` must be 0644 again. The leak counter must stay at zero
+throughout. To run it by hand, as root on the same kind of machine:
+
+```sh
+sh tools/previous-release.sh /tmp/previous    # needs gh with a token, docker and the network
+. /tmp/previous/previous.env
+MOLEBRIDGE_PREVIOUS_BIN=/tmp/previous/molebridge MOLEBRIDGE_PREVIOUS_VERSION=$PREVIOUS_BUILD_TAG \
+  go test -count=1 -v -timeout 20m -tags drill,systemrig -run TestUpgradeFromPrevious ./internal/exit/
+```
+
+It does not replace the live `upgrade-from-<previous>` drill: the previous release runs here as a
+binary, not as its signed image under Compose, Podman or Kubernetes, against the rig's fakes, with
+the fake NetBird of the commit under test rather than the NetBird client the previous image pins,
+and on the native Mullvad exit only, with no gluetun, sidecar, PIA, NordVPN or exchange state.
+
 It writes `/etc/netns/<namespace>/hosts` for the time it runs, so run it only where the namespace
 drills may run. It does not cover the real provider APIs, real relays, the real NetBird overlay
 (the overlay is a WireGuard pair the test keys, without NetBird's masquerade), container runtimes

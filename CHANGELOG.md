@@ -10,6 +10,18 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 **Experimental.** Upgrade from 0.14.1 by moving to the new image;
 what changed is below.
+- Test only, no change to the exit or the panel: CI's new "Upgrade drill"
+  job runs the upgrade from the previous release on the system rig (issue
+  54, step 3). The previous release is the newest final tag before the
+  commit, built from its source and required to hash equal to the binary in
+  its released image (`tools/previous-release.sh`). Its exit and panel build
+  state (a verified exit, a request by name and a switch), then the
+  candidate's take over the same state directory and must keep the request,
+  `desired.json` and `location.json`, show the same server and verify
+  again, with and without `STATE_GID` set at the upgrade; then the previous
+  release's take the candidate's state back
+  ([CONTRIBUTING](CONTRIBUTING.md#the-system-rig)). The acceptance policy
+  still lists the live upgrade drill.
 
 - Piece 7 of the [multi-provider
   exit](docs/multi-provider.md), the panel (on in this release; see the

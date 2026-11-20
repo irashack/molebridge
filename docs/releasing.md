@@ -79,7 +79,11 @@ candidate` job of `release.yml`, which:
 
 CI also runs on the tag push. The `ci-namespace-drills` drill in the
 acceptance policy is CI's namespace-drill step passing on the tag, and
-`ci-system-rig` is its System rig job passing there:
+`ci-system-rig` is its System rig job passing there. CI's Upgrade drill job
+also runs the upgrade from the previous release, and the rollback to it, on
+the system rig ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)); the
+policy does not count it yet, so `upgrade-from-<previous>` stays a live
+drill:
 
 ```sh
 gh run list --workflow ci.yml --branch v0.10.0-rc.1
