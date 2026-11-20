@@ -22,7 +22,9 @@ use your own values where the examples have placeholders in angle brackets.
 ## 1. Prepare `main`
 
 1. The changelog has an entry for the release, headed `unreleased` until the
-   acceptance dates it.
+   acceptance dates it, under an empty `## Unreleased` heading that stays on
+   top: a change merged while the candidate waits goes there, not into the
+   candidate's section, since the candidate doesn't contain it.
 2. The acceptance policy, `tools/acceptance-policy.json`, names what the live
    acceptance must cover: `platforms`, `providers`, `kinds` and `drills`. For
    each release, raise its `version` by one and change the upgrade drill to the

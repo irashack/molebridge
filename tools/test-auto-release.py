@@ -58,7 +58,8 @@ class Changelog(unittest.TestCase):
     def test_prep_minor(self):
         out = ar.prep_changelog(self.TEXT, "0.12.0", "0.11.1", [])
         self.assertIn("## 0.12.0 — unreleased\n\n**Experimental.** Upgrade from 0.11.1", out)
-        self.assertNotIn("## Unreleased", out)
+        self.assertTrue(out.index("## Unreleased\n\n## 0.12.0") > 0)
+        self.assertFalse(ar.has_entries(ar.unreleased(out)))
         self.assertIn("- A thing.", out)
         self.assertEqual(ar.pending_heading(out), "0.12.0")
         dated = ar.date_changelog(out, "0.12.0", "2026-11-20")
