@@ -6,7 +6,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
-## 0.14.3 — unreleased
+## 0.14.3 — 2026-11-20
 
 **Experimental.** Upgrade from 0.14.2 by moving to the new image;
 what changed is below.

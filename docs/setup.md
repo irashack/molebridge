@@ -45,8 +45,8 @@ sign in, do. Set these from the release notes, which also list the source
 commit and the image digests:
 
 ```sh
-TAG=v0.14.2           # the release tag
-RC=v0.14.2-rc.1       # the candidate tag the release notes name: the build ran under it
+TAG=v0.14.3           # the release tag
+RC=v0.14.3-rc.1       # the candidate tag the release notes name: the build ran under it
 COMMIT=<source commit from the release notes>
 DIGEST=sha256:<index digest from the release notes>
 REPO=irashack/molebridge
@@ -266,7 +266,7 @@ before it, and a binary can't know its own image's digest, so without them
 `init` writes the 0.13.0 images. Without them it says so on stderr after
 writing, for example from a 0.14.1 image: `molebridge init: compose.yaml
 pins the Molebridge images at v0.14.0, the pins of the source this binary
-was built from: this is v0.14.2 (built as v0.14.2-rc.1); the pins are
+was built from: this is v0.14.3 (built as v0.14.3-rc.1); the pins are
 v0.14.0's. To pin the release you verified, pass --image and --core-image
 (docs/setup.md#molebridge-init).` A build that reports no release tag
 (`molebridge dev`), or the pins' own release, says `, possibly an older

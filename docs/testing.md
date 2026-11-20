@@ -51,6 +51,29 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.14.3
+
+Released from `v0.14.3-rc.1` by the release automation. The acceptance policy (`tools/acceptance-policy.json`, version 23) is the one the candidate was attested against.
+
+### v0.14.3-rc.1, 2026-11-20: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.14.3-rc.1`, index digest `sha256:22b75f671d3de076b22ef85c652941d88deb08bd09461f3a4cf43cab4bbf8e60`, and `ghcr.io/irashack/molebridge-core:v0.14.3-rc.1`, index digest `sha256:ba76ec5974d897d20d80e9ef5471003ef945d64884517b17fad82447e584fc1f` (commit `8543927`). Attested by [run 44838388434](https://github.com/irashack/molebridge/actions/runs/44838388434) and promoted as `v0.14.3`.
+
+### v0.14.3-rc.1: mb-accept on the owner's exits
+Candidate commit `854392758a2c3288fd1e69d6f35f847fae80192f`: `ghcr.io/irashack/molebridge:v0.14.3-rc.1@sha256:22b75f671d3de076b22ef85c652941d88deb08bd09461f3a4cf43cab4bbf8e60`, `ghcr.io/irashack/molebridge-core:v0.14.3-rc.1@sha256:ba76ec5974d897d20d80e9ef5471003ef945d64884517b17fad82447e584fc1f`; policy 23.
+
+- Upgrade from 0.14.2, Kubernetes: every owner exit ok on v0.14.2, moved by the canary keys alone, ok on the candidate with 0 restarts: mullvad-exit (mullvad, native, verified), pia-exit (pia, native, verified), nordvpn-exit (nordvpn, native, verified), gluetun-exit (nordvpn, gluetun, verified), molebridge-sidecar (nordvpn, sidecar, verified), vela-web (pia, native-sidecar, verified)
+- tunnel-loss: mullvad-exit passed; pia-exit passed; nordvpn-exit passed; gluetun-exit passed
+- network-exchange-smoke: nordvpn-exit+mb-exchange-trial passed
+- proxy-live: mullvad-exit+proxy passed
+- Upgrade from 0.14.2, Podman rootless Quadlet (testbed guest): the sidecar ok on v0.14.2, only the exit moved to the candidate, ok and verified, the app's egress through the tunnel, gluetun and the app not restarted.
+- multi-provider-live (testbed guest, one exit with Mullvad, PIA and NordVPN): every direction verified at the provider tier (two through the panel's provider tab), a tunnel loss on each provider, 0 unsafe routing samples: nordvpn → mullvad (file) 8192 ms; mullvad → pia (panel) 7065 ms, PIA port in 69215 ms; pia → nordvpn (file) 5900 ms; nordvpn → pia (file) 7046 ms, PIA port in 69062 ms; pia → mullvad (file) 6437 ms; mullvad → nordvpn (panel) 6074 ms; loss on nordvpn: back 1801 ms, traffic 3354 ms, verified 57341 ms; nordvpn → mullvad (file) 7585 ms; loss on mullvad: back 1260 ms, traffic 2434 ms, verified 57682 ms; mullvad → pia (file) 7626 ms, PIA port in 69633 ms; loss on pia: back 2197 ms, traffic 11142 ms, verified 11813 ms; memory: current_avg_MB=44 anon_avg_MB=39 peak_MB=59
+- CI on the tag's commit: ci-namespace-drills, ci-system-rig, ci-upgrade-drill (CI passed, with System rig, Upgrade drill).
+
+Evidence:
+
+- homelab-ops services/molebridge-sidecar/acceptance (mb-accept), run 2026-11-20 23:15 UTC on the owner's exits
+
 ## 0.14.2
 
 Released from `v0.14.2-rc.1` by the release automation. The acceptance policy (`tools/acceptance-policy.json`, version 22) is the one the candidate was attested against.
