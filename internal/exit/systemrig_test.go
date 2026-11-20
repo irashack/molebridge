@@ -180,6 +180,9 @@ type systemRig struct {
 
 	mu     sync.Mutex
 	served []string
+	// nordAPI, when set, answers for api.nordvpn.com (the multi-provider
+	// drill's fake NordVPN network); the name resolves to the check server.
+	nordAPI http.Handler
 	// hold, while not nil, keeps Mullvad check answers on port 443 (the
 	// exit's, never the client's probes) waiting until it is closed.
 	hold chan struct{}
@@ -356,11 +359,13 @@ func newSystemRig(t *testing.T) *systemRig {
 
 	// What reaches the internet: anything from the client by the host path
 	// (unmasqueraded, or a probe port from the exit's own address), and the
-	// client's probes by each relay.
+	// client's probes by each relay (nord0 is the multi-provider drill's
+	// fake NordVPN server, absent from the other drills).
 	counters := `table inet rig {
   counter leak {}
   counter via_relaya0 {}
   counter via_relayb0 {}
+  counter via_nord0 {}
   chain pre {
     type filter hook prerouting priority raw; policy accept;
     ip saddr 192.0.2.0/24 counter name leak
@@ -368,6 +373,7 @@ func newSystemRig(t *testing.T) *systemRig {
     iifname "exit0" tcp dport ` + rigClientPort + ` counter name leak
     iifname "relaya0" tcp dport ` + rigClientPort + ` counter name via_relaya0
     iifname "relayb0" tcp dport ` + rigClientPort + ` counter name via_relayb0
+    iifname "nord0" tcp dport ` + rigClientPort + ` counter name via_nord0
   }
 }
 `
@@ -418,6 +424,9 @@ func rigNames(t *testing.T) map[string][]int {
 		return u.Hostname()
 	}
 	names[host(providers.MullvadRelaysURL)] = []int{4, 6}
+	// The fake NordVPN network's API, IPv4 only like NordVPN's tunnel; only
+	// the multi-provider drill serves it.
+	names[host(providers.NordServersURL)] = []int{4}
 	for family, urls := range egress.EchoURLs {
 		for _, u := range urls {
 			names[host(u)] = append(names[host(u)], family)
@@ -583,6 +592,13 @@ func (r *systemRig) startServers() {
 		_, _ = w.Write(r.catalogJSON())
 	})
 	check := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.mu.Lock()
+		nord := r.nordAPI
+		r.mu.Unlock()
+		if nord != nil && req.Host == "api.nordvpn.com" {
+			nord.ServeHTTP(w, req)
+			return
+		}
 		host, _, _ := net.SplitHostPort(req.RemoteAddr)
 		src, err := netip.ParseAddr(host)
 		if err != nil {
