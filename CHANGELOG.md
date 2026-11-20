@@ -6,6 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+## 0.14.2 — unreleased
+
+**Experimental.** Upgrade from 0.14.1 by moving to the new image;
+what changed is below.
+
 - Piece 7 of the [multi-provider
   exit](docs/multi-provider.md), the panel (on in this release; see the
   entry below that removes the switch). `PANEL_EXITS` takes
