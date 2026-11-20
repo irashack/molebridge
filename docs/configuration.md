@@ -605,8 +605,8 @@ start with `molebridge panel: PANEL_NETWORK_EXITS: '<id>' is not an exit in PANE
 PIA or NordVPN, one at a time ([its design](design/multi-provider.md)). The
 settings, files and the exit's provider change are built and covered by unit
 tests and a drill against fake servers; the panel can't pick a provider yet,
-`molebridge init` doesn't offer it, and the Compose files don't pass
-`PROVIDERS`. The live pass on real accounts and the memory measurement of an
+only a drill build's `molebridge init` offers it, and the shipped Compose
+files don't pass `PROVIDERS`. The live pass on real accounts and the memory measurement of an
 exit holding NordVPN's catalog have **not run**.
 
 **Built but switched off.** This release's exit refuses to start, and
@@ -655,7 +655,9 @@ EXIT_IF=vpn                     # the one interface name; vpn by default with PR
   for `PROVIDERS`, and `check-config` prints every provider's config.
 
 To try it, an override for `compose.yaml` sets `PROVIDERS`, `PROVIDER`,
-`EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` on the `exit` service.
+`EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` on the `exit` service, or a drill
+build of [`molebridge init`](setup.md#molebridge-init) writes the Compose
+file and `.env` for it.
 
 ## The tunnel config
 

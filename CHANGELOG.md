@@ -88,6 +88,20 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   `GO_TAGS`, empty for every release) into the throwaway
   `ghcr.io/irashack/molebridge-ci` package, for live measurements of the
   multi-provider exit ([the drill image](CONTRIBUTING.md#the-drill-image)).
+- Built but switched off: piece 8 of the [multi-provider
+  exit](docs/design/multi-provider.md), `molebridge init`.
+  On a drill build its first question takes two or three of `mullvad`,
+  `pia`, `nordvpn` for a NetBird exit (`"provider": "mullvad,nordvpn"` in an
+  answers file), and it writes `PROVIDERS`, `PROVIDER` (the first),
+  `EXIT_IF=vpn` and one read-only mount per provider's
+  `tunnel/wg_confs/<provider>.conf`. It refuses such an exit with the
+  sidecar, the proxy, port-sync or a gluetun provider. This release's init
+  doesn't offer it and refuses several providers with "a multi-provider
+  exit is not available in this release yet", since the exit would refuse
+  to start. `tools/check-compose.sh` checks the 52 combinations the release
+  build writes and, with a drill binary, the 76 a drill build writes
+  ([setup](docs/setup.md#molebridge-init)). Checked by CI only; no stack
+  init wrote has been started.
 
 ## 0.14.0 — 2026-11-20
 

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/irashack/molebridge/internal/exit"
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/tools/privfile"
 	"github.com/irashack/molebridge/internal/validate"
@@ -89,6 +90,9 @@ var (
 
 // Answers are the choices, from the terminal or the answers file.
 type Answers struct {
+	// Provider is one provider, or, for a multi-provider exit, two or three
+	// native providers comma-separated ("mullvad,nordvpn"), the first being
+	// the one the tunnel starts on.
 	Provider string
 	WaysIn   []string
 	Extras   []string
@@ -99,9 +103,12 @@ type Plan struct {
 	Answers
 	Form            string
 	GluetunProvider string // gluetun's own id for a gluetun-<id> provider
-	Proxy           bool
-	Switchyard      bool
-	PortSync        bool
+	// Providers is set on a multi-provider exit only: the providers in the
+	// order given, PROVIDER the first (docs/design/multi-provider.md).
+	Providers  []string
+	Proxy      bool
+	Switchyard bool
+	PortSync   bool
 }
 
 // Refusal is an answer or combination init refuses, with a message for the
@@ -112,8 +119,9 @@ func (r Refusal) Error() string { return string(r) }
 
 func refuse(format string, a ...any) error { return Refusal(fmt.Sprintf(format, a...)) }
 
-// Help is the usage text.
-const Help = `Usage: molebridge init --out DIR [--answers FILE] [--force]
+// helpText is the usage text; multiHelp goes in it where multi-provider
+// exits are available (the drill build, until a release turns them on).
+const helpText = `Usage: molebridge init --out DIR [--answers FILE] [--force]
 
 EXPERIMENTAL. Asks for the provider, the ways in and the extras, or reads
 the same answers from FILE, and writes DIR/compose.yaml and DIR/.env (and,
@@ -124,8 +132,8 @@ release. It never overwrites a file unless --force is given.
   provider   mullvad, pia, nordvpn, or gluetun-<id> for a provider gluetun
              drives (gluetun-fastestvpn, gluetun-ivpn, gluetun-mullvad,
              gluetun-nordvpn, gluetun-surfshark, gluetun-windscribe)
-  ways in    one or more of netbird-exit, sidecar (the proxy is being
-             built and not offered yet: docs/design/menu.md)
+%s  ways in    one or more of netbird-exit, sidecar, proxy (the proxy: with
+             a native provider, on top of netbird-exit or sidecar)
   extras     none, or switchyard, port-sync (port-sync: PIA with sidecar)
 
 The answers file is JSON, at most 4096 bytes, with exactly these members
@@ -136,6 +144,24 @@ The answers file is JSON, at most 4096 bytes, with exactly these members
 
 docs/setup.md#molebridge-init says what to do with the result.
 `
+
+const multiHelp = `             or, for a multi-provider NetBird exit (experimental), two or
+             three of mullvad, pia, nordvpn, comma-separated, the first
+             being where the tunnel starts: "mullvad,nordvpn"
+`
+
+// Help is this build's usage text.
+func Help() string {
+	if exit.MultiProviderAvailable() {
+		return fmt.Sprintf(helpText, multiHelp)
+	}
+	return fmt.Sprintf(helpText, "")
+}
+
+// MultiUnavailable refuses several providers in a build whose exit refuses
+// PROVIDERS (internal/exit, multiProviderAvailable): init writes no exit
+// that would refuse to start.
+const MultiUnavailable = "a multi-provider exit is not available in this release yet; see docs/design/multi-provider.md."
 
 // gluetunIDs lists gluetun-<id> for every provider init offers through gluetun.
 func gluetunIDs() []string {
@@ -151,10 +177,23 @@ func providerChoices() string {
 	return strings.Join(providers.Native(), ", ") + ", or one of " + strings.Join(gluetunIDs(), ", ")
 }
 
+// providerPrompt is the first question. It offers several providers only
+// where multi-provider exits are available.
+func providerPrompt() string {
+	if exit.MultiProviderAvailable() {
+		return "Provider (" + providerChoices() + "; or, for a NetBird exit that switches between them, " +
+			"two or three of " + strings.Join(providers.Native(), ", ") + ", comma-separated): "
+	}
+	return "Provider (" + providerChoices() + "): "
+}
+
 // Plan checks the answers and returns the combination to write, or a
 // Refusal saying why it doesn't exist.
 func (a Answers) Plan() (Plan, error) {
 	p := Plan{Answers: a}
+	if strings.Contains(a.Provider, ",") {
+		return a.planMulti()
+	}
 	prov, ok := providers.Lookup(a.Provider)
 	if !ok {
 		if name, gluetun := strings.CutPrefix(a.Provider, "gluetun-"); gluetun {
@@ -212,6 +251,71 @@ func (a Answers) Plan() (Plan, error) {
 	}
 	return p, nil
 }
+
+// planMulti checks a multi-provider exit: two or three native providers, a
+// NetBird exit, and no sidecar, proxy or port-sync, as the exit's own
+// settings require (docs/design/multi-provider.md#settings-files-and-credentials).
+// A build whose exit refuses PROVIDERS refuses it here first.
+func (a Answers) planMulti() (Plan, error) {
+	p := Plan{Answers: a}
+	native := providers.Native()
+	names := strings.Split(a.Provider, ",")
+	for i, name := range names {
+		names[i] = strings.TrimSpace(name)
+		if names[i] == "" {
+			return p, refuse("provider %q has an empty name in it.", a.Provider)
+		}
+	}
+	if !exit.MultiProviderAvailable() {
+		return p, Refusal(MultiUnavailable)
+	}
+	seen := map[string]bool{}
+	for _, name := range names {
+		if seen[name] {
+			return p, refuse("provider %s is listed twice.", name)
+		}
+		seen[name] = true
+		if slices.Contains(native, name) {
+			continue
+		}
+		if _, ok := providers.Lookup(name); ok {
+			return p, refuse("a multi-provider exit takes only providers Molebridge drives itself (%s): "+
+				"with %s the tunnel is gluetun's, and gluetun runs one provider.", strings.Join(native, ", "), name)
+		}
+		return p, refuse("provider %q is not one Molebridge knows: a multi-provider exit takes two or three of %s.",
+			name, strings.Join(native, ", "))
+	}
+	if len(names) > 3 {
+		return p, refuse("a multi-provider exit takes two or three providers, not %d.", len(names))
+	}
+	if err := checkNames("way in", a.WaysIn, Ways); err != nil {
+		return p, err
+	}
+	if err := checkNames("extra", a.Extras, Extras); err != nil {
+		return p, err
+	}
+	if len(a.WaysIn) == 0 {
+		return p, refuse("choose at least one way in: %s.", strings.Join(Ways, ", "))
+	}
+	switch {
+	case slices.Contains(a.WaysIn, WaySidecar):
+		return p, refuse("a multi-provider exit is a NetBird exit only: the sidecar runs one provider " +
+			"(the exit refuses PROVIDERS with EXIT_KIND=sidecar). Choose netbird-exit, or one provider for the sidecar.")
+	case slices.Contains(a.WaysIn, WayProxy):
+		return p, refuse("the proxy can't run on a multi-provider exit: it serves one provider's tunnel " +
+			"and refuses to start with PROVIDERS set. Leave the proxy out, or choose one provider.")
+	case slices.Contains(a.Extras, ExtraPortSync):
+		return p, refuse("port-sync runs in the native sidecar's namespace, beside your " +
+			"qBittorrent: it needs the sidecar way in, which a multi-provider exit doesn't have.")
+	}
+	p.Providers = names
+	p.Switchyard = slices.Contains(a.Extras, ExtraSwitchyard)
+	p.Form = FormOverlay
+	return p, nil
+}
+
+// Multi reports whether the plan is a multi-provider exit.
+func (p Plan) Multi() bool { return len(p.Providers) > 1 }
 
 func checkNames(kind string, got, known []string) error {
 	seen := map[string]bool{}
@@ -327,10 +431,20 @@ type envData struct {
 	DefaultProvider string
 	PanelHosts      string
 	PanelExits      bool
+	// Start is PROVIDER: the provider, or a multi-provider exit's first.
+	Start string
+	// ProviderList is PROVIDERS, on a multi-provider exit.
+	ProviderList string
+	// PIA is set when pia is the provider or one of them.
+	PIA bool
 }
 
 func (p Plan) data() envData {
-	d := envData{Plan: p, Project: project[p.Form]}
+	d := envData{Plan: p, Project: project[p.Form], Start: p.Provider, PIA: p.Provider == "pia"}
+	if p.Multi() {
+		d.Start, d.ProviderList = p.Providers[0], strings.Join(p.Providers, ",")
+		d.PIA = slices.Contains(p.Providers, "pia")
+	}
 	switch p.Form {
 	case FormOverlay:
 		d.DefaultProvider, d.PanelHosts, d.PanelExits = "mullvad", "exit.example.net", true
@@ -361,6 +475,14 @@ func joinOrNone(list []string) string {
 // Render returns the files of a plan, by their path under --out.
 func Render(p Plan) (map[string][]byte, error) {
 	var c bytes.Buffer
+	provider, multi := p.Provider, ""
+	if p.Multi() {
+		provider = strings.Join(p.Providers, ", ") + " (a multi-provider exit)"
+		multi = `# The exit differs from it in two things: it passes PROVIDERS, and it
+# mounts one tunnel config per provider instead of the tunnel/wg_confs
+# directory (docs/configuration.md#multi-provider-exit; experimental).
+`
+	}
 	fmt.Fprintf(&c, `# Written by `+"`molebridge init`"+` (experimental, docs/setup.md#molebridge-init).
 #   provider: %s
 #   ways in:  %s
@@ -368,14 +490,14 @@ func Render(p Plan) (map[string][]byte, error) {
 # The services are those of %s in the Molebridge source
 # of the same release, with its settings and image pins; that file's
 # comments say more.
-# Your settings are in .env beside this file.
+%s# Your settings are in .env beside this file.
 #
 # Secrets live in the mode-0600 files under ./tunnel and ./secrets; never
 # print them or paste `+"`docker compose config`"+` output anywhere.
 name: %s
 
 services:
-`, p.Provider, strings.Join(p.WaysIn, ", "), joinOrNone(p.Extras), SourceFile[p.Form], project[p.Form])
+`, provider, strings.Join(p.WaysIn, ", "), joinOrNone(p.Extras), SourceFile[p.Form], multi, project[p.Form])
 	for i, svc := range p.services() {
 		block, err := Block(p.Form+"/"+svc, p)
 		if err != nil {
@@ -455,7 +577,7 @@ func Main(args []string, o Options) int {
 	force := fs.Bool("force", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			io.WriteString(o.Stdout, Help)
+			io.WriteString(o.Stdout, Help())
 			return 0
 		}
 		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
@@ -511,6 +633,13 @@ func Main(args []string, o Options) int {
 	fmt.Fprintf(o.Stdout, "Wrote %s: the services of %s with %s.\n", strings.Join(names, ", "),
 		SourceFile[p.Form], strings.Join(p.Services(), ", "))
 	fmt.Fprintln(o.Stdout, "Next: edit .env, then follow docs/setup.md#molebridge-init for the secrets and state directories.")
+	if p.Multi() {
+		confs := make([]string, len(p.Providers))
+		for i, name := range p.Providers {
+			confs[i] = "tunnel/wg_confs/" + name + ".conf"
+		}
+		fmt.Fprintf(o.Stdout, "This multi-provider exit needs a tunnel config for each provider: %s.\n", strings.Join(confs, ", "))
+	}
 	return 0
 }
 
@@ -576,16 +705,25 @@ func ask(o Options) (Answers, error) {
 		return "", refuse("no usable answer after three tries.")
 	}
 	fmt.Fprintln(o.Stdout, "molebridge init (experimental): three questions, then a compose.yaml and an .env.")
-	prov, err := question("Provider ("+providerChoices()+"): ", func(s string) error {
-		if _, ok := providers.Lookup(strings.ToLower(s)); !ok {
-			return refuse("%q is not a provider init offers.", s)
+	prov, err := question(providerPrompt(), func(s string) error {
+		list := splitList(s)
+		if len(list) == 0 {
+			return refuse("choose a provider.")
+		}
+		if len(list) > 1 && !exit.MultiProviderAvailable() {
+			return Refusal(MultiUnavailable)
+		}
+		for _, name := range list {
+			if _, ok := providers.Lookup(name); !ok {
+				return refuse("%q is not a provider init offers.", name)
+			}
 		}
 		return nil
 	})
 	if err != nil {
 		return a, err
 	}
-	a.Provider = strings.ToLower(prov)
+	a.Provider = strings.Join(splitList(prov), ",")
 	ways, err := question("Ways in, comma-separated ("+strings.Join(Ways, ", ")+"): ", func(s string) error {
 		list := splitList(s)
 		if len(list) == 0 {

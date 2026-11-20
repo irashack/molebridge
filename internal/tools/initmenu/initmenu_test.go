@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/irashack/molebridge/internal/exit"
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/routing"
 )
@@ -107,19 +108,50 @@ func allProviders() []string {
 	for _, name := range providers.GluetunProviderKeys {
 		out = append(out, "gluetun-"+name)
 	}
-	return append(out, "wireguard")
+	out = append(out, "wireguard")
+	// Multi-provider exits: every ordering of two or three native providers
+	// (the first is where the tunnel starts, so each order is its own
+	// output), and sets init must refuse.
+	native := providers.Native()
+	for _, a := range native {
+		for _, b := range native {
+			if b == a {
+				continue
+			}
+			out = append(out, a+","+b)
+			for _, c := range native {
+				if c != a && c != b {
+					out = append(out, a+","+b+","+c)
+				}
+			}
+		}
+	}
+	return append(out, "mullvad,mullvad", "mullvad,gluetun-nordvpn", "pia,wireguard",
+		"mullvad,pia,nordvpn,gluetun-ivpn", "mullvad,", ",pia")
 }
 
+// The combinations init accepts. The release build: each native provider
+// with netbird-exit or sidecar, each with or without the proxy, with or
+// without Switchyard: 24; PIA's sidecar with port-sync: 4 more; each of the
+// six gluetun providers with netbird-exit or sidecar, with or without
+// Switchyard: 24. A build with multi-provider exits (the drill tag) adds
+// each of the 12 orderings of two or three native providers with
+// netbird-exit alone, with or without Switchyard: 24.
+const (
+	releaseCombinations = 52
+	drillCombinations   = releaseCombinations + 24
+)
+
 // TestEveryCombination tries every provider and every set of ways in and
-// extras. init accepts exactly 52 combinations
-// (each native provider with netbird-exit or sidecar, each with or without
-// the proxy, with or without Switchyard: 24; PIA's sidecar with port-sync:
-// 4 more; each of the six gluetun providers with netbird-exit or sidecar,
-// with or without Switchyard: 24). tools/check-compose.sh checks the same
-// number.
+// extras, and counts what init accepts in this build. tools/check-compose.sh
+// checks the same numbers, with a release and a drill binary.
 func TestEveryCombination(t *testing.T) {
-	if got := combinations(t); got != 52 {
-		t.Fatalf("init accepts %d combinations, want 52", got)
+	want := releaseCombinations
+	if exit.MultiProviderAvailable() {
+		want = drillCombinations
+	}
+	if got := combinations(t); got != want {
+		t.Fatalf("init accepts %d combinations, want %d", got, want)
 	}
 }
 
@@ -452,6 +484,14 @@ func TestGolden(t *testing.T) {
 		"gluetun-nordvpn-netbird-yard": {"gluetun-nordvpn", []string{WayNetBird}, []string{ExtraSwitchyard}},
 		"gluetun-ivpn-sidecar":         {"gluetun-ivpn", []string{WaySidecar}, nil},
 	} {
+		golden(t, name, a)
+	}
+}
+
+// golden compares one combination's output with its files in testdata/.
+func golden(t *testing.T, name string, a Answers) {
+	t.Helper()
+	{
 		p, err := a.Plan()
 		if err != nil {
 			t.Fatal(err)
