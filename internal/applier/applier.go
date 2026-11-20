@@ -323,7 +323,11 @@ func (a *Applier) backend() string { return a.backendName }
 func (a *Applier) nativeSidecar() bool { return a.kind() == "sidecar" && a.backend() == "native" }
 
 func (a *Applier) exitConfig() verdict.ExitConfig {
-	return verdict.ExitConfig{Provider: a.hooks.ID(), Kind: a.kind()}
+	cfg := verdict.ExitConfig{Provider: a.hooks.ID(), Kind: a.kind()}
+	if a.multiProvider() {
+		cfg.Providers = append([]string(nil), a.set.ids...)
+	}
+	return cfg
 }
 
 // ConfiguredServer is the SERVER setting as the applier holds it.
@@ -660,8 +664,15 @@ func (a *Applier) selectionRecord() validate.Obj {
 		if a.request != nil {
 			target = a.request.Server
 		}
-		return validate.Members("source", "panel", "outcome", "rejected", "attempt", 0, "target", target,
-			"next_action", nil, "next_action_at", nil)
+		selection := validate.Members("source", "panel", "outcome", "rejected", "attempt", 0, "target", target)
+		if a.multiProvider() {
+			var provider any
+			if a.request != nil {
+				provider = orNull(a.request.Provider)
+			}
+			selection = append(selection, validate.Pair{Key: "target_provider", Value: provider})
+		}
+		return append(selection, validate.Members("next_action", nil, "next_action_at", nil)...)
 	}
 	source := at.Source
 	if source == "" {
@@ -675,8 +686,21 @@ func (a *Applier) selectionRecord() validate.Obj {
 	if at.NextAction != "" {
 		nextAt = a.wallOf(at.NextActionAt)
 	}
-	return validate.Members("source", source, "outcome", orNull(at.Outcome), "attempt", at.Attempts,
-		"target", orNull(at.Target), "next_action", orNull(at.NextAction), "next_action_at", nextAt)
+	selection := validate.Members("source", source, "outcome", orNull(at.Outcome), "attempt", at.Attempts,
+		"target", orNull(at.Target))
+	if a.multiProvider() {
+		// The target's provider, beside the target: an attempt without one
+		// is the active provider's.
+		var provider any
+		if at.Target != "" {
+			provider = at.Provider
+			if at.Provider == "" {
+				provider = a.set.active
+			}
+		}
+		selection = append(selection, validate.Pair{Key: "target_provider", Value: provider})
+	}
+	return append(selection, validate.Members("next_action", orNull(at.NextAction), "next_action_at", nextAt)...)
 }
 
 // publishRecord builds a status record and hands it to the supervisor.
@@ -684,17 +708,32 @@ func (a *Applier) publishRecord(status, message, server string, checks, fields v
 	if len(checks) == 0 {
 		checks = a.blankChecks()
 	}
-	var requested, requestID any
+	var requested, requestedProvider, requestID any
 	if a.request != nil {
 		// The request's own id, never prefixed with its provider.
 		requested, requestID = a.request.Server, state.RequestToken(*a.request)
+		requestedProvider = orNull(a.request.Provider)
 	}
 	members := validate.Members("schema", verdict.Schema, "kind", a.kind(), "backend", a.backend(),
-		"provider", a.hooks.ID(), "status", status, "message", orNull(message), "checked_at", a.nowISO(),
-		"server", orNull(server), "requested_server", requested,
+		"provider", a.hooks.ID())
+	if a.multiProvider() {
+		// A multi-provider exit's members (docs/design/multi-provider.md),
+		// on its records only: a single-provider record is as it was.
+		ids := make([]any, len(a.set.ids))
+		for i, id := range a.set.ids {
+			ids[i] = id
+		}
+		members = append(members, validate.Pair{Key: "providers", Value: ids})
+	}
+	members = append(members, validate.Members("status", status, "message", orNull(message), "checked_at", a.nowISO(),
+		"server", orNull(server), "requested_server", requested)...)
+	if a.multiProvider() {
+		members = append(members, validate.Pair{Key: "requested_provider", Value: requestedProvider})
+	}
+	members = append(members, validate.Members(
 		"configured_server", orNull(truncateChars(a.configuredServer, ServerReportChars)),
 		"request_id", requestID, "selection", a.selectionRecord(), "checks", checks,
-		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)
+		"egress_ip", nil, "egress_ips", validate.Obj{}, "egress_city", nil, "egress_country", nil)...)
 	if moved := a.movedRecord(); moved != nil {
 		// The requested server left the provider's catalogue and the exit
 		// runs another in the same city: readers accept that server for the

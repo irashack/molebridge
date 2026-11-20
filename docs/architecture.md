@@ -2071,6 +2071,24 @@ at that moment, then the restore target.
   `restore`, `reconverge`, `retry` or `operator-retry` record; an observed
   `seed` can be connected with no selection made.
 
+**A multi-provider exit** ([being built](design/multi-provider.md); no
+setting reaches it yet) keeps schema 2. Its records add `providers` (the
+exit's `PROVIDERS`, in order) after `provider`, `requested_provider` after
+`requested_server`, and `selection.target_provider` after
+`selection.target`; `provider` is the provider of the tunnel in place and
+every check is judged against that provider's registry entry, and
+`configured_server` is `<provider>/<server>` when `SERVER` is set. A
+reader configured for such an exit requires `providers` to be its own list
+and `provider` one of them (otherwise "provider mismatch"), then the
+target's provider before its server: `not-configured-provider` against
+`SERVER`, `not-requested-provider` against the panel's request (whose
+provider `requested_provider` must acknowledge), `not-target-server`
+against any other target. A single-provider reader calls a record with
+`providers` a provider mismatch. A reader from before multi-provider exits
+sees another provider (a provider mismatch) or a true record of its own
+provider, as `internal/verdict/multiprovider_test.go` checks with a copy of
+the earlier rules.
+
 ### Egress tiers
 
 Egress is confirmed at one of two tiers, recorded as `checks.egress.tier`:

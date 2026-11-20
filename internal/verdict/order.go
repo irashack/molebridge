@@ -8,12 +8,14 @@ import (
 
 // Member order of a record (the Python dict's) and of the checks, so the
 // published file reads like the Python applier's did. Members not listed
-// follow in sorted order.
+// follow in sorted order. A multi-provider exit's members (providers,
+// requested_provider, selection.target_provider) are listed where its
+// records put them; no single-provider record has them.
 var (
-	recordOrder = []string{"schema", "kind", "backend", "provider", "status", "message", "checked_at", "server",
-		"requested_server", "configured_server", "request_id", "selection", "checks", "egress_ip", "egress_ips",
+	recordOrder = []string{"schema", "kind", "backend", "provider", "providers", "status", "message", "checked_at", "server",
+		"requested_server", "requested_provider", "configured_server", "request_id", "selection", "checks", "egress_ip", "egress_ips",
 		"egress_city", "egress_country"}
-	selectionOrder = []string{"source", "outcome", "attempt", "target", "next_action", "next_action_at"}
+	selectionOrder = []string{"source", "outcome", "attempt", "target", "target_provider", "next_action", "next_action_at"}
 	checkOrder     = []string{"state", "at", "server", "tier", "expected_families", "families", "reason", "age_s", "fallback", "from", "by", "expires_at"}
 )
 

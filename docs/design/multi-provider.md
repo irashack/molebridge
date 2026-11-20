@@ -2,9 +2,10 @@
 
 Status: **being built** (2026-11-19). Piece 1, [whole-tunnel
 replacement](#whole-tunnel-replacement), piece 2, [the provider
-set](#the-provider-set), and the applier's side of piece 3, [the
-target](#the-target), and piece 4, [leaving a
-provider](#leaving-a-provider), are built; no setting reaches a multi-provider exit
+set](#the-provider-set), the applier's side of piece 3, [the
+target](#the-target), piece 4, [leaving a
+provider](#leaving-a-provider), and piece 5, [the status record and the
+verdict](#the-status-record-and-the-verdict), are built; no setting reaches a multi-provider exit
 yet (that is piece 6). This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
@@ -273,7 +274,7 @@ implements it outside the tests yet: the per-provider configs, the
 previous provider's tunnel as it was; a failure after it leaves the target
 provider active, and the retry, once the exit's recovery has brought up
 that provider's config, is a switch on it through its `ApplyRelay`. PIA's
-`Leave` is piece 4's ([below](#leaving-a-provider)). The status record names no provider yet (piece 5).
+`Leave` is piece 4's ([below](#leaving-a-provider)). The status record names the providers since piece 5 ([below](#the-status-record-and-the-verdict)).
 Tested with a fake kernel and a fake `ProviderTunnels`: every change
 between Mullvad, NordVPN and PIA, failures before and
 after `SetActive`, interrupted changes resumed after a restart, rejections
@@ -438,6 +439,36 @@ list and its `provider` to be in it; anything else is "provider mismatch".
 `verdict.Target` gains `Provider`; a record whose `provider` isn't the
 target's disagrees with the new reason code `not-requested-provider` (or
 `not-configured-provider`).
+
+**As built (piece 5).** `verdict.ExitConfig.Providers` (checked by
+`verdict.NewMultiExitConfig`: an overlay exit, two or three distinct native
+providers, `Provider` among them) and `verdict.Target.Provider`. A
+multi-provider reader judges a record as its `provider`'s once its
+`providers` equal the reader's; the target's provider is judged before its
+server, with `not-configured-provider`, `not-requested-provider` (the
+record's `requested_provider` must be the request's too) and, for any other
+target, `not-target-server`; with no target of the reader's own, a
+`restore`, `reconverge`, `retry`, `operator-retry` or `failover` record's
+`selection.target_provider` must be its `provider`. A lock that doesn't
+split into one of the exit's providers and a server valid for it is
+`not-configured-server`. `verdict.TargetFor(exit, result, desired)` is the
+reader's target for any exit: a multi-provider exit's lock split, its
+request read by `state.DesiredRequestFor`, a three-member one as the
+record's provider's. One departure: a single-provider reader built now
+calls any record with a `providers` member "provider mismatch" (it isn't
+configured for the exit), rather than judging it as its own provider's;
+only readers from before piece 5 do that, as below. The applier writes the
+members on a multi-provider exit only (its `exitConfig` and its own target
+carry the providers too), so a single-provider record is unchanged. Nothing
+reads `PROVIDERS` yet: the doctor and the exit's settings come with piece
+6, the panel's `+` exits with piece 7. Tested by golden records
+(`internal/verdict/testdata/multiprovider_golden.json`, judged by
+`multiprovider_test.go`) for a multi-provider reader, a single-provider
+reader built now, and, with a copy of the rules from before piece 5, an old
+reader of each provider, which must get either "provider mismatch" or the
+verdict a single-provider record with the same evidence gets; and by the
+applier's records after every change between the three providers
+(`internal/applier/record_multi_test.go`).
 
 ### Old readers
 

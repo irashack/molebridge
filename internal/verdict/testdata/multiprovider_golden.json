@@ -1,0 +1,1987 @@
+{
+ "providers": [
+  "mullvad",
+  "pia",
+  "nordvpn"
+ ],
+ "cases": [
+  {
+   "name": "healthy on mullvad, the panel's request for mullvad",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "se-sto-wg-001",
+    "requested_provider": "mullvad",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-sto-wg-001",
+     "target_provider": "mullvad",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "mullvad",
+    "server": "se-sto-wg-001",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "healthy on pia, the panel's request for pia",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us_chicago",
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "healthy on nordvpn, the panel's request for nordvpn",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "nordvpn",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us9001.nordvpn.com",
+    "requested_server": "us9001.nordvpn.com",
+    "requested_provider": "nordvpn",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us9001.nordvpn.com",
+     "target_provider": "nordvpn",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "nordvpn",
+    "server": "us9001.nordvpn.com",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    }
+   }
+  },
+  {
+   "name": "an old panel's three-member request, read as the active provider's",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "se-sto-wg-001",
+    "requested_provider": "mullvad",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-sto-wg-001",
+     "target_provider": "mullvad",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "server": "se-sto-wg-001",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "changing from Mullvad to PIA, before Replace",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "applying",
+    "message": "Changing the exit's provider to PIA.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": null,
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "applying",
+     "label": "switching",
+     "reasons": [
+      "applying"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "changing from Mullvad to PIA, after Replace",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "applying",
+    "message": "Verifying the new server.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": null,
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": null,
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "fail",
+      "at": "2026-10-11T11:59:55Z",
+      "server": null,
+      "reason": "no-peer"
+     },
+     "handshake": {
+      "state": "unknown"
+     },
+     "egress": {
+      "state": "unknown"
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": null,
+    "egress_ips": {},
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "applying",
+    "label": "switching",
+    "reasons": [
+     "applying"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "applying",
+     "label": "switching",
+     "reasons": [
+      "applying"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "a change to NordVPN failed after it became active: no tunnel",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "nordvpn",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "failed",
+    "message": "Tunnel inspection or egress check failed.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": null,
+    "requested_server": "us9001.nordvpn.com",
+    "requested_provider": "nordvpn",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "mutation-failed",
+     "attempt": 1,
+     "target": "us9001.nordvpn.com",
+     "target_provider": "nordvpn",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "fail",
+      "at": "2026-10-11T11:59:55Z",
+      "server": null,
+      "reason": "no-peer"
+     },
+     "handshake": {
+      "state": "unknown"
+     },
+     "egress": {
+      "state": "unknown"
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": null,
+    "egress_ips": {},
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "nordvpn",
+    "server": "us9001.nordvpn.com",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "peer-failed",
+     "rejected"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "failed",
+     "label": "failed",
+     "reasons": [
+      "peer-failed",
+      "rejected"
+     ]
+    }
+   }
+  },
+  {
+   "name": "a change to PIA refused before it became active: Mullvad's tunnel in place",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "failed",
+    "message": "PIA refused the registration.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "mutation-failed",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "fail",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "reason": "not-target"
+     },
+     "handshake": {
+      "state": "unknown"
+     },
+     "egress": {
+      "state": "unknown"
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": null,
+    "egress_ips": {},
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "peer-failed",
+     "rejected"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "failed",
+     "label": "failed",
+     "reasons": [
+      "peer-failed",
+      "rejected"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "healthy on Mullvad, the request acknowledged for PIA",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-provider"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "healthy on PIA, the request acknowledged for NordVPN",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us_chicago",
+    "requested_server": "us9001.nordvpn.com",
+    "requested_provider": "nordvpn",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us9001.nordvpn.com",
+     "target_provider": "nordvpn",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {
+    "provider": "nordvpn",
+    "server": "us9001.nordvpn.com",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-requested-provider"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "SERVER=pia/us_chicago, on PIA",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us_chicago",
+    "requested_server": null,
+    "requested_provider": null,
+    "configured_server": "pia/us_chicago",
+    "request_id": null,
+    "selection": {
+     "source": "configured",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {},
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "failed",
+     "label": "verification failed",
+     "reasons": [
+      "not-configured-server"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "SERVER=pia/us_chicago, still on Mullvad",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": null,
+    "requested_provider": null,
+    "configured_server": "pia/us_chicago",
+    "request_id": null,
+    "selection": {
+     "source": "configured",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {},
+   "want": {
+    "state": "failed",
+    "label": "verification failed",
+    "reasons": [
+     "not-configured-provider"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "failed",
+     "label": "verification failed",
+     "reasons": [
+      "not-configured-server"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "restored after a restart on the last active provider, no request",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us_chicago",
+    "requested_server": null,
+    "requested_provider": null,
+    "configured_server": null,
+    "request_id": null,
+    "selection": {
+     "source": "restore",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {},
+   "want": {
+    "state": "ok",
+    "label": "connected",
+    "reasons": []
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "another exit's providers",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "mullvad",
+    "providers": [
+     "mullvad",
+     "pia"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "se-sto-wg-001",
+    "requested_server": "se-sto-wg-001",
+    "requested_provider": "mullvad",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "se-sto-wg-001",
+     "target_provider": "mullvad",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "se-sto-wg-001",
+      "tier": "provider",
+      "expected_families": [
+       "4",
+       "6"
+      ],
+      "families": {
+       "4": "pass",
+       "6": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7",
+     "6": "2001:db8::7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "mullvad",
+    "server": "se-sto-wg-001",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "unknown",
+    "label": "provider mismatch",
+    "reasons": [
+     "provider-mismatch"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "a provider outside its own providers",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "nordvpn",
+    "providers": [
+     "mullvad",
+     "pia"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us9001.nordvpn.com",
+    "requested_server": "us9001.nordvpn.com",
+    "requested_provider": "nordvpn",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us9001.nordvpn.com",
+     "target_provider": "nordvpn",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us9001.nordvpn.com",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null
+   },
+   "desired": {
+    "provider": "nordvpn",
+    "server": "us9001.nordvpn.com",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "unknown",
+    "label": "provider mismatch",
+    "reasons": [
+     "provider-mismatch"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "nordvpn": {
+     "state": "ok",
+     "label": "connected",
+     "reasons": []
+    }
+   }
+  },
+  {
+   "name": "stale, on PIA",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "ok",
+    "message": "Healthy.",
+    "checked_at": "2026-10-11T11:55:00Z",
+    "server": "us_chicago",
+    "requested_server": "us_chicago",
+    "requested_provider": "pia",
+    "configured_server": null,
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "selection": {
+     "source": "panel",
+     "outcome": "verified",
+     "attempt": 1,
+     "target": "us_chicago",
+     "target_provider": "pia",
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:55:00Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {
+    "provider": "pia",
+    "server": "us_chicago",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "unknown",
+    "label": "status stale",
+    "reasons": [
+     "status-stale"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "unknown",
+     "label": "status stale",
+     "reasons": [
+      "status-stale"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  },
+  {
+   "name": "an old NordVPN panel's request while PIA is active: invalid for PIA, rejected",
+   "record": {
+    "schema": 2,
+    "kind": "overlay",
+    "backend": "native",
+    "provider": "pia",
+    "providers": [
+     "mullvad",
+     "pia",
+     "nordvpn"
+    ],
+    "status": "failed",
+    "message": "Invalid desired-state file; no change applied.",
+    "checked_at": "2026-10-11T11:59:55Z",
+    "server": "us_chicago",
+    "requested_server": null,
+    "requested_provider": null,
+    "configured_server": null,
+    "request_id": null,
+    "selection": {
+     "source": "panel",
+     "outcome": "rejected",
+     "attempt": 0,
+     "target": null,
+     "target_provider": null,
+     "next_action": null,
+     "next_action_at": null
+    },
+    "checks": {
+     "routing": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "fallback": true
+     },
+     "netbird": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "owner_record": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z"
+     },
+     "peer": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago"
+     },
+     "handshake": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "age_s": 12
+     },
+     "egress": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "server": "us_chicago",
+      "tier": "provider",
+      "expected_families": [
+       "4"
+      ],
+      "families": {
+       "4": "pass"
+      }
+     },
+     "traffic_protection": {
+      "state": "pass",
+      "at": "2026-10-11T11:59:55Z",
+      "from": "routing"
+     },
+     "app_attachment": {
+      "state": "n/a"
+     }
+    },
+    "egress_ip": "203.0.113.7",
+    "egress_ips": {
+     "4": "203.0.113.7"
+    },
+    "egress_city": null,
+    "egress_country": null,
+    "port_forward": false,
+    "forwarded_port": null,
+    "port_forward_error": null
+   },
+   "desired": {
+    "server": "us9001.nordvpn.com",
+    "requested_at": "2026-10-11T11:59:50Z",
+    "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "want": {
+    "state": "failed",
+    "label": "failed",
+    "reasons": [
+     "rejected"
+    ]
+   },
+   "old": {
+    "mullvad": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    },
+    "pia": {
+     "state": "failed",
+     "label": "failed",
+     "reasons": [
+      "rejected"
+     ]
+    },
+    "nordvpn": {
+     "state": "unknown",
+     "label": "provider mismatch",
+     "reasons": [
+      "provider-mismatch"
+     ]
+    }
+   }
+  }
+ ]
+}

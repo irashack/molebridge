@@ -39,6 +39,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   retried, so a forwarded port never points into another provider's tunnel.
   Tested with fakes and a namespace drill (CI); still behind no setting.
 
+- Internal, no user-visible change: piece 5 of the [multi-provider
+  exit](docs/design/multi-provider.md), the status record and the verdict.
+  The record stays schema 2; a multi-provider exit's adds `providers`,
+  `requested_provider` and `selection.target_provider`. A reader configured
+  for such an exit (`verdict.ExitConfig.Providers`) requires its own
+  providers and judges the target's provider, with the new reason codes
+  `not-requested-provider` and `not-configured-provider`. A single-provider
+  reader calls such a record a provider mismatch, and golden records check
+  that a reader from before this change sees either a provider mismatch or
+  a true record of its own provider. Single-provider records are unchanged.
+
 ## 0.14.0 — unreleased
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;

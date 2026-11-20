@@ -108,7 +108,10 @@ The reason codes in `status` and in `/api/status` come from the
 `host-address-not-measurable`, `<check>-failed`, `<check>-expired`,
 `<check>-unmeasured`, `rejected`, `status-failed`, `status-unknown`, and for a
 connection on the wrong server `not-configured-server`, `not-requested-server`
-or `not-target-server`. A connected exit may carry `no-selection`: nothing has
+or `not-target-server` (and, on a [multi-provider
+exit](design/multi-provider.md), being
+built, `not-configured-provider` or `not-requested-provider` for one on the
+wrong provider). A connected exit may carry `no-selection`: nothing has
 been selected yet, or `server-moved`: its server stands in for one the
 provider retired ([a server the provider retires](architecture.md#a-server-the-provider-retires)),
 or `failover`: it is connected to a backup ([automatic
