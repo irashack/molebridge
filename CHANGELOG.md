@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.14.1 — unreleased
+
+**Experimental.** Upgrade from 0.14.0 by moving to the new image;
+what changed is below.
 
 - Changes ship as patch releases (0.14.1, 0.14.2, ...): the release
   automation no longer moves the middle number. A person prepares a minor
