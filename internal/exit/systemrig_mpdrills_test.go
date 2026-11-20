@@ -180,7 +180,7 @@ func TestSystemRigMultiProviderInterruptedReplace(t *testing.T) {
 		if r.linkExists(r.exit, "vpn") {
 			t.Errorf("%s -> %s held: a tunnel link exists between the links", step.from, step.to)
 		}
-		pid := r.pid("molebridge-drill", "exit", "--worker")
+		pid := r.workerPid()
 		if pid == 0 {
 			t.Fatal("no worker process")
 		}
@@ -233,7 +233,9 @@ func TestSystemRigMultiProviderPIAForwardLeft(t *testing.T) {
 	A, B, P := mullvadExit(r.relays[0]), mullvadExit(r.relays[1]), piaExit()
 	forwarded := func(what string) {
 		t.Helper()
-		r.waitFor(120*time.Second, what, func() bool {
+		// Port forwarding starts on a pass after the verdict is ok, and the
+		// record that shows it comes with the next full check, a minute on.
+		r.waitFor(240*time.Second, what, func() bool {
 			if !p.running() {
 				t.Fatalf("the exit stopped (%d):\n%s", p.code, p.out.String())
 			}
