@@ -406,8 +406,9 @@ type Images struct {
 var (
 	releaseTagRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
 	digestRE     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	// molebridgePinRE matches a pin of either Molebridge image.
-	molebridgePinRE = regexp.MustCompile(`ghcr\.io/irashack/molebridge(-core)?:([A-Za-z0-9._-]+)@sha256:[0-9a-f]{64}`)
+	// molebridgePinRE matches a Compose image line that pins either
+	// Molebridge image; group 1 is everything before the reference.
+	molebridgePinRE = regexp.MustCompile(`(?m)^(\s+image: )ghcr\.io/irashack/molebridge(-core)?:([A-Za-z0-9._-]+)@sha256:[0-9a-f]{64}$`)
 )
 
 // checkImage returns the tag of ref, which must be exactly
@@ -473,7 +474,7 @@ func ParseImages(whatImage string, image *string, whatCore string, core *string)
 func PinnedTag() string {
 	raw, _ := templateFS.ReadFile("compose.tmpl")
 	if m := molebridgePinRE.FindSubmatch(raw); m != nil {
-		return string(m[2])
+		return string(m[3])
 	}
 	return ""
 }
@@ -668,11 +669,12 @@ services:
 	}
 	compose := c.Bytes()
 	if p.Images.Tag != "" {
-		compose = molebridgePinRE.ReplaceAllFunc(compose, func(pin []byte) []byte {
-			if bytes.HasPrefix(pin, []byte(CoreRepo+":")) {
-				return []byte(p.Images.Core)
+		compose = molebridgePinRE.ReplaceAllFunc(compose, func(line []byte) []byte {
+			m := molebridgePinRE.FindSubmatch(line)
+			if len(m[2]) > 0 {
+				return append(append([]byte{}, m[1]...), p.Images.Core...)
 			}
-			return []byte(p.Images.Molebridge)
+			return append(append([]byte{}, m[1]...), p.Images.Molebridge...)
 		})
 	}
 	var e bytes.Buffer
