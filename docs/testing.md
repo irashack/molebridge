@@ -4,6 +4,29 @@ This page records tests on real hosts and the gaps that remain. Unit tests
 and isolated Linux namespace drills in CI do not establish that a whole
 NetBird deployment works with any provider or backend.
 
+It is a record, newest release first: each release's section says which
+candidate was accepted, what its live acceptance ran on which exits, and what
+was **not tested**. The procedures themselves are in
+[verification](verification.md); what CI runs (the namespace drills and the
+system rig, against fakes) is in [CONTRIBUTING](../CONTRIBUTING.md#checks).
+
+To find what has run for one part, read the newest release sections first:
+
+- **The NetBird exit node**, native (Mullvad, PIA, NordVPN) and with gluetun:
+  every release's acceptance, as the upgrade, `tunnel-loss` and repair lines.
+- **The sidecars**: the gluetun sidecar's lines in each release's acceptance
+  (rootless Podman with Quadlet, and Kubernetes); the native sidecar from
+  [0.9.0](#090) on.
+- **The proxy** (experimental): its acceptance drill is `proxy-live`, on a
+  native Mullvad exit; Mullvad's relay proxies used directly were tested at
+  0.9.4 ([Mullvad's SOCKS5 proxies through an exit](#mullvads-socks5-proxies-through-an-exit)).
+- **The network exchange** (experimental): first live at
+  [v0.10.0-rc.2](#v0100-rc2-2026-11-03-released), then as
+  `network-exchange-smoke` in each acceptance.
+- **Automatic failover** and **the multi-provider exit** (experimental): no
+  live run yet; CI's system rig drills them against fake servers
+  ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)).
+
 Published hashes below map to identical trees from before the metadata-only
 history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
 `afa8594` → `4739352`; their quoted CI runs used the old hashes. The panel
@@ -919,7 +942,7 @@ it. Attested by acceptance run 39876247409.
 ### Mullvad's SOCKS5 proxies through an exit
 
 On 2026-11-02, a read-only check of whether a device on a native Mullvad exit
-can use [Mullvad's SOCKS5 proxies](mullvad-socks5.md), with no change to
+can use [Mullvad's SOCKS5 proxies](proxy.md), with no change to
 Molebridge. The exit was a native overlay exit at v0.9.4
 (`ghcr.io/irashack/molebridge@sha256:dd5405664563cf9192cea72fed803953384d955a4e76a63a36e623cb46ea0835`)
 on Kubernetes. The client was a throwaway Linux peer in its own network

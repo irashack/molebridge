@@ -29,7 +29,8 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
 - `cmd/molebridge/`: the one binary. The first argument is the role (`exit`,
   `panel`, `health`, `status`, `check-config`, `prepare-config`, `nordvpn-key`,
   `gluetun-auth`, `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`,
-  `port-sync`, `exchange`, `init`, `version`); each has a `role_*.go` file.
+  `port-sync`, `proxy`, `exchange`, `init`, `version`); each is in a
+  `role_*.go` file (the gluetun tools share `role_gluetun.go`).
 - `internal/exit/`: the exit container's process: the supervisor, the worker, the
   lease, the NetBird child, status publication and the stop sequence.
 - `internal/contract/`: the routing contract: expected rules and routes, the diff and
@@ -47,8 +48,11 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   reader, `internal/providers/` is the provider registry and the catalog parsers,
   `internal/egress/` the tunnel-tier checks, `internal/countries/` country names to codes.
 - `internal/proxy/` is the core of the proxy way in (SOCKS5 and HTTP `CONNECT`,
-  sessions, the tunnel gate and `proxy.json`), which no role uses yet
-  ([design](docs/design/menu.md)).
+  sessions, the tunnel gate and `proxy.json`), which the `proxy` role runs over
+  `internal/relayproxy/` (Mullvad's relay proxies as a catalogue, choosing and
+  benching; the exit's current server for PIA and NordVPN) and
+  `internal/tunneldial/` (connections and DNS bound to the tunnel interface)
+  ([architecture](docs/architecture.md#the-proxy)).
 - `internal/nbprofile/` checks NetBird's settings and stored profile and holds the
   `fix-blacklist` repair; `internal/tunnelconf/` validates the tunnel config;
   `internal/gluetunauth/` is gluetun's role file and API key.
@@ -62,9 +66,11 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   strict I/O, validation, HTTP client and boot clock.
 - `internal/failover/` is the automatic failover policy, pure rules with no I/O
   ([design](docs/design/failover.md)).
-- `internal/tunneldial/` (connections and DNS bound to the tunnel interface) and
-  `internal/relayproxy/` (Mullvad's relay proxies as a catalogue, choosing and benching)
-  are pieces of the proxy being built ([design](docs/design/menu.md)); no role uses them yet.
+- `internal/exchange/` is the network exchange's file contract between an exit
+  and its panel, used by the exit's `--exchange` child and the `exchange` role.
+  `internal/portsync/` is the `port-sync` role's work. `internal/buildgate/`
+  holds the switches a build turns on or off (the `drill` tag turns on the
+  multi-provider exit).
 - `internal/drill/` and `internal/nstest/` are the namespace drills (below).
 - `routing/gluetun-preflight` is the one runtime shell script: it runs inside gluetun's
   container. `routing/embed.go` embeds it in the binary for the `gluetun-preflight` tool. `tools/` holds the release and image scripts (`make-bundle.sh`,
@@ -204,7 +210,7 @@ is restarted (the native exit reads the list at start and every six hours), so i
 with `moved` (`left-catalogue`), the log line, `location.json` and the panel's `server-moved` note;
 with A listed again and another restart it returns to A. The gluetun form's move, where gluetun's
 `servers.json` changes and gluetun itself reconnects, is not on the rig. `TestSystemRigProxy` runs
-the [proxy's](docs/design/menu.md) drill: `molebridge proxy` in the exit's namespace as
+the [proxy's](docs/proxy.md) drill: `molebridge proxy` in the exit's namespace as
 uid 65532 with no capabilities and the applier directory read-only, as its Compose service runs it,
 with the fake Mullvad network grown by a namespace of relay proxies (a SOCKS5 server at a
 `10.124.0.0/16` address for each relay of a five-relay catalogue across two countries and three
