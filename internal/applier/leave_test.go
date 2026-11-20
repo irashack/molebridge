@@ -105,7 +105,7 @@ func TestAForwardThatCannotBeRemovedRefusesTheChange(t *testing.T) {
 			break
 		}
 	}
-	if m.a.Providers().Active() != "mullvad" || m.k.lastNFT() != "remove-forward" {
-		t.Fatalf("active %s, %v", m.a.Providers().Active(), m.k.nftOps)
+	if m.a.Providers().Active() != "mullvad" || m.k.lastNFT() != "remove-forward" || status(r) != "ok" {
+		t.Fatalf("active %s, %s: %s, %v", m.a.Providers().Active(), status(r), message(r), m.k.nftOps)
 	}
 }
