@@ -185,14 +185,16 @@ jobs:
       - name: System rig drills
         # The release build of molebridge, the exit and the panel, against
         # fake Mullvad servers and two WireGuard relays in network namespaces
-        # of the runner, a disposable VM (CONTRIBUTING.md, "The system rig").
-        # Every drill has a rig of its own and they run at once; the failover
-        # drills, which wait out a stale handshake and the reapply guard
-        # several times, are the longest (about 15 minutes).
+        # of the runner, a disposable VM (CONTRIBUTING.md, "The system rig");
+        # the failover and multi-provider drills run the drill build, beside
+        # fake NordVPN and PIA servers for the latter. Every drill has a rig
+        # of its own and they run at once; the failover drills, which wait
+        # out a stale handshake and the reapply guard several times, are the
+        # longest (about 10 minutes).
         run: |
           sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
           sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
-            go test -count=1 -v -timeout 25m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+            go test -count=1 -v -timeout 25m -parallel 16 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 
   image:
     name: Image (amd64 and arm64)

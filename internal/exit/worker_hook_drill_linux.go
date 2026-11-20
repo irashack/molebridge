@@ -3,6 +3,7 @@
 package exit
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime/pprof"
@@ -42,4 +43,29 @@ func (w *worker) drillHooks() {
 			}
 		}
 	}()
+}
+
+// drillBetweenLinks holds a tunnel replacement between its links on
+// request: while the file <run dir>/hold-replace exists, Replace waits
+// after deleting the old link and before creating the new one, until the
+// file goes or the operation's deadline passes. The system rig kills the
+// worker there (TestSystemRigMultiProviderInterruptedReplace).
+func (w *worker) drillBetweenLinks() func(context.Context) {
+	path := filepath.Join(w.s.RunDir, "hold-replace")
+	return func(ctx context.Context) {
+		if _, err := os.Stat(path); err != nil {
+			return
+		}
+		w.logf("drill hook: holding the tunnel replacement between its links")
+		for {
+			if _, err := os.Stat(path); err != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}
 }

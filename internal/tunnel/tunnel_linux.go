@@ -43,6 +43,11 @@ type Options struct {
 	// NetNS is a file descriptor of the network namespace to operate in; zero
 	// is the calling thread's namespace.
 	NetNS int
+	// BetweenLinks, when set, runs in Replace after the old link is gone and
+	// before the new one is created. Only the drill build's worker sets it,
+	// to hold a replacement at its emptiest moment for the system rig
+	// (internal/exit/worker_hook_drill_linux.go); it is nil in production.
+	BetweenLinks func(context.Context)
 }
 
 // routeAPI is the part of *rtnl.Conn the Manager uses.
@@ -491,7 +496,12 @@ func (m *Manager) Replace(ctx context.Context, owner *mutator.Mutator, from, to 
 	return owner.ReplaceTunnel(ctx, mutator.TunnelChange{
 		ReturnPath: rp, LeaveReturnPath: leave, Old: old,
 		RemoveLink: func(tx *mutator.Tx) error { return m.removeLink(tx.Context(), exit) },
-		CreateLink: func(tx *mutator.Tx) error { return m.UpContext(tx.Context(), to) },
+		CreateLink: func(tx *mutator.Tx) error {
+			if m.opts.BetweenLinks != nil {
+				m.opts.BetweenLinks(tx.Context())
+			}
+			return m.UpContext(tx.Context(), to)
+		},
 	})
 }
 

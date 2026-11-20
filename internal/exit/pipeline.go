@@ -107,6 +107,7 @@ func newPipeline(e pipelineEnv) (Pipeline, error) {
 		Gatus: applier.Gatus{URL: s.Env["GATUS_URL"], Token: s.Env["GATUS_TOKEN"], Endpoint: orDefault(s.Env["GATUS_ENDPOINT"], "molebridge")},
 	}
 	drillFailover(s.Env, &cfg)
+	drillProviders(s.Env, e.Log, append([]applier.Provider{prov}, set...)...)
 	a, err := applier.New(cfg)
 	if err != nil {
 		return nil, err
