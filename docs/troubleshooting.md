@@ -20,6 +20,38 @@ Don't paste raw diagnostics into issues. They contain addresses, peer names
 and sometimes keys. Never share the output of `wg showconf` or `wg show ...
 dump`.
 
+Find the symptom by where it shows:
+
+| Symptom | Section |
+|---|---|
+| The exit stops at start, or never gets healthy | [Startup](#startup), then [why the exit stopped itself](#why-the-exit-stopped-itself) |
+| NetBird isn't started, or the profile is refused | [NetBird's settings and profile](#netbirds-settings-and-profile) |
+| The panel stops at start, or answers 421, 403 or 500 | [The panel](#the-panel) |
+| A state or label in the panel you don't expect | [The panel](#the-panel) and [switching](#switching) |
+| Sign-in fails or loops | [Sign-in](#sign-in) |
+| A switch fails, waits or doesn't verify | [Switching](#switching) |
+| Devices connect but traffic is slow, missing or leaks | [Clients](#clients) |
+
+By way in:
+
+- **[NetBird exit](netbird-exit.md):** [startup](#startup),
+  [NetBird's settings and profile](#netbirds-settings-and-profile),
+  [switching](#switching) and [clients](#clients); with gluetun, also
+  [gluetun backend](#gluetun-backend).
+- **Sidecar:** [a native sidecar](#a-native-sidecar), or for a gluetun
+  sidecar the [gluetun backend](#gluetun-backend).
+- **[Proxy](proxy.md):** [the proxy](#the-proxy).
+
+By extra:
+
+- **[Switchyard](switchyard.md):** [the panel](#the-panel) and
+  [sign-in](#sign-in).
+- **[Failover](failover.md):** [failover](#failover).
+- **[Multi-provider exit](multi-provider.md):** [multi-provider
+  exit](#multi-provider-exit).
+- **[Network exchange](exchange.md):** [the network
+  exchange](#the-network-exchange).
+
 ## Startup
 
 **The exit never gets healthy, and its log repeats `molebridge-exit: tunnel
@@ -659,15 +691,9 @@ refused:
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
 - `PANEL_EXITS: multi-provider exits are not available in this release yet; see
-  docs/design/multi-provider.md, in '<entry>'` and `PROVIDERS is set, but
-  multi-provider exits are not available in this release yet; see
-  docs/design/multi-provider.md`: the panel follows the exit's switch, which is off
-  in release builds ([multi-provider exit](configuration.md#multi-provider-exit)).
-  With it on, `PANEL_EXITS: a multi-provider exit takes two or three of mullvad, pia
-  and nordvpn, each once, in '<entry>'`, `PANEL_EXITS: a multi-provider exit is an
-  overlay exit, in '<entry>'`, `PANEL_PROXY_STATUS: '<id>' is a multi-provider exit;
-  the proxy does not run beside one` and `PANEL_NETWORK_EXITS: '<id>' is a
-  multi-provider exit, which the network exchange does not carry`.
+  docs/design/multi-provider.md, in '<entry>'`, and every other refusal of a
+  multi-provider exit: see [multi-provider exit](#multi-provider-exit).
+- `PANEL_NETWORK_EXITS: ...`: see [the network exchange](#the-network-exchange).
 - `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as
   exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
   Write `exit.example.net`, not `https://exit.example.net` or `exit.example.net/`, and
@@ -722,13 +748,7 @@ host's clock is right. After the exit stops on purpose, the last record goes sta
 after 150 seconds, as it did in 0.7.
 
 **The status says "exit unreachable" or "clocks differ".** Only for an exit in
-`PANEL_NETWORK_EXITS` ([the network exchange](configuration.md#the-network-exchange)).
-"exit unreachable": the exchange has heard nothing from the exit for 15 seconds.
-Look for `molebridge-exit: exchange: round failed: <reason>` in the exit's log; a
-401 is a wrong `EXCHANGE_TOKEN` or `EXCHANGE_EXIT_ID`, a timeout means the exit can't
-reach `EXCHANGE_URL`. Check that the `exchange` container runs and shares the panel's
-state directory. "clocks differ": the exit's clock and the exchange's are more than
-10 seconds apart; fix the hosts' time sync.
+`PANEL_NETWORK_EXITS`; see [the network exchange](#the-network-exchange).
 
 **Other states the panel shows as unknown or failed.** Each is the
 [verdict](architecture.md#the-verdict) on the exit's last record:
@@ -897,21 +917,8 @@ The panel then shows "<server> is no longer in the provider's server list.
 Connected through <server>, in the same city, instead." Nothing needs doing;
 pick a server yourself if you want a particular one.
 
-With [automatic failover](configuration.md#automatic-failover) on
-(experimental), these lines tell an episode:
-
-- `applier: the selected server has kept failing for <n> s (<reason>); moving to backup <server>`
-- `applier: backup <server> did not verify; trying the next`
-- `applier: no backup verified; staying on the selected server`
-- `applier: trying the selected server again`
-- `applier: the selected server still fails; back to backup <server>`
-- `applier: the selected server verified again; failover ended`
-- `applier: a new selection ends the failover`
-- `applier: the host's network does not answer; not failing over`
-
-The panel then shows "connected to backup" and "Connected to backup
-<server>. <server> has kept failing since <time> UTC; trying it again at
-<time> UTC." Picking any server ends the failover.
+With [automatic failover](failover.md) on, more lines tell an episode, and
+the panel shows "connected to backup"; see [failover](#failover).
 
 `<source>` is what asked for the switch, as in
 [requests and switching](architecture.md#requests-and-switching), and `<message>` is the
@@ -1048,7 +1055,7 @@ server list doesn't name. See [egress tiers](architecture.md#egress-tiers).
 exit's provider: a typo, a port, a URL or a list. Fix it and apply the change with
 [recovery](operations.md#recovery) ([a server set in
 configuration](configuration.md#a-server-set-in-configuration)). On a
-[multi-provider exit](configuration.md#multi-provider-exit) `SERVER` names its provider too,
+[multi-provider exit](multi-provider.md#locking-it-to-one-server) `SERVER` names its provider too,
 and the message says so: `Invalid SERVER "nl9001.nordvpn.com"; with PROVIDERS set, SERVER is
 <provider>/<server> with one of mullvad, pia, nordvpn, for example
 "nordvpn/nl9001.nordvpn.com"; no change applied.` The example appears when the bare name
@@ -1172,3 +1179,154 @@ Use a resolver the client can reach directly, or NetBird's DNS settings.
 
 **A device can't reach addresses on the exit host's LAN.** That's by design. Forwarded traffic goes
 only into the tunnel.
+
+## The proxy
+
+Read its log with `docker compose logs proxy`; its lines start
+`molebridge proxy: `. The settings and the guarantee are in [the
+proxy](proxy.md).
+
+**The proxy stops at start with `molebridge proxy: refusing to start:
+<reason>`.** It checks its isolation, then its settings, and prints one line
+for every problem it found, not only the first. The isolation lines are
+fixed: `the proxy must not run as root (uid 0); set PANEL_USER to the
+uid:gid that owns state/proxy and secrets/proxy`, `the proxy must run with no
+capabilities (cap_drop: [ALL]); its effective capability set is not empty`
+and `the proxy cannot read its capability set from /proc/self/status, so it
+cannot show it has none`. With `PROVIDERS` set the line is `PROVIDERS is set:
+the proxy is not supported on a multi-provider exit`.
+
+**`molebridge status --proxy` says `refusing`, and the container is
+unhealthy.** The proxy's message is "Refusing new connections: the exit's
+verdict is <verdict>." It serves only while the exit's verdict is `ok`, so
+fix the exit first: run `docker compose exec exit molebridge status`, and
+look up its reasons in the sections above. The proxy serves again by itself
+once the exit is `ok`.
+
+## Failover
+
+[Failover](failover.md) is experimental and off by default; these apply only
+with `FAILOVER` set. The exit's log tells every step of an episode on one
+line:
+
+- `applier: the selected server has kept failing for <n> s (<reason>); moving to backup <server>`
+- `applier: backup <server> did not verify; trying the next`
+- `applier: no backup verified; staying on the selected server`
+- `applier: trying the selected server again`
+- `applier: the selected server still fails; back to backup <server>`
+- `applier: the selected server verified again; failover ended`
+- `applier: a new selection ends the failover`
+- `applier: the host's network does not answer; not failing over`
+
+**The exit stops at start with a `FAILOVER` line.** Each refusal is listed
+with its cause in [failover's refusals](failover.md#refusals).
+
+**The panel says "connected to backup".** The exit moved because your
+server kept failing; the note says since when and when the exit tries it
+again. Nothing needs doing. To go back now, pick your server (or press
+**Retry** on it): a new pick ends the episode. With `FAILOVER_RETURN=manual`
+the exit stays on the backup until you do.
+
+**"No backup verified; retrying <server>."** The episode tried up to 3
+backups and none verified, so the exit is back on your server, retrying on
+its usual backoff, and won't fail over again for 30 minutes. When several
+servers fail in a row, the cause is usually not the servers: check the
+account, the provider's status and the host's network, as for any failed
+switch ([switching](#switching)).
+
+**The server keeps failing, but the exit doesn't fail over.** Check, in
+order:
+
+- The log says `applier: the host's network does not answer; not failing
+  over`: the host's own connection is down, and moving would not help.
+- The failures don't count. Only `switch-failed`, `handshake-failed`,
+  `tunnel-silent` and `repair-failed` do, for `FAILOVER_AFTER` seconds
+  (300 by default) with at least 3 of them and nothing in between that
+  resets the count; a request waiting for a prerequisite, a refused request
+  or a provider's check service that is down never counts ([when it
+  moves](failover.md#when-it-moves)).
+- You picked the server in the last 150 seconds: a new pick gets its full
+  window.
+- No backup is left. With `same-city` or `same-country`, the selected server
+  must have been verified on this exit once (with 0.11.0 or later), and with
+  PIA most regions are alone in their city: use `same-country` or
+  `servers` ([which mode](failover.md#which-mode)). An exhausted episode also
+  holds failover off for 30 minutes.
+
+**The exit fails over when you don't expect it.** Read the reason in the
+first line of the episode. `tunnel-silent` and `handshake-failed` mean the
+selected server stopped carrying traffic for the whole window; raise
+`FAILOVER_AFTER` (up to 3600) if short outages of that server are normal for
+you, or turn failover off.
+
+**An older Switchyard shows the exit as "verification failed".** A panel or
+`molebridge status` from before failover reads an exit on a backup as
+failed. Upgrade it.
+
+**`applier: the failover state could not be saved: <reason>`.** The exit
+couldn't write `failover.json` (in `state/applier/`, or `PRIVATE_STATE_DIR`).
+Failover goes on in memory, but a restart forgets the episode. Check the
+directory's space and permissions as for `result.json` ([startup](#startup)).
+
+## Multi-provider exit
+
+A [multi-provider exit](multi-provider.md) is built but switched off in
+release builds.
+
+**`molebridge-exit: PROVIDERS is set, but multi-provider exits are not
+available in this release yet; see docs/design/multi-provider.md`.** You run
+a release build. The panel says the same after `molebridge panel: `, or
+`molebridge panel: PANEL_EXITS: multi-provider exits are not available in
+this release yet; see docs/design/multi-provider.md, in '<entry>'` for a `+`
+in `PANEL_EXITS`, and `molebridge init` says `molebridge init: a
+multi-provider exit is not available in this release yet; see
+docs/design/multi-provider.md.` Remove `PROVIDERS` (and the `+` entry), or
+run one single-provider exit per provider side by side.
+
+**Other refusals at start.** With the feature on, every refusal of the exit,
+the panel, the proxy and `init` is listed with its cause in [the multi-provider
+exit's refusals](multi-provider.md#refusals).
+
+**A pick answers 400 `unknown provider` or `unknown or unlisted server`.**
+The provider isn't one of the exit's, or the server isn't in that provider's
+current list. Reload the page and pick again.
+
+**The status says "verification failed" with `not-configured-provider` or
+`not-requested-provider`.** The exit is connected on another provider than
+`SERVER` or the panel's request names. It is converging; if it stays, check
+the log for the switch's own message ([switching](#switching)).
+
+**After moving back to one provider, the exit refuses to start and asks for
+`fix-blacklist`.** The NetBird profile excludes `vpn`, not the new `EXIT_IF`.
+[Moving back to one provider](multi-provider.md#moving-back-to-one-provider)
+has the two ways out.
+
+## The network exchange
+
+The [network exchange](exchange.md) is experimental. The exit's lines about
+it start `molebridge-exit: exchange: `, and the exchange's own
+`molebridge exchange: `.
+
+**The status says "exit unreachable".** The exchange has heard nothing from
+the exit for 15 seconds. Look for `molebridge-exit: exchange: round failed:
+<reason>` in the exit's log:
+
+- a 401 is a wrong `EXCHANGE_TOKEN` or `EXCHANGE_EXIT_ID`, or a token file
+  the exchange refused: look for `molebridge exchange: warning: no usable
+  token for exit <id>; its requests are refused` at the exchange's start. On
+  Kubernetes, a token mounted from a Secret without `subPath` is a symbolic
+  link, which the exchange refuses ([tokens](exchange.md#1-make-a-token-per-exit));
+- a timeout or a refused connection means the exit can't reach
+  `EXCHANGE_URL`: check the exchange's published port and
+  `EXCHANGE_LISTEN`;
+- no such line at all: check that the exit has `EXCHANGE_URL` (the bundled
+  Compose files don't pass it; [the exit](exchange.md#2-the-exit)).
+
+Also check that the `exchange` container runs and shares the panel's state
+directory, so the panel sees the `exchange.json` it writes.
+
+**The status says "clocks differ".** The exit's clock and the exchange's are
+more than 10 seconds apart. Fix time sync on both hosts.
+
+**The exchange or the panel stops at start.** Every refusal is listed with
+its cause in [the exchange's refusals](exchange.md#refusals).
