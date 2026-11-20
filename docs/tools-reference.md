@@ -12,8 +12,11 @@ commands there use `"$IMAGE"` where this page shows the reference.
 
 The image's other roles are not tools: `exit` and `panel` are the two
 containers, `health` is the exit's container health check, `status` prints the
-exit's verdict from inside it ([other roles](#other-roles)), and `port-sync` is a
-container of a [native sidecar](native-sidecar.md) ([port-sync](#port-sync)).
+exit's verdict from inside it ([other roles](#other-roles)), `proxy` is the
+[proxy](proxy.md) and `exchange` the panel's side of the [network
+exchange](exchange.md), and `port-sync` is a container of a [native
+sidecar](native-sidecar.md) ([port-sync](#port-sync)). [`init`](#init) is the
+menu that writes a Compose file and an `.env`.
 
 This page is the reference. Where the tools sit in the setup order is in
 [setup.md](setup.md).
@@ -574,10 +577,49 @@ sent. The reasons are:
 It never exits because qBittorrent or the record is unavailable: it logs and
 tries again at the next interval.
 
+## init
+
+**Experimental.** The menu: it asks for the provider, the ways in and the
+extras, or reads the same answers from a file, and writes a Compose file and
+an `.env` for them. The services, settings and image pins are those of the
+Compose files shipped with the same release. What to do with the result is in
+[setup](setup.md#molebridge-init).
+
+```sh
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out" \
+  ghcr.io/irashack/molebridge:<tag> init --out /out
+```
+
+| Argument | Meaning |
+|---|---|
+| `--out DIR` | Required. Writes `DIR/compose.yaml` and `DIR/.env` (mode 0644) and, for a gluetun provider, `DIR/routing/gluetun-preflight` (mode 0755). |
+| `--answers FILE` | Reads the answers from `FILE` instead of asking. Without it, `init` needs a terminal. |
+| `--force` | Replaces files that exist. Without it, `init` refuses with `<path> exists; pass --force to replace it, or choose another --out.` |
+
+The answers are a provider (`mullvad`, `pia`, `nordvpn`, or `gluetun-<id>` for
+a provider gluetun drives), one or more ways in (`netbird-exit`, `sidecar`,
+`proxy`; the proxy needs a native provider and `netbird-exit` or `sidecar`)
+and any extras (`switchyard`, `port-sync`; `port-sync` needs PIA and
+`sidecar`). The answers file is a JSON object of at most 4096 bytes with
+exactly these members (`extras` may be left out):
+
+```json
+{"schema": 1, "provider": "pia", "ways_in": ["sidecar"], "extras": ["switchyard", "port-sync"]}
+```
+
+On success it prints `Wrote <files>: the services of <source> with <services>.`
+and then `Next: edit .env, then follow docs/setup.md#molebridge-init for the secrets and state directories.`
+A refused answer or a file it can't write prints `molebridge init: <reason>`
+and exits `1`. With no terminal and no `--answers` it prints
+`molebridge init: no terminal to ask on; pass --answers FILE (docs/setup.md#molebridge-init).`
+and exits `2`, as for a wrong argument (`usage: molebridge init --out DIR [--answers FILE] [--force]`).
+`init -h` prints its help and exits `0`.
+
 ## Other roles
 
 These run as containers or inside the exit, not as throwaway tools. Settings
-come from the environment, and none takes arguments.
+come from the environment; only `health` and `status` take arguments, shown
+in their rows.
 
 | Role | What it does | Exit status |
 |---|---|---|

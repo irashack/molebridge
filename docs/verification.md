@@ -22,6 +22,26 @@ changed `COMPOSE_PROJECT_NAME`, `EXIT_IF`, `EXIT_TABLE` or `OVERLAY_IF`, use
 your values. For rootless Podman, use `podman` where this page says `docker`
 (the [Podman notes](operations.md#rootless-podman)).
 
+The checks are grouped by way in. Each checks that way in's guarantee
+([architecture](architecture.md#ways-in) states them):
+
+| Way in | Its checks |
+|---|---|
+| NetBird exit node, native | [Inside the namespace](#inside-the-namespace), [fail-closed drills](#fail-closed-drills), [from a client](#from-a-client) |
+| NetBird exit node, gluetun | [gluetun as a NetBird exit](gluetun-netbird-exit.md#verification), then [from a client](#from-a-client) |
+| Native sidecar | [A native sidecar](#a-native-sidecar) |
+| gluetun sidecar | [A gluetun sidecar](#a-gluetun-sidecar) |
+| Proxy | [The proxy](#the-proxy) |
+
+[Status and recovery](#status-and-recovery) applies to every way in with a
+status record, and [extras](#extras) has the checks for the network exchange
+and automatic failover.
+
+## The NetBird exit node
+
+The guarantee: forwarded client traffic leaves through the tunnel or fails.
+The checks run inside the exit's namespace first, then from a client.
+
 **The gluetun backend** has other rules, so the namespace checks and drills on
 this page don't carry over by renaming. Use the ones in
 [gluetun as a NetBird exit](gluetun-netbird-exit.md#verification), then
@@ -31,7 +51,7 @@ gluetun's namespace, unmarked traffic the exit sends goes into gluetun's tunnel,
 and only NetBird's marked control traffic uses the host's connection, so check 4
 below doesn't apply.
 
-## Inside the namespace
+### Inside the namespace
 
 The exit container is an Alpine image with busybox, not a toolbox: it has no
 `curl`, `nft`, `wg`, `tcpdump` or iproute2's `ip` (busybox's `ip` has no `-d`
@@ -144,7 +164,7 @@ The PIA and NordVPN IPv6 probes check blocking. Use the explicit IPv6 hostname a
 `am.i.mullvad.net` itself has no AAAA record. A DNS failure alone does not
 prove routing blocked the request.
 
-## Fail-closed drills
+### Fail-closed drills
 
 Run these on every exit you rely on, each provider and backend, with a client
 holding the exit. For each drill, keep that client on the selected exit probing
@@ -207,7 +227,7 @@ isolated drills below; [testing](testing.md) records which have run on a live ex
 Confirm the exit host's own unbound traffic stays on its ordinary path while the
 client path is blocked.
 
-### A capture on the host interface
+#### A capture on the host interface
 
 To see that nothing a client sends leaves by the host's route, capture on the
 namespace's host-side interface in the shell for the duration of a drill, filtered on
@@ -223,7 +243,7 @@ pasta it is the host's own interface name. Without a filter you should see NetBi
 WireGuard port, STUN and its TCP control connections, and the provider's endpoint;
 anything else needs an explanation.
 
-### What the isolated drills cover
+#### What the isolated drills cover
 
 The namespace drills in `internal/drill` run the same cases against a real kernel,
 inside disposable namespaces in a privileged container (CI, and
@@ -262,7 +282,53 @@ of reaching the exit. Repeat the ping with the tunnel down. The local-delivery r
 PIA, NordVPN and gluetun exits at 0.7.0; [testing](testing.md) says which protocols and families each
 covered.
 
-## A native sidecar
+### From a client
+
+With the exit selected on a device in `exit-users`:
+
+- For Mullvad, <https://mullvad.net/check> reports Mullvad egress in the chosen server's city. For PIA,
+  <https://www.privateinternetaccess.com/api/client/status> reports `"connected": true`.
+- Addresses on the host's own LAN, such as its router, are unreachable.
+- With IPv6 overlay and a `::/0` route, an IPv6 egress check shows a Mullvad address for a dual-stack Mullvad
+  tunnel. On PIA it must fail: forwarded IPv6 hits the unreachable fallback. Without an IPv6 overlay and exit
+  route, check that IPv6 fails or is unused; a native IPv6 address means that traffic bypasses the exit.
+- Try a video call or an HTTP/3 (QUIC) download. A stall followed by recovery can be a symptom of a missing ICMP
+  return path when a browser falls back to TCP. Check the return path with namespace step 6 before drawing that
+  conclusion; a completed download alone does not test oversized UDP replies.
+- On the host, use `docker compose exec exit netbird status -d` to check whether the client's path is `P2P` or
+  `Relayed`. If it is relayed, see [direct connections](operations.md#direct-connections). The exit refuses to start
+  NetBird unless the exit interface is in the peer's ICE blacklist
+  ([the blacklist](operations.md#netbird-interface-blacklist)).
+- Choose another Mullvad server or PIA region in the panel. Confirm the panel reports the new location and the
+  client's egress follows without reselecting the exit.
+- Molebridge does not change DNS; see [operations](operations.md#dns). Run a DNS leak check and confirm the resolvers
+  shown are acceptable to you. If it flags a resolver, see
+  [when a leak test flags DNS](operations.md#when-a-leak-test-flags-dns).
+
+### Optional PIA port forwarding
+
+These are acceptance checks for [port forwarding](providers.md#port-forwarding). Live forwarding against PIA remains
+untested in the [test record](testing.md). Enable it, select a region that offers forwarding, and wait for an allocated
+port in the panel or `forwarded_port` in `/api/status`.
+
+- Have the target service listen on that allocated port for TCP and UDP. DNAT changes the destination address and keeps
+  the port.
+- Confirm the NetBird policy allows the exit peer to reach the target on that port for both protocols. Forwarded
+  connections use the exit peer's overlay address.
+- From outside your NetBird network, connect to the PIA egress address and allocated port over TCP and UDP. Confirm both
+  reach the target service.
+- Set `PIA_PORT_FORWARD=off` and clear `PIA_PORT_FORWARD_TARGET`, then recreate the exit so it reads the new settings.
+  Check that `nft list table ip molebridge_forward` in the shell reports the table absent after startup; the exit
+  retries removal if it fails. `nft list table inet molebridge_guard` must still show the ingress guard. Use new
+  connections for the check: existing conntrack mappings can outlive the forwarding rules.
+
+## The sidecar
+
+The guarantee of the native sidecar: the traffic of the containers that share
+its namespace leaves through the tunnel or fails. The gluetun sidecar relies on
+gluetun's firewall for that.
+
+### A native sidecar
 
 The checks and drills above are for an overlay exit. A [native sidecar](native-sidecar.md)
 has no NetBird and no clients; its applications share the exit's namespace, so
@@ -370,7 +436,51 @@ that the same cases come from are in [testing](testing.md#090).
 - With `PIA_PORT_FORWARD=off` and the exit recreated, the input chain has no port
   rules. Live forwarding against PIA has not been tested.
 
+### A gluetun sidecar
+
+In the gluetun sidecar, gluetun's firewall keeps the applications' traffic in
+the tunnel, and Molebridge only selects and checks servers, so the checks are
+that each application really shares gluetun's namespace
+([checking that containers share gluetun's namespace](gluetun-sidecar.md#checking-that-containers-share-gluetuns-namespace))
+and that `docker compose exec exit molebridge status` says `ok`. The record's
+`app_attachment` check is `not-checked`: Molebridge can't see the other
+containers.
+
+## The proxy
+
+The acceptance drill `proxy-live` (since policy 18) runs the candidate's
+[proxy](proxy.md) beside a native Mullvad exit that is `ok`, as its Compose
+service runs it: `molebridge proxy` in the exit's network namespace, as a
+non-root user with no capabilities, a read-only root and the exit's applier
+directory read-only. A client in the same namespace, under another user,
+connects to it over loopback.
+
+1. Through SOCKS5 (`socks5h://`, so the name resolves on the far side) ask
+   `https://am.i.mullvad.net/json` with the usernames `any`, a country, a city
+   and a server of the exit's catalogue. Each must answer `mullvad_exit_ip`
+   true, with `country` and `city` matching the location asked for. For a
+   server, `mullvad_exit_ip_hostname` names that relay's SOCKS5 host
+   (`<cc>-<city>-wg-socks5-<n>` for the relay `<cc>-<city>-wg-<n>`).
+2. Two connections with the same `<location>.<session>` username must leave
+   by the same server.
+3. The same request through HTTP `CONNECT` on the same port must pass as in
+   step 1.
+4. A wrong password must be refused before any connection is made.
+5. Throughout, an nftables counter in the exit's namespace on the proxy's uid
+   (`meta skuid`) must see its packets go out the tunnel and nothing else,
+   apart from its answers to the client over loopback. Kernel WireGuard's own
+   encrypted packets to the relay's endpoint keep the uid of the socket whose
+   packet they carry. Count UDP to the relay endpoint's port apart: it is the
+   tunnel, not a leak. CI's [system rig](../CONTRIBUTING.md#the-system-rig)
+   counts the same way.
+
+`molebridge status --proxy` must say `ok` at the end, with no server benched
+that the drill didn't fail on purpose.
+
 ## Status and recovery
+
+These apply to every way in that writes a status record: the NetBird exit
+node in both backends and both sidecars.
 
 ### Reading the status
 
@@ -485,61 +595,11 @@ by `go test` ([testing](testing.md)).
 gluetun reads `servers.json` when it starts and its updater may rewrite it;
 don't restart gluetun between steps 2 and 4.
 
-### The proxy
+## Extras
 
-The acceptance drill `proxy-live` (since policy 18) runs the candidate's
-[proxy](proxy.md) beside a native Mullvad exit that is `ok`, as its Compose
-service runs it: `molebridge proxy` in the exit's network namespace, as a
-non-root user with no capabilities, a read-only root and the exit's applier
-directory read-only. A client in the same namespace, under another user,
-connects to it over loopback.
+The extras change no way in's guarantee; these checks are for what each adds.
 
-1. Through SOCKS5 (`socks5h://`, so the name resolves on the far side) ask
-   `https://am.i.mullvad.net/json` with the usernames `any`, a country, a city
-   and a server of the exit's catalogue. Each must answer `mullvad_exit_ip`
-   true, with `country` and `city` matching the location asked for. For a
-   server, `mullvad_exit_ip_hostname` names that relay's SOCKS5 host
-   (`<cc>-<city>-wg-socks5-<n>` for the relay `<cc>-<city>-wg-<n>`).
-2. Two connections with the same `<location>.<session>` username must leave
-   by the same server.
-3. The same request through HTTP `CONNECT` on the same port must pass as in
-   step 1.
-4. A wrong password must be refused before any connection is made.
-5. Throughout, an nftables counter in the exit's namespace on the proxy's uid
-   (`meta skuid`) must see its packets go out the tunnel and nothing else,
-   apart from its answers to the client over loopback. Kernel WireGuard's own
-   encrypted packets to the relay's endpoint keep the uid of the socket whose
-   packet they carry. Count UDP to the relay endpoint's port apart: it is the
-   tunnel, not a leak. CI's [system rig](../CONTRIBUTING.md#the-system-rig)
-   counts the same way.
-
-`molebridge status --proxy` must say `ok` at the end, with no server benched
-that the drill didn't fail on purpose.
-
-## From a client
-
-With the exit selected on a device in `exit-users`:
-
-- For Mullvad, <https://mullvad.net/check> reports Mullvad egress in the chosen server's city. For PIA,
-  <https://www.privateinternetaccess.com/api/client/status> reports `"connected": true`.
-- Addresses on the host's own LAN, such as its router, are unreachable.
-- With IPv6 overlay and a `::/0` route, an IPv6 egress check shows a Mullvad address for a dual-stack Mullvad
-  tunnel. On PIA it must fail: forwarded IPv6 hits the unreachable fallback. Without an IPv6 overlay and exit
-  route, check that IPv6 fails or is unused; a native IPv6 address means that traffic bypasses the exit.
-- Try a video call or an HTTP/3 (QUIC) download. A stall followed by recovery can be a symptom of a missing ICMP
-  return path when a browser falls back to TCP. Check the return path with namespace step 6 before drawing that
-  conclusion; a completed download alone does not test oversized UDP replies.
-- On the host, use `docker compose exec exit netbird status -d` to check whether the client's path is `P2P` or
-  `Relayed`. If it is relayed, see [direct connections](operations.md#direct-connections). The exit refuses to start
-  NetBird unless the exit interface is in the peer's ICE blacklist
-  ([the blacklist](operations.md#netbird-interface-blacklist)).
-- Choose another Mullvad server or PIA region in the panel. Confirm the panel reports the new location and the
-  client's egress follows without reselecting the exit.
-- Molebridge does not change DNS; see [operations](operations.md#dns). Run a DNS leak check and confirm the resolvers
-  shown are acceptable to you. If it flags a resolver, see
-  [when a leak test flags DNS](operations.md#when-a-leak-test-flags-dns).
-
-## The network exchange
+### The network exchange
 
 For an exit and a panel on different nodes, joined by the [network
 exchange](configuration.md#the-network-exchange), with a client on the exit.
@@ -567,19 +627,11 @@ The acceptance drill `network-exchange` is all of these, on Kubernetes:
   exchange's address go into the tunnel or fail, unless the address is in
   the LAN prefixes you allowed it.
 
-## Optional PIA port forwarding
+### Automatic failover
 
-These are acceptance checks for [port forwarding](providers.md#port-forwarding). Live forwarding against PIA remains
-untested in the [test record](testing.md). Enable it, select a region that offers forwarding, and wait for an allocated
-port in the panel or `forwarded_port` in `/api/status`.
-
-- Have the target service listen on that allocated port for TCP and UDP. DNAT changes the destination address and keeps
-  the port.
-- Confirm the NetBird policy allows the exit peer to reach the target on that port for both protocols. Forwarded
-  connections use the exit peer's overlay address.
-- From outside your NetBird network, connect to the PIA egress address and allocated port over TCP and UDP. Confirm both
-  reach the target service.
-- Set `PIA_PORT_FORWARD=off` and clear `PIA_PORT_FORWARD_TARGET`, then recreate the exit so it reads the new settings.
-  Check that `nft list table ip molebridge_forward` in the shell reports the table absent after startup; the exit
-  retries removal if it fails. `nft list table inet molebridge_guard` must still show the ingress guard. Use new
-  connections for the check: existing conntrack mappings can outlive the forwarding rules.
+[Automatic failover](failover.md) (experimental, off by default) has no live
+procedure here: its live drill on a real provider has not run. CI's [system
+rig](../CONTRIBUTING.md#the-system-rig) drills it against fake servers
+([testing](testing.md)). On your host, `molebridge status` and the panel show
+"connected to backup" while an episode runs, and `applier/failover.json` holds
+it ([state files](configuration.md#state-files)).

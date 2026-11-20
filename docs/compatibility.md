@@ -33,10 +33,14 @@ before 2.0.
   (since 0.9.3) is on the list too, but no reader judges it. `moved` (since
   0.11.0) is present only while the exit's server stands in for a retired
   one; a reader older than 0.11.0 judges such a record "verification failed",
-  because `server` isn't the requested server. `failover` ([automatic
-  failover](design/failover.md), experimental and off by default) is present only during a
+  because `server` isn't the requested server. `repair` (since 0.10.1) is present only on the `applying` records
+  published while a lapsed PIA registration is registered again; no reader
+  judges it. `failover` ([automatic failover](failover.md), experimental and off
+  by default) is present only during a
   failover episode; a reader from before it judges a record on a backup
-  "verification failed" for the same reason, never connected.
+  "verification failed" for the same reason, never connected. A
+  [multi-provider exit](multi-provider.md)'s records (experimental) add
+  `providers`, `requested_provider` and `selection.target_provider`.
 - The eight checks (`routing`, `traffic_protection`, `netbird`,
   `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`), their five
   states (`pass`, `fail`, `unknown`, `n/a`, `not-checked`), and which of them
@@ -56,8 +60,12 @@ read `status` and the checks, not the text.
 The names, paths and fields in [state files](configuration.md#state-files):
 `applier/result.json`, `applier/relays.json`, `applier/relay-error.json`,
 `applier/attempt.json`, `applier/location.json`, `applier/tunnel.json` (PIA),
-`applier/gluetun-selection.json` (gluetun backend) and `panel/desired.json`,
-and which component writes and reads each. The four private files may live
+`applier/gluetun-selection.json` (gluetun backend), `applier/failover.json`
+(automatic failover), `applier/tunnel-provider.json` (multi-provider exit),
+`panel/desired.json`, the proxy's `proxy/proxy.json` and the exchange's
+`<id>/exchange.json`, and which component writes and reads each. The private
+files (`attempt.json`, `location.json`, `failover.json`,
+`gluetun-selection.json`, `tunnel.json` and `tunnel-provider.json`) may live
 under `PRIVATE_STATE_DIR` instead
 ([keeping the published files in memory](configuration.md#keeping-the-published-files-in-memory)).
 The files under the exit's `/run` tmpfs (the heartbeat, the guard heartbeat
@@ -74,18 +82,23 @@ value that a release accepts stays accepted with the same meaning; a later
 release may accept more values, never fewer. The variables that
 [configuration](configuration.md#other-settings-the-compose-files-fix) calls
 internal to the supervisor or the tests (`MOLEBRIDGE_GENERATION`,
-`MOLEBRIDGE_RTNL_NOTIFY_LOCKED`, `MOLEBRIDGE_DRILL_CPUPROFILE`,
-`MOLEBRIDGE_PANEL_LISTEN`, `MOLEBRIDGE_PANEL_ISOLATION_CHECK`) are not on the
-list.
+`MOLEBRIDGE_EXCHANGE_MARK`, `MOLEBRIDGE_RTNL_NOTIFY_LOCKED`, the
+`MOLEBRIDGE_DRILL_*` variables, `MOLEBRIDGE_PANEL_LISTEN`,
+`MOLEBRIDGE_PANEL_ISOLATION_CHECK`) are not on the list. The `.env` that
+[`molebridge init`](tools-reference.md#init) writes holds these same
+settings.
 
 ### The Compose files
 
 - The four files, `compose.yaml`, `compose.gluetun.yaml`, `compose.sidecar.yaml`
   and `compose.native-sidecar.yaml`, and their project names (`molebridge`,
-  `molebridge-sidecar`, `molebridge-native-sidecar`).
+  `molebridge-sidecar`, `molebridge-native-sidecar`). `compose.proxy.yaml`,
+  which adds the experimental proxy to `compose.yaml` or
+  `compose.native-sidecar.yaml`, follows this page as an experimental form.
 - The service names: `exit` and `switchyard` in every form, `gluetun` in the two
   gluetun forms, `example-app` in both sidecar forms and `port-sync` in the
-  native sidecar's, with the profiles `example` and `port-sync`.
+  native sidecar's, with the profiles `example` and `port-sync`; `proxy` in
+  `compose.proxy.yaml`.
 - The named volumes, `netbird-data` above all: it holds the NetBird identity,
   and a renamed volume would enroll a new peer. Also `gluetun-data` and
   `gluetun-servers`.
@@ -94,8 +107,9 @@ list.
   `/config/wg_confs`, `/run/secrets/pia`, `/var/lib/netbird` and the gluetun
   paths in [configuration](configuration.md#gluetun-backend)), so a manifest
   written for one release mounts the next.
-- The image's role names (`exit`, `panel`, `health`, `status`,
-  `check-config`, `prepare-config` and the other tools in the
+- The image's role names (`exit`, `panel`, `health`, `status`, `proxy`,
+  `exchange`, `port-sync`, `init`, `version`, `check-config`,
+  `prepare-config` and the other tools in the
   [tools reference](tools-reference.md)).
 
 ### The routing contract
@@ -116,7 +130,8 @@ moving.
 | Command | `0` | `1` | `2` |
 |---|---|---|---|
 | `molebridge status` | the verdict's state is `ok` | any other state, or a bad `PROVIDER` or `EXIT_KIND` | a usage error |
-| `molebridge health` and `health --guarded` | healthy | unhealthy | a usage error |
+| `molebridge status --proxy` | the proxy's state is `ok` | any other state | a usage error |
+| `molebridge health`, `health --guarded` and `health --proxy` | healthy | unhealthy | a usage error |
 
 The text they print is for people and is not on the list; a script should
 use the exit status, or read `/api/status` or `result.json`.
@@ -173,7 +188,7 @@ description is without them.
 Each release has two images with the same tags:
 `ghcr.io/irashack/molebridge` (with the NetBird client, for exits and the
 panel) and `ghcr.io/irashack/molebridge-core` (without it, for the gluetun
-and native sidecars), built from the same commit and promoted together.
+and native sidecars, their panels, `port-sync` and the proxy), built from the same commit and promoted together.
 
 - `vX.Y.Z` is a release. It is never moved or deleted, and its index digest is
   the one the live acceptance attested ([releasing](releasing.md)). Pin it
