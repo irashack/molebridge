@@ -357,19 +357,35 @@ func newSystemRig(t *testing.T) *systemRig {
 		r.relays = append(r.relays, rl)
 	}
 
-	// What reaches the internet: anything from the client by the host path
-	// (unmasqueraded, or a probe port from the exit's own address), and the
-	// client's probes by each relay (nord0 is the multi-provider drill's
-	// fake NordVPN server, absent from the other drills).
+	// What reaches the internet. leak counts anything from the client by
+	// the exit's host path: a packet with the client's overlay source that
+	// arrives by any link but a relay's (exit0 above all), and a probe-port
+	// packet from exit0 whatever its source. This hook sees every packet
+	// at the link it first enters this namespace by, and the exit's host
+	// path enters by exit0: a relay's namespace has no link to the exit but
+	// its WireGuard, whose UDP itself crosses this namespace by exit0, so a
+	// client packet arriving by a relay's link came out of that relay's
+	// WireGuard, that is through the tunnel. unnat counts those the relay
+	// forwarded without its SNAT: after a switch, a packet of a connection
+	// that began on the other relay (in the drills, its closing FIN) has no
+	// conntrack entry on the new one, conntrack calls it invalid, and NAT
+	// skips it, so it reaches the internet with the overlay source (issue
+	// 119). unnat is not a leak; the drills log it. via_* count the
+	// client's probes by each relay (nord0 is the
+	// multi-provider drill's fake NordVPN server, absent from the other
+	// drills).
 	counters := `table inet rig {
   counter leak {}
+  counter unnat {}
   counter via_relaya0 {}
   counter via_relayb0 {}
   counter via_nord0 {}
   chain pre {
     type filter hook prerouting priority raw; policy accept;
-    ip saddr 192.0.2.0/24 counter name leak
-    ip6 saddr 2001:db8:1::/64 counter name leak
+    iifname { "relaya0", "relayb0", "nord0" } ip saddr 192.0.2.0/24 counter name unnat
+    iifname { "relaya0", "relayb0", "nord0" } ip6 saddr 2001:db8:1::/64 counter name unnat
+    iifname != { "relaya0", "relayb0", "nord0" } ip saddr 192.0.2.0/24 counter name leak
+    iifname != { "relaya0", "relayb0", "nord0" } ip6 saddr 2001:db8:1::/64 counter name leak
     iifname "exit0" tcp dport ` + rigClientPort + ` counter name leak
     iifname "relaya0" tcp dport ` + rigClientPort + ` counter name via_relaya0
     iifname "relayb0" tcp dport ` + rigClientPort + ` counter name via_relayb0

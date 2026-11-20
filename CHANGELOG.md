@@ -122,6 +122,23 @@ what changed is below.
   Single-provider views are byte for byte as before (a new golden test
   locks them).
 
+- Test only, no change to the exit: the system rig's leak counter counted
+  one packet during a panel switch on one CI run (issue 119). Its timing
+  and a reproduction in CI show what it was: the client's closing packet
+  for a connection that began on the old relay, sent through the tunnel to
+  the new relay after the switch had finished. The fake relay had no
+  conntrack entry for that connection, so conntrack called the packet
+  invalid, the relay forwarded it without its SNAT, and it reached the fake
+  internet with the client's overlay source, which the counter matched on
+  any link. In the reproduction (64 switches under load, over four CI
+  runs) such packets arrived by the relays' links only, none by the exit's
+  host link; in the run that also read the relays' conntrack, all 13 were
+  invalid there. The counter now counts the client's source on any link
+  but the relays' (the exit's host link above all), and any
+  client-probe-port packet from the host link as before; packets a relay
+  forwarded without its SNAT go to a separate counter the drills log
+  ([the system rig](CONTRIBUTING.md#the-system-rig)).
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
