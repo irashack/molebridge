@@ -6,12 +6,9 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
-- Built but switched off: piece 7 of the [multi-provider
-  exit](docs/configuration.md#multi-provider-exit), the panel. This
-  release's panel refuses a multi-provider exit ("multi-provider exits are
-  not available in this release yet") by the same switch as the exit, so
-  it never offers a provider the exit can't change to; only drill builds
-  accept it. In such a build `PANEL_EXITS` takes
+- Piece 7 of the [multi-provider
+  exit](docs/multi-provider.md), the panel (on in this release; see the
+  entry below that removes the switch). `PANEL_EXITS` takes
   `id=mullvad+pia+nordvpn[:label]` (overlay only), and a single exit's panel
   reads `PROVIDERS` as the exit does. The exit's page has provider tabs
   above the server list, marks the provider in use, warns before a pick
