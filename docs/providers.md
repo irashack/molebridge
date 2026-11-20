@@ -1,29 +1,39 @@
 # VPN providers
 
-Each Molebridge exit uses one provider. A native exit, overlay or
-[native sidecar](native-sidecar.md), sets it with `PROVIDER`
-in `.env`; with the gluetun backend you set `GLUETUN_PROVIDER` instead, and
-Compose gives the exit and the panel the registry id
-`gluetun-<provider>`. These ids also name providers in `PANEL_EXITS`:
+Each Molebridge exit uses one provider, and every way in reaches the tunnel
+of that exit. A native exit, the [NetBird exit](netbird-exit.md) or the
+[native sidecar](native-sidecar.md), sets it with `PROVIDER` in `.env`; with
+gluetun owning the tunnel, the [gluetun NetBird exit](gluetun-netbird-exit.md)
+or the [gluetun sidecar](gluetun-sidecar.md), you set `GLUETUN_PROVIDER`
+instead, and Compose gives the exit and the panel the registry id
+`gluetun-<provider>`. These ids also name providers in `PANEL_EXITS` and in
+`molebridge init`'s answers ([setup](setup.md#molebridge-init)).
 
-| Provider | Status | You pick | Keys |
-|---|---|---|---|
-| `mullvad` (default) | Tested on the hosts in [testing](testing.md) | a server | One device key and tunnel address, valid on every server |
-| `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | a region | A key registered on each server, with a different tunnel address on each |
-| `nordvpn` | Experimental: live passes on macOS with OrbStack, rootless Podman and Kubernetes, see [testing](testing.md) | a server | One account key and tunnel address, valid on every server; server keys shared per location |
-| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md); the [gluetun backend](#the-gluetun-backend) | a server | Whatever the provider uses; gluetun holds the key |
+## Which provider works with which way in
 
-The `gluetun-*` ids also serve the experimental [gluetun
-sidecar](gluetun-sidecar.md), where only Mullvad's and NordVPN's egress can
-be verified. The native ids also serve the experimental [native
-sidecar](native-sidecar.md) (run live with PIA on Kubernetes only): Molebridge's own
-tunnel for containers that share the exit's namespace, and the only form that
-offers PIA to them.
+| Provider id | Status | NetBird exit | Sidecar | Proxy |
+|---|---|---|---|---|
+| `mullvad` (default) | Tested on the hosts in [testing](testing.md) | native (`compose.yaml`) | native sidecar; no live pass | any country, city or server per connection; drilled live |
+| `pia` | Experimental: fewer live checks so far, see [testing](testing.md) | native, with [port forwarding](#port-forwarding) to one device | native sidecar, with port forwarding to the namespace; run live on Kubernetes | the exit's current region only; not drilled |
+| `nordvpn` | Experimental: live passes on macOS with OrbStack, rootless Podman and Kubernetes, see [testing](testing.md) | native | native sidecar; no live pass | the exit's current server only; not drilled |
+| `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`, `gluetun-surfshark`, `gluetun-windscribe` | Experimental: live passes with NordVPN only, see [testing](testing.md); the [gluetun backend](#the-gluetun-backend) | with gluetun (`compose.gluetun.yaml`) | gluetun sidecar; egress verified for Mullvad and NordVPN only | no: the proxy needs a tunnel Molebridge brings up itself |
 
-To offer more than one, run one exit per provider with different
+PIA reaches containers only through the native sidecar: gluetun drives PIA
+over OpenVPN only, and Molebridge's gluetun forms don't offer it. What the
+proxy offers per provider is in [the proxy](proxy.md#choosing-where-a-connection-leaves-the-username).
+
+| Provider | You pick | Keys |
+|---|---|---|
+| Mullvad | a server | One device key and tunnel address, valid on every server |
+| PIA | a region | A key registered on each server, with a different tunnel address on each |
+| NordVPN | a server | One account key and tunnel address, valid on every server; server keys shared per location |
+| gluetun's | a server | Whatever the provider uses; gluetun holds the key |
+
+To offer more than one provider, run one exit per provider with different
 `COMPOSE_PROJECT_NAME`, `NB_HOSTNAME` and `PANEL_PORT`, each with its own
 NetBird route. One [Switchyard](switchyard.md#several-exits-in-one-panel) can
-serve them all.
+serve them all. A NetBird exit can also hold several native providers'
+tunnels in one peer: the [multi-provider exit](multi-provider.md).
 
 ## How PIA differs
 
@@ -202,9 +212,16 @@ retry is covered by unit tests only.
 
 ## Port forwarding
 
+PIA only. PIA can forward one port on the current server. On the
+[NetBird exit](netbird-exit.md) Molebridge passes it to one device on your
+NetBird network; in the [native sidecar](native-sidecar.md#port-forwarding)
+it reaches the namespace itself ([below](#in-a-native-sidecar)).
+
+### On the NetBird exit
+
 Off by default, and experimental: the forwarding path is covered by isolated
-drills in CI but hasn't been tested against PIA itself, at any version. PIA can forward one
-port on the current server. Molebridge passes it to **one overlay device**:
+drills in CI but hasn't been tested against PIA itself, at any version.
+Molebridge passes the port to **one overlay device**:
 
 ```sh
 PIA_PORT_FORWARD=on
@@ -227,7 +244,7 @@ With it on:
   re-registration or restart, so anything that depends on it has to follow
   `forwarded_port`.
 
-With [automatic failover](configuration.md#automatic-failover) on
+With [automatic failover](failover.md) on
 (experimental), only forwarding regions are backups. The port belongs to a
 registration, so a failover changes it, as a switch does, and a return
 changes it again: anything that depends on it has to follow
@@ -237,7 +254,9 @@ The service on the target must listen on the forwarded port itself; there's
 no port translation. You also need a NetBird policy that lets the exit peer
 reach that port on the target.
 
-**In a native sidecar** the port reaches the namespace itself, so
+### In a native sidecar
+
+The port reaches the namespace itself, so
 `PIA_PORT_FORWARD_TARGET` is refused and nothing is forwarded to another device.
 The steps above are the same up to the nftables table: there is no
 `ip molebridge_forward` and no `inet molebridge_guard`. The sidecar firewall's
@@ -246,24 +265,29 @@ port, and the exit installs the firewall again each time the port changes or
 goes away. The application must listen on the forwarded port itself; for
 qBittorrent, [`molebridge port-sync`](tools-reference.md#port-sync) keeps its
 listening port in step. See [the native sidecar](native-sidecar.md#port-forwarding).
-Like the overlay's, it has not been tested against PIA itself.
+Unlike the NetBird exit's, it has run live against PIA, on Kubernetes beside
+qBittorrent ([testing](testing.md#090)).
+
+### Either way
 
 A healthy exit doesn't mean forwarding works. Forwarding errors appear as
 `port_forward_error` in `result.json`, without changing the exit's connected
 state; the panel's Diagnostics shows only the forwarded port, or `none`.
 
-To turn forwarding off, set `PIA_PORT_FORWARD=off`, clear
-`PIA_PORT_FORWARD_TARGET` (the exit refuses to start with a target and
+To turn forwarding off, set `PIA_PORT_FORWARD=off`, on the NetBird exit
+clear `PIA_PORT_FORWARD_TARGET` (the exit refuses to start with a target and
 forwarding off), and recreate the exit so it picks up the new settings.
-It removes `molebridge_forward` as it starts; the
+The NetBird exit removes `molebridge_forward` as it starts, and a native
+sidecar installs its firewall without the port; the
 [port-forwarding checks](verification.md#optional-pia-port-forwarding) confirm
 it. Connections already open continue until they close, and PIA stops
 forwarding within 15 minutes of the last bind.
 
 **This opens a port to the Internet.** Anyone can connect to it, and their
-connections reach the target device. Only turn it on for a service that is
-meant to be public. The exit refuses a target outside `OVERLAY_CIDR`, and
-refuses to start forwarding without a target.
+connections reach the target device, or in a native sidecar your
+application. Only turn it on for a service that is meant to be public. The
+NetBird exit refuses a target outside `OVERLAY_CIDR`, and refuses to start
+forwarding without a target.
 
 ## The gluetun backend
 
@@ -295,7 +319,7 @@ How it differs from a native provider:
   install it starts as gluetun's built-in list, which can be years old; the
   exit asks gluetun to refresh it once the tunnel works. Start gluetun
   with `GLUETUN_SERVER_COUNTRIES` set to your country
-  ([setup](setup.md#with-the-gluetun-backend-instead)).
+  ([the first start](gluetun-netbird-exit.md#the-first-start)).
 - A switch tells gluetun which server to use through its control server.
   gluetun restarts its tunnel for that, so open connections drop, as with
   any switch; the exit waits up to 90 seconds for the new server before
@@ -361,8 +385,7 @@ provider needs:
   address, an IPv6 address and a peer;
   [the tunnel config](configuration.md#the-tunnel-config)). The image itself stays
   free of credentials.
-- for the [multi-provider exit](design/multi-provider.md), still being built,
-  the hooks `Leave` (let go of what the provider holds beyond the tunnel before
+- for the [multi-provider exit](multi-provider.md), the hooks `Leave` (let go of what the provider holds beyond the tunnel before
   another provider's tunnel replaces it; `BaseProvider`'s does nothing) and
   `EnterTunnel` (bring the tunnel up as the provider's on a server, around the
   exit's whole-tunnel replacement; `BaseProvider`'s sets the server's peer).

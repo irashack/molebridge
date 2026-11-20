@@ -1,23 +1,45 @@
 # The gluetun sidecar
 
-Experimental. Use this when you want an ordinary gluetun container that
-other containers share (`network_mode: service:gluetun`), with Switchyard to
-choose and check its server. Your applications send their own traffic
-through gluetun's tunnel. Nothing is forwarded for other devices: there is no
-NetBird peer and no Molebridge routing contract. That is the NetBird exit,
-the `overlay` kind (`compose.yaml` or
-[`compose.gluetun.yaml`](gluetun-netbird-exit.md)). The sidecar is the
-`sidecar` kind, `EXIT_KIND=sidecar`. If you want Molebridge to build the tunnel
-itself, and to keep your applications' traffic in it, with PIA over WireGuard or
-Mullvad or NordVPN, use the [native sidecar](native-sidecar.md) instead.
+**Your applications' traffic leaves through gluetun's tunnel, or not at all,
+as far as gluetun's firewall keeps it there.** Molebridge installs no routes
+or firewall rules in this form and doesn't inspect gluetun's: what it adds is
+choosing gluetun's server and checking the peer, the handshake and, for
+Mullvad and NordVPN, the egress ([what is checked](#what-is-checked-and-by-whom)).
 
-**What has been tested.** A sidecar with gluetun and NordVPN has been upgraded to each release
-and reported healthy, on Kubernetes and on rootless Podman with Quadlet units, with the
-application's public address NordVPN's, not the host's; no drill has been run on it, and the
-attachment procedure has no record since the Go rewrite. Mullvad, the four
-[tunnel-tier providers](#tunnel-tier-providers), Docker, podman-compose and an application left
-in gluetun's old namespace are untested, and `compose.sidecar.yaml` is validated with
-`docker compose config` only. The passes are in [testing](testing.md).
+**Experimental.** It has run live with NordVPN only, on Kubernetes and on
+rootless Podman with Quadlet units
+([what was tested](#limits-and-what-wasnt-tested)).
+
+## Who it is for
+
+Use this when you want an ordinary [gluetun](https://github.com/qdm12/gluetun)
+container that other containers share (`network_mode: service:gluetun`),
+with Switchyard to choose and check its server. Your applications send their
+own traffic through gluetun's tunnel. Nothing is forwarded for other
+devices: there is no NetBird peer and no Molebridge routing contract. That is
+the NetBird exit ([natively](netbird-exit.md) or [with
+gluetun](gluetun-netbird-exit.md)).
+
+Choose it for gluetun's providers: FastestVPN, IVPN, Mullvad, NordVPN,
+Surfshark and Windscribe. If you want Molebridge to build the tunnel itself,
+and to keep your applications' traffic in it with a routing contract and a
+firewall it checks, with PIA over WireGuard or Mullvad or NordVPN, use the
+[native sidecar](native-sidecar.md) instead; its page compares the two.
+[The menu](menu.md) compares every way in.
+
+## What you run
+
+`compose.sidecar.yaml` with `.env.sidecar.example`, or the same services
+written by `molebridge init` with the `sidecar` way in and a `gluetun-<id>`
+provider ([setup](setup.md#molebridge-init)). The exit is the `sidecar` kind,
+`EXIT_KIND=sidecar` with `TUNNEL_BACKEND=gluetun`.
+
+| Service | Image | Role |
+|---|---|---|
+| `gluetun` | `docker.io/qmcgaw/gluetun:v3.41.3`, pinned by digest | Owns the namespace, the tunnel and its firewall. Starts through `routing/gluetun-preflight` with `MOLEBRIDGE_KIND=sidecar`. The engine's default capabilities plus `NET_ADMIN` |
+| `exit` | `ghcr.io/irashack/molebridge-core` | Joins gluetun's namespace, reads gluetun's server list and selects servers through its control server, checks the peer, handshake and egress, and writes the status record. `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE` ([its privileges](#the-exits-privileges)) |
+| your applications | yours | `network_mode: service:gluetun`, listed in `SIDECAR_APPS`. `example-app`, a busybox that only sleeps, stands in under the `example` profile |
+| `switchyard` | `ghcr.io/irashack/molebridge-core` | The panel, optional |
 
 ## What is checked, and by whom
 
@@ -33,8 +55,7 @@ in gluetun's old namespace are untested, and `compose.sidecar.yaml` is validated
 gluetun's firewall is what keeps your applications' traffic in the tunnel
 when the tunnel is down or reconnecting. Molebridge installs no routes or
 firewall rules here and doesn't inspect gluetun's. Check your applications'
-egress and DNS yourself after setup and after changes. There is no
-automatic failover to another server.
+egress and DNS yourself after setup and after changes.
 
 ### Tunnel-tier providers
 
@@ -67,6 +88,10 @@ it stops.
 
 You need Docker with Compose 2.24 or later, or rootless Podman with
 podman-compose (untested for this form). No Python is needed.
+[Setup](setup.md) has the steps every way in shares; these are the gluetun
+sidecar's. If `molebridge init` wrote your `compose.yaml`, `.env` and
+`routing/gluetun-preflight`, skip the copy in step 1 and use its files where
+the steps name `compose.sidecar.yaml`.
 
 1. From the verified, extracted bundle ([setup](setup.md#1-download-and-verify)):
 
@@ -170,6 +195,21 @@ for this; use it with this directory and Compose file. Then run the
 [attachment check](#checking-that-containers-share-gluetuns-namespace).
 This boot order has not been tested with the gluetun sidecar.
 
+## Choosing and switching servers
+
+gluetun starts on the server its `GLUETUN_SERVER_*` settings give it. Choose a
+server in the panel, or set `SERVER` in `.env` to one hostname from the
+catalog to keep the exit on it
+([a server set in configuration](configuration.md#a-server-set-in-configuration)).
+The exit puts the selection to gluetun's control server, which restarts its
+VPN in-process, so your applications' connections may drop; after gluetun
+restarts, the exit puts your last selection back. The server list is
+gluetun's, as current as gluetun's updater keeps it; on a first start set
+`GLUETUN_SERVER_COUNTRIES` to your own country, as [the gluetun NetBird
+exit's first start](gluetun-netbird-exit.md#the-first-start) explains for
+both forms. There is no automatic failover: the exit refuses to start with
+`FAILOVER` on, as gluetun reconnects by itself.
+
 ## Checking that containers share gluetun's namespace
 
 The exit can't see whether your applications are in gluetun's current namespace, and
@@ -250,3 +290,28 @@ run there ([testing](testing.md)).
 `docker compose down` stops and removes the containers. Add `-v` to also delete gluetun's
 data and server-list volumes. Delete `secrets/`, `state/` and `.env`, or keep them if you
 might reinstall.
+## Limits and what wasn't tested
+
+**What was tested.** A sidecar with gluetun and NordVPN has been upgraded to
+each release and reported healthy, on Kubernetes and on rootless Podman with
+Quadlet units, with the application's public address NordVPN's, not the
+host's. No drill has been run on it, and the attachment procedure has no
+record since the Go rewrite. The passes are in [testing](testing.md).
+
+**Not tested:** Mullvad and the four [tunnel-tier
+providers](#tunnel-tier-providers), Docker, podman-compose, the boot order
+in [starting at boot](#starting-at-boot), and an application left in
+gluetun's old namespace. `compose.sidecar.yaml` is validated with
+`docker compose config` only.
+
+- **gluetun's firewall is the guarantee.** Molebridge doesn't check that your
+  applications' traffic, DNS included, stays in the tunnel while it is down or
+  reconnecting. Check your applications' egress and DNS yourself after setup
+  and after changes.
+- **Egress is verified for Mullvad and NordVPN only.** With the other four
+  providers `molebridge status` stays `unknown` by design.
+- **Attachment is yours to check**
+  ([below](#checking-that-containers-share-gluetuns-namespace)).
+- **No PIA.** gluetun drives PIA over OpenVPN only; use the
+  [native sidecar](native-sidecar.md).
+- **No automatic failover**, and no NetBird.

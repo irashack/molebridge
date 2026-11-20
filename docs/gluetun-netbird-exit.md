@@ -1,54 +1,38 @@
 # gluetun as a NetBird exit node
 
-**Experimental.** This page is for you if you want your NetBird devices to use a
-[gluetun](https://github.com/qdm12/gluetun) connection as an exit node, and
-want to understand how Molebridge keeps it safe. It describes
-`compose.gluetun.yaml`: gluetun, the `exit` container beside it, and the optional
-panel. gluetun and NetBird do not work safely together without something like
-Molebridge's routing contract.
-[Why plain gluetun plus NetBird fails](#why-plain-gluetun-plus-netbird-fails)
-explains why, so you can judge whether to use the design as written or adapt it.
+**Traffic your devices forward through the exit leaves through gluetun's
+tunnel, or not at all.** If the tunnel or its route is gone, that traffic is
+dropped; it does not fall back to the host's connection. Molebridge's routing
+contract, kept by the `exit` container in gluetun's namespace, is what holds
+it, and the [drills](#verification) check it.
 
-**What changed in 0.8.0.** In 0.7 you could run this form without Molebridge's
-panel and server logic: three containers, a routing guard as a sidecar, a gate
-script in front of NetBird, and any gluetun WireGuard provider. That form is
-gone. The `exit` container is one program that holds the routing, supervises
-NetBird and runs the provider logic (server list, selection through gluetun's
-control server, egress checks, the status record), and it accepts only the six
-providers the registry knows: FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
-Windscribe. The panel stays optional: start `gluetun` and `exit` alone, and read
-the result with `molebridge status`. A provider outside that list, or OpenVPN,
-isn't covered ([other providers](other-providers.md)).
+**Experimental.** It has run live with NordVPN only, on rootless Podman and
+Kubernetes ([what was tested](#limits-and-what-wasnt-tested)).
 
-## What was tested
+## Who it is for
 
-[Testing](testing.md) is the record. A gluetun overlay exit with NordVPN has been upgraded to
-each release and come up healthy and connected, on rootless Podman with Quadlet units and on
-Kubernetes, with its preflight from an init container there. No drill has been run on the Go exit
-of this form live and no client has been held on it; the gluetun rules, monitors and stop sequence
-are covered by the namespace drills in CI only. The design itself was verified live before the Go
-rewrite, with NordVPN through gluetun v3.41.3, on Docker
-([2026-10-08](testing.md#gluetun-backend-pass-at-a3bb14f)) and on rootless Podman with a Linux
-client held on the exit ([2026-10-11](testing.md#070-on-rootless-podman-at-d5a234a)).
-
-**Not tested:** any gluetun provider other than NordVPN, IPv6 through gluetun, the
-`SERVER_CATEGORIES` override, podman-compose, Docker Engine on Linux, running
-`compose.gluetun.yaml` at all, and NetBird Cloud ([the list](testing.md#not-tested-at-080)).
-
-## What you get, and what you don't
+This page is for you if you want your NetBird devices to use a
+[gluetun](https://github.com/qdm12/gluetun) connection as an exit node: the
+[NetBird exit](netbird-exit.md) way in, with gluetun owning the tunnel and
+bringing its provider support. Choose it for FastestVPN, IVPN, Surfshark or
+Windscribe, or for Mullvad or NordVPN when you want gluetun's tunnel. For
+Mullvad, PIA and NordVPN the [native NetBird exit](netbird-exit.md) needs no
+gluetun. gluetun and NetBird do not work safely together without something
+like Molebridge's routing contract;
+[why plain gluetun plus NetBird fails](#why-plain-gluetun-plus-netbird-fails)
+explains why, so you can judge whether to use the design as written or adapt
+it.
 
 You get:
 
-- **Forwarded traffic fails closed.** Traffic your devices send through the exit leaves
-  only through gluetun's tunnel. If the tunnel or its route is gone, that traffic is
-  dropped; it does not fall back to the host's connection. This is what the routing
-  contract is for, and the [drills](#verification) check it.
+- **Forwarded traffic fails closed**, as above.
 - **NetBird's own traffic stays off the tunnel.** The exit peer's connections to
   NetBird's management, signal and relay servers, and its WireGuard socket, use the
   host's route. A plain gluetun setup sends them into the tunnel.
 - **The exit's own traffic goes into the tunnel or fails.** What gluetun and other
   processes in the namespace send without a mark does not use the host interface while
-  gluetun reconnects. Rules 102 to 104 below are why.
+  gluetun reconnects. Rules 102 to 104 are why
+  ([architecture](architecture.md#the-exits-own-traffic-rules-102104)).
 - **Server selection and a verdict.** The exit selects servers through gluetun's control
   server, restores your selection after gluetun restarts, and checks the peer, the
   handshake and the egress on a schedule, with the same status record and panel as the
@@ -56,14 +40,27 @@ You get:
 - **Gluetun's tunnel and provider support.** The tunnel is gluetun's; you configure it
   the way gluetun's documentation describes.
 
-You don't get:
+## What you run
 
-- **No automatic failover.** A dead tunnel means a dead exit until gluetun reconnects.
-  Molebridge never picks another server.
-- **WireGuard only.** The contract assumes a kernel WireGuard tunnel. OpenVPN, and
-  providers gluetun supports only over OpenVPN, are not covered.
-- **No kill switch on your devices.** As with Molebridge, a device that deselects the exit,
-  or that NetBird disconnects, uses its own connection.
+`compose.gluetun.yaml` with `.env.gluetun.example`, or the same services
+written by `molebridge init` with the `netbird-exit` way in and a
+`gluetun-<id>` provider ([setup](setup.md#molebridge-init)). The first two
+share one network namespace, owned by `gluetun`:
+
+| Service | Role |
+|---|---|
+| `gluetun` | `docker.io/qmcgaw/gluetun:v3.41.3`, pinned by digest. Owns the namespace, creates the tunnel interface (`wg0` by default), runs its own firewall. Starts through `routing/gluetun-preflight`. The engine's default capabilities plus `NET_ADMIN`, with `no-new-privileges`; Compose drops none of the defaults and leaves its root file system writable, because neither has been tried with gluetun. |
+| `exit` | The `ghcr.io/irashack/molebridge` image's `exit` role (it carries NetBird), joined to gluetun's namespace (`network_mode: service:gluetun`) with `TUNNEL_BACKEND=gluetun`. Installs and keeps the rules and routes below, runs NetBird as a supervised child, reads gluetun's server list and switches servers through its control server. `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`. |
+| `switchyard` | The panel. Optional; on its own network. Start `gluetun` and `exit` alone and read the result with `molebridge status` if you don't want it. |
+
+**What changed in 0.8.0.** In 0.7 you could run this form without Molebridge's
+panel and server logic: three containers, a routing guard as a sidecar, a gate
+script in front of NetBird, and any gluetun WireGuard provider. That form is
+gone. The `exit` container is one program that holds the routing, supervises
+NetBird and runs the provider logic (server list, selection through gluetun's
+control server, egress checks, the status record), and it accepts only the six
+providers the registry knows. A provider outside that list, or OpenVPN, isn't
+covered ([other providers](other-providers.md)).
 
 ## Why plain gluetun plus NetBird fails
 
@@ -99,15 +96,7 @@ The contract works in policy routing. The firewall rules in this setup only open
 what gluetun's `DROP` policies would block
 ([Post-rules](#post-rules-for-gluetuns-firewall)).
 
-## The design
-
-Three containers, with the first two sharing one network namespace owned by `gluetun`:
-
-| Service | Role |
-|---|---|
-| `gluetun` | Owns the namespace, creates the tunnel interface (`wg0` by default), runs its own firewall. Starts through `routing/gluetun-preflight`. The engine's default capabilities plus `NET_ADMIN`, with `no-new-privileges`; Compose drops none of the defaults and leaves its root file system writable, because neither has been tried with gluetun. |
-| `exit` | The Molebridge image's `exit` role, joined to gluetun's namespace (`network_mode: service:gluetun`) with `TUNNEL_BACKEND=gluetun`. Installs and keeps the rules and routes below, runs NetBird as a supervised child, reads gluetun's server list and switches servers through its control server. `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`. |
-| `switchyard` | The panel. Optional; on its own network. |
+## How it keeps the guarantee
 
 Gluetun deletes and recreates its tunnel interface on every reconnect, and the kernel drops
 the routes through it. The exit therefore keeps watching: it repairs on the kernel's
@@ -191,8 +180,8 @@ traffic out: rules 1, 95 and 97 hold forwarded traffic throughout.
   [requirements](prerequisites.md#host).
 - **A NetBird account** with admin access, either NetBird Cloud or self-hosted (only a self-hosted
   server has been tried). You need the groups, the policy, a setup key and the exit route. The steps
-  are the same as for Molebridge; follow the [NetBird section of the requirements](prerequisites.md#netbird)
-  and [setup step 9](setup.md#9-create-the-route-and-try-a-device), and do not skip the group rules: the
+  are the same as for the native exit; follow the [NetBird section of the requirements](prerequisites.md#netbird)
+  and [the native exit's setup specifics](netbird-exit.md#setup-specifics), and do not skip the group rules: the
   exit peer is never in `exit-users`, and the exit route is never distributed to `All`. The image
   carries the NetBird client; its version is pinned in the `Dockerfile` (0.82.1 at this writing).
 - **A WireGuard account at one of the six providers**, with the private key (and the tunnel address, if
@@ -204,8 +193,9 @@ No Python is needed on the host: the tools run from the image.
 ## Set up
 
 This is the one installation procedure for the gluetun form, with the reasons. It uses the
-bundle's `compose.gluetun.yaml` and `.env.gluetun.example`. The [setup page](setup.md) covers the
-native exit and says where this form differs.
+bundle's `compose.gluetun.yaml` and `.env.gluetun.example`; if `molebridge init` wrote your
+`compose.yaml`, `.env` and `routing/gluetun-preflight`, skip the copy in step 1 and use its files
+where the steps name `compose.gluetun.yaml`. [Setup](setup.md) has the steps every way in shares.
 
 1. **Verify and extract the bundle** ([setup](setup.md#1-download-and-verify)), then:
 
@@ -431,16 +421,6 @@ the current servers; choose a server after that. gluetun starts on any server (o
 and NordVPN the panel shows a connected exit as "tunnel checks only", because there is no
 provider check.
 
-## A configured server
-
-Set `SERVER` in `.env` to one server hostname from the catalog to pin the exit to it.
-When `SERVER` is set, configuration wins: the exit ignores `desired.json` and restores
-`SERVER` after a gluetun restart, ahead of a saved panel selection. If you run Switchyard,
-it shows that exit read-only as "Set in configuration". Invalid or unknown names fail
-validation rather than falling back to a panel selection. `GLUETUN_SERVER_*` filters still
-choose gluetun's initial connection before the exit can converge. See [the setting and its
-validation](configuration.md#a-server-set-in-configuration).
-
 ## Choosing and switching servers
 
 Choose a server in the panel, or pin one with `SERVER`. The exit then puts the selection to
@@ -462,6 +442,16 @@ matters. Gluetun's `SERVER_CATEGORIES` setting selects by category, but
 `compose.gluetun.yaml` does not pass it through; you would add it to the gluetun service
 in a `compose.override.yaml` and set
 `COMPOSE_FILE=compose.gluetun.yaml:compose.override.yaml`. That has not been tried.
+
+### A configured server
+
+Set `SERVER` in `.env` to one server hostname from the catalog to pin the exit to it.
+When `SERVER` is set, configuration wins: the exit ignores `desired.json` and restores
+`SERVER` after a gluetun restart, ahead of a saved panel selection. If you run Switchyard,
+it shows that exit read-only as "Set in configuration". Invalid or unknown names fail
+validation rather than falling back to a panel selection. `GLUETUN_SERVER_*` filters still
+choose gluetun's initial connection before the exit can converge. See [the setting and its
+validation](configuration.md#a-server-set-in-configuration).
 
 ## Keep these off for the exit peer
 
@@ -719,6 +709,32 @@ tunnel because of it.
 [Troubleshooting](troubleshooting.md#gluetun-backend) covers the exit's refusals and stops, the control-server
 checks, the preflight's messages, and gluetun refusing to start with a server it does not know. Gluetun's own log
 (`docker compose logs gluetun`) says why it could not connect.
+
+## Limits and what wasn't tested
+
+**What was tested.** [Testing](testing.md) is the record. A gluetun overlay exit with NordVPN has been upgraded to
+each release and come up healthy and connected, on rootless Podman with Quadlet units and on
+Kubernetes, with its preflight from an init container there. On Kubernetes each release
+candidate's acceptance runs the tunnel-loss drill and the retired-server move on it, from inside
+the namespace. No client has been held on the Go exit of this form, and the other drills on this page
+(the gluetun rules, monitors and stop sequence) are covered by the namespace drills in CI only. The design itself was verified live before the Go
+rewrite, with NordVPN through gluetun v3.41.3, on Docker
+([2026-10-08](testing.md#gluetun-backend-pass-at-a3bb14f)) and on rootless Podman with a Linux
+client held on the exit ([2026-10-11](testing.md#070-on-rootless-podman-at-d5a234a)).
+
+**Not tested:** any gluetun provider other than NordVPN, IPv6 through gluetun, the
+`SERVER_CATEGORIES` override, podman-compose, Docker Engine on Linux, running
+`compose.gluetun.yaml` at all, and NetBird Cloud ([the list](testing.md#not-tested-at-080)).
+
+- **No automatic failover.** A dead tunnel means a dead exit until gluetun reconnects.
+  Molebridge never picks another server, and the exit refuses to start with `FAILOVER` on.
+- **WireGuard only.** The contract assumes a kernel WireGuard tunnel. OpenVPN, and
+  providers gluetun supports only over OpenVPN, are not covered. PIA stays native.
+- **No kill switch on your devices.** As with the native exit, a device that deselects the exit,
+  or that NetBird disconnects, uses its own connection.
+- **Egress is provider-confirmed for Mullvad and NordVPN only.** The others show "tunnel
+  checks only" ([providers](providers.md#the-gluetun-backend)).
+- **No proxy.** The [proxy](proxy.md) needs a tunnel Molebridge brings up itself.
 
 ---
 
