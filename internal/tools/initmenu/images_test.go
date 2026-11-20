@@ -86,11 +86,12 @@ func TestRenderWithImages(t *testing.T) {
 	}
 	raw, _ := templateFS.ReadFile("compose.tmpl")
 	var tmplImage, tmplCore string
-	for _, m := range molebridgePinRE.FindAll(raw, -1) {
-		if bytes.HasPrefix(m, []byte(CoreRepo+":")) {
-			tmplCore = string(m)
+	for _, m := range molebridgePinRE.FindAllSubmatch(raw, -1) {
+		ref := strings.TrimPrefix(string(m[0]), string(m[1]))
+		if len(m[2]) > 0 {
+			tmplCore = ref
 		} else {
-			tmplImage = string(m)
+			tmplImage = ref
 		}
 	}
 	if tmplImage == "" || tmplCore == "" {
