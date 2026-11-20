@@ -215,19 +215,20 @@ func systemIdentity() identity {
 	return id
 }
 
-// The isolation refusals, fixed text. Unlike the panel there is no root
-// statement: the proxy never needs root, on a rootless engine either (give
-// it the uid that owns state/proxy and secrets/proxy).
+// The isolation refusals, fixed text. As with the panel and the exchange,
+// root is refused unless PANEL_ALLOW_ROOT is exactly "1": a rootless engine
+// maps the container's uid 0 to the unprivileged user who runs it.
 const (
-	refuseProxyRoot       = "the proxy must not run as root (uid 0); set PANEL_USER to the uid:gid that owns state/proxy and secrets/proxy"
+	refuseProxyRoot       = "the proxy must not run as root (uid 0); set PANEL_USER to the uid:gid that owns state/proxy and secrets/proxy (on a rootless engine, 0:0 with PANEL_ALLOW_ROOT=1)"
 	refuseProxyCaps       = "the proxy must run with no capabilities (cap_drop: [ALL]); its effective capability set is not empty"
 	refuseProxyCapUnknown = "the proxy cannot read its capability set from /proc/self/status, so it cannot show it has none"
 )
 
 // checkProxyIsolation returns the refusals that apply, in a stable order.
-func checkProxyIsolation(id identity) []string {
+// allowRoot is PANEL_ALLOW_ROOT from the environment ("" when unset).
+func checkProxyIsolation(id identity, allowRoot string) []string {
 	var refusals []string
-	if id.UID == 0 || id.EUID == 0 {
+	if (id.UID == 0 || id.EUID == 0) && allowRoot != "1" {
 		refusals = append(refusals, refuseProxyRoot)
 	}
 	switch {
@@ -242,7 +243,7 @@ func checkProxyIsolation(id identity) []string {
 // proxyMain checks the process and the settings, then serves until ctx ends.
 // Exit status 0 after a clean stop, 1 for a refusal or a failure.
 func proxyMain(ctx context.Context, env map[string]string, id identity, stderr io.Writer) int {
-	if refusals := checkProxyIsolation(id); len(refusals) > 0 {
+	if refusals := checkProxyIsolation(id, env["PANEL_ALLOW_ROOT"]); len(refusals) > 0 {
 		for _, r := range refusals {
 			fmt.Fprintf(stderr, "molebridge proxy: refusing to start: %s\n", r)
 		}

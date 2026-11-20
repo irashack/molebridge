@@ -89,7 +89,7 @@ gluetun and native sidecar Compose files run it.
 |---|---|---|
 | `exit` | `exit` | Owns the namespace. One process tree: a supervisor as PID 1, a worker that holds the routing and runs the provider logic, and the pinned NetBird client. Serves no HTTP. `NET_ADMIN`, `NET_RAW` and `DAC_OVERRIDE`; everything else dropped |
 | `switchyard` | `panel` | The web panel (Switchyard). Separate bridge network, loopback publish, no capabilities, no subprocesses. Runs as `PANEL_USER` (the host user's uid, or container root mapped to the host user under rootless Podman) |
-| `proxy` (optional) | `proxy` | The [proxy](#the-proxy), from `compose.proxy.yaml`, on `molebridge-core`. Joins the exit's namespace, runs as `PANEL_USER`, refuses root and every capability, and has the applier directory read-only |
+| `proxy` (optional) | `proxy` | The [proxy](#the-proxy), from `compose.proxy.yaml`, on `molebridge-core`. Joins the exit's namespace, runs as `PANEL_USER`, refuses root (unless `PANEL_ALLOW_ROOT=1`) and every capability, and has the applier directory read-only |
 
 The other roles run as throwaway containers or inside the exit: `health` and
 `status` read the exit's runtime state, `check-config` validates settings,
@@ -2240,7 +2240,7 @@ listener that takes SOCKS5 (RFC 1928 `CONNECT` with RFC 1929 username and
 password) and HTTP `CONNECT`. Its Compose service (`compose.proxy.yaml`, on
 `molebridge-core`) joins the namespace of a NetBird exit (`compose.yaml`) or a
 native sidecar (`compose.native-sidecar.yaml`). It runs as `PANEL_USER`, and
-refuses to start as root, with any capability, with a provider other than
+refuses to start as root (unless `PANEL_ALLOW_ROOT=1`), with any capability, with a provider other than
 `mullvad`, `pia` or `nordvpn`, or with `PROVIDERS` set. It changes nothing in
 the kernel: it needs none of the exit's privileges, and the exit's routing
 contract and repair are unchanged by it.

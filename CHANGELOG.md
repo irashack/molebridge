@@ -98,6 +98,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   - `molebridge init` and the proxy are in v0.14.0, not "no release yet".
   - Testing claims now match the record.
 
+- Fixed: the proxy accepts `PANEL_ALLOW_ROOT=1`, as the panel and the
+  exchange do, so it starts on rootless Podman with the documented
+  `PANEL_USER=0:0` and `PANEL_ALLOW_ROOT=1` (#129). It refused uid 0 whatever
+  the setting, and `compose.proxy.yaml` didn't pass it. It still refuses
+  uid 0 or effective uid 0 unless the value is exactly `1`, and still
+  refuses any capability. `compose.proxy.yaml` and `molebridge init` pass
+  `PANEL_ALLOW_ROOT`, and the refusal now ends `(on a rootless engine, 0:0
+  with PANEL_ALLOW_ROOT=1)`. [The proxy](docs/proxy.md#set-it-up-with-compose)
+  drops its untested workaround (a non-root `user:` override) for these
+  settings. Not run on rootless Podman.
+
 ## 0.14.1 — unreleased
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;

@@ -1190,7 +1190,8 @@ proxy](proxy.md).
 <reason>`.** It checks its isolation, then its settings, and prints one line
 for every problem it found, not only the first. The isolation lines are
 fixed: `the proxy must not run as root (uid 0); set PANEL_USER to the
-uid:gid that owns state/proxy and secrets/proxy`, `the proxy must run with no
+uid:gid that owns state/proxy and secrets/proxy (on a rootless engine, 0:0
+with PANEL_ALLOW_ROOT=1)`, `the proxy must run with no
 capabilities (cap_drop: [ALL]); its effective capability set is not empty`
 and `the proxy cannot read its capability set from /proc/self/status, so it
 cannot show it has none`. With `PROVIDERS` set the line is `PROVIDERS is set:

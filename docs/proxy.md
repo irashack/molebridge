@@ -96,19 +96,19 @@ By hand:
    `docker compose up -d`. The proxy starts once the exit is healthy and is
    restarted with it.
 
-**On rootless Podman**, where the panel runs with `PANEL_USER=0:0`, the proxy
-refuses to start, because it never runs as root:
+**On rootless Podman**, use the same `PANEL_USER=0:0` and
+`PANEL_ALLOW_ROOT=1` as the rest of the stack
+([rootless Podman](prerequisites.md#rootless-podman)). Container root is your
+own user there, so the directories you created in step 1 are already the
+proxy's and the `chown` is not needed. The proxy still runs with no
+capabilities. Without `PANEL_ALLOW_ROOT=1` it refuses to start as uid 0:
 
 ```text
-molebridge proxy: refusing to start: the proxy must not run as root (uid 0); set PANEL_USER to the uid:gid that owns state/proxy and secrets/proxy
+molebridge proxy: refusing to start: the proxy must not run as root (uid 0); set PANEL_USER to the uid:gid that owns state/proxy and secrets/proxy (on a rootless engine, 0:0 with PANEL_ALLOW_ROOT=1)
 ```
 
-Give the `proxy` service a non-root `user:` of its own in a Compose override,
-own `state/proxy` and `secrets/proxy` as that user inside the user namespace
-(`podman unshare chown <uid>:<gid> state/proxy secrets/proxy`), and let it
-read the exit's files through `STATE_GID`
-([readers in another group](configuration.md#readers-in-another-group)).
-This form has not been tested.
+The proxy has not been run on rootless Podman this way
+([what wasn't tested](#limits-and-what-wasnt-tested)).
 
 ### A client container outside the stack
 
@@ -138,6 +138,7 @@ Docker form is not recorded in [testing](testing.md).
 | `PROXY_MAX_CONNS` | `512` | The most client connections open at once, 1 to 65535. One more is closed before anything is read. |
 | `PROXY_DNS` | the provider's | The resolver, an IP address with an optional port (53 when left out), for the names the proxy resolves itself: Mullvad relay proxy names, and every target with PIA and NordVPN. Asked through the tunnel. The defaults are each provider's own: Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53`, NordVPN `103.86.96.100:53`. |
 | `OVERLAY_IF` | `wt0` | The only interface besides loopback whose addresses `PROXY_LISTEN` may use: NetBird's, as the exit's own `OVERLAY_IF`, or on Kubernetes the pod's own interface ([below](#on-kubernetes)). It must differ from `TUNNEL_INTERFACE`. |
+| `PANEL_ALLOW_ROOT` | empty | Exactly `1` lets the proxy run as uid 0, for `PANEL_USER=0:0` on a rootless engine ([rootless Podman](prerequisites.md#rootless-podman)). Any other value, as empty, refuses uid 0. Compose passes the stack's. |
 | `STATE_DIR` | `/state` | A clean absolute path. The exit's `applier/` is read from here (mounted read-only: `relays.json` and `result.json`), and the proxy writes `proxy/proxy.json`. |
 
 An empty value is the same as an unset one. `PROVIDERS` must be unset: the
@@ -395,7 +396,7 @@ candidate ([the proxy drill](verification.md#the-proxy)). An image from
 before the proxy role exits at once with `unknown role "proxy"`.
 
 **Not tested:** PIA and NordVPN, the native sidecar's namespace (on the rig
-or live), Docker Engine, rootless Podman with a non-root proxy user, and
+or live), Docker Engine, rootless Podman (`PANEL_USER=0:0` with `PANEL_ALLOW_ROOT=1`), and
 `STATE_GID` on Kubernetes ([testing](testing.md)).
 
 - **Relay choice is Mullvad only.** PIA and NordVPN offer only the exit's

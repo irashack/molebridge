@@ -685,7 +685,7 @@ its guarantee, setup and limits. `compose.proxy.yaml` adds the `proxy`
 service on top of `compose.yaml` or `compose.native-sidecar.yaml`
 (`COMPOSE_FILE=compose.yaml:compose.proxy.yaml`). It passes the exit's
 `PROVIDER`, `EXIT_IF` (as `TUNNEL_INTERFACE`), `OVERLAY_IF` and
-`PANEL_USER` (the user it runs as), and these of its own from `.env`:
+`PANEL_USER` (the user it runs as) with `PANEL_ALLOW_ROOT`, and these of its own from `.env`:
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -695,7 +695,8 @@ service on top of `compose.yaml` or `compose.native-sidecar.yaml`
 
 The password is the one line in `secrets/proxy/password` (mode `0600`, owned
 by `PANEL_USER`), mounted read-only at `/run/secrets/proxy/password`
-(`PROXY_PASSWORD_FILE`). The proxy refuses to start as root, with any
+(`PROXY_PASSWORD_FILE`). The proxy refuses to start as root (unless `PANEL_ALLOW_ROOT` is exactly
+`1`, as for the panel), with any
 capability, with a provider other than `mullvad`, `pia` or `nordvpn`, or with
 a setting that doesn't parse, and names every bad setting at once;
 [the proxy](proxy.md#settings) lists every setting the role reads. With

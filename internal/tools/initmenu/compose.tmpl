@@ -1077,7 +1077,9 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     restart: unless-stopped
     network_mode: service:exit
     # The user that owns ./state/proxy and ./secrets/proxy, as the panel's
-    # PANEL_USER (docs/configuration.md).
+    # PANEL_USER (docs/configuration.md). Under a rootless engine that remaps
+    # uids, PANEL_USER=0:0 with PANEL_ALLOW_ROOT=1, as for the panel: the
+    # proxy refuses to run as uid 0 unless you say so.
     user: "${PANEL_USER:-1000:1000}"
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -1085,6 +1087,10 @@ the shipped files (tools/auto-release.py, PIN_FILES).
     environment:
       STATE_DIR: /state
       PROVIDER: "${PROVIDER:-{{.DefaultProvider}}}"
+      # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
+      # this container is deliberate (PANEL_USER=0:0). The proxy treats
+      # empty as unset.
+      PANEL_ALLOW_ROOT: "${PANEL_ALLOW_ROOT:-}"
       TUNNEL_INTERFACE: "${EXIT_IF:-{{.DefaultProvider}}}"
 {{- if eq .Form "overlay"}}
       # The exit's NetBird address and a port, for devices on the overlay,

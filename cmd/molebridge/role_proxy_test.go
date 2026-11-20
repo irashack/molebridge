@@ -208,22 +208,32 @@ func TestProxyStartRefusalsIncludeThePasswordFileAndTheListenAddress(t *testing.
 
 func TestProxyIsolation(t *testing.T) {
 	ok := identity{UID: 1000, EUID: 1000, CapKnown: true}
-	if r := checkProxyIsolation(ok); len(r) != 0 {
+	if r := checkProxyIsolation(ok, ""); len(r) != 0 {
 		t.Fatalf("a non-root process with no capabilities refused: %v", r)
 	}
+	root := identity{UID: 0, EUID: 0, CapKnown: true}
 	cases := []struct {
-		name string
-		id   identity
-		want []string
+		name      string
+		id        identity
+		allowRoot string
+		want      []string
 	}{
-		{"root", identity{UID: 0, EUID: 0, CapKnown: true}, []string{refuseProxyRoot}},
-		{"effective root", identity{UID: 1000, EUID: 0, CapKnown: true}, []string{refuseProxyRoot}},
-		{"one capability", identity{UID: 1000, EUID: 1000, CapEff: 1 << 12, CapKnown: true}, []string{refuseProxyCaps}},
-		{"capabilities unknown", identity{UID: 1000, EUID: 1000}, []string{refuseProxyCapUnknown}},
-		{"root with every capability", identity{CapEff: 0x1ffffffffff, CapKnown: true}, []string{refuseProxyRoot, refuseProxyCaps}},
+		{"root", root, "", []string{refuseProxyRoot}},
+		{"effective root", identity{UID: 1000, EUID: 0, CapKnown: true}, "", []string{refuseProxyRoot}},
+		{"root with PANEL_ALLOW_ROOT=1", root, "1", nil},
+		{"effective root with PANEL_ALLOW_ROOT=1", identity{UID: 1000, EUID: 0, CapKnown: true}, "1", nil},
+		{"root with PANEL_ALLOW_ROOT=true", root, "true", []string{refuseProxyRoot}},
+		{"root with PANEL_ALLOW_ROOT=yes", root, "yes", []string{refuseProxyRoot}},
+		{"root with PANEL_ALLOW_ROOT=0", root, "0", []string{refuseProxyRoot}},
+		{"root with PANEL_ALLOW_ROOT=' 1'", root, " 1", []string{refuseProxyRoot}},
+		{"one capability", identity{UID: 1000, EUID: 1000, CapEff: 1 << 12, CapKnown: true}, "", []string{refuseProxyCaps}},
+		{"capabilities unknown", identity{UID: 1000, EUID: 1000}, "", []string{refuseProxyCapUnknown}},
+		{"root with every capability", identity{CapEff: 0x1ffffffffff, CapKnown: true}, "", []string{refuseProxyRoot, refuseProxyCaps}},
+		{"allowed root still needs no capabilities", identity{CapEff: 0x1ffffffffff, CapKnown: true}, "1", []string{refuseProxyCaps}},
+		{"allowed root, capabilities unknown", identity{}, "1", []string{refuseProxyCapUnknown}},
 	}
 	for _, c := range cases {
-		got := checkProxyIsolation(c.id)
+		got := checkProxyIsolation(c.id, c.allowRoot)
 		if strings.Join(got, "|") != strings.Join(c.want, "|") {
 			t.Errorf("%s: %v", c.name, got)
 		}
@@ -232,6 +242,12 @@ func TestProxyIsolation(t *testing.T) {
 	var stderr bytes.Buffer
 	if code := proxyMain(context.Background(), map[string]string{}, identity{CapKnown: true}, &stderr); code != 1 ||
 		!strings.Contains(stderr.String(), "must not run as root") || strings.Contains(stderr.String(), "PROVIDER") {
+		t.Fatalf("%d %q", code, stderr.String())
+	}
+	// With PANEL_ALLOW_ROOT=1 the root check passes and the settings are read.
+	stderr.Reset()
+	if code := proxyMain(context.Background(), map[string]string{"PANEL_ALLOW_ROOT": "1", "PROVIDER": "gluetun-ivpn"}, identity{CapKnown: true}, &stderr); code != 1 ||
+		strings.Contains(stderr.String(), "must not run as root") || !strings.Contains(stderr.String(), "refusing to start: PROVIDER") {
 		t.Fatalf("%d %q", code, stderr.String())
 	}
 	stderr.Reset()
