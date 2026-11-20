@@ -4,6 +4,52 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
+## Unreleased
+
+- Built but switched off: piece 7 of the [multi-provider
+  exit](docs/configuration.md#multi-provider-exit), the panel. This
+  release's panel refuses a multi-provider exit ("multi-provider exits are
+  not available in this release yet") by the same switch as the exit, so
+  it never offers a provider the exit can't change to; only drill builds
+  accept it. In such a build `PANEL_EXITS` takes
+  `id=mullvad+pia+nordvpn[:label]` (overlay only), and a single exit's panel
+  reads `PROVIDERS` as the exit does. The exit's page has provider tabs
+  above the server list, marks the provider in use, warns before a pick
+  that every device on the exit moves to another provider, and writes the
+  provider with the server. The status line names the provider
+  ("Connected: PIA, us_chicago"); PIA's forwarded port shows only while PIA
+  is in use. Refused in `PANEL_PROXY_STATUS` and `PANEL_NETWORK_EXITS`.
+  Single-provider views are byte for byte as before (a new golden test
+  locks them).
+- Test only, no change to the exit: the system rig's leak counter counted
+  one packet during a panel switch on one CI run (issue 119). Its timing
+  and a reproduction in CI show what it was: the client's closing packet
+  for a connection that began on the old relay, sent through the tunnel to
+  the new relay after the switch had finished. The fake relay had no
+  conntrack entry for that connection, so conntrack called the packet
+  invalid, the relay forwarded it without its SNAT, and it reached the fake
+  internet with the client's overlay source, which the counter matched on
+  any link. In the reproduction (64 switches under load, over four CI
+  runs) such packets arrived by the relays' links only, none by the exit's
+  host link; in the run that also read the relays' conntrack, all 13 were
+  invalid there. The counter now counts the client's source on any link
+  but the relays' (the exit's host link above all), and any
+  client-probe-port packet from the host link as before; packets a relay
+  forwarded without its SNAT go to a separate counter the drills log
+  ([the system rig](CONTRIBUTING.md#the-system-rig)).
+- Internal, no user-visible change: the system rig drills a multi-provider
+  exit across all three providers. Beside a new fake PIA network (region
+  list, login, status check, and a WireGuard server with its registration
+  and port-forwarding APIs), the drill build changes between every pair of
+  Mullvad, NordVPN and PIA in both directions, recovers a tunnel lost right
+  after a change as the new provider's, finishes a change whose `Replace`
+  was killed with the worker between its links, removes PIA's forwarding
+  table before Mullvad's tunnel is up, and repairs routing faults on each
+  provider's tunnel, with no client packet by the host path. Two hooks
+  exist only in drill builds: trusting the rig's certificate authority for
+  PIA, and holding a replacement between its links. Fake networks only:
+  the live pass has not run.
+
 ## 0.14.1 — unreleased
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;
@@ -73,7 +119,7 @@ what changed is below.
   default with `PROVIDERS`); a change of provider replaces the whole tunnel,
   PIA's return-path rules included, and a restart comes back on the last
   active provider. Refused with gluetun, the sidecar, failover, the network
-  exchange and the proxy. The live
+  exchange and the proxy. The panel can't pick a provider yet, and the live
   pass and the memory measurement with NordVPN have not run. A
   single-provider exit is byte for byte as before (a new golden test locks
   its settings, child environments and starting record).
@@ -105,52 +151,6 @@ what changed is below.
   build writes and, with a drill binary, the 76 a drill build writes
   ([setup](docs/setup.md#molebridge-init)). Checked by CI only; no stack
   init wrote has been started.
-
-- Built but switched off: piece 7 of the [multi-provider
-  exit](docs/configuration.md#multi-provider-exit), the panel. This
-  release's panel refuses a multi-provider exit ("multi-provider exits are
-  not available in this release yet") by the same switch as the exit, so
-  it never offers a provider the exit can't change to; only drill builds
-  accept it. In such a build `PANEL_EXITS` takes
-  `id=mullvad+pia+nordvpn[:label]` (overlay only), and a single exit's panel
-  reads `PROVIDERS` as the exit does. The exit's page has provider tabs
-  above the server list, marks the provider in use, warns before a pick
-  that every device on the exit moves to another provider, and writes the
-  provider with the server. The status line names the provider
-  ("Connected: PIA, us_chicago"); PIA's forwarded port shows only while PIA
-  is in use. Refused in `PANEL_PROXY_STATUS` and `PANEL_NETWORK_EXITS`.
-  Single-provider views are byte for byte as before (a new golden test
-  locks them).
-
-- Test only, no change to the exit: the system rig's leak counter counted
-  one packet during a panel switch on one CI run (issue 119). Its timing
-  and a reproduction in CI show what it was: the client's closing packet
-  for a connection that began on the old relay, sent through the tunnel to
-  the new relay after the switch had finished. The fake relay had no
-  conntrack entry for that connection, so conntrack called the packet
-  invalid, the relay forwarded it without its SNAT, and it reached the fake
-  internet with the client's overlay source, which the counter matched on
-  any link. In the reproduction (64 switches under load, over four CI
-  runs) such packets arrived by the relays' links only, none by the exit's
-  host link; in the run that also read the relays' conntrack, all 13 were
-  invalid there. The counter now counts the client's source on any link
-  but the relays' (the exit's host link above all), and any
-  client-probe-port packet from the host link as before; packets a relay
-  forwarded without its SNAT go to a separate counter the drills log
-  ([the system rig](CONTRIBUTING.md#the-system-rig)).
-
-- Internal, no user-visible change: the system rig drills a multi-provider
-  exit across all three providers. Beside a new fake PIA network (region
-  list, login, status check, and a WireGuard server with its registration
-  and port-forwarding APIs), the drill build changes between every pair of
-  Mullvad, NordVPN and PIA in both directions, recovers a tunnel lost right
-  after a change as the new provider's, finishes a change whose `Replace`
-  was killed with the worker between its links, removes PIA's forwarding
-  table before Mullvad's tunnel is up, and repairs routing faults on each
-  provider's tunnel, with no client packet by the host path. Two hooks
-  exist only in drill builds: trusting the rig's certificate authority for
-  PIA, and holding a replacement between its links. Fake networks only:
-  the live pass has not run.
 
 ## 0.14.0 — 2026-11-20
 
