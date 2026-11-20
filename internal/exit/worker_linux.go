@@ -351,7 +351,7 @@ func (w *worker) run() int {
 		return 1
 	}
 	defer obs.Close()
-	tun, err := tunnel.Open(tunnel.Options{})
+	tun, err := tunnel.Open(tunnel.Options{BetweenLinks: w.drillBetweenLinks()})
 	if err != nil {
 		w.logf("%v", err)
 		return 1

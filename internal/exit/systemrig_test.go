@@ -61,6 +61,7 @@ import (
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
+	"github.com/irashack/molebridge/internal/applier"
 	"github.com/irashack/molebridge/internal/egress"
 	"github.com/irashack/molebridge/internal/nstest"
 	"github.com/irashack/molebridge/internal/providers"
@@ -180,9 +181,10 @@ type systemRig struct {
 
 	mu     sync.Mutex
 	served []string
-	// nordAPI, when set, answers for api.nordvpn.com (the multi-provider
-	// drill's fake NordVPN network); the name resolves to the check server.
-	nordAPI http.Handler
+	// apis answer for other providers' API names by host (the
+	// multi-provider drills' fake NordVPN and PIA networks); the names
+	// resolve to the check server.
+	apis map[string]http.Handler
 	// hold, while not nil, keeps Mullvad check answers on port 443 (the
 	// exit's, never the client's probes) waiting until it is closed.
 	hold chan struct{}
@@ -371,25 +373,26 @@ func newSystemRig(t *testing.T) *systemRig {
 	// conntrack entry on the new one, conntrack calls it invalid, and NAT
 	// skips it, so it reaches the internet with the overlay source (issue
 	// 119). unnat is not a leak; the drills log it. via_* count the
-	// client's probes by each relay (nord0 is the
-	// multi-provider drill's fake NordVPN server, absent from the other
-	// drills).
+	// client's probes by each relay (nord0 and pia0 are the multi-provider
+	// drills' fake NordVPN and PIA servers, absent from the other drills).
 	counters := `table inet rig {
   counter leak {}
   counter unnat {}
   counter via_relaya0 {}
   counter via_relayb0 {}
   counter via_nord0 {}
+  counter via_pia0 {}
   chain pre {
     type filter hook prerouting priority raw; policy accept;
-    iifname { "relaya0", "relayb0", "nord0" } ip saddr 192.0.2.0/24 counter name unnat
-    iifname { "relaya0", "relayb0", "nord0" } ip6 saddr 2001:db8:1::/64 counter name unnat
-    iifname != { "relaya0", "relayb0", "nord0" } ip saddr 192.0.2.0/24 counter name leak
-    iifname != { "relaya0", "relayb0", "nord0" } ip6 saddr 2001:db8:1::/64 counter name leak
+    iifname { "relaya0", "relayb0", "nord0", "pia0" } ip saddr 192.0.2.0/24 counter name unnat
+    iifname { "relaya0", "relayb0", "nord0", "pia0" } ip6 saddr 2001:db8:1::/64 counter name unnat
+    iifname != { "relaya0", "relayb0", "nord0", "pia0" } ip saddr 192.0.2.0/24 counter name leak
+    iifname != { "relaya0", "relayb0", "nord0", "pia0" } ip6 saddr 2001:db8:1::/64 counter name leak
     iifname "exit0" tcp dport ` + rigClientPort + ` counter name leak
     iifname "relaya0" tcp dport ` + rigClientPort + ` counter name via_relaya0
     iifname "relayb0" tcp dport ` + rigClientPort + ` counter name via_relayb0
     iifname "nord0" tcp dport ` + rigClientPort + ` counter name via_nord0
+    iifname "pia0" tcp dport ` + rigClientPort + ` counter name via_pia0
   }
 }
 `
@@ -440,9 +443,11 @@ func rigNames(t *testing.T) map[string][]int {
 		return u.Hostname()
 	}
 	names[host(providers.MullvadRelaysURL)] = []int{4, 6}
-	// The fake NordVPN network's API, IPv4 only like NordVPN's tunnel; only
-	// the multi-provider drill serves it.
-	names[host(providers.NordServersURL)] = []int{4}
+	// The fake NordVPN and PIA networks' APIs, IPv4 only like their
+	// tunnels; only the multi-provider drills serve them.
+	for _, u := range []string{providers.NordServersURL, providers.PIAServerlistURL, applier.PIATokenURL, applier.PIAStatusURL} {
+		names[host(u)] = []int{4}
+	}
 	for family, urls := range egress.EchoURLs {
 		for _, u := range urls {
 			names[host(u)] = append(names[host(u)], family)
@@ -501,7 +506,7 @@ func (r *systemRig) makeCerts() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dns := []string{"echo.example.net", rigExchangeName}
+	dns := []string{"echo.example.net", rigExchangeName, rigPIACN}
 	for name := range rigNames(t) {
 		dns = append(dns, name)
 	}
@@ -609,10 +614,10 @@ func (r *systemRig) startServers() {
 	})
 	check := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.mu.Lock()
-		nord := r.nordAPI
+		other := r.apis[req.Host]
 		r.mu.Unlock()
-		if nord != nil && req.Host == "api.nordvpn.com" {
-			nord.ServeHTTP(w, req)
+		if other != nil {
+			other.ServeHTTP(w, req)
 			return
 		}
 		host, _, _ := net.SplitHostPort(req.RemoteAddr)
@@ -664,9 +669,13 @@ func (r *systemRig) startServers() {
 
 // serve runs an HTTPS server in the test process on a listener opened in
 // "internet".
-func (r *systemRig) serve(addr string, h http.Handler) {
+func (r *systemRig) serve(addr string, h http.Handler) { r.serveIn(r.internet, addr, h) }
+
+// serveIn runs an HTTPS server in the test process on a listener opened in
+// ns.
+func (r *systemRig) serveIn(ns *nstest.NS, addr string, h http.Handler) {
 	var ln net.Listener
-	if err := r.internet.Do(func() error {
+	if err := ns.Do(func() error {
 		var err error
 		ln, err = net.Listen("tcp", addr)
 		return err

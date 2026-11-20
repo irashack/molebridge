@@ -191,6 +191,18 @@ func NewPIA(cfg PIAConfig) Provider {
 	return &piaProvider{BaseProvider: BaseProvider{Name: "pia"}, cfg: cfg}
 }
 
+// UsePIARootCAs replaces a PIA provider's certificate authority with pool,
+// and reports whether p is PIA's. Only the system rig's drill build calls it
+// (internal/exit's pia_hook_drill.go), so its fake PIA servers can present
+// the rig's own certificates; the release build trusts PIA's CA alone.
+func UsePIARootCAs(p Provider, pool *x509.CertPool) bool {
+	pia, ok := p.(*piaProvider)
+	if ok && pool != nil {
+		pia.cfg.RootCAs = pool
+	}
+	return ok
+}
+
 // tunnelPath is tunnel.json in the exit's private directory.
 func tunnelPath(a *Applier) string { return filepath.Join(a.privateDir, "tunnel.json") }
 
