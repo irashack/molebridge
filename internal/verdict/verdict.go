@@ -30,6 +30,17 @@
 // (failoverFor); a reader from before failover finds the record's server is
 // not its target and says failed, never connected.
 //
+// Multi-provider exits (docs/design/multi-provider.md) keep schema 2. Their
+// records add "providers" (the exit's PROVIDERS), "requested_provider" and
+// "selection.target_provider"; "provider" stays the provider of the tunnel
+// in place, and every check is judged against its registry entry. A reader
+// configured for such an exit (ExitConfig.Providers) requires the record's
+// providers to be its own and judges the target's provider as well
+// (not-requested-provider, not-configured-provider). A single-provider
+// reader calls such a record a provider mismatch; one from before
+// multi-provider exits sees either another provider (a mismatch) or a true
+// record of its own provider.
+//
 // The package offers Assess (with ExitConfig, Target and Verdict), StatusView,
 // LegacyProjection, RequiredChecks, FixedChecks, BackendOf, OrderRecord (the
 // member order the supervisor writes), and the schema's constants; and, in
@@ -40,6 +51,7 @@ package verdict
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/irashack/molebridge/internal/providers"
@@ -195,7 +207,15 @@ type ExitConfig struct {
 	Provider string
 	Kind     string // "overlay", or "sidecar" (a gluetun sidecar or a native sidecar)
 	ID       string
+	// Providers is a multi-provider exit's PROVIDERS, in order
+	// (docs/design/multi-provider.md); nil for a single-provider exit. With
+	// it, a record is judged as its own provider's, which must be one of
+	// these, and Provider is only the provider the exit started on.
+	Providers []string
 }
+
+// MultiProvider is true for a reader configured for a multi-provider exit.
+func (c ExitConfig) MultiProvider() bool { return len(c.Providers) > 1 }
 
 // NewExitConfig validates the combination: a known provider and a known kind.
 // A sidecar takes any provider: a gluetun provider makes the gluetun sidecar,
@@ -211,6 +231,40 @@ func NewExitConfig(provider, kind, id string) (ExitConfig, error) {
 		return ExitConfig{}, errors.New("EXIT_KIND must be overlay or sidecar")
 	}
 	return ExitConfig{Provider: provider, Kind: kind, ID: id}, nil
+}
+
+// MaxProviders is the most providers a multi-provider exit holds.
+const MaxProviders = 3
+
+// NewMultiExitConfig validates a multi-provider exit's configuration: an
+// overlay exit with two or three distinct native providers, provider (the
+// one it starts on) among them. An empty kind means "overlay".
+func NewMultiExitConfig(ids []string, provider, kind, id string) (ExitConfig, error) {
+	if kind == "" {
+		kind = "overlay"
+	}
+	if kind != "overlay" {
+		return ExitConfig{}, errors.New("a multi-provider exit is an overlay exit")
+	}
+	if len(ids) < 2 || len(ids) > MaxProviders {
+		return ExitConfig{}, errors.New("a multi-provider exit takes two or three providers")
+	}
+	for i, p := range ids {
+		spec, ok := providers.Lookup(p)
+		if !ok {
+			return ExitConfig{}, errors.New("unknown provider")
+		}
+		if spec.Backend != providers.BackendNative {
+			return ExitConfig{}, errors.New("a multi-provider exit takes native providers only")
+		}
+		if contains(ids[:i], p) {
+			return ExitConfig{}, errors.New("a provider is listed twice")
+		}
+	}
+	if !contains(ids, provider) {
+		return ExitConfig{}, errors.New("the provider is not one of the exit's providers")
+	}
+	return ExitConfig{Provider: provider, Kind: kind, ID: id, Providers: append([]string(nil), ids...)}, nil
 }
 
 // gluetunSidecar is the sidecar of 0.8.0: an ordinary gluetun that other
@@ -239,6 +293,9 @@ type Target struct {
 	Source string
 	// Request is the panel's desired.json request, when the target is one.
 	Request *state.Request
+	// Provider is the target's provider on a multi-provider exit, "" for
+	// a single-provider exit, whose targets are its one provider's.
+	Provider string
 }
 
 // TargetForPanel is the panel's target for a status record and its request.
@@ -250,6 +307,48 @@ func TargetForPanel(result, desired any, provider string) Target {
 		return Target{Server: request.Server, Source: "panel", Request: &request}
 	}
 	return Target{}
+}
+
+// TargetFor is a reader's target for a status record and the panel's
+// request, for any exit: TargetForPanel on a single-provider exit. On a
+// multi-provider exit the configured lock is <provider>/<server>, and the
+// request is read by state.DesiredRequestFor, one without a provider as the
+// record's own provider's (the exit reads it as its active provider's).
+func TargetFor(exit ExitConfig, result, desired any) Target {
+	if !exit.MultiProvider() {
+		return TargetForPanel(result, desired, exit.Provider)
+	}
+	if configured, ok := state.ConfiguredServer(result); ok {
+		if provider, server, split := SplitTarget(configured, exit.Providers); split {
+			return Target{Server: server, Source: "configured", Provider: provider}
+		}
+		// Unreadable, it still locks the exit, and no record's server is it.
+		return Target{Server: configured, Source: "configured"}
+	}
+	request, ok := state.DesiredRequestFor(desired, exit.Providers)
+	if !ok {
+		return Target{}
+	}
+	if request.Provider == "" {
+		record, _ := object(result)
+		active, _ := record["provider"].(string)
+		if !contains(exit.Providers, active) || !state.ValidServerName(request.Server, active) {
+			return Target{}
+		}
+		request.Provider = active
+	}
+	return Target{Server: request.Server, Source: "panel", Request: &request, Provider: request.Provider}
+}
+
+// SplitTarget splits a multi-provider exit's <provider>/<server> (its
+// SERVER setting, and the record's configured_server) into a provider of
+// ids and a server name valid for it; ok is false when it doesn't.
+func SplitTarget(value string, ids []string) (provider, server string, ok bool) {
+	provider, server, found := strings.Cut(value, "/")
+	if !found || !contains(ids, provider) || !state.ValidServerName(server, provider) {
+		return "", "", false
+	}
+	return provider, server, true
 }
 
 // Verdict is the judgment.
@@ -377,7 +476,8 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 	if record["kind"] != exit.Kind {
 		return with(Verdict{State: "unknown", Label: "kind mismatch", Reasons: []string{"kind-mismatch"}})
 	}
-	if record["provider"] != exit.Provider || record["backend"] != exit.Backend() {
+	exit, matched := judgedAs(exit, record)
+	if !matched {
 		return with(Verdict{State: "unknown", Label: "provider mismatch", Reasons: []string{"provider-mismatch"}})
 	}
 	// 5. A stale or future record.
@@ -451,7 +551,11 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 		allChecks, _ := object(record["checks"])
 		egress, _ := object(allChecks["egress"])
 		tier, _ := egress["tier"].(string)
-		if disagreement := agreement(record, target, selection, configured, configuredPresent(configured)); disagreement != "" {
+		disagreement := providerDisagreement(exit, record, target, selection, configured)
+		if disagreement == "" {
+			disagreement = agreement(record, target, selection, serverOf(exit, configured), configuredPresent(configured))
+		}
+		if disagreement != "" {
 			return with(Verdict{State: "failed", Label: "verification failed", Reasons: []string{disagreement}, Message: message, Checks: checks})
 		}
 		var note []string
@@ -475,6 +579,104 @@ func Assess(exit ExitConfig, result any, target Target, now time.Time) Verdict {
 }
 
 func configuredPresent(configured string) bool { return configured != "" }
+
+// judgedAs is judgedAsProvider; the old-readers test swaps in the rule as it
+// was before multi-provider exits.
+var judgedAs = judgedAsProvider
+
+// judgedAsProvider is the configuration a record is judged by, with ok false
+// for "provider mismatch". A single-provider reader takes only a record of
+// its own provider and backend from a single-provider exit: a record with a
+// providers member is a multi-provider exit's, and the reader isn't
+// configured for it. A multi-provider reader takes a record whose providers
+// are its own, in order, and whose provider is one of them, and judges it as
+// that provider's: every check against that provider's registry entry.
+func judgedAsProvider(exit ExitConfig, record map[string]any) (ExitConfig, bool) {
+	listed, present := record["providers"]
+	if !exit.MultiProvider() {
+		if present || record["provider"] != exit.Provider || record["backend"] != exit.Backend() {
+			return exit, false
+		}
+		return exit, true
+	}
+	list, isList := listed.([]any)
+	if !isList || len(list) != len(exit.Providers) {
+		return exit, false
+	}
+	for i, id := range exit.Providers {
+		if list[i] != id {
+			return exit, false
+		}
+	}
+	provider, isString := record["provider"].(string)
+	if !isString || !contains(exit.Providers, provider) || record["backend"] != BackendOf(provider) {
+		return exit, false
+	}
+	judged := exit
+	judged.Provider = provider
+	return judged, true
+}
+
+// serverOf is the server of a configured lock: on a multi-provider exit the
+// part after its provider, when it splits.
+func serverOf(exit ExitConfig, configured string) string {
+	if !exit.MultiProvider() {
+		return configured
+	}
+	if _, server, ok := SplitTarget(configured, exit.Providers); ok {
+		return server
+	}
+	return configured
+}
+
+// providerDisagreement is why, on a multi-provider exit, the record's
+// provider isn't the target's, or "": not-configured-provider against the
+// SERVER lock (not-configured-server when the lock names no provider of the
+// exit's), not-requested-provider against the panel's request (the
+// record must acknowledge its provider too), not-target-server against any
+// other target, and, with no target of the reader's own, a record whose
+// selection names another provider than its own. The server is judged
+// afterwards, by agreement. A single-provider reader has none: its records
+// name no other provider (judgedAs).
+func providerDisagreement(exit ExitConfig, record map[string]any, target Target, selection map[string]any, configured string) string {
+	if !exit.MultiProvider() {
+		return ""
+	}
+	provider := record["provider"]
+	if target.Source == "configured" || configured != "" {
+		expected := target.Provider
+		if target.Source != "configured" {
+			expected, _, _ = SplitTarget(configured, exit.Providers)
+		}
+		if expected == "" {
+			// A lock that doesn't name one of the exit's providers: the
+			// exit refuses it, and no record agrees with it.
+			return "not-configured-server"
+		}
+		if provider != expected {
+			return "not-configured-provider"
+		}
+		return ""
+	}
+	if target.Source == "panel" {
+		if record["requested_provider"] != target.Provider || provider != target.Provider {
+			return "not-requested-provider"
+		}
+		return ""
+	}
+	if target.Server != "" {
+		if target.Provider != "" && provider != target.Provider {
+			return "not-target-server"
+		}
+		return ""
+	}
+	if source, isString := selection["source"].(string); isString && contains([]string{"restore", "reconverge", "retry", "operator-retry", "failover"}, source) {
+		if !same(provider, selection["target_provider"]) {
+			return "not-target-server"
+		}
+	}
+	return ""
+}
 
 // unacknowledged: while the panel's request isn't acknowledged, switching
 // while it is fresh, then unknown.
@@ -809,6 +1011,10 @@ func legacy(exit ExitConfig, record map[string]any, target Target, now time.Time
 	// kind mismatch.
 	if exit.Kind != "overlay" {
 		return with(Verdict{State: "unknown", Label: "kind mismatch", Reasons: []string{"kind-mismatch"}})
+	}
+	if exit.MultiProvider() {
+		// Multi-provider exits came after schema 2.
+		return with(Verdict{State: "unknown", Label: "provider mismatch", Reasons: []string{"provider-mismatch"}})
 	}
 	if !fresh(record["checked_at"], now) {
 		return with(Verdict{State: "unknown", Label: "status stale", Reasons: []string{"status-stale"}})

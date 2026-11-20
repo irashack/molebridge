@@ -275,9 +275,9 @@ func (s *Selection) target() verdict.Target {
 	if s.Replaces != "" {
 		// A reader's target is what was asked for; the record says what
 		// stands in for it.
-		return verdict.Target{Server: s.Replaces, Source: s.Source, Request: s.Request}
+		return verdict.Target{Server: s.Replaces, Source: s.Source, Request: s.Request, Provider: s.Provider}
 	}
-	return verdict.Target{Server: s.Server, Source: s.Source, Request: s.Request}
+	return verdict.Target{Server: s.Server, Source: s.Source, Request: s.Request, Provider: s.Provider}
 }
 
 // Finding is one inspection's findings (measure); emit publishes it.
