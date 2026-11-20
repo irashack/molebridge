@@ -21,4 +21,4 @@ and agents, tunneled out.") is set in Comfortaa Bold, converted to outlines.
 Comfortaa is © 2011 The Comfortaa Project Authors, under the
 [SIL Open Font License 1.1](https://github.com/googlefonts/comfortaa/blob/main/OFL.txt).
 No font file is included. `social-preview.svg` is the source of
-`social-preview.png`.
+`social-preview.png`, which `tools/screenshots/capture.js` renders.
