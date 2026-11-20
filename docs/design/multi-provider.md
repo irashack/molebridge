@@ -1,8 +1,8 @@
 # Design: one exit for several providers
 
-Status: **built** (2026-11-20). Every piece below, `molebridge init`
-included, is built. Release builds keep the feature switched off, and it
-passed one live pass on a drill image (issue #79). The user documentation is
+Status: **built, experimental, and in release builds** (switched on after
+the live pass of 2026-11-20 on a drill image, issue #79). Every piece below,
+`molebridge init` included, is built. The user documentation is
 [one exit for several providers](../multi-provider.md); where this record and
 the code disagree, the code wins and that page follows the code. This file
 stays as the design: the target shape, the pieces, their boundaries and how
@@ -413,25 +413,19 @@ child environments and starting record byte for byte
 (`single_provider_test.go`, generated before this piece); the replacement
 on a kernel is the rig drill's.
 
-As built (the switch): the release build refuses `PROVIDERS` at start and
-in `check-config` with "multi-provider exits are not available in this
-release yet; see docs/design/multi-provider.md", before any other setting is
-read (decision 4: no shipping before NordVPN's memory is measured). The
-switch is one constant, `buildgate.MultiProvider` (`internal/buildgate`),
-false in the release build and true only under the `drill` build tag
-(`multi_provider_drill.go`), the way `molebridge init` keeps the proxy
-behind `proxyAvailable`. The exit (`multiProviderAvailable` in
-`internal/exit/multi_available.go`) and the panel (piece 7) both read it, so
-a panel of a release build never offers what its exit refuses. A later release, with the live
-measurement and the live pass behind it, turns it on. Until then the
-package's own tests reach a multi-provider exit through a test-only load
-option, and the drills through the `drill` build.
+As built (the switch, now removed): until the live pass, release builds
+refused `PROVIDERS` in the exit, the panel and `molebridge init` with "...
+not available in this release yet", behind one constant that only the
+`drill` build tag turned on (decision 4: no shipping before NordVPN's memory
+is measured). The live pass of 2026-11-20 measured it (48 MB idle, 65 MB at
+peak, with all three providers), and the release after it removed the
+switch: every build accepts `PROVIDERS`, with the refusals below.
 
 As built (the rig drills): the `TestSystemRigMultiProvider*` drills
 (`internal/exit/systemrig_multiprovider_test.go`,
 `systemrig_mpdrills_test.go`) run the rig's `molebridge-drill` (the release
-build's flags plus the `drill` tag, which switches multi-provider exits on;
-the release build refuses `PROVIDERS`) beside a fake NordVPN network and a
+build's flags plus the `drill` tag, for its hooks: the fake PIA network's
+certificate authority and the hold-replace hook) beside a fake NordVPN network and a
 fake PIA network (`systemrig_pia_test.go`), by requests written to
 `desired.json` (the rig drives the exit without a panel). What they
 cover is under [System rig drills](#system-rig-drills).
@@ -566,10 +560,7 @@ record must change meaning ([the lease](../../ROADMAP.md#publishing-the-lease-ap
 (two or three, each once, native only; `/overlay` may be written, any other
 kind is refused; the default label joins the providers, "Mullvad + PIA").
 A single exit's panel reads `PROVIDERS` and `PROVIDER` with the exit's own
-refusals and messages. Both are behind `buildgate.MultiProvider`, the
-exit's switch: the release-build panel refuses them with "multi-provider
-exits are not available in this release yet; see
-docs/design/multi-provider.md", like the exit. A multi-provider exit is also
+refusals and messages. A multi-provider exit is
 refused in `PANEL_PROXY_STATUS` (the proxy refuses `PROVIDERS`) and
 `PANEL_NETWORK_EXITS` (the exchange carries one provider). The panel judges
 with `verdict.TargetFor` for the set, reads each provider's catalogue from
@@ -590,7 +581,7 @@ reads "Connected: PIA, us_chicago", the provider named only on evidence (a
 record, a lock or a request); PIA's forwarded port shows only while the
 record's provider is PIA. Metrics label such an exit's `provider`
 `mullvad+pia`. Tested: `internal/panel/multi_provider_test.go` (the
-entries, the refusals and the release switch, the request written, the
+entries, the refusals, the request written, the
 gate and the lock, the page per provider, the status line and PIA's fields
 only while PIA is active, one panel serving both kinds), the browser's
 status line against the server's (`panel/js-tests/provider-line.test.js`),
@@ -605,21 +596,16 @@ exit; choosing more than one writes `PROVIDERS`, `PROVIDER` (the first),
 multi-provider exit with a sidecar, the proxy or gluetun, and
 `tools/check-compose.sh` checks the combinations it can write.
 
-As built (piece 8): `internal/tools/initmenu` asks
-`exit.MultiProviderAvailable()`, the same switch as the exit, so the release
-build neither offers several providers (prompt, `--help`) nor writes them:
-it refuses them with "a multi-provider exit is not available in this
-release yet; see docs/design/multi-provider.md.", and a drill build offers
-them. Several providers are one answer, comma-separated, in the order given
+As built (piece 8): `internal/tools/initmenu` offers several providers in
+its prompt and `--help`. Several providers are one answer, comma-separated, in the order given
 (`"provider": "mullvad,nordvpn"`), so the answers file keeps schema 1. The
 exit is `compose.yaml`'s with `PROVIDERS` added and, in place of the
 `tunnel/wg_confs` directory, one read-only bind of each
 `<provider>.conf` with `create_host_path: false`; port-sync is refused too
 (it needs the sidecar). Each ordering is its own output (the first is
-`PROVIDER`), so a drill build accepts 76 combinations, 24 more than the
-release build's 52. `TestEveryCombination` counts both, and
-`tools/check-compose.sh` builds a release and a drill binary and checks
-each: the multi-provider exits resolve as `compose.yaml`'s exit apart from
+`PROVIDER`), so init accepts 76 combinations, 24 more than the 52 of the
+single-provider forms. `TestEveryCombination` counts them, and
+`tools/check-compose.sh` checks each: the multi-provider exits resolve as `compose.yaml`'s exit apart from
 `PROVIDERS` and the config mounts, which it checks on their own. The panel
 receives the same `PROVIDERS` (piece 7).
 
@@ -760,7 +746,7 @@ The marks **(owner)** above refer to these decisions.
 | 1 | Status record schema | **Stay on schema 2** with the new members: old readers see "provider mismatch" or a true record of their provider; schema 3 would blind every older reader for no safety gain |
 | 2 | Kinds | **Overlay exit only** for now; the native sidecar later if asked for |
 | 3 | Which providers | **Any two or three** of Mullvad, PIA, NordVPN |
-| 4 | Ship before NordVPN's memory is measured | **No**: build behind the setting; if NordVPN misses the target, ship Mullvad and PIA first |
+| 4 | Ship before NordVPN's memory is measured | **No**: build behind the setting; if NordVPN misses the target, ship Mullvad and PIA first. Measured live on 2026-11-20 (65 MB peak against 70 MB) and switched on in release builds after it |
 | 5 | Every provider's credentials in one container | **Accept**, opt-in, with the wider exposure stated in the docs next to the setting |
 | 6 | The proxy on a multi-provider exit | **Refused** for now |
 | 7 | Failover to another provider | **No**: failover stays within the target's provider |

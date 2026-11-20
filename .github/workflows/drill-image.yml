@@ -1,8 +1,8 @@
 name: Drill image
 
 # On demand only: the image with NetBird built with the `drill` tag, for
-# measurements and live drills of what release builds keep switched off (the
-# multi-provider exit). It goes to the throwaway package
+# live measurements and drills that need its hooks (MOLEBRIDGE_DRILL_*, such
+# as the failover timings). It goes to the throwaway package
 # ghcr.io/irashack/molebridge-ci as drill-<commit>-<run id>, unsigned and
 # never released or promoted; its binary reports that tag. The digest is in
 # the run's summary. Use it by digest.

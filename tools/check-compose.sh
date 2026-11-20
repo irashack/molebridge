@@ -458,11 +458,9 @@ pass "one image tag, no 0.7 leftovers"
 # comes from (resolved with init's .env, mount paths taken relative to each
 # file's directory, `build:` and profiles set aside): so every check above
 # holds for init's services too. Combinations init refuses must say why and
-# write nothing. Needs Go to build the binary. The release build refuses a
-# multi-provider exit (several providers: PROVIDERS), as its exit does; a
-# second binary, built with the drill tag, whose exit accepts PROVIDERS,
-# writes those too. Their exit is compose.yaml's but for PROVIDERS and one
-# tunnel-config mount per provider in place of the tunnel/wg_confs
+# write nothing. Needs Go to build the binary. A multi-provider exit
+# (several providers: PROVIDERS) is compose.yaml's exit but for PROVIDERS and
+# one tunnel-config mount per provider in place of the tunnel/wg_confs
 # directory, which get a check of their own.
 if ! command -v go >/dev/null 2>&1; then
     echo "SKIP init: go not found"
@@ -470,7 +468,6 @@ if ! command -v go >/dev/null 2>&1; then
     exit 0
 fi
 go build -o "$work/molebridge" ./cmd/molebridge || fail "molebridge does not build"
-go build -tags drill -o "$work/molebridge-drill" ./cmd/molebridge || fail "molebridge does not build with the drill tag"
 core_image=$(jq -c .services.exit.image "$work/nsc.json")
 # check_init <n> <shipped file> <expected services>: init's output in $work/init-<n>.
 check_init() {
@@ -573,12 +570,8 @@ init_all() {
     # TestEveryCombination (internal/tools/initmenu) counts the same.
     [ "$accepted" = "$expect" ] || fail "$bin accepted $accepted combinations, want $expect"
 }
-init_all "$work/molebridge" 52
+init_all "$work/molebridge" 76
 "$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
     fail "init overwrote an earlier output without --force"
-[ "$(grep -l 'not available in this release yet' "$work"/init-*.log | wc -l | tr -d ' ')" = 420 ] ||
-    fail "the release build did not refuse every multi-provider answer as not available"
-pass "init: 52 combinations written, each resolving as the shipped forms' services, the proxy hardened; multi-provider exits refused"
-init_all "$work/molebridge-drill" 76
-pass "init with the drill tag: 76 combinations, the 24 multi-provider exits with PROVIDERS and one tunnel-config mount per provider"
+pass "init: 76 combinations written, each resolving as the shipped forms' services, the proxy hardened, the 24 multi-provider exits with PROVIDERS and one tunnel-config mount per provider"
 echo "all Compose checks passed"

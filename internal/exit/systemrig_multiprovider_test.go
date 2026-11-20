@@ -24,8 +24,8 @@ import (
 )
 
 // The multi-provider drills (docs/design/multi-provider.md, "System rig
-// drills"): an exit with PROVIDERS, on the drill build (the release build
-// refuses PROVIDERS until multi-provider exits are switched on), changes
+// drills"): an exit with PROVIDERS, on the drill build (for its hooks: the
+// fake PIA network's certificate authority and hold-replace), changes
 // its whole tunnel between the rig's Mullvad relays, a fake NordVPN server
 // and a fake PIA server (systemrig_pia_test.go) without a restart, while a
 // client behind the overlay keeps probing. The fake NordVPN network is
@@ -243,8 +243,8 @@ func (e rigExit) String() string { return e.provider + " " + e.server }
 // with providers (PROVIDERS) and the tunnel interface vpn.
 func (r *systemRig) multiProvider(providers string) {
 	r.exitExtra = append(r.exitExtra, "PROVIDERS="+providers, "EXIT_IF=vpn", "NB_EXTRA_IFACE_BLACKLIST=vpn")
-	// The drill build: the release build refuses PROVIDERS until
-	// multi-provider exits are switched on (multi_available.go).
+	// The drill build, for its hooks (pia_hook_drill.go,
+	// worker_hook_drill_linux.go).
 	r.bin = filepath.Join(filepath.Dir(r.bin), "molebridge-drill")
 }
 

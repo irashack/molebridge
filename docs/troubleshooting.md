@@ -690,9 +690,8 @@ refused:
   `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
-- `PANEL_EXITS: multi-provider exits are not available in this release yet; see
-  docs/design/multi-provider.md, in '<entry>'`, and every other refusal of a
-  multi-provider exit: see [multi-provider exit](#multi-provider-exit).
+- Every refusal of a multi-provider exit (an entry with `+`): see
+  [multi-provider exit](#multi-provider-exit).
 - `PANEL_NETWORK_EXITS: ...`: see [the network exchange](#the-network-exchange).
 - `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as
   exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
@@ -1270,21 +1269,17 @@ directory's space and permissions as for `result.json` ([startup](#startup)).
 
 ## Multi-provider exit
 
-A [multi-provider exit](multi-provider.md) is built but switched off in
-release builds.
+A [multi-provider exit](multi-provider.md) is experimental.
 
-**`molebridge-exit: PROVIDERS is set, but multi-provider exits are not
-available in this release yet; see docs/design/multi-provider.md`.** You run
-a release build. The panel says the same after `molebridge panel: `, or
-`molebridge panel: PANEL_EXITS: multi-provider exits are not available in
-this release yet; see docs/design/multi-provider.md, in '<entry>'` for a `+`
-in `PANEL_EXITS`, and `molebridge init` says `molebridge init: a
-multi-provider exit is not available in this release yet; see
-docs/design/multi-provider.md.` Remove `PROVIDERS` (and the `+` entry), or
-run one single-provider exit per provider side by side.
+**`... multi-provider exits are not available in this release yet; see
+docs/design/multi-provider.md`.** The exit, the panel or `molebridge init`
+is from a release before multi-provider exits were switched on. Move every
+container of the stack to a release whose
+[changelog](../CHANGELOG.md) lists the multi-provider exit as in release
+builds, or remove `PROVIDERS` (and the `+` entry in `PANEL_EXITS`).
 
-**Other refusals at start.** With the feature on, every refusal of the exit,
-the panel, the proxy and `init` is listed with its cause in [the multi-provider
+**Other refusals at start.** Every refusal of the exit, the panel, the proxy
+and `init` is listed with its cause in [the multi-provider
 exit's refusals](multi-provider.md#refusals).
 
 **A pick answers 400 `unknown provider` or `unknown or unlisted server`.**

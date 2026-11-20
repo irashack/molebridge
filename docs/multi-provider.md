@@ -16,11 +16,11 @@ retries on the provider you picked.
 
 ## Status
 
-**Built, but switched off in release builds.** Every piece described on this
-page is built and covered by unit tests and by system rig drills in CI
-against fake Mullvad, PIA and NordVPN networks. Only builds with the `drill`
-tag accept it: the drills, the system rig's `molebridge-drill`, and
-`molebridge init` run as `go run -tags drill ./cmd/molebridge init`.
+**Experimental, in release builds since the next release** (the
+[changelog](../CHANGELOG.md) entry that turns it on names it). Every piece
+described on this page is built and covered by unit tests and by system rig
+drills in CI against fake Mullvad, PIA and NordVPN networks. The exit, the
+panel and `molebridge init` of a release build accept it.
 
 It passed one live pass, on 2026-11-20, with real Mullvad, PIA and NordVPN
 accounts, on a drill image built from commit 3e31f78 and run on a
@@ -37,25 +37,9 @@ memory during a server-list refresh, and traffic arriving on the forwarded
 port. The pass is recorded on
 [issue 79](https://github.com/irashack/molebridge/issues/79#issuecomment-7044744228);
 [testing](testing.md) records it with the release that turns the feature
-on, whose changelog will say so. The
-[design record](design/multi-provider.md) lists the drills.
-
-A release build refuses it everywhere, with these lines:
-
-- the exit, at start and in `check-config`: `molebridge-exit: PROVIDERS is
-  set, but multi-provider exits are not available in this release yet; see
-  docs/design/multi-provider.md`;
-- the panel, for a single exit: `molebridge panel: PROVIDERS is set, but
-  multi-provider exits are not available in this release yet; see
-  docs/design/multi-provider.md`, and in `PANEL_EXITS`: `molebridge panel:
-  PANEL_EXITS: multi-provider exits are not available in this release yet;
-  see docs/design/multi-provider.md, in '<entry>'`;
-- `molebridge init`: `molebridge init: a multi-provider exit is not available
-  in this release yet; see docs/design/multi-provider.md.`
-
-The panel and `init` follow the exit's switch, so a release never offers a
-provider its exit can't change to. The rest of this page describes what a
-build with the feature on does.
+on. Release acceptance does not yet require a live multi-provider drill of
+every candidate: [issue 128](https://github.com/irashack/molebridge/issues/128)
+tracks it. The [design record](design/multi-provider.md) lists the drills.
 
 ## Limits
 
@@ -78,9 +62,10 @@ build with the feature on does.
 
 ## Set it up
 
-`molebridge init` on a drill build writes it ([setup](setup.md) has the rest
-of init). Its first question takes two or three of `mullvad`, `pia` and
-`nordvpn`, comma-separated (`"provider": "mullvad,nordvpn"` in an answers
+`molebridge init`, run from the image, writes it
+([setup](setup.md#molebridge-init) has the command and the rest of init).
+Its first question takes two or three of `mullvad`, `pia` and `nordvpn`,
+comma-separated (`"provider": "mullvad,nordvpn"` in an answers
 file); choose `netbird-exit`, with or without `switchyard`. The first
 provider is where the tunnel starts the first time. `init` writes
 `compose.yaml`'s `exit` with two differences: it passes `PROVIDERS`, and it
@@ -238,8 +223,7 @@ not read by a single-provider exit.
 
 ## Refusals
 
-With the feature on, the exit refuses at start, with one line and nothing
-changed:
+The exit refuses at start, with one line and nothing changed:
 
 | Message | Cause |
 |---|---|

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/irashack/molebridge/internal/exit"
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/routing"
 )
@@ -130,28 +129,20 @@ func allProviders() []string {
 		"mullvad,pia,nordvpn,gluetun-ivpn", "mullvad,", ",pia")
 }
 
-// The combinations init accepts. The release build: each native provider
-// with netbird-exit or sidecar, each with or without the proxy, with or
-// without Switchyard: 24; PIA's sidecar with port-sync: 4 more; each of the
-// six gluetun providers with netbird-exit or sidecar, with or without
-// Switchyard: 24. A build with multi-provider exits (the drill tag) adds
-// each of the 12 orderings of two or three native providers with
-// netbird-exit alone, with or without Switchyard: 24.
-const (
-	releaseCombinations = 52
-	drillCombinations   = releaseCombinations + 24
-)
+// The combinations init accepts: each native provider with netbird-exit or
+// sidecar, each with or without the proxy, with or without Switchyard: 24;
+// PIA's sidecar with port-sync: 4 more; each of the six gluetun providers
+// with netbird-exit or sidecar, with or without Switchyard: 24; and each of
+// the 12 orderings of two or three native providers (a multi-provider exit)
+// with netbird-exit alone, with or without Switchyard: 24.
+const allCombinations = 52 + 24
 
 // TestEveryCombination tries every provider and every set of ways in and
-// extras, and counts what init accepts in this build. tools/check-compose.sh
-// checks the same numbers, with a release and a drill binary.
+// extras, and counts what init accepts. tools/check-compose.sh checks the
+// same number.
 func TestEveryCombination(t *testing.T) {
-	want := releaseCombinations
-	if exit.MultiProviderAvailable() {
-		want = drillCombinations
-	}
-	if got := combinations(t); got != want {
-		t.Fatalf("init accepts %d combinations, want %d", got, want)
+	if got := combinations(t); got != allCombinations {
+		t.Fatalf("init accepts %d combinations, want %d", got, allCombinations)
 	}
 }
 

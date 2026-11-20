@@ -342,10 +342,8 @@ or use sign-in to give people different exits.
 
 ### A multi-provider exit
 
-**Experimental, and refused by release builds**: the panel follows the
-exit's switch, so a release build refuses a `+` in `PANEL_EXITS` and
-`PROVIDERS` ([multi-provider exit](multi-provider.md#status)). In a build
-that has it on, write such an exit as `id=mullvad+pia[+nordvpn][:label]`:
+**Experimental** ([multi-provider exit](multi-provider.md#status)). Write
+such an exit as `id=mullvad+pia[+nordvpn][:label]`:
 
 ```sh
 PANEL_EXITS='home=mullvad:Home,both=mullvad+pia'

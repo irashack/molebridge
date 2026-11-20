@@ -1,5 +1,3 @@
-//go:build drill
-
 package initmenu
 
 import (
@@ -9,16 +7,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/irashack/molebridge/internal/exit"
 )
 
-// TestDrillBuildOffersMultiProvider: the drill build's exit accepts
-// PROVIDERS, and init offers it on the terminal and in --help.
-func TestDrillBuildOffersMultiProvider(t *testing.T) {
-	if !exit.MultiProviderAvailable() {
-		t.Fatal("multi-provider exits are off in the drill build")
-	}
+// TestOffersMultiProvider: the exit accepts PROVIDERS, and init offers it
+// on the terminal and in --help.
+func TestOffersMultiProvider(t *testing.T) {
 	if code, out, _ := run(t, "", false, "--help"); code != 0 || !strings.Contains(out, `"mullvad,nordvpn"`) {
 		t.Errorf("--help: %d %s", code, out)
 	}

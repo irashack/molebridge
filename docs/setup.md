@@ -191,7 +191,9 @@ docker run --rm -it --user "$(id -u):$(id -g)" -v "$DIR:/out" "$IMAGE" init --ou
 The names it takes are those on [the menu](menu.md): a provider (`mullvad`,
 `pia`, `nordvpn`, or `gluetun-<id>` for a provider gluetun drives:
 `gluetun-fastestvpn`, `gluetun-ivpn`, `gluetun-mullvad`, `gluetun-nordvpn`,
-`gluetun-surfshark`, `gluetun-windscribe`); one or more ways in
+`gluetun-surfshark`, `gluetun-windscribe`; or, for an experimental
+[multi-provider exit](multi-provider.md), two or three of `mullvad`, `pia`,
+`nordvpn`, comma-separated); one or more ways in
 (`netbird-exit`, `sidecar`, `proxy`), comma-separated; and the extras
 (`switchyard`, `port-sync`), or nothing for none. `docker run ... init --help`
 prints the same.

@@ -23,9 +23,14 @@ To find what has run for one part, read the newest release sections first:
 - **The network exchange** (experimental): first live at
   [v0.10.0-rc.2](#v0100-rc2-2026-11-03-released), then as
   `network-exchange-smoke` in each acceptance.
-- **Automatic failover** and **the multi-provider exit** (experimental): no
-  live run yet; CI's system rig drills them against fake servers
+- **Automatic failover** (experimental): no live run yet; CI's system rig
+  drills it against fake servers
   ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)).
+- **The multi-provider exit** (experimental): one live pass, on 2026-11-20,
+  on a drill image ([its status](multi-provider.md#status)); not yet part of
+  each release's acceptance
+  ([issue 128](https://github.com/irashack/molebridge/issues/128)). CI's
+  system rig drills it against fake servers.
 
 Published hashes below map to identical trees from before the metadata-only
 history rewrite: `ae95c33` → `1390860`, `984a703` → `336d904`, and
