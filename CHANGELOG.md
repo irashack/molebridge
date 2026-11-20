@@ -83,6 +83,12 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   provider's check and no client packet by the host path. Fake networks
   only: the live pass and the NordVPN memory measurement have not run.
 
+- Internal, no user-visible change: a hand-run **Drill image** workflow
+  builds the image with the `drill` build tag (a new Dockerfile argument,
+  `GO_TAGS`, empty for every release) into the throwaway
+  `ghcr.io/irashack/molebridge-ci` package, for live measurements of the
+  multi-provider exit ([the drill image](CONTRIBUTING.md#the-drill-image)).
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
