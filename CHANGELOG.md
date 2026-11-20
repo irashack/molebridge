@@ -166,7 +166,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   nftables counter showing no packet from the proxy's uid outside the tunnel.
   A real Mullvad relay proxy is still untested.
 
-## 0.13.0 — unreleased
+## 0.13.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.12.0 by moving to the new image;
 what changed is below.
