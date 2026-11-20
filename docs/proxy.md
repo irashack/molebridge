@@ -78,8 +78,8 @@ is in `compose.proxy.yaml`, added on top of the exit's file:
    `docker compose up -d`. The proxy starts once the exit is healthy and is
    restarted with it.
 
-`molebridge init` writes the same service when you choose the proxy, once a
-release has the role.
+`molebridge init` writes the same service when you choose the proxy
+([setup](setup.md#molebridge-init)).
 
 ## Settings
 

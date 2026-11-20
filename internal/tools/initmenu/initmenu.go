@@ -42,27 +42,6 @@ var (
 	Extras = []string{ExtraSwitchyard, ExtraPortSync}
 )
 
-// proxyAvailable is the switch for the proxy way in. It stays "false" until
-// a release has the proxy role (docs/design/menu.md): until then init refuses
-// the proxy rather than write a service that can't run. The tests set it,
-// and tools/check-compose.sh builds a binary with
-// -ldflags "-X <this package>.proxyAvailable=true" to check the proxy's
-// output; no release is built that way.
-var proxyAvailable = "false"
-
-func proxyOn() bool { return proxyAvailable == "true" }
-
-// proxyRefusal is the refusal while the switch is off.
-const proxyRefusal = "the proxy is being built and init does not offer it yet; see docs/design/menu.md."
-
-// offeredWays are the ways in init offers now.
-func offeredWays() []string {
-	if proxyOn() {
-		return Ways
-	}
-	return []string{WayNetBird, WaySidecar}
-}
-
 // The forms: which shipped Compose file a plan's services come from.
 const (
 	FormOverlay        = "overlay"         // compose.yaml
@@ -193,10 +172,7 @@ func (a Answers) Plan() (Plan, error) {
 		return p, err
 	}
 	if len(a.WaysIn) == 0 {
-		return p, refuse("choose at least one way in: %s.", strings.Join(offeredWays(), ", "))
-	}
-	if slices.Contains(a.WaysIn, WayProxy) && !proxyOn() {
-		return p, Refusal(proxyRefusal)
+		return p, refuse("choose at least one way in: %s.", strings.Join(Ways, ", "))
 	}
 	netbird := slices.Contains(a.WaysIn, WayNetBird)
 	sidecar := slices.Contains(a.WaysIn, WaySidecar)
@@ -610,13 +586,10 @@ func ask(o Options) (Answers, error) {
 		return a, err
 	}
 	a.Provider = strings.ToLower(prov)
-	ways, err := question("Ways in, comma-separated ("+strings.Join(offeredWays(), ", ")+"): ", func(s string) error {
+	ways, err := question("Ways in, comma-separated ("+strings.Join(Ways, ", ")+"): ", func(s string) error {
 		list := splitList(s)
 		if len(list) == 0 {
 			return refuse("choose at least one way in.")
-		}
-		if slices.Contains(list, WayProxy) && !proxyOn() {
-			return Refusal(proxyRefusal)
 		}
 		return checkNames("way in", list, Ways)
 	})

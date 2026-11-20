@@ -458,18 +458,13 @@ pass "one image tag, no 0.7 leftovers"
 # comes from (resolved with init's .env, mount paths taken relative to each
 # file's directory, `build:` and profiles set aside): so every check above
 # holds for init's services too. Combinations init refuses must say why and
-# write nothing. Needs Go to build the binary. init refuses the proxy until a
-# release has the proxy role; a second binary, built with the switch on
-# (internal/tools/initmenu, proxyAvailable), writes the proxy outputs too,
-# which get their own checks.
+# write nothing. Needs Go to build the binary.
 if ! command -v go >/dev/null 2>&1; then
     echo "SKIP init: go not found"
     echo "all Compose checks passed"
     exit 0
 fi
 go build -o "$work/molebridge" ./cmd/molebridge || fail "molebridge does not build"
-go build -ldflags "-X github.com/irashack/molebridge/internal/tools/initmenu.proxyAvailable=true" \
-    -o "$work/molebridge-proxy" ./cmd/molebridge || fail "molebridge does not build with the proxy switch on"
 core_image=$(jq -c .services.exit.image "$work/nsc.json")
 # check_init <n> <shipped file> <expected services>: init's output in $work/init-<n>.
 check_init() {
@@ -541,9 +536,6 @@ init_all() {
                 src=$(sed -n 's/.*: the services of \(compose[a-z.-]*\) with .*/\1/p' "$work/init-$n.log")
                 want=$(sed -n 's/.*: the services of compose[a-z.-]* with \(.*\)[.]$/\1/p' "$work/init-$n.log" | sed 's/, / /g')
                 [ -n "$src" ] && [ -n "$want" ] || fail "init-$n: init did not say what it wrote"
-                case " $want " in *" proxy "*)
-                    [ "$bin" = "$work/molebridge-proxy" ] || fail "init-$n: init wrote a proxy with the switch off" ;;
-                esac
                 check_init "$n" "$src" "$want"
             done
         done
@@ -551,12 +543,8 @@ init_all() {
     # TestEveryCombination (internal/tools/initmenu) counts the same.
     [ "$accepted" = "$expect" ] || fail "$bin accepted $accepted combinations, want $expect"
 }
-init_all "$work/molebridge" 38
+init_all "$work/molebridge" 52
 "$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
     fail "init overwrote an earlier output without --force"
-grep -qx 'molebridge init: the proxy is being built and init does not offer it yet; see docs/design/menu.md.' "$work/init-9.log" ||
-    fail "init-9 (mullvad with only the proxy): not refused as being built"
-pass "init: 38 combinations written, each resolving as the shipped forms' services; the proxy refused"
-init_all "$work/molebridge-proxy" 52
-pass "init with the proxy switch on: 52 combinations, the proxy hardened"
+pass "init: 52 combinations written, each resolving as the shipped forms' services, the proxy hardened"
 echo "all Compose checks passed"
