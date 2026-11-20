@@ -97,6 +97,24 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
     `compose.override.yaml`.
   - `molebridge init` and the proxy are in v0.14.0, not "no release yet".
   - Testing claims now match the record.
+- **Experimental:** the [multi-provider exit](docs/multi-provider.md) is in
+  release builds. One NetBird exit carries Mullvad, PIA or NordVPN, one at a
+  time, and Switchyard picks the provider and the server in one step: set
+  `PROVIDERS` (two or three of `mullvad`, `pia`, `nordvpn`), or answer
+  `molebridge init`'s first question with several providers. The exit, the
+  panel and `init` no longer refuse it with "not available in this release
+  yet", and the build switch the entries above describe is gone; its other
+  refusals (gluetun, the sidecar, the proxy, failover, the network exchange)
+  stay. It passed one live pass on 2026-11-20 with real Mullvad, PIA and
+  NordVPN accounts
+  ([issue 79](https://github.com/irashack/molebridge/issues/79#issuecomment-7044744228)):
+  switches between providers in 4.7 to 9.9 seconds; a lost tunnel back in
+  1.7 seconds on Mullvad, 1.9 on NordVPN and 25.9 on PIA, measured before
+  the 10-second no-peer guard; 48 MB idle and 65 MB at peak with all three
+  providers. Not run live: memory during a server-list refresh and traffic
+  on the forwarded port. Release acceptance does not yet require a live
+  multi-provider drill of every candidate
+  ([issue 128](https://github.com/irashack/molebridge/issues/128)).
 
 - Fixed: the proxy accepts `PANEL_ALLOW_ROOT=1`, as the panel and the
   exchange do, so it starts on rootless Podman with the documented

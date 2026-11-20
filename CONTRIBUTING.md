@@ -68,9 +68,7 @@ a reason in the commit message and an update of `THIRD_PARTY.md` (see below).
   ([design](docs/design/failover.md)).
 - `internal/exchange/` is the network exchange's file contract between an exit
   and its panel, used by the exit's `--exchange` child and the `exchange` role.
-  `internal/portsync/` is the `port-sync` role's work. `internal/buildgate/`
-  holds the switches a build turns on or off (the `drill` tag turns on the
-  multi-provider exit).
+  `internal/portsync/` is the `port-sync` role's work.
 - `internal/drill/` and `internal/nstest/` are the namespace drills (below).
 - `routing/gluetun-preflight` is the one runtime shell script: it runs inside gluetun's
   container. `routing/embed.go` embeds it in the binary for the `gluetun-preflight` tool. `tools/` holds the release and image scripts (`make-bundle.sh`,
@@ -159,8 +157,8 @@ worker with the namespace held by another container, and the stop budget
 
 ### The drill image
 
-Live drills and measurements of what release builds keep switched off (the
-multi-provider exit) need the `drill` build in a real image. The **Drill image**
+Live drills and measurements that need the `drill` build's hooks
+(`MOLEBRIDGE_DRILL_*`) need it in a real image. The **Drill image**
 workflow (`.github/workflows/drill-image.yml`, run by hand) builds the image with
 NetBird with `GO_TAGS=drill` and pushes it to `ghcr.io/irashack/molebridge-ci` as
 `drill-<commit>-<run id>`; the run's summary has the digest. It is unsigned and never
@@ -244,9 +242,8 @@ failures still come from the pipeline's own checks and re-applies, and every swi
 90-second reapply guard, so these are the longest drills, about fifteen minutes.
 The `TestSystemRigMultiProvider*` drills (`systemrig_multiprovider_test.go`,
 `systemrig_mpdrills_test.go`) run a [multi-provider exit](docs/configuration.md#multi-provider-exit)
-on the `molebridge-drill` binary, not the release build: the release build refuses `PROVIDERS`
-until multi-provider exits are switched on, and the `drill` tag switches them on
-(`internal/buildgate/multi_provider_drill.go`). Beside the Mullvad relays the rig then has a fake
+on the `molebridge-drill` binary, not the release build, for the drill hooks below (the fake PIA
+network's certificate authority, and the hold-replace hook of the interrupted-switch drill). Beside the Mullvad relays the rig then has a fake
 NordVPN network (the fixture's catalogue in `tools/fixtures/nordvpn` cut to one server, a kernel
 WireGuard server on port 51820 for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4 only, with an
 SNAT to its own egress address, and the `ips/insights` check, protected only from that address)

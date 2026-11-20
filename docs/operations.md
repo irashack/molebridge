@@ -109,7 +109,7 @@ The reason codes in `status` and in `/api/status` come from the
 `<check>-unmeasured`, `rejected`, `status-failed`, `status-unknown`, and for a
 connection on the wrong server `not-configured-server`, `not-requested-server`
 or `not-target-server` (and, on a [multi-provider
-exit](multi-provider.md), switched off in release builds,
+exit](multi-provider.md),
 `not-configured-provider` or `not-requested-provider` for one on the
 wrong provider). A connected exit may carry `no-selection`: nothing has
 been selected yet, or `server-moved`: its server stands in for one the

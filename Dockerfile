@@ -20,8 +20,8 @@ ARG TARGETARCH
 # builds with the same flags.
 ARG VERSION=dev
 # Build tags: empty for every release. `drill` only for the drill image
-# (.github/workflows/drill-image.yml), which lifts the gates the system rig's
-# drills need (the multi-provider exit among them); it is never released.
+# (.github/workflows/drill-image.yml), which adds the hooks the drills need
+# (MOLEBRIDGE_DRILL_*); it is never released.
 ARG GO_TAGS=
 WORKDIR /src
 # The build context is the allowlist in Dockerfile.dockerignore (Go sources, vendor/,

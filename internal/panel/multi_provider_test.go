@@ -3,9 +3,6 @@ package panel
 // Multi-provider exits in the panel (docs/design/multi-provider.md, "The
 // panel"): PANEL_EXITS with +, a single exit's PROVIDERS, the request
 // written, and provider fields shown only while that provider is active.
-// The release build switches multi-provider exits off; these tests switch
-// them on (newProviderSetHarness, configFromEnv, parseExits) except where
-// they check the switch itself.
 
 import (
 	"net/url"
@@ -15,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/irashack/molebridge/internal/buildgate"
 	"github.com/irashack/molebridge/internal/state"
 	"github.com/irashack/molebridge/internal/verdict"
 )
@@ -41,7 +37,7 @@ func multiRequest(provider, server string, id ...string) map[string]any {
 }
 
 func TestPanelExitsTakeAProviderSet(t *testing.T) {
-	exits, err := parseExits("both=mullvad+pia, all = mullvad + pia + nordvpn/overlay:Anywhere, home=mullvad", "/state", true)
+	exits, err := ParseExits("both=mullvad+pia, all = mullvad + pia + nordvpn/overlay:Anywhere, home=mullvad", "/state")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,38 +69,28 @@ func TestPanelExitsTakeAProviderSet(t *testing.T) {
 		"a=mullvad+pia/":                           "a multi-provider exit is an overlay exit",
 		"a=mullvad+pia:" + strings.Repeat("x", 41): "labels are at most 40",
 	} {
-		_, err := parseExits(bad, "/state", true)
+		_, err := ParseExits(bad, "/state")
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v, want %q", bad, err, want)
 		}
 	}
 }
 
-func TestReleaseBuildPanelOffersNoMultiProviderExit(t *testing.T) {
-	_, err := parseExits("both=mullvad+pia", "/state", false)
-	if err == nil || err.Error() != "PANEL_EXITS: multi-provider exits are not available in this release yet; see docs/design/multi-provider.md, in 'both=mullvad+pia'" {
-		t.Fatalf("switched off: %v", err)
+func TestPanelAcceptsMultiProviderExits(t *testing.T) {
+	if _, err := ParseExits("both=mullvad+pia", "/state"); err != nil {
+		t.Fatalf("PANEL_EXITS: %v", err)
 	}
-	_, err = configFromEnv(map[string]string{"PROVIDERS": "mullvad,pia", "PROVIDER": "mullvad"}, false)
-	if err == nil || err.Error() != "PROVIDERS is set, but multi-provider exits are not available in this release yet; see docs/design/multi-provider.md" {
-		t.Fatalf("switched off: %v", err)
-	}
-	// The panel follows the exit's switch: one constant for both.
-	_, err = ParseExits("both=mullvad+pia", "/state")
-	if (err == nil) != buildgate.MultiProvider {
-		t.Fatalf("ParseExits with buildgate.MultiProvider=%v: %v", buildgate.MultiProvider, err)
-	}
-	if _, err = ConfigFromEnv(map[string]string{"PROVIDERS": "mullvad,pia", "PROVIDER": "pia"}); (err == nil) != buildgate.MultiProvider {
-		t.Fatalf("ConfigFromEnv with buildgate.MultiProvider=%v: %v", buildgate.MultiProvider, err)
+	if cfg, err := ConfigFromEnv(map[string]string{"PROVIDERS": "mullvad,pia", "PROVIDER": "pia"}); err != nil || !cfg.Single.Multi() {
+		t.Fatalf("PROVIDERS: %v", err)
 	}
 	// An empty PROVIDERS is unset, as Compose passes it.
-	if cfg, err := configFromEnv(map[string]string{"PROVIDERS": "", "PROVIDER": "pia"}, false); err != nil || cfg.Single.Multi() {
+	if cfg, err := ConfigFromEnv(map[string]string{"PROVIDERS": "", "PROVIDER": "pia"}); err != nil || cfg.Single.Multi() {
 		t.Fatalf("empty PROVIDERS: %v", err)
 	}
 }
 
 func TestSingleExitPanelReadsProvidersAsTheExitDoes(t *testing.T) {
-	cfg, err := configFromEnv(map[string]string{"PROVIDERS": "mullvad, pia,nordvpn", "PROVIDER": "pia", "STATE_DIR": "/state"}, true)
+	cfg, err := ConfigFromEnv(map[string]string{"PROVIDERS": "mullvad, pia,nordvpn", "PROVIDER": "pia", "STATE_DIR": "/state"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +113,7 @@ func TestSingleExitPanelReadsProvidersAsTheExitDoes(t *testing.T) {
 		{map[string]string{"PANEL_EXITS": "both=mullvad+pia", "PANEL_PROXY_STATUS": "both=/proxy/proxy.json"}, "PANEL_PROXY_STATUS: 'both' is a multi-provider exit; the proxy does not run beside one"},
 		{map[string]string{"PANEL_EXITS": "both=mullvad+pia", "PANEL_NETWORK_EXITS": "both"}, "PANEL_NETWORK_EXITS: 'both' is a multi-provider exit, which the network exchange does not carry"},
 	} {
-		if _, err := configFromEnv(c.env, true); err == nil || err.Error() != c.want {
+		if _, err := ConfigFromEnv(c.env); err == nil || err.Error() != c.want {
 			t.Errorf("%v: %v, want %q", c.env, err, c.want)
 		}
 	}
@@ -142,7 +128,7 @@ type providerSet struct {
 
 func newProviderSet(t *testing.T) *providerSet {
 	t.Helper()
-	h := newProviderSetHarness(t, map[string]string{"PANEL_EXITS": "home=mullvad, both=mullvad+pia"}, nil)
+	h := newHarness(t, map[string]string{"PANEL_EXITS": "home=mullvad, both=mullvad+pia"}, nil)
 	p := &providerSet{h, h.exit("both"), h.exit("home")}
 	mullvad, _ := p.both.CatalogFiles("mullvad")
 	pia, _ := p.both.CatalogFiles("pia")

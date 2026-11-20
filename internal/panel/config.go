@@ -9,7 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/irashack/molebridge/internal/buildgate"
 	"github.com/irashack/molebridge/internal/exchange"
 	"github.com/irashack/molebridge/internal/panel/oidc"
 	"github.com/irashack/molebridge/internal/panel/pystr"
@@ -24,17 +23,10 @@ var exitIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 // kind being overlay (the default) or sidecar (a gluetun provider's, or since
 // 0.9.0 a native provider's: the native sidecar). A multi-provider exit is
 // `id=mullvad+pia+nordvpn[/overlay][:label]`: two or three native providers
-// joined by + (no provider id contains it), overlay only, accepted only where
-// multi-provider exits are switched on (buildgate.MultiProvider). Each exit's
-// state is $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one
-// exit whose state is $STATE_DIR itself (no exits are returned).
+// joined by + (no provider id contains it), overlay only. Each exit's state
+// is $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one exit
+// whose state is $STATE_DIR itself (no exits are returned).
 func ParseExits(raw, stateDir string) ([]Exit, error) {
-	return parseExits(raw, stateDir, buildgate.MultiProvider)
-}
-
-// parseExits is ParseExits with multi-provider exits switched on or off:
-// this package's tests cover them in the release build too.
-func parseExits(raw, stateDir string, multiAvailable bool) ([]Exit, error) {
 	var exits []Exit
 	for _, piece := range strings.Split(raw, ",") {
 		entry := pystr.Strip(piece)
@@ -52,9 +44,6 @@ func parseExits(raw, stateDir string, multiAvailable bool) ([]Exit, error) {
 		}
 		var set []string
 		if strings.Contains(provider, "+") {
-			if !multiAvailable {
-				return nil, fmt.Errorf("PANEL_EXITS: %s, in %s", multiProviderUnavailable, repr)
-			}
 			var err error
 			if set, err = parseProviderSet(strings.Split(provider, "+")); err != nil {
 				return nil, fmt.Errorf("PANEL_EXITS: %v, in %s", err, repr)
@@ -94,10 +83,6 @@ func parseExits(raw, stateDir string, multiAvailable bool) ([]Exit, error) {
 	}
 	return exits, nil
 }
-
-// multiProviderUnavailable is the refusal of a multi-provider exit while
-// they are switched off in this build, worded as the exit's.
-const multiProviderUnavailable = "multi-provider exits are not available in this release yet; see docs/design/multi-provider.md"
 
 // providerSetBad is the refusal of a provider set that isn't two or three
 // distinct native providers.
@@ -150,13 +135,10 @@ const providersEnvMax = 64
 // does (internal/exit's parseProviders): set, the exit is a multi-provider
 // exit, refused with EXIT_KIND=sidecar or TUNNEL_BACKEND=gluetun, with
 // PROVIDER required and one of them. Empty is unset, as Compose passes it.
-func singleProviders(env map[string]string, multiAvailable bool) ([]string, error) {
+func singleProviders(env map[string]string) ([]string, error) {
 	list := env["PROVIDERS"]
 	if list == "" {
 		return nil, nil
-	}
-	if !multiAvailable {
-		return nil, errors.New("PROVIDERS is set, but " + multiProviderUnavailable)
 	}
 	if env["TUNNEL_BACKEND"] == "gluetun" {
 		return nil, errors.New("PROVIDERS needs TUNNEL_BACKEND=native: a gluetun exit carries one provider")
@@ -204,19 +186,13 @@ type Config struct {
 // variable, STATE_DIR, PROVIDER, EXIT_KIND and PANEL_EXITS, with the
 // defaults and refusals app.py had. An error stops the panel at start.
 func ConfigFromEnv(env map[string]string) (*Config, error) {
-	return configFromEnv(env, buildgate.MultiProvider)
-}
-
-// configFromEnv is ConfigFromEnv with multi-provider exits switched on or
-// off.
-func configFromEnv(env map[string]string, multiAvailable bool) (*Config, error) {
 	getenv := func(name string) string { return env[name] }
 	provider, err := state.ProviderFromEnv(getenv)
 	if err != nil {
 		return nil, err
 	}
 	stateDir := envDefault(env, "STATE_DIR", "/state")
-	exits, err := parseExits(env["PANEL_EXITS"], stateDir, multiAvailable)
+	exits, err := ParseExits(env["PANEL_EXITS"], stateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +208,7 @@ func configFromEnv(env map[string]string, multiAvailable bool) (*Config, error) 
 	spec, _ := providers.Lookup(provider)
 	single := ExitUnder("", provider, spec.Label, stateDir, exitKind)
 	if len(exits) == 0 {
-		set, err := singleProviders(env, multiAvailable)
+		set, err := singleProviders(env)
 		if err != nil {
 			return nil, err
 		}

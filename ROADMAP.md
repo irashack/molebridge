@@ -48,14 +48,19 @@ multi-provider exit. In the order they came:
   `molebridge init`, which writes the Compose file from three questions
   ([setup](docs/setup.md#molebridge-init)) and offers the proxy from the
   release after 0.14.0; NetBird moved behind one boundary in the exit, with
-  no change of behavior; and automatic failover ([failover](docs/failover.md)).
+  no change of behavior; and automatic failover ([failover](docs/failover.md));
+- the multi-provider exit, one NetBird exit carrying Mullvad, PIA or
+  NordVPN one at a time, experimental and in release builds from the
+  release after its live pass of 2026-11-20
+  ([multi-provider exit](docs/multi-provider.md)).
 
 `EXIT_KIND` and `TUNNEL_BACKEND` keep their meaning: `init` only writes them,
 and the shipped Compose files stay valid, so existing exits need no change.
 
 **What is left.** Live passes for what has run only in CI: a stack written by
 `init` started on a host, the proxy in a native sidecar's namespace and with
-PIA and NordVPN, failover on a real provider, and the multi-provider exit
+PIA and NordVPN, failover on a real provider, and the multi-provider exit's
+memory during a server-list refresh and traffic on its forwarded port
 ([its page](docs/multi-provider.md) says where it stands). Each way in is
 tested once against the core's contracts, not in every combination.
 
@@ -157,11 +162,15 @@ maintainer's to make are in [its design](docs/design/failover.md).
 
 ### One exit for several providers
 
-One NetBird exit that carries Mullvad, PIA or NordVPN, one at a time, so that
-a device stays on one peer while Switchyard picks the provider and the server
-in one step. Single-provider exits stay as they are. Whether a release offers
-it, and what has not run, is on [its page](docs/multi-provider.md); the
-contract it was built to is [its design](docs/design/multi-provider.md).
+Built, and experimental: one NetBird exit that carries Mullvad, PIA or
+NordVPN, one at a time, so that a device stays on one peer while Switchyard
+picks the provider and the server in one step. Single-provider exits stay as
+they are. It passed one live pass on 2026-11-20 and is in release builds
+from the release after it; what has not run is on
+[its page](docs/multi-provider.md), and the contract it was built to is
+[its design](docs/design/multi-provider.md). Release acceptance does not yet
+require a live multi-provider drill of every candidate
+([issue 128](https://github.com/irashack/molebridge/issues/128)).
 gluetun exits are out of scope: gluetun owns their tunnel.
 
 ## Backlog

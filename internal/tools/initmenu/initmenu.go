@@ -21,7 +21,6 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/irashack/molebridge/internal/exit"
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/tools/privfile"
 	"github.com/irashack/molebridge/internal/validate"
@@ -119,8 +118,7 @@ func (r Refusal) Error() string { return string(r) }
 
 func refuse(format string, a ...any) error { return Refusal(fmt.Sprintf(format, a...)) }
 
-// helpText is the usage text; multiHelp goes in it where multi-provider
-// exits are available (the drill build, until a release turns them on).
+// helpText is the usage text.
 const helpText = `Usage: molebridge init --out DIR [--answers FILE] [--force]
 
 EXPERIMENTAL. Asks for the provider, the ways in and the extras, or reads
@@ -132,7 +130,10 @@ release. It never overwrites a file unless --force is given.
   provider   mullvad, pia, nordvpn, or gluetun-<id> for a provider gluetun
              drives (gluetun-fastestvpn, gluetun-ivpn, gluetun-mullvad,
              gluetun-nordvpn, gluetun-surfshark, gluetun-windscribe)
-%s  ways in    one or more of netbird-exit, sidecar, proxy (the proxy: with
+             or, for a multi-provider NetBird exit (experimental), two or
+             three of mullvad, pia, nordvpn, comma-separated, the first
+             being where the tunnel starts: "mullvad,nordvpn"
+  ways in    one or more of netbird-exit, sidecar, proxy (the proxy: with
              a native provider, on top of netbird-exit or sidecar)
   extras     none, or switchyard, port-sync (port-sync: PIA with sidecar)
 
@@ -144,24 +145,6 @@ The answers file is JSON, at most 4096 bytes, with exactly these members
 
 docs/setup.md#molebridge-init says what to do with the result.
 `
-
-const multiHelp = `             or, for a multi-provider NetBird exit (experimental), two or
-             three of mullvad, pia, nordvpn, comma-separated, the first
-             being where the tunnel starts: "mullvad,nordvpn"
-`
-
-// Help is this build's usage text.
-func Help() string {
-	if exit.MultiProviderAvailable() {
-		return fmt.Sprintf(helpText, multiHelp)
-	}
-	return fmt.Sprintf(helpText, "")
-}
-
-// MultiUnavailable refuses several providers in a build whose exit refuses
-// PROVIDERS (internal/exit, multiProviderAvailable): init writes no exit
-// that would refuse to start.
-const MultiUnavailable = "a multi-provider exit is not available in this release yet; see docs/design/multi-provider.md."
 
 // gluetunIDs lists gluetun-<id> for every provider init offers through gluetun.
 func gluetunIDs() []string {
@@ -177,14 +160,10 @@ func providerChoices() string {
 	return strings.Join(providers.Native(), ", ") + ", or one of " + strings.Join(gluetunIDs(), ", ")
 }
 
-// providerPrompt is the first question. It offers several providers only
-// where multi-provider exits are available.
+// providerPrompt is the first question.
 func providerPrompt() string {
-	if exit.MultiProviderAvailable() {
-		return "Provider (" + providerChoices() + "; or, for a NetBird exit that switches between them, " +
-			"two or three of " + strings.Join(providers.Native(), ", ") + ", comma-separated): "
-	}
-	return "Provider (" + providerChoices() + "): "
+	return "Provider (" + providerChoices() + "; or, for a NetBird exit that switches between them, " +
+		"two or three of " + strings.Join(providers.Native(), ", ") + ", comma-separated): "
 }
 
 // Plan checks the answers and returns the combination to write, or a
@@ -255,7 +234,6 @@ func (a Answers) Plan() (Plan, error) {
 // planMulti checks a multi-provider exit: two or three native providers, a
 // NetBird exit, and no sidecar, proxy or port-sync, as the exit's own
 // settings require (docs/design/multi-provider.md#settings-files-and-credentials).
-// A build whose exit refuses PROVIDERS refuses it here first.
 func (a Answers) planMulti() (Plan, error) {
 	p := Plan{Answers: a}
 	native := providers.Native()
@@ -265,9 +243,6 @@ func (a Answers) planMulti() (Plan, error) {
 		if names[i] == "" {
 			return p, refuse("provider %q has an empty name in it.", a.Provider)
 		}
-	}
-	if !exit.MultiProviderAvailable() {
-		return p, Refusal(MultiUnavailable)
 	}
 	seen := map[string]bool{}
 	for _, name := range names {
@@ -577,7 +552,7 @@ func Main(args []string, o Options) int {
 	force := fs.Bool("force", false, "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			io.WriteString(o.Stdout, Help())
+			io.WriteString(o.Stdout, helpText)
 			return 0
 		}
 		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
@@ -709,9 +684,6 @@ func ask(o Options) (Answers, error) {
 		list := splitList(s)
 		if len(list) == 0 {
 			return refuse("choose a provider.")
-		}
-		if len(list) > 1 && !exit.MultiProviderAvailable() {
-			return Refusal(MultiUnavailable)
 		}
 		for _, name := range list {
 			if _, ok := providers.Lookup(name); !ok {

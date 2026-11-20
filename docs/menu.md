@@ -71,11 +71,12 @@ has no unique single-filter server identifier.`
 | Switchyard | the web panel: choose and check the server, see the proxy | every way in | `init` extra `switchyard` | [Switchyard](switchyard.md) |
 | `port-sync` | gives PIA's forwarded port to qBittorrent | PIA, native sidecar | `init` extra `port-sync` | [native sidecar](native-sidecar.md#port-forwarding) |
 | Failover | moves the exit to a backup server when the selected one keeps failing; off by default | native forms only | `FAILOVER` in `.env` | [failover](failover.md) |
-| Multi-provider exit | one NetBird exit that carries Mullvad, PIA or NordVPN, one at a time | the native NetBird exit | its page says | [multi-provider exit](multi-provider.md) |
+| Multi-provider exit | one NetBird exit that carries Mullvad, PIA or NordVPN, one at a time | the native NetBird exit | several providers as `init`'s first answer, such as `mullvad,nordvpn` | [multi-provider exit](multi-provider.md) |
 | Network exchange | an exit and its panel that share no filesystem exchange their files over HTTP | an exit with Switchyard | `EXCHANGE_URL` in `.env` | [network exchange](exchange.md) |
 
-Failover, the multi-provider exit and the network exchange are settings, not
-`init` choices: you add them to the `.env` that `init` writes. The exit
+Failover and the network exchange are settings, not `init` choices: you add
+them to the `.env` that `init` writes. `init` writes a multi-provider exit
+when its first answer names several providers. The exit
 refuses failover with gluetun (`molebridge-exit: FAILOVER needs
 TUNNEL_BACKEND=native: gluetun reconnects by itself`).
 
