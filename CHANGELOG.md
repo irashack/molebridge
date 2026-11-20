@@ -69,6 +69,19 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   address, a NetworkPolicy); and moving a multi-provider exit back to one
   provider on the same NetBird profile needs `fix-blacklist`. Unit tests
   only; nothing of this has run live.
+- A PIA tunnel lost within 90 seconds of a change came back only after 90
+  seconds, and a change interrupted by a worker restart (on a multi-provider
+  exit, Mullvad to PIA) finished only on its one-minute retry (issue 121).
+  PIA's tunnel always comes back from its config with no peer, so the exit
+  registers again; that re-apply waited out the 90-second guard against
+  re-applying soon after a change. The login was not the cause: its token is
+  kept for 12 hours. With the native backend, a tunnel with no peer is now
+  applied again 10 seconds after the last change at the earliest, single-
+  or multi-provider; drift and gluetun keep the 90 seconds. On the system
+  rig's fake networks a PIA tunnel lost right after a change is back in
+  10.1 s (was 90.3 s) and the interrupted change verified 10.3 s after the
+  kill (was 65.4 s); the drills now fail above 30 and 45 seconds. Not
+  measured on a real PIA tunnel.
 
 ## 0.14.1 — unreleased
 

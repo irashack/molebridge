@@ -980,9 +980,10 @@ seconds first.
 **"Expected exactly one tunnel peer."** The tunnel has no peer, or more than one. With PIA
 and NordVPN a tunnel the worker brought back can have no peer (NordVPN's comes back on its
 last peer; PIA's never does, since its peer belongs to a registration). The exit applies the
-selection again at once, but never within 10 seconds of its last change, and after a failed
-change only when its retry is due or the worker itself restarted. With PIA that means
-registering again: expect the tunnel back about 5 to 15 seconds after it was lost. With gluetun, a reconnecting
+selection again 10 seconds after its last change at the earliest, and after a failed change
+only when its retry is due or the worker itself restarted. With PIA that means registering again; on the system rig's
+fake network a PIA tunnel lost right after a change was back about 10 seconds later
+([design](design/multi-provider.md), "Recovery times"). With gluetun, a reconnecting
 tunnel has no peer for a moment, and the exit waits 90 seconds before it acts. The exit's
 container stays healthy meanwhile. If it persists, recreate the exit
 ([recovery](operations.md#recovery)).
