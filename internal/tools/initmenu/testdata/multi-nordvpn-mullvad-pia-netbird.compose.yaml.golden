@@ -3,7 +3,7 @@
 #   ways in:  netbird-exit
 #   extras:   none
 # The services are those of compose.yaml in the Molebridge source
-# of the same release, with its settings and image pins; that file's
+# this binary was built from, with its settings and image pins; that file's
 # comments say more.
 # The exit differs from it in two things: it passes PROVIDERS, and it
 # mounts one tunnel config per provider instead of the tunnel/wg_confs

@@ -6,6 +6,10 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- `molebridge init`'s compose.yaml header said its services and pins came
+  from the source "of the same release"; it now says the source this binary
+  was built from, which may be an older release (the follow-up from #139).
+
 ## 0.14.3 — 2026-11-20
 
 **Experimental.** Upgrade from 0.14.2 by moving to the new image;
