@@ -6,6 +6,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Acceptance policy 22 counts CI for two live drills
+  ([#54](https://github.com/irashack/molebridge/issues/54)). The
+  retired-server move is no longer run by hand: CI's System rig drills it
+  on the native Mullvad exit and in the gluetun form (`ci-system-rig`). The
+  upgrade's state carry-over and rollback count through the new
+  `ci-upgrade-drill` (CI's Upgrade drill job), and the live
+  `upgrade-from-<previous>` is the image swap only. Real gluetun's own
+  reconnection and an upgrade's state on exits other than native Mullvad
+  are no longer drilled live; [releasing](docs/releasing.md#3-run-the-live-acceptance)
+  lists the gaps.
+
 ## 0.14.2 — unreleased
 
 **Experimental.** Upgrade from 0.14.1 by moving to the new image;

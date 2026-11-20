@@ -27,7 +27,7 @@ V=0.10.3; RC=v$V-rc.1; PREV=0.10.2
   `sh tools/test-make-acceptance-predicate.sh` passes.
 - If `release.yml` or an action it uses changed: `gh workflow run release.yml --ref main`
   (the signing rehearsal, against the throwaway package) and wait for it.
-- After the merge, CI's five jobs are green on the commit to be tagged:
+- After the merge, every CI job is green on the commit to be tagged (the System rig and Upgrade drill jobs are the `ci-system-rig` and `ci-upgrade-drill` drills):
 
   ```sh
   git switch --detach origin/main
@@ -39,7 +39,7 @@ V=0.10.3; RC=v$V-rc.1; PREV=0.10.2
 ```sh
 git tag $RC "$(git rev-parse origin/main)" && git push origin $RC
 gh run list --workflow release.yml --branch $RC     # builds, signs, publishes the pre-release
-gh run list --workflow ci.yml --branch $RC          # the ci-namespace-drills drill is this run
+gh run list --workflow ci.yml --branch $RC          # the ci-* drills are this run
 ```
 
 Both green before anything else. From here the release commit is fixed: whatever is written

@@ -79,11 +79,12 @@ candidate` job of `release.yml`, which:
 
 CI also runs on the tag push. The `ci-namespace-drills` drill in the
 acceptance policy is CI's namespace-drill step passing on the tag, and
-`ci-system-rig` is its System rig job passing there. CI's Upgrade drill job
-also runs the upgrade from the previous release, and the rollback to it, on
-the system rig ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)); the
-policy does not count it yet, so `upgrade-from-<previous>` stays a live
-drill:
+`ci-system-rig` is its System rig job passing there, and `ci-upgrade-drill`
+its Upgrade drill job, which runs the upgrade from the previous release, and
+the rollback to it, on the system rig
+([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)). [Automatic
+releases](#automatic-releases) tag a candidate only from a commit whose
+checks all passed, so these jobs have passed before live acceptance starts:
 
 ```sh
 gh run list --workflow ci.yml --branch v0.10.0-rc.1
@@ -101,24 +102,24 @@ candidate's digest. Then run what the policy names:
   (`native`, `gluetun`, `sidecar`, `native-sidecar`), each listed provider, on
   each listed platform, comes back `ok` on the candidate;
 - **drills**: the upgrade from the previous release, changing only what the
-  changelog's **Breaking** items for this release ask for
-  (`upgrade-from-0.9.4`; for 0.10.0, `net.ipv4.icmp_errors_use_inbound_ifaddr`
+  changelog's **Breaking** items for this release ask for, with the exits
+  under test coming back `ok` on the candidate's image (`upgrade-from-0.9.4`; for 0.10.0, `net.ipv4.icmp_errors_use_inbound_ifaddr`
   on Kubernetes, and check that a native exit without it doesn't start
   NetBird); the tunnel deleted and recovered (`tunnel-loss`); a short
   [network exchange](verification.md#the-network-exchange) run between an
   exit and a panel on different nodes (`network-exchange-smoke`: the exit
   `ok` through the exchange, one switch verified with its result back on the
-  panel, and a wrong exchange token refused with 401); since 0.11.0, a
-  selected server taken out of gluetun's server list and put back
-  ([a retired server](verification.md#a-retired-server),
+  panel, and a wrong exchange token refused with 401); from 0.11.0 to
+  policy 21, a selected server taken out of gluetun's server list and put
+  back ([a retired server](verification.md#a-retired-server),
   `retired-server-move`); since policy 18, the proxy on a real Mullvad exit
   ([the proxy](verification.md#the-proxy), `proxy-live`); since policy 20, a
   [multi-provider exit](multi-provider.md) with Mullvad, PIA and NordVPN
   (`multi-provider-live`: a switch between providers in each direction,
   one through the panel, each verified within 60 seconds; a tunnel lost on
   each provider, the interface back within 5 seconds, traffic within 30
-  (PIA 60) and a verified record within 90; no unsafe routing sample and no restart); and CI's namespace drills and system rig on the tag
-  (`ci-namespace-drills`, `ci-system-rig`). The procedures are in [verification](verification.md). The policy
+  (PIA 60) and a verified record within 90; no unsafe routing sample and no restart); and CI's namespace drills, system rig and upgrade drill on the tag
+  (`ci-namespace-drills`, `ci-system-rig`, `ci-upgrade-drill`). The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
 
@@ -145,6 +146,22 @@ candidate's digest. Then run what the policy names:
   the container runtimes, the signed image, and real gluetun's reconnection
   when a server leaves its list (the rig covers that move only for
   Mullvad's own tunnel, `TestSystemRigRetiredServer`).
+
+  Since policy 22, the retired-server move is no longer run by hand: the
+  System rig drills it on the native Mullvad exit and, against a fake
+  gluetun control server, in the gluetun form
+  (`TestSystemRigGluetunRetiredServer`), and it counts through
+  `ci-system-rig`. The state half of the upgrade counts through
+  `ci-upgrade-drill`: CI builds the previous release from its tag, checks it
+  byte for byte against the released image, and runs it and then the
+  candidate on one state directory (`TestUpgradeFromPrevious`).
+  `upgrade-from-<previous>` stays live but is the image swap only: the exits
+  under test move from the previous release's image to the candidate's and
+  come back `ok`. No longer drilled live: real gluetun's own reconnection
+  when a server leaves its list (its timing, firewall rewrite and updater),
+  and an upgrade's state on PIA, NordVPN, gluetun, sidecar and exchange
+  exits; the rig runs both on fakes, and the upgrade on the native Mullvad
+  exit only ([#54](https://github.com/irashack/molebridge/issues/54)).
 
 Write down what ran, where and with which results as you go. The record goes
 into [testing](testing.md) afterwards, in the form of the earlier candidates'
