@@ -37,9 +37,11 @@ memory during a server-list refresh, and traffic arriving on the forwarded
 port. The pass is recorded on
 [issue 79](https://github.com/irashack/molebridge/issues/79#issuecomment-7044744228);
 [testing](testing.md) records it with the release that turns the feature
-on. Release acceptance does not yet require a live multi-provider drill of
-every candidate: [issue 128](https://github.com/irashack/molebridge/issues/128)
-tracks it. The [design record](design/multi-provider.md) lists the drills.
+on. Since acceptance policy 20, every candidate needs the live
+`multi-provider-live` drill ([releasing](releasing.md#3-run-the-live-acceptance)).
+The [design record](design/multi-provider.md) lists the drills, and
+[verification](verification.md#multi-provider-exits) has the same checks to
+run on your own host.
 
 ## Limits
 
