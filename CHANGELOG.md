@@ -74,6 +74,14 @@ what changed is below.
   single-provider exit is byte for byte as before (a new golden test locks
   its settings, child environments and starting record).
 
+- The system rig drills a multi-provider exit
+  (`TestSystemRigMultiProviderSwitch`, on the drill build, since the
+  release build refuses `PROVIDERS`): with `PROVIDERS=mullvad,nordvpn`
+  beside a fake NordVPN network, the exit changes from Mullvad to NordVPN
+  and back to another Mullvad relay, each change verified with its
+  provider's check and no client packet by the host path. Fake networks
+  only: the live pass and the NordVPN memory measurement have not run.
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;

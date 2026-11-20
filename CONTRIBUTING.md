@@ -218,7 +218,20 @@ over the host path the uplink probe holds the failover until it answers; a panel
 the episode is applied at once and ends it; and with both relays dropping, the episode is exhausted
 (`failover-exhausted` in the panel, "No backup verified"). The leak counter must stay at zero. The
 failures still come from the pipeline's own checks and re-applies, and every switch waits out the
-90-second reapply guard, so these are the longest drills, about fifteen minutes. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
+90-second reapply guard, so these are the longest drills, about fifteen minutes.
+`TestSystemRigMultiProviderSwitch` (`systemrig_multiprovider_test.go`) runs a [multi-provider
+exit](docs/configuration.md#multi-provider-exit) on the `molebridge-drill` binary, not the release
+build: the release build refuses `PROVIDERS` until multi-provider exits are switched on, and the
+`drill` tag switches them on (`internal/exit/multi_available_drill.go`). It runs with
+`PROVIDERS=mullvad,nordvpn` beside a fake
+NordVPN network: the fixture's catalogue (`tools/fixtures/nordvpn`) cut to one server, which is a
+kernel WireGuard server on port 51820 for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4 only,
+with an SNAT to its own egress address, and the `ips/insights` check, protected only from that
+address. Requests written to `desired.json` change the tunnel from Mullvad relay A to the NordVPN
+server and on to Mullvad relay B without a restart; each change must end verified for its request
+with its provider's own check, the client's traffic following (IPv4 only on NordVPN, its IPv6 with
+no way out), and the leak counter at zero throughout. The panel has no provider choice yet, so the
+drill does without it; PIA has no fake network on the rig. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh

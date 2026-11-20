@@ -428,6 +428,22 @@ measurement and the live pass behind it, turns it on. Until then the
 package's own tests reach a multi-provider exit through a test-only load
 option, and the drills through the `drill` build.
 
+As built (the rig drill): `TestSystemRigMultiProviderSwitch`
+(`internal/exit/systemrig_multiprovider_test.go`) grows the system rig by a
+fake NordVPN network only: one server cut from the fixture catalogue,
+kernel WireGuard for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4
+only, an SNAT to its egress address, and `ips/insights` protected only from
+it. The rig's `molebridge-drill` (the release build's flags plus the
+`drill` tag, which switches multi-provider exits on; the release build
+refuses `PROVIDERS`) with `PROVIDERS=mullvad,nordvpn` changes from Mullvad
+relay A to NordVPN and on to Mullvad relay B, by requests written to
+`desired.json` (the panel can't name a provider until piece 7), each change
+verified with its provider's check, the client following, and the leak
+counter at zero throughout. Not on the rig yet, from the drills below: PIA's
+fake network and every pair with it, tunnel loss right after a change, a
+`Replace` interrupted by a restart, and the routing-repair drills per
+provider.
+
 ## The catalogs in one process
 
 This is why piece 0 comes first. A single NordVPN exit used about 190 MB
