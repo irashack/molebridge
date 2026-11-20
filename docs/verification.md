@@ -560,8 +560,11 @@ whose server leaves the provider's list
 [moves to another in the same city](architecture.md#a-server-the-provider-retires)
 and returns. It runs on an exit with the gluetun backend, because there the
 server list is a file you can edit; the native providers' lists come from the
-provider's API at start and every six hours, and their move is covered only
-by `go test` ([testing](testing.md)).
+provider's API at start and every six hours, and their move has no live
+procedure. CI's [system rig](../CONTRIBUTING.md#the-system-rig) runs the move
+against fake servers on the native Mullvad exit and, with a fake gluetun
+control server, in the gluetun form; real gluetun's own reconnection is
+covered only by this drill.
 
 1. In the panel pick a standard server (not a dedicated-IP, Onion or other
    special one, which the exit's catalog leaves out) whose city has at least
