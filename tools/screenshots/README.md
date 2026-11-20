@@ -26,7 +26,10 @@ records) and the panel's request, plus a `scene.json` with the panel's
 environment. For each scene it starts `molebridge panel` on loopback with
 only that environment and `MOLEBRIDGE_PANEL_ISOLATION_CHECK=off`, opens the
 page in Chromium at 1280×860 with a device scale factor of 2, and writes a
-2560×1720 PNG. The social preview is the SVG on a 1280×640 page at the same
+2560×1720 PNG. In the two multi-exit scenes it closes the current
+country's section, which the page opens, so the location list ends inside
+the frame. The configured scene is cropped 48 px below the exit card, at
+full width. The social preview is the SVG on a 1280×640 page at the same
 scale, 2560×1280.
 
 Chromium on Linux picks fonts through fontconfig, and a fontconfig without
