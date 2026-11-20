@@ -559,7 +559,7 @@ Then run the [client checks](verification.md#from-a-client).
 reboot ([operations](operations.md#checking-that-containers-share-gluetuns-namespace)).
 
 **Proxy.** Point a client at it with the password, as in [the
-username](proxy.md#the-username-where-a-connection-leaves), and read
+username](proxy.md#choosing-where-a-connection-leaves-the-username), and read
 `docker compose exec proxy molebridge status --proxy`.
 
 For every form, read `docker compose exec exit molebridge status`. A passing

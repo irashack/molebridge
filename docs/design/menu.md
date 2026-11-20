@@ -26,7 +26,7 @@ code in `internal/tunneldial`.
 ## Relay proxies
 
 Locations, Mullvad's relay proxies, choosing and benching servers:
-[the username](../proxy.md#the-username-where-a-connection-leaves). The code
+[the username](../proxy.md#choosing-where-a-connection-leaves-the-username). The code
 is `internal/relayproxy`.
 
 ## The proxy

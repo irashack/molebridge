@@ -20,13 +20,25 @@ retries on the provider you picked.
 page is built and covered by unit tests and by system rig drills in CI
 against fake Mullvad, PIA and NordVPN networks. Only builds with the `drill`
 tag accept it: the drills, the system rig's `molebridge-drill`, and
-`molebridge init` run as `go run -tags drill ./cmd/molebridge init`. The live
-pass with three real accounts has **not run**. Memory was measured once, on
-a test host with all three providers: 52 MB idle and 64 MB at peak, against
-a 70 MB target (a NordVPN-only exit on the same image used 50 MB and 59 MB).
-A later release turns it on once the live pass has run; its changelog will
-say so. [Testing](testing.md) is the record of what ran on real hosts, and
-the [design record](design/multi-provider.md) lists the drills.
+`molebridge init` run as `go run -tags drill ./cmd/molebridge init`.
+
+It passed one live pass, on 2026-11-20, with real Mullvad, PIA and NordVPN
+accounts, on a drill image built from commit 3e31f78 and run on a
+test host (not a NetBird client's view: the client probe couldn't reach
+that host, so a routing-rule sampler at 10 Hz stood in for it and saw no
+unsafe moment). Every switch between providers, in all six directions,
+finished in 4.7 to 9.9 seconds, two of them made from the panel's provider
+tab. A lost tunnel was back in 1.7 seconds on Mullvad, 1.9 on NordVPN and
+25.9 on PIA, before the 10-second no-peer guard of a later change (see
+[limits](#limits)). PIA's forwarded port arrived about 68 seconds after each
+change to PIA and was cleared on leaving. Memory with all three providers
+was 48 MB idle and 65 MB at peak, against a 70 MB target. Not run live:
+memory during a server-list refresh, and traffic arriving on the forwarded
+port. The pass is recorded on
+[issue 79](https://github.com/irashack/molebridge/issues/79#issuecomment-7044744228);
+[testing](testing.md) records it with the release that turns the feature
+on, whose changelog will say so. The
+[design record](design/multi-provider.md) lists the drills.
 
 A release build refuses it everywhere, with these lines:
 
@@ -54,13 +66,14 @@ build with the feature on does.
   provider's tunnel key and, with `pia` in the set, PIA's login. A
   compromised multi-provider exit gives away all of them, not one. Where that
   matters, run single-provider exits side by side instead.
-- **PIA recovers slowly.** In the system rig, a tunnel lost right after a
-  change came back in about 1.5 seconds on Mullvad and NordVPN and about
-  90 seconds on PIA; a change from Mullvad to PIA interrupted between
-  removing the old tunnel and creating the new one needed a second attempt
-  and finished about 65 seconds later (PIA to NordVPN: 5 seconds). The likely
-  cause, PIA's login and key registration running again on each recovery, has
-  not been confirmed. These are fake networks; real PIA has not been timed.
+- **PIA recovers more slowly than the others.** A tunnel PIA loses comes
+  back with no peer, and the exit logs in and registers again before traffic
+  flows. Live, before the exit's 10-second wait for a tunnel with no peer
+  (it waited 90 seconds before), that took 25.9 seconds; on the system rig's
+  fake network, with the 10-second wait, about 10 seconds. A change from
+  Mullvad to PIA interrupted between removing the old tunnel and creating
+  the new one needs a second attempt; the system rig bounds it at
+  45 seconds. Mullvad and NordVPN come back in about 2 seconds.
 - Two providers' configs holding the same key are not refused.
 
 ## Set it up

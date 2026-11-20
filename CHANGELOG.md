@@ -83,6 +83,21 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   kill (was 65.4 s); the drills now fail above 30 and 45 seconds. Not
   measured on a real PIA tunnel.
 
+- Docs: rewritten around the menu (#127). The README is shorter and leads
+  with the ways in. [The menu](docs/menu.md) helps you choose, and
+  [setup](docs/setup.md) starts from `molebridge init`. New pages:
+  [the NetBird exit](docs/netbird-exit.md), [failover](docs/failover.md),
+  [multi-provider exit](docs/multi-provider.md) and
+  [the network exchange](docs/exchange.md). The Mullvad SOCKS5 page is now a
+  section of [the proxy](docs/proxy.md#mullvads-relay-proxies-used-directly).
+  [Configuration](docs/configuration.md) is reference only, and
+  [architecture](docs/architecture.md) is organised as the core, the ways in
+  and the extras. Corrections the rewrite found:
+  - The `FAILOVER*` settings are not passed from `.env`; set them in a
+    `compose.override.yaml`.
+  - `molebridge init` and the proxy are in v0.14.0, not "no release yet".
+  - Testing claims now match the record.
+
 ## 0.14.1 — unreleased
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;
@@ -730,7 +745,7 @@ the setup key reaches only `netbird up` but stays readable in the exit's
 `/proc/1/environ` until the exit is recreated; rule 1 keeps unicast overlay
 traffic from local delivery, not multicast or broadcast; a host suspended
 longer than `GUARD_GRACE` restarts the exit by design.
-Added: [Mullvad's SOCKS5 proxies](docs/mullvad-socks5.md) through a native
+Added: [Mullvad's SOCKS5 proxies](docs/proxy.md#mullvads-relay-proxies-used-directly) through a native
 Mullvad exit, which need no change to Molebridge (checked live at 0.9.4,
 [testing](docs/testing.md#mullvads-socks5-proxies-through-an-exit)); a
 [direction](ROADMAP.md#direction) and a [proxy on the exit](ROADMAP.md#a-proxy-on-the-exit)
