@@ -43,6 +43,29 @@ container and tool names of those releases (`wireguard`, `netbird`, `applier`,
 `control-panel`, `tools/molebridge.py doctor`). They are the history of what was
 tested, not instructions; the current commands are in the other pages.
 
+## 0.14.1
+
+Released from `v0.14.1-rc.1` by the release automation. The acceptance policy (`tools/acceptance-policy.json`, version 20) is the one the candidate was attested against.
+
+### v0.14.1-rc.1, 2026-11-20: released
+
+The candidate `ghcr.io/irashack/molebridge:v0.14.1-rc.1`, index digest `sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75`, and `ghcr.io/irashack/molebridge-core:v0.14.1-rc.1`, index digest `sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6` (commit `5324f44`). Attested by [run 44803227203](https://github.com/irashack/molebridge/actions/runs/44803227203) and promoted as `v0.14.1`.
+
+### v0.14.1-rc.1: mb-accept on the owner's exits
+Candidate commit `5324f44ee5fa6a9c37d27745ea8e26b133600890`: `ghcr.io/irashack/molebridge:v0.14.1-rc.1@sha256:ef8322f5f3356975b039636219c475cb72ea5de2810cf44a244c669ab0e5ce75`, `ghcr.io/irashack/molebridge-core:v0.14.1-rc.1@sha256:cb5c64aad329af1020eb5bca6c8fbede7e645475c79d0605008871a2a4ccafa6`; policy 19.
+
+- Upgrade from 0.14.0, Kubernetes: every owner exit ok on v0.14.0, moved by the canary keys alone, ok on the candidate with 0 restarts: mullvad-exit (mullvad, native, verified), pia-exit (pia, native, verified), nordvpn-exit (nordvpn, native, verified), gluetun-exit (nordvpn, gluetun, verified), molebridge-sidecar (nordvpn, sidecar, verified), vela-web (pia, native-sidecar, verified)
+- tunnel-loss: mullvad-exit passed; pia-exit passed; nordvpn-exit passed; gluetun-exit passed
+- retired-server-move: gluetun-exit passed
+- network-exchange-smoke: nordvpn-exit+mb-exchange-trial passed
+- proxy-live: mullvad-exit+proxy passed
+- Upgrade from 0.14.0, Podman rootless Quadlet (testbed guest): the sidecar ok on v0.14.0, only the exit moved to the candidate, ok and verified, the app's egress through the tunnel, gluetun and the app not restarted.
+- CI on the tag's commit: ci-namespace-drills, ci-system-rig (CI and System rig passed).
+
+Evidence:
+
+- homelab-ops services/molebridge-sidecar/acceptance (mb-accept), run 2026-11-20 19:17 UTC on the owner's exits
+
 ## 0.14.0
 
 Released from `v0.14.0-rc.1` by the release automation. The acceptance policy (`tools/acceptance-policy.json`, version 18) is the one the candidate was attested against.
