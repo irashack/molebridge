@@ -1,16 +1,17 @@
 # Roadmap
 
-Where Molebridge is going, and ideas that are not scheduled. Nothing in the
-backlog is built; each entry says what it would take as far as we know today.
+Where Molebridge is going, what is built, and ideas that are not scheduled.
+Nothing in the backlog is built; each entry says what it would take as far as
+we know today.
 
 ## Direction
 
 Molebridge runs a commercial VPN tunnel as a self-hosted service, reached in
-more than one way. It began as a NetBird exit node, and that stays the main
-way in, but most of what it is doesn't depend on NetBird: the provider
-tunnels, the server catalogs, the admission pipeline, the routing contract,
-the status record and its verdict, and Switchyard. The sidecars already use
-that core with no NetBird at all.
+more than one way. It began as a NetBird exit node, but most of what it is
+doesn't depend on NetBird: the core (the provider tunnels, the server
+catalogs, the admission pipeline, the routing contract, fail-closed repair,
+the status record and its verdict) and Switchyard. The sidecars and the proxy
+use that core with no NetBird at all.
 
 Each way in is defined by what it guarantees, not by its protocol:
 
@@ -18,7 +19,7 @@ Each way in is defined by what it guarantees, not by its protocol:
 |---|---|---|
 | NetBird exit | whole devices | fail-closed for the traffic the exit receives |
 | Sidecar (gluetun or native) | whole containers | fail-closed, by gluetun's firewall or by the native sidecar's routing contract and firewall |
-| Proxy ([backlog](#a-proxy-on-the-exit)) | applications or connections that opt in | the proxy's own connections leave only through the tunnel; nothing about traffic not sent to it |
+| Proxy | programs that opt in | every connection the proxy opens leaves through the tunnel, or fails; nothing about traffic not sent to it |
 
 Three rules follow, and the project's
 [properties](AGENTS.md#preserve-the-properties) carry them:
@@ -31,15 +32,32 @@ Three rules follow, and the project's
 - **The core stays shared.** A way in reuses the provider tunnels, the
   admission pipeline and the verdict rather than growing its own.
 
-The aim is a menu: an operator picks the ways in they want (a NetBird exit,
-a sidecar, a proxy) and the extras (Switchyard, `port-sync`), and the core
-underneath is the same. NetBird becomes one of the choices rather than the
-frame. Each way in is tested once against the core's contracts, not in every
-combination, and is labeled stable or experimental on its own. Today's
-`EXIT_KIND` and `TUNNEL_BACKEND` stay valid and map onto the menu, so existing
-exits need no change. A single setting or file naming the choices, and a
-`molebridge init` that writes the Compose file from a few questions, would
-come after the proxy.
+**What is built.** The menu exists: you pick the ways in and the extras, and
+the core underneath is the same ([the menu](docs/menu.md)). All three ways in
+are built, each experimental and labeled on its own; the extras are
+Switchyard, `port-sync`, failover, the network exchange and the
+multi-provider exit. In the order they came:
+
+- exchanging requests and status over the network, so that more ways in
+  don't mean more shared directories (0.10.0, run live in every release's
+  acceptance since: [the network exchange](docs/exchange.md));
+- an image without NetBird, `ghcr.io/irashack/molebridge-core` (0.12.0; the
+  sidecars on it since 0.13.0);
+- in 0.14.0: the proxy, with a status file of its own instead of a change to
+  the exit's record ([the proxy](docs/proxy.md)); Switchyard's view of it;
+  `molebridge init`, which writes the Compose file from three questions
+  ([setup](docs/setup.md#molebridge-init)) and offers the proxy from the
+  release after 0.14.0; NetBird moved behind one boundary in the exit, with
+  no change of behavior; and automatic failover ([failover](docs/failover.md)).
+
+`EXIT_KIND` and `TUNNEL_BACKEND` keep their meaning: `init` only writes them,
+and the shipped Compose files stay valid, so existing exits need no change.
+
+**What is left.** Live passes for what has run only in CI: a stack written by
+`init` started on a host, the proxy in a native sidecar's namespace and with
+PIA and NordVPN, failover on a real provider, and the multi-provider exit
+([its page](docs/multi-provider.md) says where it stands). Each way in is
+tested once against the core's contracts, not in every combination.
 
 Two decisions shape the work (maintainer, 2026-11-19):
 
@@ -54,22 +72,10 @@ Two decisions shape the work (maintainer, 2026-11-19):
   without cgo, and what the project depends on (the NetBird client, gluetun,
   wgctrl, netlink and nftables) is Go. The failures that matter here are
   logic failures, a leaking rule or a lapsed lease shown as live, which no
-  language prevents and the drills and live passes catch. Once the ways in
-  have clean boundaries, one could be rewritten behind its contract if
+  language prevents and the drills and live passes catch. Now that the ways
+  in have clean boundaries, one could be rewritten behind its contract if
   measurements give a reason; a userspace tunnel for the proxy is the likely
   candidate. No rewrite happens alongside the change of core.
-
-The order of work: exchanging requests and status over the network first,
-so that more ways in don't mean more shared directories (built in 0.10.0 and
-run live in every release's acceptance since:
-[the network exchange](docs/architecture.md#the-network-exchange));
-then an image without NetBird (0.12.0, the sidecars on it since 0.13.0); then
-the proxy, with a status file of its own instead of a change to the exit's
-record, the menu and `molebridge init`, and NetBird as a module, built in
-parallel to the contract in [the menu's design](docs/design/menu.md).
-Meanwhile a device on a Mullvad exit can already
-reach Mullvad's own per-server proxies ([Mullvad's SOCKS5
-proxies](docs/mullvad-socks5.md)).
 
 ## Done
 
@@ -126,6 +132,38 @@ proxies](docs/mullvad-socks5.md)).
   `EXIT_KIND=overlay` at start. The sidecar Compose files use it after
   0.12.0 ([#47](https://github.com/irashack/molebridge/issues/47)).
 
+## Built, still experimental
+
+These were backlog entries. They are built; what each still lacks is on its
+own page.
+
+### A proxy on the exit
+
+Built in 0.14.0: `molebridge proxy`, SOCKS5 and HTTP `CONNECT` in a native
+exit's namespace for programs that opt in, the username choosing a country,
+a city or a server, with sessions and benched servers, in its own container
+with no capabilities, keys or credentials, and a status file of its own
+([the proxy](docs/proxy.md)). Every connection it opens leaves through the
+tunnel, or fails. It has been drilled live on a Mullvad NetBird exit only;
+PIA, NordVPN and the native sidecar's namespace have not been drilled.
+
+### Automatic failover
+
+Built in 0.14.0, off by default: when the selected server keeps failing, a
+native exit moves to a backup in the same city, the same country or a list
+you give, and comes back ([failover](docs/failover.md)). Its live drill on a
+real provider has not run. The rules and the choices that were the
+maintainer's to make are in [its design](docs/design/failover.md).
+
+### One exit for several providers
+
+One NetBird exit that carries Mullvad, PIA or NordVPN, one at a time, so that
+a device stays on one peer while Switchyard picks the provider and the server
+in one step. Single-provider exits stay as they are. Whether a release offers
+it, and what has not run, is on [its page](docs/multi-provider.md); the
+contract it was built to is [its design](docs/design/multi-provider.md).
+gluetun exits are out of scope: gluetun owns their tunnel.
+
 ## Backlog
 
 ### Publishing the lease apart from the status record
@@ -176,64 +214,6 @@ which Molebridge cannot shrink. Their live memory has not been measured since
 these changes. Done means NordVPN and gluetun exits under the target, with server
 choice and refresh unchanged.
 
-### One exit for several providers
-
-Today each exit has one provider, fixed at start by `PROVIDER`, so using
-Mullvad, PIA and NordVPN means three exits and three NetBird peers. Moving a
-device from one provider to another means choosing a different exit node in
-the NetBird app and then the server in Switchyard. A multi-provider exit
-would be one peer: the device stays on it, and Switchyard picks the provider
-and the server in one step. It would be an opt-in kind of exit for the native
-providers. Single-provider exits stay as they are, and existing setups need
-no change.
-
-It looks feasible, but a provider change is more than today's server switch,
-which keeps the tunnel and changes its peer (and, for PIA, its address). What
-it would take:
-
-- Replacing the tunnel's whole configuration (key, addresses, MTU, routes)
-  through the mutation owner, and making the tunnel-recovery loop rebuild the
-  current provider's tunnel. Today recovery recreates the tunnel from the
-  configuration the exit started with, on the last peer set.
-- A target that names a provider and a server, through the same admission
-  pipeline, with each provider's own registration, key handling and egress
-  check. Attempt records would need the provider as well as the server, and
-  readers of the status record, which already names its provider, would have
-  to accept one that changes; today a reader rejects a record whose provider
-  differs from its own setting.
-- Per-provider routing differences handled at a switch, such as PIA's
-  return-path rules and its port forwarding, which must be gone before
-  another provider's tunnel is up.
-- One tunnel interface name for every provider, the simplest way to keep
-  NetBird's interface exclusion and the routing contract stable (the
-  exclusion list could also name several).
-- Every provider's credentials and tunnel configs in one container, which
-  widens what a compromised exit holds, and every provider's server catalog
-  in one process, which depends on the memory work above.
-- A panel that offers the provider as well as the server.
-- A live pass with switches in both directions between every pair of
-  providers, and the tunnel-loss and repair drills run on each.
-
-gluetun exits are out of scope: gluetun owns their tunnel. Everyone using a
-multi-provider exit shares its current provider. To put different devices on
-different providers at the same time, run single-provider exits beside it.
-
-The contract for building it, with the choices that are the maintainer's to
-make, is [its design](docs/design/multi-provider.md).
-
-### Automatic failover
-
-Today Molebridge never picks another server: it retries the one you chose.
-A failover would move an exit to a backup server when its own keeps failing,
-and back again. The admission pipeline already separates the operator's
-choice (the primary target) from the server it applies, so a backup would
-go through the same gates and checks. What it takes: rules for when to fail
-over and when to return, which backups are acceptable, how the panel shows
-it, and a live pass.
-
-The rules, the pieces and the choices that are the maintainer's to make are
-in [its design](docs/design/failover.md).
-
 ### Verifying a sidecar's tunnel-tier egress
 
 A gluetun sidecar with FastestVPN, IVPN, Surfshark or Windscribe is shown as
@@ -241,44 +221,3 @@ switched, never verified, because nothing in plain gluetun's namespace can
 measure the host's own address. The panel could measure it instead, as an
 opt-in, if it can show that it and gluetun leave the host by the same path,
 with fresh bounded measurements, and still work without a panel.
-
-### A proxy on the exit
-
-A device on a Mullvad exit can already use [Mullvad's SOCKS5
-proxies](docs/mullvad-socks5.md) to send one application out through another
-server, but only by naming that server's proxy, and only from a NetBird
-device. A proxy run by Molebridge would let an application ask for a country,
-a city or a server in the proxy username (`de`, `us-nyc`, `se-sto-wg-001`),
-keep one server per named session, and skip servers that fail, as
-[mullpod](https://github.com/SkanaviLabs/mullpod) does with its own
-in-process tunnel. The users this fits are mostly programs: agents, scrapers,
-browser tests and CI jobs that want a stable or changing location per task.
-
-It guarantees nothing about traffic that isn't sent to it, so it would be a
-way in of its own ([direction](#direction)), never a sidecar mode. What it
-would take:
-
-- Its own container with no capabilities, keys or credentials, so the exit's
-  listening surface doesn't grow. If it shares the exit's namespace, every
-  connection it opens must be bound to the tunnel interface: the routing
-  contract sends only traffic from NetBird, or bound to the tunnel, to the
-  exit table, and an unbound connection from the namespace leaves by the host
-  ([testing](docs/testing.md#mullvads-socks5-proxies-through-an-exit)). A
-  failed or missing binding has to fail the connection, never fall back.
-- Listening on NetBird's interface or loopback only, with a password from a
-  mounted file, because Mullvad's proxies take none and anyone who reaches the
-  port reaches every server.
-- The proxy names derived from the relay list (`relays.json` has no field for
-  them), validated like the rest of the catalog.
-- A status record that can say "the tunnel is up, these servers answered,
-  these are benched" without a reader taking it for a verified fail-closed
-  exit, and a Switchyard view of sessions and benched servers instead of a
-  server switch.
-- The standard library only: SOCKS5, HTTP `CONNECT`, sessions and the
-  benching are small enough not to need a module.
-- For PIA and NordVPN, a proxy for the exit's current server only: they offer
-  no proxy per server that Molebridge knows of.
-- A live pass: clients selecting servers by every kind of name, a session
-  kept and moved, a benched server, a server switch of the exit, tunnel loss,
-  and an nftables counter on every interface but the tunnel showing no
-  packet from the proxy.

@@ -3,11 +3,21 @@
 Everything here is needed before [setup](setup.md). Where something has only
 been tested in one configuration, this page says so. [Testing](testing.md)
 is the record of what ran live, where and at which revision; "tested"
-statements below that name an earlier release are about that release. The
-sidecar forms ([gluetun](gluetun-sidecar.md) and [native](native-sidecar.md),
-the latter run live with PIA on Kubernetes only)
-need no NetBird account: read the host, runtime and network parts, and skip
-[NetBird](#netbird).
+statements below that name an earlier release are about that release.
+
+## By way in
+
+Every way in ([the menu](menu.md)) needs the [host](#host) and the
+[network](#network) parts. The rest depends on what you chose:
+
+| Way in or extra | Also needs |
+|---|---|
+| NetBird exit | [NetBird](#netbird), a [VPN account](#vpn-provider) with Mullvad, PIA or NordVPN, and the three [sysctls](#kernel-settings-in-the-exits-namespace) |
+| NetBird exit with gluetun | [NetBird](#netbird), an account with one of [gluetun's providers](#through-gluetun), and the sysctls (on the `gluetun` service) |
+| Native sidecar | a [VPN account](#vpn-provider) with Mullvad, PIA or NordVPN, and nftables; no NetBird |
+| gluetun sidecar | an account with one of [gluetun's providers](#through-gluetun); no NetBird |
+| Proxy | a native NetBird exit or native sidecar to run beside, Linux 5.7 or later, and on a NetBird exit an [access policy](#netbird) for its clients |
+| Switchyard | a way to reach it with [authentication](#panel-access) |
 
 ## Host
 
@@ -15,7 +25,9 @@ need no NetBird account: read the host, runtime and network parts, and skip
   Internet connection until they deselect it.
 - **Linux with kernel WireGuard** (5.6 or later, or an older kernel with the
   module installed). Molebridge uses the kernel implementation only; there is
-  no userspace fallback.
+  no userspace fallback. The proxy needs Linux 5.7 or later: it binds every
+  connection to the tunnel interface without capabilities, which older
+  kernels allow only with `NET_RAW`, and a failed bind fails the connection.
 - **nftables in the kernel** (`nf_tables`, which current distribution kernels
   include). The image has no iptables, so NetBird uses its nftables firewall,
   and the exit's own PIA port-forwarding rules are nftables too. A
@@ -33,7 +45,8 @@ need no NetBird account: read the host, runtime and network parts, and skip
   no tunnel was started`. Turning IPv6 off with the `disable_ipv6` sysctls
   is fine: the family is still there.
 - **Docker Engine with Compose 2.24 or later, or rootless Podman with
-  podman-compose.** The Compose files use `env_file` entries with
+  podman-compose.** No other tool is needed on the host: `molebridge init`
+  and the setup tools run from the image. The Compose files use `env_file` entries with
   `required: false` and bind mounts that must exist, which older Compose
   versions don't read.
 
@@ -175,12 +188,15 @@ you want direct NetBird connections from a rootless or bridged setup (see
 | NordVPN, through the tunnel: HTTPS to `api.nordvpn.com` | Egress check |
 | Native sidecar: the rows for its provider above. The exit's provider downloads, login and registration leave over the host's connection; the applications reach only `SIDECAR_LAN_CIDRS` outside the tunnel | As the provider's rows; a resolver inside `SIDECAR_LAN_CIDRS` is reached outside the tunnel ([DNS](native-sidecar.md#dns)) |
 | gluetun backend: what gluetun needs for its provider, including its server list updater and DNS, which go through the tunnel | Tunnel, server list |
+| Proxy, with Mullvad: through the tunnel, the relay proxies (port 1080 in `10.124.0.0/16`) and Mullvad's resolver `10.64.0.1:53`. With PIA and NordVPN: the targets themselves and the provider's resolver, through the tunnel | Every connection the proxy opens; it makes none outside the tunnel ([the proxy](proxy.md#how-it-keeps-the-guarantee)) |
 | gluetun backend with FastestVPN, IVPN, Surfshark or Windscribe: HTTPS to `api.ipify.org` and `ipv4.icanhazip.com` (and `api6.ipify.org`, `ipv6.icanhazip.com` for IPv6), through the tunnel and from the host | The tunnel checks, which compare the address seen through the tunnel with the host's own |
 
 Check your ISP's or hosting provider's terms before relaying traffic for other
 people. Some forbid it.
 
 ## NetBird
+
+For the NetBird exit only; the sidecars need no NetBird account.
 
 - **A NetBird account**, either NetBird Cloud or self-hosted. The image
   carries the NetBird client at the version pinned in its `Dockerfile`
@@ -219,6 +235,11 @@ people. Some forbid it.
   `exit-users`. With IPv6 overlay, NetBird adds a matching `::/0` route; check
   that it's there. NetBird's [exit node guide](https://docs.netbird.io/use-cases/remote-access/exit-nodes)
   covers the dashboard steps.
+
+- **With the proxy on the exit**, an access policy that lets only the
+  devices meant to use it reach the exit on the proxy's port
+  ([where it listens](proxy.md#where-it-listens)); the proxy's password is
+  the second check.
 
 - **Nothing else for the exit peer.** Don't enable NetBird SSH for it, don't
   give `exit-nodes` DNS nameservers, don't route domain resources or domain
@@ -283,9 +304,18 @@ live acceptance, without a client device ([testing](testing.md)).
   limit for the exit container is sized for it.
 - NordVPN carries IPv4 only. See [providers](providers.md#how-nordvpn-differs).
 
+### Through gluetun
+
+An account at FastestVPN, IVPN, Mullvad, NordVPN, Surfshark or Windscribe,
+with the WireGuard private key (and the tunnel address, if the provider
+assigns one) that gluetun's documentation for that provider asks for. Only
+NordVPN has been tried. [gluetun as a NetBird exit](gluetun-netbird-exit.md#requirements)
+lists the rest; [other providers](other-providers.md) says why others are not
+offered.
+
 ## Panel access
 
-By default the panel has no login. Anyone who can reach it can switch the
+For Switchyard. By default the panel has no login. Anyone who can reach it can switch the
 exit for everyone. It listens on the host's loopback address only, and you
 need one of:
 
