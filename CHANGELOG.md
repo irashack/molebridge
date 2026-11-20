@@ -159,7 +159,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   with Playwright ([how](tools/screenshots/README.md)). The README banner's
   footer lines fall back to a sans-serif font where Arial is missing.
 
-## 0.14.1 — unreleased
+## 0.14.1 — 2026-11-20
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;
 what changed is below.
