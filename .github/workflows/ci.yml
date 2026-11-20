@@ -196,6 +196,43 @@ jobs:
           sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
             go test -count=1 -v -timeout 25m -parallel 16 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 
+  upgrade-drill:
+    name: Upgrade drill
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Every tag, to find the previous release among HEAD's ancestors.
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      - name: Build the previous release
+        # The newest final tag before HEAD, built from its source with the
+        # release flags and checked byte for byte against the binary in the
+        # release's linux/amd64 image, pulled by the digest its GitHub
+        # release names (tools/previous-release.sh).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh tools/previous-release.sh "$RUNNER_TEMP/previous"
+          cat "$RUNNER_TEMP/previous/previous.env"
+      - name: Upgrade and roll back on the system rig
+        # The previous release's exit and panel build state on the rig,
+        # the candidate's take over the same state directory, then the
+        # previous release's again (CONTRIBUTING.md, "The system rig").
+        run: |
+          . "$RUNNER_TEMP/previous/previous.env"
+          sudo apt-get install -y --no-install-recommends nftables iproute2 wireguard-tools util-linux >/dev/null
+          sudo --preserve-env=PATH,GOROOT,GOFLAGS,GOTOOLCHAIN env "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" \
+            "MOLEBRIDGE_PREVIOUS_BIN=$RUNNER_TEMP/previous/molebridge" "MOLEBRIDGE_PREVIOUS_VERSION=$PREVIOUS_BUILD_TAG" \
+            go test -count=1 -v -timeout 20m -tags drill,systemrig -run TestUpgradeFromPrevious ./internal/exit/
+
   image:
     name: Image (amd64 and arm64)
     runs-on: ubuntu-24.04

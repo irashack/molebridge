@@ -14,6 +14,10 @@ To find what has run for one part, read the newest release sections first:
 
 - **The NetBird exit node**, native (Mullvad, PIA, NordVPN) and with gluetun:
   every release's acceptance, as the upgrade, `tunnel-loss` and repair lines.
+  CI's Upgrade drill job also upgrades a native Mullvad exit and its panel
+  from the previous release on the system rig, and rolls them back, for
+  every commit, against fake servers
+  ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)).
 - **The sidecars**: the gluetun sidecar's lines in each release's acceptance
   (rootless Podman with Quadlet, and Kubernetes); the native sidecar from
   [0.9.0](#090) on.
