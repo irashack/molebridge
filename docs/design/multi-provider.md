@@ -632,7 +632,7 @@ release build's 52. `TestEveryCombination` counts both, and
 `tools/check-compose.sh` builds a release and a drill binary and checks
 each: the multi-provider exits resolve as `compose.yaml`'s exit apart from
 `PROVIDERS` and the config mounts, which it checks on their own. The panel
-still receives `PROVIDER`, the first provider, until piece 7.
+receives the same `PROVIDERS` (piece 7).
 
 ## Testing
 

@@ -192,6 +192,8 @@ services:
     environment:
       STATE_DIR: /state
       PROVIDER: "${PROVIDER:-mullvad}"
+      # The exit's providers: the panel offers each one's servers.
+      PROVIDERS: "${PROVIDERS:?set PROVIDERS in .env (docs/configuration.md#multi-provider-exit)}"
       # Empty unless you set PANEL_ALLOW_ROOT=1: your statement that root in
       # this container is deliberate (PANEL_USER=0:0). The panel treats
       # empty as unset.
