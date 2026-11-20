@@ -330,3 +330,65 @@ func TestSystemRigMultiProviderPIAForwardLeft(t *testing.T) {
 		t.Errorf("PIA should have registered and forwarded twice: %d registrations, %d signatures, %d binds", adds, sigs, binds)
 	}
 }
+
+// switchAfterLossWithin bounds a requested change of provider made right
+// after a tunnel-loss recovery (#134: 90.9 s on homelab, a failed
+// registration and the backoff's first minute).
+const switchAfterLossWithin = 30 * time.Second
+
+// TestSystemRigMultiProviderSwitchAfterTunnelLoss: the tunnel link is
+// deleted on Mullvad; once the exit's recovery has brought it back and
+// written a verified record after that, Mullvad -> PIA is requested at once
+// and must verify within switchAfterLossWithin. Then the same again with
+// PIA's server dropping the change's first registration unanswered: the
+// requested change is tried again 10 seconds on, not after the backoff's
+// first minute, and still verifies within the bound. Nothing from the
+// client leaves outside WireGuard meanwhile.
+func TestSystemRigMultiProviderSwitchAfterTunnelLoss(t *testing.T) {
+	t.Parallel()
+	r, p, pia := newMultiRig(t, "mullvad,nordvpn,pia")
+	A, P := mullvadExit(r.relays[0]), piaExit()
+	for _, drop := range []int{0, 1} {
+		// Lost on Mullvad, back, and verified again after it came back.
+		lost := time.Now()
+		r.exit.IP("link", "del", "vpn")
+		var back time.Time
+		r.waitFor(150*time.Second, "the tunnel back on "+A.String(), func() bool {
+			if !p.running() {
+				t.Fatalf("the exit stopped (%d):\n%s", p.code, p.out.String())
+			}
+			if back.IsZero() {
+				if strings.Contains(r.endpoints(), A.endpoint+":") {
+					back = time.Now()
+				}
+				return false
+			}
+			checked, err := time.Parse(time.RFC3339, fmt.Sprint(r.result()["checked_at"]))
+			return err == nil && !checked.Before(back.Truncate(time.Second)) && r.verifiedOn(A, "")
+		})
+		t.Logf("tunnel lost on %s: back %v after, verified again %v after", A,
+			back.Sub(lost).Round(time.Millisecond), time.Since(lost).Round(time.Millisecond))
+
+		pia.dropRegistrations(drop)
+		at := time.Now()
+		id := r.request(P.provider, P.server)
+		r.waitOn(p, P, id, 150*time.Second)
+		took := time.Since(at)
+		r.clientOn(P, 30*time.Second)
+		r.onTunnel(P)
+		r.leakFree(fmt.Sprintf("%s -> %s after the tunnel loss (%d registrations dropped)", A, P, drop))
+		pia.mu.Lock()
+		dropped := pia.dropped
+		pia.mu.Unlock()
+		t.Logf("%s -> %s requested right after the recovery, %d registrations dropped so far: verified %v after the request; selection %s",
+			A, P, dropped, took.Round(time.Millisecond), jsonText(r.result()["selection"]))
+		if took > switchAfterLossWithin {
+			t.Errorf("%s -> %s requested right after the tunnel loss (%d dropped): verified only %v after; want within %v",
+				A, P, drop, took.Round(time.Millisecond), switchAfterLossWithin)
+		}
+		if drop > 0 && dropped < drop {
+			t.Errorf("the PIA server dropped %d registrations; the drill meant %d", dropped, drop)
+		}
+		r.switchTo(p, P, A)
+	}
+}

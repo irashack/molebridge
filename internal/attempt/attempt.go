@@ -45,6 +45,12 @@ const (
 	// registrations) under an interface that keeps disappearing, or a worker
 	// that keeps restarting, to one per 10 seconds.
 	NoPeerGuardSec = 10
+	// RequestRetrySec: a requested change (a panel request, or the
+	// operator's retry of one) whose first mutation failed is applied again
+	// this long after, once, before the backoff takes over: a passing
+	// failure (a provider server that didn't answer) otherwise held the
+	// request back for the backoff's first minute (#134).
+	RequestRetrySec = 10
 	// UnidentifiedSec: a live peer the catalogue can't name is waited out this
 	// long before it counts as drift.
 	UnidentifiedSec = 90
@@ -361,6 +367,21 @@ func (a *Attempt) Schedule(action string, now float64) {
 	due := now + float64(Backoff(a.BackoffStep))
 	a.NextActionAt = &due
 	a.BackoffStep++
+}
+
+// ScheduleRetry schedules the re-apply after a failed mutation. The first
+// failure of a requested change (requested, and this target's only mutation
+// so far) is applied again RequestRetrySec on, without advancing the
+// backoff; every other failure waits its step of the backoff (Schedule).
+// So a request gets at most one early retry, and the retries after it are
+// spaced as any other's.
+func (a *Attempt) ScheduleRetry(requested bool, now float64) {
+	if requested && a.Attempts == 1 {
+		due := now + RequestRetrySec
+		a.NextAction, a.NextActionAt = "reapply", &due
+		return
+	}
+	a.Schedule("reapply", now)
 }
 
 // Settle records a verified selection: no further action, the backoff starts

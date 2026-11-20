@@ -208,6 +208,30 @@ func TestBackoff(t *testing.T) {
 	}
 }
 
+func TestScheduleRetry(t *testing.T) {
+	// A request's first failed mutation: once, RequestRetrySec on, the
+	// backoff not advanced.
+	a := newAttempt(boot)
+	a.Attempts = 1
+	a.ScheduleRetry(true, 100)
+	if RequestRetrySec != 10 || a.NextAction != "reapply" || *a.NextActionAt != 110 || a.BackoffStep != 0 {
+		t.Errorf("first failure: %+v", a)
+	}
+	// Its second: the backoff from its first step.
+	a.Attempts = 2
+	a.ScheduleRetry(true, 200)
+	if *a.NextActionAt != 260 || a.BackoffStep != 1 {
+		t.Errorf("second failure: %+v", a)
+	}
+	// Anything not requested: the backoff, first failure included.
+	b := newAttempt(boot)
+	b.Attempts = 1
+	b.ScheduleRetry(false, 100)
+	if b.NextAction != "reapply" || *b.NextActionAt != 160 || b.BackoffStep != 1 {
+		t.Errorf("automatic: %+v", b)
+	}
+}
+
 func TestGuardScheduleSettle(t *testing.T) {
 	a := newAttempt(boot)
 	if !a.GuardPassed(0) || !a.NoPeerGuardPassed(0) {

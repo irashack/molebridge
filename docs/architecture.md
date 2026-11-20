@@ -1043,7 +1043,18 @@ What happens next, in precedence order on each pass:
    peer the catalog can't name (7): gluetun's interface has no peer for a
    moment while it reconnects by itself.
 4. **A due re-apply.** A failed change is applied again on a backoff of 1,
-   2, 4 and 8 minutes, then every 15.
+   2, 4 and 8 minutes, then every 15. On a multi-provider exit, a requested
+   change (a panel request or its Retry) whose first change failed is applied
+   again 10 seconds later (`attempt.RequestRetrySec`) without advancing the
+   backoff; its second failure waits the backoff's first minute, so a request
+   gets one early retry and no more. A single-provider exit keeps the
+   backoff for every failure. The early retry exists because a change can
+   fail on something that passes in seconds: on homelab (#134), Mullvad → PIA
+   failed after 20 seconds in PIA's registration, before the tunnel was
+   touched, and the request then waited the backoff's first minute; the retry
+   went through in 2 seconds, 90.9 seconds after the request. A failed
+   change's cause is logged (`applier: the change's mutation failed: …`); the
+   record keeps the provider's message.
 5. **A lapsed registration** (PIA, whose registry entry sets
    `registration_lapses`): the last inspection, at most two minutes old,
    found the target live with a handshake 180 seconds old or older, or

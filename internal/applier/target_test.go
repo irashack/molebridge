@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/irashack/molebridge/internal/attempt"
 	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/netx"
 	"github.com/irashack/molebridge/internal/providers"
@@ -331,5 +332,134 @@ func TestAnAttemptsProviderOutsideTheSetIsForgotten(t *testing.T) {
 	again := newMulti(t, m.dir, "nordvpn", []string{"mullvad", "nordvpn"}, nil)
 	if again.a.attempt.Provider != "" {
 		t.Fatalf("attempt provider %q", again.a.attempt.Provider)
+	}
+}
+
+// unansweredAddKey makes PIA's registration server not answer the next n
+// registrations (a timeout, as netx reports one), or those to address only
+// when address is set.
+func (m *multiExit) unansweredAddKey(n int, address string) *int {
+	real := m.k.handler
+	asked := 0
+	m.k.handler = func(req netx.Request) (netx.Response, error) {
+		if strings.Contains(req.URL, "/addKey?") {
+			asked++
+			if n > 0 && (address == "" || strings.HasPrefix(req.ConnectAddr, address+":")) {
+				n--
+				return netx.Response{}, netx.ErrTimeout
+			}
+		}
+		return real(req)
+	}
+	return &asked
+}
+
+// A requested change of provider made a moment after a mutation on the
+// previous provider (the issue's case: a tunnel-loss recovery's re-apply,
+// then Mullvad -> PIA), whose registration fails on a server that doesn't
+// answer, is applied again 10 seconds on, not after the backoff's first
+// minute; a second failure waits the backoff as before (#134).
+func TestAFailedRequestedChangeIsTriedAgainSoonOnce(t *testing.T) {
+	m := newMulti(t, "", "mullvad", allThree, nil)
+	settle := targetOf("mullvad")
+	settle["request_id"] = strings.Repeat("1", 32)
+	if r := m.a.switchTo(t, settle); status(r) != "ok" {
+		t.Fatalf("on Mullvad: %s %s", status(r), message(r))
+	}
+	m.k.now++
+	asked := m.unansweredAddKey(1, "")
+	desire(t, m.a, targetOf("pia"))
+	r := mustTick(t, m.a)
+	if status(r) == "ok" || len(m.tunnels.replaced) != 0 || m.a.Providers().Active() != "mullvad" {
+		t.Fatalf("%s, replaced %v, active %s", status(r), m.tunnels.replaced, m.a.Providers().Active())
+	}
+	at := m.a.Attempt()
+	if at.State != "failed" || at.NextAction != "reapply" || at.NextActionAt == nil || at.BackoffStep != 0 {
+		t.Fatalf("attempt %+v", at)
+	}
+	failed := m.k.now
+	if wait := *at.NextActionAt - failed; wait != attempt.RequestRetrySec {
+		t.Fatalf("the retry is due %v s after the failure; want %d", wait, attempt.RequestRetrySec)
+	}
+	if !m.k.logged("the change's mutation failed: the PIA server did not answer") {
+		t.Fatalf("the cause is not logged: %v", m.k.logs)
+	}
+	for m.k.now < failed+30 && len(m.tunnels.replaced) == 0 {
+		m.k.now += PollSec
+		r = mustTick(t, m.a)
+	}
+	if took := m.k.now - failed; len(m.tunnels.replaced) != 1 || took > attempt.RequestRetrySec+PollSec {
+		t.Fatalf("replaced %v %v s after the failure", m.tunnels.replaced, took)
+	}
+	if status(r) != "ok" || m.a.Providers().Active() != "pia" || *asked != 2 {
+		t.Fatalf("%s %s, active %s, %d registrations", status(r), message(r), m.a.Providers().Active(), *asked)
+	}
+
+	// Twice in a row: the second failure waits the backoff's first step.
+	m.k.now++
+	m.unansweredAddKey(2, "")
+	other := targetOf("mullvad")
+	other["request_id"] = strings.Repeat("4", 32)
+	if r := m.a.switchTo(t, other); status(r) != "ok" {
+		t.Fatalf("back on Mullvad: %s %s", status(r), message(r))
+	}
+	m.k.now++
+	desire(t, m.a, func() map[string]any { r := targetOf("pia"); r["request_id"] = strings.Repeat("5", 32); return r }())
+	mustTick(t, m.a)
+	for m.a.Attempt().Attempts < 2 {
+		m.k.now += PollSec
+		mustTick(t, m.a)
+	}
+	at = m.a.Attempt()
+	if at.State != "failed" || at.BackoffStep != 1 || at.NextActionAt == nil ||
+		*at.NextActionAt-*at.LastMutationAt < float64(attempt.Backoff(0)) {
+		t.Fatalf("after the second failure: %+v", at)
+	}
+}
+
+// A single-provider exit keeps the backoff for a request's first failure:
+// its attempt record stays byte for byte (docs/design/multi-provider.md,
+// rule 2).
+func TestASingleProviderRequestKeepsTheBackoff(t *testing.T) {
+	a, _, api, _, _ := piaSetup(t, false)
+	api.addkeyBad = true
+	a.switchTo(t, piaRequest(nil))
+	if at := a.Attempt(); at.State != "failed" || at.BackoffStep != 1 ||
+		*at.NextActionAt-*at.LastMutationAt != float64(attempt.Backoff(0)) {
+		t.Fatalf("attempt %+v", at)
+	}
+}
+
+// A PIA registration server that doesn't answer is not asked again with a
+// fresh token: the region's next server is asked instead, with the same
+// token, and the change goes through (#134).
+func TestAnUnansweredPIAServerIsSkippedForTheRegionsNext(t *testing.T) {
+	dir := t.TempDir()
+	multiCatalogues(t, dir)
+	entries, err := providers.ParsePIACatalog(piaServerlist(piaRegionJSON(map[string]any{"servers": map[string]any{
+		"wg": []any{map[string]any{"ip": "198.51.100.22", "cn": "example401"},
+			map[string]any{"ip": "198.51.100.20", "cn": "example401"}},
+		"meta": []any{map[string]any{"ip": "198.51.100.21", "cn": "example401"}}}})), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, dir, "relays-pia.json", "pia", entries)
+	m := newMulti(t, dir, "mullvad", allThree, nil)
+	asked := m.unansweredAddKey(1, "198.51.100.22")
+	r := m.a.switchTo(t, targetOf("pia"))
+	if status(r) != "ok" || m.a.Providers().Active() != "pia" || *asked != 2 {
+		t.Fatalf("%s %s, active %s, %d registrations", status(r), message(r), m.a.Providers().Active(), *asked)
+	}
+	if n := m.k.tokenRequests(); n != 1 {
+		t.Fatalf("%d token requests; a server that didn't answer says nothing about the token", n)
+	}
+	// One server only: it fails at once, with no fresh token asked for.
+	m2 := newMulti(t, "", "mullvad", allThree, nil)
+	m2.unansweredAddKey(5, "")
+	if r := m2.a.switchTo(t, targetOf("pia")); status(r) == "ok" {
+		t.Fatal("ok with no server answering")
+	}
+	if a, n := m2.k.addKeys(), m2.k.tokenRequests(); a != 1 || n != 1 {
+		t.Fatalf("%d registrations, %d token requests", a, n)
 	}
 }
