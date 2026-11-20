@@ -50,7 +50,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   that a reader from before this change sees either a provider mismatch or
   a true record of its own provider. Single-provider records are unchanged.
 
-## 0.14.0 — unreleased
+## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
 what changed is below.

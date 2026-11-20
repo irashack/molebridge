@@ -160,7 +160,7 @@ You pull a signed image and run it with Compose; the commands are in
    docker compose up -d
    ```
 
-The bundle pins each image by tag and digest (`ghcr.io/irashack/molebridge:v0.13.0@sha256:...`,
+The bundle pins each image by tag and digest (`ghcr.io/irashack/molebridge:v0.14.0@sha256:...`,
 and `ghcr.io/irashack/molebridge-core` in the two sidecar forms),
 so the image that runs is the one you verified. A release tag never moves;
 `:0.9`, without the `v`, follows the newest 0.9 patch release
