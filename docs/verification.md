@@ -34,8 +34,8 @@ The checks are grouped by way in. Each checks that way in's guarantee
 | Proxy | [The proxy](#the-proxy) |
 
 [Status and recovery](#status-and-recovery) applies to every way in with a
-status record, and [extras](#extras) has the checks for the network exchange
-and automatic failover.
+status record, and [extras](#extras) has the checks for the network exchange,
+automatic failover and multi-provider exits.
 
 ## The NetBird exit node
 
@@ -635,3 +635,93 @@ rig](../CONTRIBUTING.md#the-system-rig) drills it against fake servers
 ([testing](testing.md)). On your host, `molebridge status` and the panel show
 "connected to backup" while an episode runs, and `applier/failover.json` holds
 it ([state files](configuration.md#state-files)).
+
+### Multi-provider exits
+
+A [multi-provider exit](multi-provider.md) carries Mullvad, PIA or NordVPN,
+one at a time, on a native NetBird exit. This is the manual form of the
+release policy's `multi-provider-live` drill
+([releasing](releasing.md#3-run-the-live-acceptance)). The steps name two
+providers, the first and the second; with a third, repeat the switches for
+each pair you use. They use `vpn`, the default `EXIT_IF` when `PROVIDERS` is
+set, and the exit container `molebridge-exit`.
+
+Before the first switch, note the container and its restart count, so you can
+show it never restarted:
+
+```sh
+docker inspect -f '{{.Id}} {{.RestartCount}}' molebridge-exit
+```
+
+Keep a client on the exit using [from a client](#from-a-client), and the shell
+from [Inside the namespace](#inside-the-namespace) for the egress probes and
+the tunnel loss. Open the [host capture](#a-capture-on-the-host-interface) for
+the probe's address and leave it running through every step below.
+
+1. In Switchyard, open the second provider's tab, pick a server and confirm.
+   The panel warns "Picking a <second> server moves every device on this exit
+   from <first> to <second>." Within 60 seconds the panel must show
+   `Connected: <second>, <server>`, and the record must have the second
+   provider, `server` set to the server you picked, and `selection.outcome`
+   `verified`:
+
+   ```sh
+   jq '{provider, requested_provider, server, outcome: .selection.outcome,
+        target_provider: .selection.target_provider}' state/applier/result.json
+   ```
+
+   The log has `applier: changing the tunnel's provider from <first> to
+   <second>`, then `applier: the tunnel's provider is now <second>`, then
+   `applier: "<server>" is verified`. Check egress with the second provider's
+   row of [the probe table](#inside-the-namespace), using `--interface vpn`. It
+   must report the second provider's egress, not the first's and not your
+   host's. A client on the exit must follow to the second provider too.
+
+2. Switch back to the first provider the same way. It must verify within 60
+   seconds, with the same record fields and the same log lines in the other
+   direction, and the first provider's egress must return.
+
+3. With each provider in use, force a tunnel loss and time the recovery. In
+   the shell, delete the interface as in the tunnel-down row of [the
+   fail-closed drills](#fail-closed-drills), with `vpn` in place of the
+   provider's name:
+
+   ```sh
+   ip link del vpn
+   ```
+
+   The log has `molebridge-exit: bringing the tunnel up`, then
+   `molebridge-exit: tunnel up`. Time until `ip link show vpn` reports the
+   interface up (within 5 seconds), until the provider's egress probe succeeds
+   (within 30 seconds; 60 seconds on PIA), and until the record's
+   `selection.outcome` is `verified` again (within 90 seconds). On Mullvad and
+   NordVPN the record can follow the traffic by up to 60 seconds, because a
+   recovered tunnel on its last peer waits for the next periodic check
+   ([limits](multi-provider.md#limits)); the 90-second bound covers that. Run
+   the loss once with each provider in use, switching again if you need to.
+
+4. The [capture](#a-capture-on-the-host-interface) must print nothing during
+   each switch and each tunnel loss. A packet there is an unsafe sample and
+   fails the drill.
+
+The drill passes when:
+
+- every switch, in each direction you ran, verified within 60 seconds with
+  egress from the new provider;
+- every tunnel loss had the interface up within 5 seconds, traffic within 30
+  seconds (60 seconds on PIA), and a verified record within 90 seconds;
+- the capture printed nothing: 0 unsafe routing samples;
+- the container ID and restart count from before are unchanged, so the
+  container did not restart.
+
+PIA's forwarded port arrival and the exit's memory are notes, not pass
+conditions.
+
+This does not test the sidecars, gluetun, the proxy, failover or the network
+exchange; a multi-provider exit refuses them
+([limits](multi-provider.md#limits)). It also does not test traffic on PIA's
+forwarded port or memory during a server-list refresh; those are notes in [its
+status](multi-provider.md#status). A client's fallback to its own connection
+after NetBird disconnects is outside the exit's control ([from a
+client](#from-a-client)). [Testing](testing.md) records where the
+multi-provider checks have run and at which revision.
