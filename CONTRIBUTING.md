@@ -175,7 +175,15 @@ and trusts a certificate authority made at run time through `SSL_CERT_FILE`; no 
 knows about the rig. `TestSystemRigClientSwitch` puts a client behind the overlay, switches the
 exit through the panel from relay A to B and back, and requires each switch to end verified with
 the client's traffic leaving by the new relay in both families and none of it by the host path.
-It logs the switch times. `TestSystemRigStatus` runs the four [status
+It logs the switch times. The rig's leak counter (table `inet rig` in the "internet" namespace)
+counts a packet with the client's overlay source arriving by any link but a relay's, and a
+client-probe-port packet arriving from the exit's host link. It counts each packet at the link it
+first enters the namespace by. A relay's namespace has no link to the exit but its WireGuard, whose
+UDP itself crosses the namespace by the host link, so a client packet arriving by a relay's link
+came through the tunnel. A separate `unnat` counter, logged and not a failure, counts the client's
+packets a relay forwarded without its SNAT: after a switch, a packet of a connection that began on
+the other relay (in the drills, its closing FIN) has no conntrack entry on the new relay, so
+conntrack calls it invalid and NAT skips it (issue 119). `TestSystemRigStatus` runs the four [status
 drills](docs/verification.md#status-drills) of the live acceptance, each on a rig of its own: the
 exit's egress check dropped in its namespace (failed, `applied-unverified`, `recheck`, then `ok`
 again), a second switch through the panel while the first is held applying (409), a switch to a

@@ -45,13 +45,17 @@ func TestSystemRigClientSwitch(t *testing.T) {
 	// What the client saw while the panel switched: every answer came by a
 	// relay or failed, never by another path.
 	byVia := map[string]int{}
+	var failed []string
 	for _, s := range all {
 		byVia[s.via]++
+		if s.via == "" {
+			failed = append(failed, s.at.UTC().Format("15:04:05.000"))
+		}
 		if s.via != "" && s.via != a.host && s.via != b.host {
 			t.Errorf("a client probe at %s left by %s", s.at.Format(time.RFC3339Nano), s.via)
 		}
 	}
-	t.Logf("client probes during the switches: %d by %s, %d by %s, %d failed", byVia[a.host], a.host, byVia[b.host], b.host, byVia[""])
+	t.Logf("client probes during the switches: %d by %s, %d by %s, %d failed %v", byVia[a.host], a.host, byVia[b.host], b.host, byVia[""], failed)
 
 	if leaked := r.counted("leak"); leaked != 0 {
 		t.Errorf("%d packets from the client reached the internet by the exit's host path", leaked)
@@ -60,7 +64,8 @@ func TestSystemRigClientSwitch(t *testing.T) {
 	if viaA == 0 || viaB == 0 {
 		t.Errorf("the client's probes should have arrived by both relays: %d by %s, %d by %s", viaA, a.host, viaB, b.host)
 	}
-	t.Logf("client probe packets at the internet: %d by %s, %d by %s, 0 by the host path", viaA, a.host, viaB, b.host)
+	t.Logf("client probe packets at the internet: %d by %s, %d by %s, 0 by the host path; %d of the client's by a relay without its SNAT (a connection's last packets after a switch)",
+		viaA, a.host, viaB, b.host, r.counted("unnat"))
 	for _, s := range times {
 		t.Logf("switch time %s -> %s: verified %v, client %v", s.from, s.to, s.verified.Round(time.Millisecond), s.client.Round(time.Millisecond))
 	}
