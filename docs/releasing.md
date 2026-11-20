@@ -108,7 +108,12 @@ candidate's digest. Then run what the policy names:
   selected server taken out of gluetun's server list and put back
   ([a retired server](verification.md#a-retired-server),
   `retired-server-move`); since policy 18, the proxy on a real Mullvad exit
-  ([the proxy](verification.md#the-proxy), `proxy-live`); and CI's namespace drills and system rig on the tag
+  ([the proxy](verification.md#the-proxy), `proxy-live`); since policy 20, a
+  [multi-provider exit](multi-provider.md) with Mullvad, PIA and NordVPN
+  (`multi-provider-live`: a switch between providers in each direction,
+  one through the panel, each verified within 60 seconds; a tunnel lost on
+  each provider, traffic back within 5 seconds and verified within 90 (PIA:
+  60 and 90); no unsafe routing sample and no restart); and CI's namespace drills and system rig on the tag
   (`ci-namespace-drills`, `ci-system-rig`). The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
@@ -170,7 +175,8 @@ For the policy above, the coverage is:
            {"id":"upgrade-from-0.9.4","result":"passed"},
            {"id":"network-exchange-smoke","result":"passed"},
            {"id":"retired-server-move","result":"passed"},
-           {"id":"proxy-live","result":"passed"}]}
+           {"id":"proxy-live","result":"passed"},
+           {"id":"multi-provider-live","result":"passed"}]}
 ```
 
 Dispatch the workflow on `main`: the attestation is signed with the identity

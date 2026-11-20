@@ -142,6 +142,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   requested right after a tunnel-loss recovery at 30 seconds; it runs in
   CI only and has not run yet. Not run live.
 
+- Acceptance policy 20: every candidate now needs `multi-provider-live` on a
+  real three-provider exit (Mullvad, PIA and NordVPN). It needs a switch
+  between providers in each direction, one of them through the panel, each
+  verified within 60 seconds. It loses a tunnel on each provider; traffic
+  must be back within 5 seconds and verified within 90 (PIA: 60 and 90).
+  No unsafe routing sample and no restart are allowed. The steps are in
+  [releasing](docs/releasing.md) (#128).
+
 ## 0.14.1 — unreleased
 
 **Experimental.** Upgrade from 0.14.0 by moving to the new image;
