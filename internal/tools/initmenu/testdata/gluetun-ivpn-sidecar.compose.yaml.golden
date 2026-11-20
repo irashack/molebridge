@@ -3,7 +3,7 @@
 #   ways in:  sidecar
 #   extras:   none
 # The services are those of compose.sidecar.yaml in the Molebridge source
-# of the same release, with its settings and image pins; that file's
+# this binary was built from, with its settings and image pins; that file's
 # comments say more.
 # Your settings are in .env beside this file.
 #

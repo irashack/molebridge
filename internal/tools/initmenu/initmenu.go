@@ -622,7 +622,7 @@ func Render(p Plan) (map[string][]byte, error) {
 #   ways in:  %s
 #   extras:   %s
 # The services are those of %s in the Molebridge source
-# of the same release, with its settings and image pins; that file's
+# this binary was built from, with its settings and image pins; that file's
 # comments say more.
 %s# Your settings are in .env beside this file.
 #
