@@ -203,19 +203,22 @@ func TestBackoff(t *testing.T) {
 			t.Errorf("Backoff(%d) = %d", step, got)
 		}
 	}
-	if ReapplyGuardSec != 90 || UnidentifiedSec != 90 || BootIDFile != "/proc/sys/kernel/random/boot_id" {
+	if ReapplyGuardSec != 90 || NoPeerGuardSec != 10 || UnidentifiedSec != 90 || BootIDFile != "/proc/sys/kernel/random/boot_id" {
 		t.Error("constants")
 	}
 }
 
 func TestGuardScheduleSettle(t *testing.T) {
 	a := newAttempt(boot)
-	if !a.GuardPassed(0) {
+	if !a.GuardPassed(0) || !a.NoPeerGuardPassed(0) {
 		t.Error("no mutation yet")
 	}
 	a.LastMutationAt = fp(1000)
 	if a.GuardPassed(1089.9) || !a.GuardPassed(1090) || !a.GuardPassed(5000) {
 		t.Error("the guard is 90 seconds")
+	}
+	if a.NoPeerGuardPassed(1009.9) || !a.NoPeerGuardPassed(1010) || !a.NoPeerGuardPassed(5000) {
+		t.Error("the no-peer guard is 10 seconds")
 	}
 	a.Schedule("recheck", 200)
 	if a.NextAction != "recheck" || *a.NextActionAt != 260 || a.BackoffStep != 1 {

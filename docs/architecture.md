@@ -1757,7 +1757,15 @@ What happens next, in precedence order on each pass:
    the target is applied again at once from `idle` or `unverified`, and once
    per new worker generation (the worker started
    again) whatever the state, even while a failure backs off; never within
-   90 seconds of the last change. With gluetun, no peer is treated like a
+   10 seconds of the last change (`NoPeerGuardSec`; every other automatic
+   re-apply waits 90). The exit's own changes never leave a native tunnel
+   at rest with no peer, and a tunnel with no peer passes nothing, so the
+   longer wait only held traffic back: PIA, whose tunnel always comes back
+   with no peer, took 90 seconds to recover from a tunnel lost right after
+   a change, and a change interrupted by a worker restart waited for its
+   one-minute retry. The 10 seconds space re-applies, and PIA's
+   registrations, under an interface that keeps disappearing or a worker
+   that keeps restarting. With gluetun, no peer is treated like a
    peer the catalog can't name (7): gluetun's interface has no peer for a
    moment while it reconnects by itself.
 4. **A due re-apply.** A failed change is applied again on a backoff of 1,

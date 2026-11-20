@@ -366,7 +366,7 @@ func TestANewOwnerGenerationReappliesOnceAtOnce(t *testing.T) {
 	}
 }
 
-func TestANewOwnerGenerationStillRespectsTheGuard(t *testing.T) {
+func TestANewOwnerGenerationStillRespectsTheNoPeerGuard(t *testing.T) {
 	dir := t.TempDir()
 	k := newKernel(t)
 	k.keys = nil
@@ -376,10 +376,80 @@ func TestANewOwnerGenerationStillRespectsTheGuard(t *testing.T) {
 	mustTick(t, a)
 	k.keys = nil
 	k.generation = "0b0b"
-	k.now += 10
+	k.now += attempt.NoPeerGuardSec - 1
 	mustTick(t, a)
 	if len(k.adds()) != 1 {
 		t.Fatalf("%v", k.adds())
+	}
+	k.now++
+	if r := mustTick(t, a); status(r) != "ok" || len(k.adds()) != 2 {
+		t.Fatalf("%s %v", status(r), k.adds())
+	}
+}
+
+func TestAWorkerRestartAfterAnInterruptedChangeReappliesBeforeTheBackoff(t *testing.T) {
+	// A change interrupted mid-mutation by a worker restart: the tunnel
+	// comes back with no peer in a new generation. The interrupted attempt
+	// is failed with its retry a minute out, but the new generation applies
+	// it again once the no-peer guard has passed, not after the backoff.
+	dir := t.TempDir()
+	k := newKernel(t)
+	k.keys = []string{otherKey}
+	a := buildApplier(t, k, dir, NewMullvad(), "")
+	k.generation = "0a0a"
+	desire(t, a, requestAt(testHost, nil))
+	mustTick(t, a)
+	a.attempt.State = "attempting"
+	if err := a.saveAttempt(); err != nil {
+		t.Fatal(err)
+	}
+	k.keys = nil
+	k.generation = "0b0b"
+	k.now += 3
+	a = buildApplier(t, k, dir, NewMullvad(), "")
+	mustTick(t, a)
+	if a.attempt.State != "failed" || a.attempt.NextActionAt == nil || *a.attempt.NextActionAt-k.now < 50 {
+		t.Fatalf("%s %v", a.attempt.State, a.attempt.NextActionAt)
+	}
+	adds := len(k.adds())
+	due := *a.attempt.NextActionAt
+	k.now += attempt.NoPeerGuardSec
+	if k.now >= due {
+		t.Fatalf("the no-peer guard (%d s) is not shorter than the first retry", attempt.NoPeerGuardSec)
+	}
+	r := mustTick(t, a)
+	if status(r) != "ok" || len(k.adds()) != adds+1 || a.attempt.State != "idle" ||
+		r.Decoded()["selection"].(map[string]any)["source"] != "reconverge" {
+		t.Fatalf("%s %v %s %v", status(r), k.adds(), a.attempt.State, r.Decoded()["selection"])
+	}
+}
+
+func TestNoNativePeerRightAfterAChangeWaitsOnlyTheNoPeerGuard(t *testing.T) {
+	// A tunnel lost seconds after a change comes back with no peer: applied
+	// again once NoPeerGuardSec has passed, not ReapplyGuardSec.
+	if attempt.NoPeerGuardSec >= attempt.ReapplyGuardSec {
+		t.Fatalf("the no-peer guard (%d s) is not shorter than the re-apply guard", attempt.NoPeerGuardSec)
+	}
+	a, k, _ := pipelineSetup(t)
+	desire(t, a, requestAt(testHost, nil))
+	mustTick(t, a)
+	k.keys = nil
+	k.now += attempt.NoPeerGuardSec - 1
+	mustTick(t, a)
+	if len(k.adds()) != 1 {
+		t.Fatalf("within the no-peer guard: %v", k.adds())
+	}
+	k.now++
+	r := mustTick(t, a)
+	if status(r) != "ok" || len(k.keys) != 1 || k.keys[0] != testKey || len(k.adds()) != 2 {
+		t.Fatalf("%s %v %v", status(r), k.keys, k.adds())
+	}
+	// Lost again at once: the next re-apply waits the guard again.
+	k.keys = nil
+	k.now += attempt.NoPeerGuardSec - 1
+	mustTick(t, a)
+	if len(k.adds()) != 2 {
+		t.Fatalf("a second loss within the guard: %v", k.adds())
 	}
 }
 

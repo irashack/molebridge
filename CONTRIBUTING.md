@@ -257,11 +257,12 @@ check, the client's traffic following (IPv4 only on NordVPN and PIA, its IPv6 wi
 and on each provider's tunnel deletes each contract rule, the tunnel route and the exit table's
 routes in turn, each repaired back to the routing it had (a subset of the namespace drills' drift
 table, whose own rig has no providers); `TestSystemRigMultiProviderTunnelLoss` deletes the tunnel
-link right after each change and requires it back as the new provider's, never the previous one's;
+link right after each change and requires it back as the new provider's, never the previous one's,
+within 30 seconds;
 `TestSystemRigMultiProviderInterruptedReplace` holds a `Replace` between its links (the drill
 build's `hold-replace` hook, `internal/exit/worker_hook_drill_linux.go`), kills the worker there,
 starts the exit again and requires the request finished on the new provider with no rule of the
-old tunnel left; `TestSystemRigMultiProviderPIAForwardLeft` forwards PIA's port to the client,
+old tunnel left, within 45 seconds of the kill; `TestSystemRigMultiProviderPIAForwardLeft` forwards PIA's port to the client,
 changes to Mullvad while sampling the exit, and requires the forwarding table gone before Mullvad's
 peer is up, then the port forwarded again back on PIA. The leak counter must stay at zero
 throughout. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
