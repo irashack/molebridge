@@ -443,13 +443,13 @@ also writes `routing/gluetun-preflight`, the script the `gluetun` service
 mounts, as the [`gluetun-preflight`](tools-reference.md#gluetun-preflight)
 tool does.
 
-**The proxy** is a way in that is being built
-([design](design/menu.md)): every connection it opens would leave through the
-tunnel, or fail, with no promise about traffic not sent to it. The proxy
-choice arrives in `init` with the `molebridge proxy` role. Until a release
-has that role, `init` doesn't offer it and refuses it in an answers file:
-`molebridge init: the proxy is being built and init does not offer it yet;
-see docs/design/menu.md.`
+**The proxy** ([the proxy](proxy.md)) goes on top of a native exit, the
+NetBird exit or the native sidecar, never alone and never with a gluetun
+provider: every connection it opens leaves through the tunnel, or fails, with
+no promise about traffic not sent to it. It is experimental and drilled live
+on Mullvad only. `init` writes its service as `compose.proxy.yaml` has it,
+and its state and secret directories are yours to create before the first
+start, as that file says.
 
 It refuses combinations that don't exist, and writes nothing then:
 

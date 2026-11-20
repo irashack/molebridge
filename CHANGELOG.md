@@ -53,6 +53,11 @@ what changed is below.
   that a reader from before this change sees either a provider mismatch or
   a true record of its own provider. Single-provider records are unchanged.
 
+- `molebridge init` offers the proxy ([setup](docs/setup.md#molebridge-init)),
+  now that 0.14.0 has the `molebridge proxy` role: with a native provider,
+  on top of the NetBird exit or the native sidecar (52 combinations). It no
+  longer refuses it as being built.
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
