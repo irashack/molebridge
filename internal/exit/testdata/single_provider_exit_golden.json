@@ -1,0 +1,143 @@
+{
+  "mullvad_exit_if_default": {
+    "cleanup_env": [
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families an IPv4 address, owner conf",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=mullvad",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "mullvad",
+    "other_confs": 1,
+    "provider": "mullvad",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"provider\": \"mullvad\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  },
+  "mullvad_exit_if_set": {
+    "cleanup_env": [
+      "EXIT_IF=mullvad",
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families an IPv4 address, owner conf",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=mullvad",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "mullvad",
+    "other_confs": 1,
+    "provider": "mullvad",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"provider\": \"mullvad\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  },
+  "nordvpn_exit_if_default": {
+    "cleanup_env": [
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families an IPv4 address, owner conf",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=nordvpn",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "mullvad",
+    "other_confs": 1,
+    "provider": "nordvpn",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"provider\": \"nordvpn\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  },
+  "nordvpn_exit_if_set": {
+    "cleanup_env": [
+      "EXIT_IF=nordvpn",
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families an IPv4 address, owner conf",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=nordvpn",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "nordvpn",
+    "other_confs": 2,
+    "provider": "nordvpn",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"provider\": \"nordvpn\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  },
+  "pia_exit_if_default": {
+    "cleanup_env": [
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families no address (the exit sets it), owner applier",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=pia",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "mullvad",
+    "other_confs": 1,
+    "provider": "pia",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"forwarded_port\": null, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"port_forward\": true, \"port_forward_error\": null, \"provider\": \"pia\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  },
+  "pia_exit_if_set": {
+    "cleanup_env": [
+      "EXIT_IF=pia",
+      "EXIT_KIND=overlay",
+      "NB_INTERFACE_NAME=wt0",
+      "OVERLAY_IF=wt0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "TUNNEL_BACKEND=native"
+    ],
+    "conf": "\u003cdir\u003e/wg_confs families no address (the exit sets it), owner applier",
+    "exchange_env": [
+      "EXCHANGE_EXIT_ID=exit-1",
+      "EXCHANGE_TOKEN=tttttttttttttttttttttttttttttttt",
+      "EXCHANGE_URL=https://exchange.example.net/",
+      "MOLEBRIDGE_EXCHANGE_MARK=0",
+      "PATH=/usr/local/bin:/usr/bin:/bin",
+      "PROVIDER=pia",
+      "STATE_DIR=\u003cdir\u003e/state"
+    ],
+    "exit_if": "pia",
+    "other_confs": 2,
+    "provider": "pia",
+    "starting_record": "{\"backend\": \"native\", \"checked_at\": \"2026-11-20T12:00:00Z\", \"checks\": {\"app_attachment\": {\"state\": \"n/a\"}, \"egress\": {\"state\": \"unknown\"}, \"handshake\": {\"state\": \"unknown\"}, \"netbird\": {\"state\": \"unknown\"}, \"owner_record\": {\"state\": \"unknown\"}, \"peer\": {\"state\": \"unknown\"}, \"routing\": {\"state\": \"unknown\"}, \"traffic_protection\": {\"state\": \"unknown\"}}, \"configured_server\": null, \"egress_city\": null, \"egress_country\": null, \"egress_ip\": null, \"egress_ips\": {}, \"forwarded_port\": null, \"kind\": \"overlay\", \"message\": \"Applier starting; waiting for verification.\", \"port_forward\": true, \"port_forward_error\": null, \"provider\": \"pia\", \"request_id\": null, \"requested_server\": null, \"schema\": 2, \"selection\": {\"attempt\": 0, \"next_action\": null, \"next_action_at\": null, \"outcome\": null, \"source\": \"seed\", \"target\": null}, \"server\": null, \"status\": \"unknown\"}"
+  }
+}
