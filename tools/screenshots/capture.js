@@ -17,12 +17,16 @@ const VIEWPORT = { width: 1280, height: 860 };
 const SCALE = 2;
 
 // Each screenshot: the scene TestWriteScreenshotState seeds, and the exit
-// whose page is shown ('' for a single-exit panel).
+// whose page is shown ('' for a single-exit panel). collapse closes the
+// current country's section, which the page opens, as a click on it would,
+// so the location list ends inside the frame. crop cuts the image 48 px
+// below the page's content, for a page shorter than the viewport.
 const SHOTS = [
-  { scene: 'switchyard', exit: 'mullvad' },
-  { scene: 'switchyard-gluetun', exit: 'mullvad-gluetun' },
-  { scene: 'switchyard-configured', exit: '' },
+  { scene: 'switchyard', exit: 'mullvad', collapse: true },
+  { scene: 'switchyard-gluetun', exit: 'mullvad-gluetun', collapse: true },
+  { scene: 'switchyard-configured', exit: '', crop: true },
 ];
+const CROP_MARGIN = 48;
 
 function seed(dir) {
   execFileSync('go', ['test', '-count=1', '-run', '^TestWriteScreenshotState$', './internal/panel'], {
@@ -95,8 +99,20 @@ async function shoot(browser, binary, stateDir, shot, port) {
     await page.goto(shot.exit ? `${url}/?exit=${shot.exit}` : `${url}/`, { waitUntil: 'networkidle' });
     // Let the latency answers land and the entrance motion finish.
     await page.waitForTimeout(1500);
+    if (shot.collapse) {
+      await page.click('details.country.is-current[open] > summary');
+      // Leave no hover or focus on the row the click closed.
+      await page.mouse.move(0, 0);
+      await page.evaluate(() => document.activeElement && document.activeElement.blur());
+      await page.waitForTimeout(800);
+    }
     const out = path.join(ASSETS, `${shot.scene}.png`);
-    await page.screenshot({ path: out });
+    let clip;
+    if (shot.crop) {
+      const bottom = await page.evaluate(() => document.querySelector('.switchboard').getBoundingClientRect().bottom);
+      clip = { x: 0, y: 0, width: VIEWPORT.width, height: Math.min(VIEWPORT.height, Math.ceil(bottom) + CROP_MARGIN) };
+    }
+    await page.screenshot({ path: out, clip });
     await context.close();
     console.log(`wrote ${path.relative(ROOT, out)}`);
   } finally {

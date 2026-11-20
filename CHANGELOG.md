@@ -151,7 +151,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   No unsafe routing sample and no restart are allowed. The steps are in
   [releasing](docs/releasing.md) (#128).
 - Docs: the Switchyard screenshots and the social preview are retaken at
-  twice their size (2560×1720 and 2560×1280), so they stay sharp on
+  twice their size (2560 px wide), so they stay sharp on
   high-density screens. The screenshots' PIA exit is on a Chicago region
   instead of the test fixture's "Example City", and every exit's place
   matches its server. `tools/screenshots/capture.js` retakes them: it seeds
