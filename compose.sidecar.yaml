@@ -123,7 +123,7 @@ services:
     # then verifies the peer, the handshake and egress. It runs no NetBird,
     # installs no routes or firewall rules and has no routing contract, so its
     # supervisor has nothing to clean up when it stops.
-    image: ghcr.io/irashack/molebridge-core:v0.13.0@sha256:41d55cc1c33973c787c0183d7971a8479a4455d3d18b0ab6f501030f6caaabe2
+    image: ghcr.io/irashack/molebridge-core:v0.14.0@sha256:6e950b62cc2ff48729cf5f457387c8e8e45f2f126e14529b528201259c663090
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
     # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
@@ -253,7 +253,7 @@ services:
   switchyard:
     # compose.yaml's panel, repeated here rather than extended: extending it
     # would make Compose resolve compose.yaml's overlay settings too.
-    image: ghcr.io/irashack/molebridge-core:v0.13.0@sha256:41d55cc1c33973c787c0183d7971a8479a4455d3d18b0ab6f501030f6caaabe2
+    image: ghcr.io/irashack/molebridge-core:v0.14.0@sha256:6e950b62cc2ff48729cf5f457387c8e8e45f2f126e14529b528201259c663090
     command: ["panel"]
     container_name: "${COMPOSE_PROJECT_NAME:-molebridge-sidecar}-switchyard"
     restart: unless-stopped
