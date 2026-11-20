@@ -73,7 +73,7 @@ what changed is below.
   default with `PROVIDERS`); a change of provider replaces the whole tunnel,
   PIA's return-path rules included, and a restart comes back on the last
   active provider. Refused with gluetun, the sidecar, failover, the network
-  exchange and the proxy. The panel can't pick a provider yet, and the live
+  exchange and the proxy. The live
   pass and the memory measurement with NordVPN have not run. A
   single-provider exit is byte for byte as before (a new golden test locks
   its settings, child environments and starting record).

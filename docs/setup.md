@@ -466,7 +466,8 @@ is missing. The `.env` holds `PROVIDERS` in the order you gave, `PROVIDER`
 set to the first and `EXIT_IF=vpn`, and PIA's port-forwarding settings when
 `pia` is one of them. This one container holds every provider's key, and
 PIA's login with `pia`: where that matters, run single-provider exits side
-by side instead. The panel can't pick a provider yet. The release build's
+by side instead. The panel gets `PROVIDERS` too and offers each
+provider's servers. The release build's
 `init` refuses several providers with `molebridge init: a multi-provider
 exit is not available in this release yet; see docs/design/multi-provider.md.`
 
