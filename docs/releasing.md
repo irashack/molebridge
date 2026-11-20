@@ -271,11 +271,10 @@ the repository stands:
    the open "Scheduled scan findings" issue lists an Alpine package with a fix
    for the current release's image, it opens a pull request with
    [step 1](#1-prepare-main): the heading `## X.Y.Z — unreleased`, the policy's
-   version and upgrade drill. Changelog entries make a minor release; Alpine
-   fixes alone make a patch release, a rebuild. A minor release waits until
-   seven days have passed since the last release (`RELEASE_EVERY_DAYS`), so
-   several changes ship together, and entries that start `- Internal` don't
-   start one on their own. Alpine fixes don't wait. It merges the pull request once
+   version and upgrade drill. Either makes a patch release, `X.Y.Z+1`:
+   changes ship as patch releases, and the middle number moves only when a
+   person prepares a release by hand ([step 1](#1-prepare-main)), for a
+   milestone or a breaking change. It merges the pull request once
    CI passes, then tags `vX.Y.Z-rc.1` on `main` once CI passes there.
 2. **Ask for the live acceptance.** Once the candidate is published, it
    comments `Live acceptance requested: vX.Y.Z-rc.1` on
