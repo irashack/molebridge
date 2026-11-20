@@ -11,6 +11,18 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 **Experimental.** Upgrade from 0.14.1 by moving to the new image;
 what changed is below.
 
+- Test only, no change to the exit: CI's System rig job runs the
+  retired-server move in the gluetun form (`TestSystemRigGluetunRetiredServer`).
+  The release build's exit runs with `TUNNEL_BACKEND=gluetun` in a namespace
+  laid out as gluetun leaves it, against a fake gluetun control server whose
+  settings PUT deletes and recreates `wg0` as gluetun's reconnect does. The
+  requested server is removed from `servers.json` with no restart; the exit
+  must move to the next server of its city with `moved` (`left-catalogue`),
+  the log line and the panel's `server-moved` note, and return once the file
+  lists it again, with a client's traffic leaving only by a relay
+  throughout. Real gluetun's own reconnection stays covered by the live drill
+  only ([contributing](CONTRIBUTING.md#the-system-rig),
+  [#54](https://github.com/irashack/molebridge/issues/54)).
 - Piece 7 of the [multi-provider
   exit](docs/multi-provider.md), the panel (on in this release; see the
   entry below that removes the switch). `PANEL_EXITS` takes

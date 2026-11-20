@@ -208,8 +208,20 @@ move](docs/architecture.md#a-server-the-provider-retires) on the native Mullvad 
 live procedure: relay A, requested through the panel, leaves the fake relay API's list and the exit
 is restarted (the native exit reads the list at start and every six hours), so it moves to relay B
 with `moved` (`left-catalogue`), the log line, `location.json` and the panel's `server-moved` note;
-with A listed again and another restart it returns to A. The gluetun form's move, where gluetun's
-`servers.json` changes and gluetun itself reconnects, is not on the rig. `TestSystemRigProxy` runs
+with A listed again and another restart it returns to A. `TestSystemRigGluetunRetiredServer`
+(`systemrig_gluetun_test.go`) runs the same move in the gluetun form: the exit, with
+`TUNNEL_BACKEND=gluetun` and `PROVIDER=gluetun-mullvad`, joins a namespace laid out as gluetun leaves
+it (its rules 98, 100 and 101, table 51820, and `wg0` with gluetun's fwmark keyed to relay A), with
+a fake control server on `127.0.0.1:8000` behind an API key file and a `servers.json` in gluetun's
+format listing the two relays and a server of another city. A settings PUT does what gluetun does
+on a reconnect: rule 101 goes, `wg0` is deleted, then created with the new server's peer, its
+addresses, its table 51820 routes and rule 101 again. A, requested through the panel, is removed
+from `servers.json` with no restart (the exit polls the file every minute), and the exit must move to
+B through the control server with the log line, `moved`, `location.json` and the panel's note, then
+return once the file lists A again; a client probes throughout and must leave only by a relay. The
+client's underlay reaches the exit through "internet" there, because in gluetun's namespace
+NetBird's marked traffic has the host table only. Real gluetun's own reconnection (its timing, its
+firewall and the rewrite of it, its updater) is not on the rig. `TestSystemRigProxy` runs
 the [proxy's](docs/proxy.md) drill: `molebridge proxy` in the exit's namespace as
 uid 65532 with no capabilities and the applier directory read-only, as its Compose service runs it,
 with the fake Mullvad network grown by a namespace of relay proxies (a SOCKS5 server at a
