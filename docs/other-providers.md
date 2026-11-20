@@ -1,12 +1,18 @@
 # Other VPN providers
 
 Molebridge supports Mullvad, PIA and NordVPN natively; PIA and NordVPN are
-experimental ([providers](providers.md)). The experimental
-[gluetun backend](providers.md#the-gluetun-backend) also selects servers for
-FastestVPN, IVPN, Surfshark and Windscribe, through gluetun; those four are
-covered by automated tests and have had no live pass. This page is about
-native support. There's no generic "bring your own WireGuard config" mode,
-because each provider handles keys, server lists and switching differently.
+experimental. A native provider serves every way in that has a tunnel
+Molebridge builds itself: the [NetBird exit](netbird-exit.md), the
+[native sidecar](native-sidecar.md) and the [proxy](proxy.md). The
+experimental [gluetun backend](providers.md#the-gluetun-backend) also selects
+servers for FastestVPN, IVPN, Surfshark and Windscribe, through gluetun, in
+the [gluetun NetBird exit](gluetun-netbird-exit.md) and the
+[gluetun sidecar](gluetun-sidecar.md); those four are covered by automated
+tests and have had no live pass. [Providers](providers.md#which-provider-works-with-which-way-in)
+has the full table. This page is about native support, which a new provider
+would need to reach the native sidecar and the proxy. There's no generic
+"bring your own WireGuard config" mode, because each provider handles keys,
+server lists and switching differently.
 
 Providers gluetun supports but Molebridge doesn't list (AirVPN and
 ProtonVPN, for example) can't be used either: the exit refuses a
