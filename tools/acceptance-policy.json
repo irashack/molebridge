@@ -1,7 +1,7 @@
 {
-  "version": "19",
+  "version": "20",
   "platforms": ["podman-rootless-quadlet", "kubernetes"],
   "providers": ["mullvad", "pia", "nordvpn"],
   "kinds": ["native", "gluetun", "sidecar", "native-sidecar"],
-  "drills": ["ci-namespace-drills", "ci-system-rig", "tunnel-loss", "upgrade-from-0.14.0", "network-exchange-smoke", "retired-server-move", "proxy-live"]
+  "drills": ["ci-namespace-drills", "ci-system-rig", "tunnel-loss", "upgrade-from-0.14.0", "network-exchange-smoke", "retired-server-move", "proxy-live", "multi-provider-live"]
 }
