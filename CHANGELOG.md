@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.15.0 — unreleased
+
+**Experimental.** Upgrade from 0.14.0 by moving to the new image;
+what changed is below.
 
 - Acceptance policy 18: every release candidate also passes `proxy-live`,
   the proxy on a real Mullvad exit ([the proxy](docs/verification.md#the-proxy)):
