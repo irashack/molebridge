@@ -180,9 +180,19 @@
     };
   }
 
+  // A multi-provider exit's status line: the verdict's label with the
+  // provider and the server ("Connected: PIA, us_chicago"); only the label
+  // while nothing says which provider the exit is on. render.go providerLine
+  // says the same.
+  function providerLine(label, providerLabel, server) {
+    const text = label ? label.charAt(0).toUpperCase() + label.slice(1) : '';
+    if (!providerLabel) return text;
+    return server ? `${text}: ${providerLabel}, ${server}` : `${text}: ${providerLabel}`;
+  }
+
   // Under Node (panel/js-tests), only the helpers above load.
   if (typeof module === 'object' && module?.exports) {
-    module.exports = { describe, checkText, describeProxy, makePoller };
+    module.exports = { describe, checkText, describeProxy, makePoller, providerLine };
     return;
   }
 
@@ -202,7 +212,16 @@
   const embed = document.body.classList.contains('embed');
   // Set when this panel serves several exits: every request names the exit.
   const exitId = page.dataset.exit || '';
-  const withExit = (params = {}) => new URLSearchParams(exitId ? { exit: exitId, ...params } : params);
+  // Set on a multi-provider exit's page: the provider whose servers it lists,
+  // the provider of the server it shows, and whether the list is another
+  // provider's than the one in use (picking from it moves every device).
+  const listedProvider = page.dataset.listedProvider || '';
+  const shownProviderAtLoad = page.dataset.shownProvider || '';
+  const foreign = page.dataset.foreign === '1';
+  const providerTabs = new Set(Array.from(page.querySelectorAll('[data-provider-tab]'), (t) => t.dataset.providerTab));
+  const scope = listedProvider ? { provider: listedProvider } : {};
+  const withExit = (params = {}) =>
+    new URLSearchParams(exitId ? { exit: exitId, ...scope, ...params } : { ...scope, ...params });
   const FASTEST_COUNT = embed ? 5 : 8;
   const SAVED_COUNT = embed ? 3 : 5;
   const chips = Array.from(document.querySelectorAll('.relay'));
@@ -241,7 +260,8 @@
   const HOST_RE = new RegExp(`^(?:${page.dataset.serverPattern || '(?!)'})$`);
   // Each exit keeps its own saved servers; a single-exit panel keeps the
   // original keys so nothing saved before is lost.
-  const KEY_PREFIX = exitId ? `molebridge.${exitId}.` : 'molebridge.';
+  // A multi-provider exit keeps them per provider: each has its own names.
+  const KEY_PREFIX = (exitId ? `molebridge.${exitId}.` : 'molebridge.') + (listedProvider ? `${listedProvider}.` : '');
   const PINNED_KEY = `${KEY_PREFIX}pinned`;
   const RECENT_KEY = `${KEY_PREFIX}recent`;
   const FILTERS_KEY = `${KEY_PREFIX}filters`;
@@ -461,7 +481,7 @@
     }
     const top = [...perCity.values()].sort((a, b) => a.ms - b.ms).slice(0, FASTEST_COUNT);
     if (!top.length) return;
-    const currentCity = chipByHost.get(desired);
+    const currentCity = foreign ? undefined : chipByHost.get(desired);
     replaceRows(
       fastestList,
       top.map(({ host, ms, chip }) =>
@@ -553,7 +573,7 @@
     replaceRows(
       savedList,
       rows.map(([h, mark, label]) =>
-        buildRow(h, latency.get(h), { current: h === desired, mark, markLabel: label, relay: true }),
+        buildRow(h, latency.get(h), { current: !foreign && h === desired, mark, markLabel: label, relay: true }),
       ),
     );
   }
@@ -564,7 +584,8 @@
   function paintPin() {
     const host = shownServer();
     if (!pinButton) return;
-    pinButton.hidden = !chipByHost.has(host);
+    // The server shown is another provider's than the listed one.
+    pinButton.hidden = foreign || !chipByHost.has(host);
     const on = pinned.includes(host);
     pinButton.textContent = on ? '★' : '☆';
     pinButton.setAttribute('aria-pressed', String(on));
@@ -575,7 +596,7 @@
 
   pinButton?.addEventListener('click', () => {
     const host = shownServer();
-    if (!chipByHost.has(host)) return;
+    if (foreign || !chipByHost.has(host)) return;
     const on = pinned.includes(host);
     pinned = on ? pinned.filter((h) => h !== host) : [host, ...pinned].slice(0, 10);
     save(PINNED_KEY, pinned);
@@ -588,7 +609,7 @@
   // A verified connection is remembered as recent.
   function noteRecent() {
     const actual = page.dataset.actual;
-    if (page.dataset.state !== 'ok' || !chipByHost.has(actual) || recent[0] === actual) return;
+    if (foreign || page.dataset.state !== 'ok' || !chipByHost.has(actual) || recent[0] === actual) return;
     recent = [actual, ...recent.filter((h) => h !== actual)].slice(0, 5);
     save(RECENT_KEY, recent);
   }
@@ -752,11 +773,16 @@
 
   // -- switching: click once to arm, again to confirm -----------------------
 
+  // On a multi-provider exit, listing another provider than the one in use:
+  // the page's warning that every device on the exit moves.
+  const providerWarning = page.querySelector('[data-provider-warning]');
+
   function disarm() {
     if (!armed) return;
     const btn = armed;
     armed = null;
     clearTimeout(armTimer);
+    providerWarning?.classList.remove('is-armed');
     btn.classList.remove('is-armed');
     btn.style.minInlineSize = '';
     btn.removeEventListener('blur', disarm);
@@ -773,7 +799,7 @@
     // Re-requesting the server being switched to would restart that switch.
     // A connected PIA region may be chosen again: PIA registers anew.
     const again = page.dataset.layout === 'regions' && page.dataset.state === 'ok';
-    if (btn.value === desired && (page.dataset.state === 'applying' || (page.dataset.state === 'ok' && !again))) {
+    if (!foreign && btn.value === desired && (page.dataset.state === 'applying' || (page.dataset.state === 'ok' && !again))) {
       e.preventDefault();
       return;
     }
@@ -787,10 +813,16 @@
     // A relay chip or region row shows the prompt in its own label slot.
     const slot = btn.querySelector('[data-arm-text]');
     btn.dataset.label = (slot || btn).textContent;
-    const reconnect = btn.value === desired;
+    const reconnect = !foreign && btn.value === desired;
     (slot || btn).textContent = slot ? (reconnect ? 'reconnect?' : 'switch?') : 'Confirm';
-    announce(reconnect ? `Press again to register ${placeOf(btn.value)} again. Escape cancels.` :
-      `Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
+    if (foreign && providerWarning) {
+      // Said before the post: the whole exit changes provider.
+      providerWarning.classList.add('is-armed');
+      announce(`${providerWarning.textContent} Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
+    } else {
+      announce(reconnect ? `Press again to register ${placeOf(btn.value)} again. Escape cancels.` :
+        `Press again to switch to ${placeOf(btn.value)}. Escape cancels.`);
+    }
     btn.addEventListener('blur', disarm);
     armTimer = setTimeout(disarm, 8000);
   });
@@ -981,6 +1013,8 @@
     page.dataset.state = state;
     const connectionLabel = page.querySelector('[data-connection-label]');
     if (connectionLabel) connectionLabel.textContent = view.connection;
+    const line = page.querySelector('[data-provider-line]');
+    if (line) line.textContent = providerLine(view.label, line.dataset.providerLabel || '', shownServer());
     if (state === 'applying') rememberSwitch(state);
     paintNotes(state, view.note, view.next, view.moved, view.failover);
     paintPin();
@@ -1067,6 +1101,17 @@
       location.reload();
       return 0;
     }
+    // A multi-provider exit on another provider is another page too: the
+    // server renders its catalogue, its colours and its fields (shownProvider
+    // in server.go). Only a provider of the exit's counts.
+    if (shownProviderAtLoad && !configured) {
+      const record = data.result || {};
+      const now = (data.verdict.state === 'applying' && data.desired?.provider) || record.provider || '';
+      if (now && now !== shownProviderAtLoad && providerTabs.has(now)) {
+        location.reload();
+        return 0;
+      }
+    }
     const want = configured || data.desired?.server || '';
     const request = data.desired?.request_id || '';
     const result = data.result || {};
@@ -1086,6 +1131,12 @@
     // started elsewhere, gluetun putting a server back) is painted in place.
     const moved = want !== desired || actual !== page.dataset.actual ||
       (state === 'applying') !== (previousState === 'applying');
+    // Listing another provider's servers, the page has no chip to paint the
+    // exit's own server from: the server renders the change.
+    if (foreign && moved) {
+      location.reload();
+      return 0;
+    }
     paintProxy(data.proxy && typeof data.proxy === 'object' ? data.proxy : proxyUnavailable());
     page.dataset.checked = result.checked_at || '';
     paintChecked();
@@ -1115,7 +1166,7 @@
       page.dataset.requested = data.desired?.requested_at || '';
       page.dataset.actual = actual;
       paintStatus(view);
-      if (!configured) paintCurrent();
+      if (!configured && !foreign) paintCurrent();
       if (previousState === 'applying' && state !== 'applying') {
         // The success moment, only for the request this tab saw applying.
         rememberSwitch(state);

@@ -5,11 +5,12 @@ replacement](#whole-tunnel-replacement), piece 2, [the provider
 set](#the-provider-set), the applier's side of piece 3, [the
 target](#the-target), piece 4, [leaving a
 provider](#leaving-a-provider), piece 5, [the status record and the
-verdict](#the-status-record-and-the-verdict), and piece 6, [settings, files
-and credentials](#settings-files-and-credentials), are built: `PROVIDERS`
+verdict](#the-status-record-and-the-verdict), piece 6, [settings, files
+and credentials](#settings-files-and-credentials), and piece 7, [the
+panel](#the-panel), are built: `PROVIDERS`
 reaches a multi-provider exit, experimental and documented as not for use
-until the live pass and piece 0 have run; the panel (7) and `molebridge
-init` (8) are not built. This is the working contract for the
+until the live pass and piece 0 have run; `molebridge
+init` (8) is not built. This is the working contract for the
 roadmap's [one exit for several
 providers](../../ROADMAP.md#one-exit-for-several-providers): the target
 shape, the pieces, their boundaries and the interfaces between them, the
@@ -420,10 +421,12 @@ As built (the switch): the release build refuses `PROVIDERS` at start and
 in `check-config` with "multi-provider exits are not available in this
 release yet; see docs/design/multi-provider.md", before any other setting is
 read (decision 4: no shipping before NordVPN's memory is measured). The
-switch is one constant, `multiProviderAvailable` in `internal/exit`
-(`multi_available.go`), false in the release build and true only under the
-`drill` build tag (`multi_available_drill.go`), the way `molebridge init`
-keeps the proxy behind `proxyAvailable`. A later release, with the live
+switch is one constant, `buildgate.MultiProvider` (`internal/buildgate`),
+false in the release build and true only under the `drill` build tag
+(`multi_provider_drill.go`), the way `molebridge init` keeps the proxy
+behind `proxyAvailable`. The exit (`multiProviderAvailable` in
+`internal/exit/multi_available.go`) and the panel (piece 7) both read it, so
+a panel of a release build never offers what its exit refuses. A later release, with the live
 measurement and the live pass behind it, turns it on. Until then the
 package's own tests reach a multi-provider exit through a test-only load
 option, and the drills through the `drill` build.
@@ -437,7 +440,7 @@ it. The rig's `molebridge-drill` (the release build's flags plus the
 `drill` tag, which switches multi-provider exits on; the release build
 refuses `PROVIDERS`) with `PROVIDERS=mullvad,nordvpn` changes from Mullvad
 relay A to NordVPN and on to Mullvad relay B, by requests written to
-`desired.json` (the panel can't name a provider until piece 7), each change
+`desired.json` (the rig drives the exit without a panel), each change
 verified with its provider's check, the client following, and the leak
 counter at zero throughout. Not on the rig yet, from the drills below: PIA's
 fake network and every pair with it, tunnel loss right after a change, a
@@ -569,6 +572,41 @@ record must change meaning ([the lease](../../ROADMAP.md#publishing-the-lease-ap
   only while that provider is active.
 - **Switchyard's views** of single-provider exits are unchanged; one panel
   can serve both kinds.
+
+**As built (piece 7).** `panel.ParseExits` takes `id=mullvad+pia[+nordvpn][:label]`
+(two or three, each once, native only; `/overlay` may be written, any other
+kind is refused; the default label joins the providers, "Mullvad + PIA").
+A single exit's panel reads `PROVIDERS` and `PROVIDER` with the exit's own
+refusals and messages. Both are behind `buildgate.MultiProvider`, the
+exit's switch: the release-build panel refuses them with "multi-provider
+exits are not available in this release yet; see
+docs/design/multi-provider.md", like the exit. A multi-provider exit is also
+refused in `PANEL_PROXY_STATUS` (the proxy refuses `PROVIDERS`) and
+`PANEL_NETWORK_EXITS` (the exchange carries one provider). The panel judges
+with `verdict.TargetFor` for the set, reads each provider's catalogue from
+`applier/relays-<provider>.json` and `relay-error-<provider>.json`, and
+shows the provider in use: the configured lock's, else the request's while
+a switch is applying, else the record's `provider`. The provider switch is
+a row of links (`?provider=<id>`, so the page works without JavaScript)
+above the server list; the provider in use is marked "in use", and the list
+of another provider carries, before any post, "Picking a PIA server moves
+every device on this exit from Mullvad to PIA." The script's two-click
+confirm adds that sentence to its prompt, and saved and recent servers are
+kept per provider. The form posts `provider` with `server`; the panel
+checks both against that provider's catalogue (400 "unknown provider",
+400 "unknown or unlisted server") and writes the four-member request,
+provider first. The 409 gate, the configured lock (`<provider>/<server>`)
+and sign-in run before it, unchanged. The status line under the heading
+reads "Connected: PIA, us_chicago", the provider named only on evidence (a
+record, a lock or a request); PIA's forwarded port shows only while the
+record's provider is PIA. Metrics label such an exit's `provider`
+`mullvad+pia`. Tested: `internal/panel/multi_provider_test.go` (the
+entries, the refusals and the release switch, the request written, the
+gate and the lock, the page per provider, the status line and PIA's fields
+only while PIA is active, one panel serving both kinds), the browser's
+status line against the server's (`panel/js-tests/provider-line.test.js`),
+and every single-provider view byte for byte
+(`single_provider_golden_test.go`, generated before this piece).
 
 ## `molebridge init`
 

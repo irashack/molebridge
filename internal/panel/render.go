@@ -11,6 +11,7 @@ import (
 	"github.com/irashack/molebridge/internal/panel/pystr"
 	"github.com/irashack/molebridge/internal/providers"
 	"github.com/irashack/molebridge/internal/state"
+	"github.com/irashack/molebridge/internal/verdict"
 )
 
 // Page rendering, ported from app.py. The HTML is built by hand with the
@@ -516,6 +517,67 @@ func exitTabs(summaries []ExitSummary, currentID string, embed bool) string {
 	return `<nav class="exit-tabs" aria-label="Exits">` + links.String() + `</nav>`
 }
 
+// portForwardProvider is the provider whose fields (the forwarded port) a
+// multi-provider exit's page shows only while it is active.
+const portForwardProvider = "pia"
+
+// providerLine is a multi-provider exit's status line: the verdict's label
+// with the provider and the server, "Connected: PIA, us_chicago"; only the
+// label while nothing says which provider the exit is on. panel.js
+// providerLine says the same.
+func providerLine(label, providerLabel, server string) string {
+	if label != "" {
+		label = strings.ToUpper(label[:1]) + label[1:]
+	}
+	if providerLabel == "" {
+		return label
+	}
+	if server == "" {
+		return label + ": " + providerLabel
+	}
+	return label + ": " + providerLabel + ", " + server
+}
+
+// providerSwitch is a multi-provider exit's provider switch, above the
+// server list: a link per provider, the listed one selected and the one in
+// use (inUse, "" when unknown) marked. Listing another provider than the one
+// in use, it says before anything is posted that picking a server moves
+// every device on the exit to that provider.
+func providerSwitch(ex Exit, listed, inUse string, embed bool) string {
+	base := "/"
+	if embed {
+		base = "/embed"
+	}
+	var tabs strings.Builder
+	for _, id := range ex.Providers {
+		spec, _ := providers.Lookup(id)
+		query := "?provider=" + esc(id)
+		if ex.ID != "" {
+			query = "?exit=" + esc(ex.ID) + "&amp;provider=" + esc(id)
+		}
+		selected, current := "", ""
+		if id == listed {
+			selected, current = " is-selected", ` aria-current="page"`
+		}
+		mark := ""
+		if id == inUse {
+			mark = ` <span class="provider-in-use">in use</span>`
+		}
+		tabs.WriteString(`<a class="provider-tab` + selected + `" href="` + base + query + `" data-provider-tab="` + esc(id) + `" ` +
+			`data-provider="` + esc(spec.CSSID()) + `"` + current + `>` + esc(spec.Label) + mark + `</a>`)
+	}
+	out := "\n    " + `<nav class="provider-switch" aria-label="Providers">` + tabs.String() + `</nav>`
+	if listed != inUse {
+		to, _ := providers.Lookup(listed)
+		warning := "Picking a " + to.Label + " server moves every device on this exit to " + to.Label + "."
+		if from, ok := providers.Lookup(inUse); ok {
+			warning = "Picking a " + to.Label + " server moves every device on this exit from " + from.Label + " to " + to.Label + "."
+		}
+		out += "\n    " + `<p class="note provider-warning" data-provider-warning>` + esc(warning) + `</p>`
+	}
+	return out
+}
+
 // IndexPage is what renderIndex draws one exit's page from.
 type IndexPage struct {
 	Exit   Exit
@@ -531,13 +593,34 @@ type IndexPage struct {
 	Exits      []ExitSummary
 	User       *string // the signed-in name, nil without sign-in
 	ShowHome   bool
+	// On a multi-provider exit: the provider whose servers Relays lists, the
+	// provider of the server the current view shows (shownProvider), and
+	// that provider's catalogue. Empty (and nil) on a single-provider exit,
+	// whose page is its one provider's.
+	ListedProvider string
+	ShownProvider  string
+	ShownRelays    *providers.Entries
 }
 
 // renderIndex is render_index_html: the page for one exit.
 func (s *Server) renderIndex(p IndexPage) string {
 	ex := p.Exit
-	provider := ex.Provider
-	spec, _ := providers.Lookup(provider)
+	// provider dresses the page; spec is the listed provider's, for the
+	// layout, the filters and server names. They differ only on a
+	// multi-provider exit whose page lists another provider than the one in
+	// use.
+	provider, listed := ex.Provider, ex.Provider
+	multiProvider := ex.Multi()
+	if multiProvider {
+		if p.ShownProvider != "" {
+			provider = p.ShownProvider
+		}
+		if p.ListedProvider != "" {
+			listed = p.ListedProvider
+		}
+	}
+	spec, _ := providers.Lookup(listed)
+	pageSpec, _ := providers.Lookup(provider)
 	status := p.Status
 	v := status.Verdict
 	view := describe(s.exitView(ex, v), status.Result)
@@ -566,12 +649,40 @@ func (s *Server) renderIndex(p IndexPage) string {
 	if !isConfigured {
 		desiredServer = orEmpty(desired["server"])
 	}
+	// listDesired is the requested server as the listed provider's list marks
+	// it: on a multi-provider exit, only in its own provider's list.
+	listDesired := desiredServer
+	currentRelays := relays
+	// lineProvider is the provider the status line names, "" while nothing
+	// says which provider the exit is on.
+	lineProvider := ""
+	if multiProvider {
+		desiredProvider := requestProvider(ex, desired)
+		if desiredProvider == "" {
+			desiredProvider = recordProvider(ex, result)
+		}
+		if isConfigured {
+			desiredProvider = ""
+			if lockProvider, server, ok := verdict.SplitTarget(configured, ex.Providers); ok {
+				desiredProvider, desiredServer = lockProvider, server
+			}
+		}
+		if desiredProvider != listed {
+			listDesired = ""
+		}
+		if p.ShownRelays != nil {
+			currentRelays = p.ShownRelays
+		}
+		if isConfigured || recordProvider(ex, result) != "" || (state == "applying" && requestProvider(ex, desired) != "") {
+			lineProvider = provider
+		}
+	}
 	resultServer := orEmpty(result["server"])
 	displayServer := resultServer
 	if state == "applying" {
 		displayServer = desiredServer
 	}
-	currentInfo, haveInfo := relays.Get(displayServer)
+	currentInfo, haveInfo := currentRelays.Get(displayServer)
 
 	var currentPlace, currentFlag string
 	switch {
@@ -594,7 +705,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 		notes = `<p class="note">Leaving ` + esc(resultServer) + `. ` + esc(text.Drop[ex.Kind]) + `</p>`
 	}
 	retry := ""
-	if !isConfigured && state == "failed" && relays.Has(desiredServer) {
+	if !isConfigured && state == "failed" && relays.Has(listDesired) {
 		// Explicit form ownership also keeps retry working without JS.
 		retry = ` <button type="submit" form="select-form" name="server" value="` + esc(desiredServer) + `" ` +
 			`class="relay-switch" data-retry>Retry</button>`
@@ -616,7 +727,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 	token := esc(p.CSRFToken)
 	var locationsHTML, locationsCount, placeholder string
 	if spec.Layout == "regions" {
-		locationsHTML = regionRows(spec, relays, desiredServer)
+		locationsHTML = regionRows(spec, relays, listDesired)
 		noun := "regions"
 		if relays.Len() == 1 {
 			noun = "region"
@@ -625,7 +736,7 @@ func (s *Server) renderIndex(p IndexPage) string {
 		placeholder = "Filter region or country…"
 	} else {
 		var countryCount int
-		locationsHTML, countryCount = countryTree(spec, relays, desiredServer, embed)
+		locationsHTML, countryCount = countryTree(spec, relays, listDesired, embed)
 		locationsCount = fmt.Sprintf("%d countries", countryCount)
 		placeholder = "Filter country, city or relay…"
 	}
@@ -654,11 +765,12 @@ func (s *Server) renderIndex(p IndexPage) string {
 	}
 	currentDetails := ""
 	if haveInfo {
-		currentDetails = relayDetails(spec, currentInfo)
+		currentDetails = relayDetails(pageSpec, currentInfo)
 	}
 	forwardRow := ""
-	// Only a provider with port forwarding (PIA) reports it.
-	if result["port_forward"] == true {
+	// Only a provider with port forwarding (PIA) reports it, and on a
+	// multi-provider exit only while that provider is active.
+	if result["port_forward"] == true && (!multiProvider || recordProvider(ex, result) == portForwardProvider) {
 		forwardRow = "\n        <dt>Forwarded port</dt><dd data-f=\"forwarded_port\">" + esc(view.Forwarded) + `</dd>`
 	}
 	// Every check, as the verdict states it; only `pass` reads as passed.
@@ -732,6 +844,10 @@ func (s *Server) renderIndex(p IndexPage) string {
 			`<input type="hidden" name="csrf_token" value="` + token + `">` +
 			`<input type="hidden" name="return" value="` + returnTo + `">` +
 			`<input type="hidden" name="exit" value="` + esc(ex.ID) + `">`
+		if multiProvider {
+			// The listed provider's servers are what this form offers.
+			formOpen += `<input type="hidden" name="provider" value="` + esc(listed) + `">`
+		}
 		formClose = "</form>"
 		pin = `<button type="button" class="link-button pin" data-pin aria-pressed="false" ` +
 			`aria-label="Pin this server" title="Pin this server" hidden>☆</button>`
@@ -742,7 +858,11 @@ func (s *Server) renderIndex(p IndexPage) string {
 	}
 	switchingControls := "</div>"
 	if !isConfigured {
-		switchingControls = fill(switchingControlsTemplate,
+		switcher := ""
+		if multiProvider {
+			switcher = providerSwitch(ex, listed, lineProvider, embed)
+		}
+		switchingControls = fill(switchingControlsTemplate, "providerSwitch", switcher,
 			"hostLabel", esc(s.Settings.HostLabel), "filtersToggle", filtersToggle, "locationsCount", locationsCount,
 			"placeholder", esc(placeholder), "filtersRow", filtersRow, "errorHTML", errorHTML,
 			"locationsHTML", locationsHTML)
@@ -787,9 +907,28 @@ func (s *Server) renderIndex(p IndexPage) string {
 	if displayHost == "" {
 		displayHost = "—"
 	}
+	// A multi-provider exit's page says which providers are shown, listed
+	// and in use (panel.js reloads when the shown one changes), and its
+	// status line names the provider.
+	multiAttrs, providerStatus := "", ""
+	if multiProvider {
+		foreign := ""
+		if listed != lineProvider && !isConfigured {
+			foreign = "1"
+		}
+		multiAttrs = ` data-shown-provider="` + esc(provider) + `" data-listed-provider="` + esc(listed) +
+			`" data-foreign="` + foreign + `"`
+		lineLabel := ""
+		if lineProvider != "" {
+			lineLabel = pageSpec.Label
+		}
+		providerStatus = "\n    " + `<p class="provider-line" data-provider-line data-provider-label="` + esc(lineLabel) + `">` +
+			esc(providerLine(v.Label, lineLabel, displayServer)) + `</p>`
+	}
 
 	return fill(indexTemplate,
-		"theme", s.Settings.Theme, "style", s.Settings.Style, "cssID", esc(spec.CSSID()), "accent", providerAccent(provider),
+		"theme", s.Settings.Theme, "style", s.Settings.Style, "cssID", esc(pageSpec.CSSID()), "accent", providerAccent(provider),
+		"multiAttrs", multiAttrs, "providerStatus", providerStatus,
 		"colorScheme", s.Settings.colorScheme(), "themeColorMeta", s.Settings.themeColorMeta(provider),
 		"shortTitle", esc(s.Settings.ShortTitle), "title", title,
 		"vIcon", versions["favicon-32.png"], "vFav", versions["favicon.svg"], "vTouch", versions["apple-touch-icon.png"], "vCSS", versions["panel.css"], "vJS", versions["panel.js"],
@@ -866,7 +1005,7 @@ const switchingControlsTemplate = `<section class="widget" id="saved" hidden>
 </div>
 <section class="widget locations-widget">
   <div class="widget-header"><h2>Locations</h2>«filtersToggle»<span class="subdue small">«locationsCount»</span></div>
-  <div class="widget-content">
+  <div class="widget-content">«providerSwitch»
     <input type="search" class="search" placeholder="«placeholder»" aria-label="Filter locations" data-filter autocomplete="off" hidden>
     «filtersRow»
     «errorHTML»
@@ -896,7 +1035,7 @@ const indexTemplate = `<!DOCTYPE html>
 <script src="/static/panel.js?v=«vJS»" defer></script>
 </head>
 <body class="«bodyClass»">
-<main class="page"«configuredAttr» data-provider="«cssID»"«accent» data-layout="«layout»" data-server-pattern="«pattern»" data-exit="«exitID»" data-kind="«kind»" data-text="«textJSON»" data-switch-timeout="«timeout»" data-checked="«checked»" data-multi="«multi»" data-desired="«desired»" data-request="«request»" data-requested="«requested»" data-actual="«actual»" data-state="«state»">
+<main class="page"«configuredAttr» data-provider="«cssID»"«accent» data-layout="«layout»" data-server-pattern="«pattern»" data-exit="«exitID»" data-kind="«kind»" data-text="«textJSON»" data-switch-timeout="«timeout»" data-checked="«checked»" data-multi="«multi»" data-desired="«desired»" data-request="«request»" data-requested="«requested»" data-actual="«actual»" data-state="«state»"«multiAttrs»>
 «heading»
 «tabs»
 «formOpen»
@@ -905,7 +1044,7 @@ const indexTemplate = `<!DOCTYPE html>
 <section class="widget current-widget">
   <div class="widget-header"><h2>«currentHeading»«providerNote»</h2>«openLink»</div>
   <div class="widget-content current">
-    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>«connection»</span></div>
+    <div class="connection-heading"><span class="connection-light" aria-hidden="true"></span><span data-connection-label>«connection»</span></div>«providerStatus»
     <div class="current-row">
       <span class="connection-orbit"><span class="flag flag-lg" data-current-flag>«currentFlag»</span></span>
       <div class="current-main">

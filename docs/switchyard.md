@@ -332,6 +332,33 @@ Without sign-in, anyone who can reach this panel can switch every exit it
 lists. Give it at least the access restrictions of the most restricted exit,
 or use sign-in to give people different exits.
 
+### A multi-provider exit
+
+**Experimental, and refused by this release** ([multi-provider
+exit](configuration.md#multi-provider-exit)): the panel follows the exit's
+switch, so a release build refuses a `+` in `PANEL_EXITS` and `PROVIDERS`.
+What follows is what the panel does in a build that has it on.
+
+Write such an exit as `id=mullvad+pia[+nordvpn][:label]`, or give a
+single-exit panel the exit's `PROVIDERS` and `PROVIDER`:
+
+```sh
+PANEL_EXITS='home=mullvad:Home,both=mullvad+pia'
+```
+
+Its page has a row of provider tabs above the server list. The provider
+the exit is on is marked "in use", and the list is that provider's
+(`applier/relays-<provider>.json`). Another provider's tab lists its
+servers with a note before you pick: "Picking a PIA server moves every
+device on this exit from Mullvad to PIA." The provider is the exit's, not
+yours, so everyone using the exit moves with it. A pick writes the
+provider with the server, and the panel checks the server against that
+provider's list. The status line names both ("Connected: PIA,
+ex_example"), and PIA's forwarded port shows only while PIA is in use.
+Switching, a set-in-configuration lock (`pia/<server>`) and sign-in work as
+for any exit. Such an exit can't be in `PANEL_PROXY_STATUS` or
+`PANEL_NETWORK_EXITS`.
+
 ### Per-person exits
 
 With [OpenID Connect sign-in](access.md#sign-in-with-openid-connect), one panel

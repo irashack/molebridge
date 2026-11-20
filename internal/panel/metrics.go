@@ -104,7 +104,7 @@ func (s *Server) metrics(session *oidc.Session) []byte {
 	exits := s.metricsExits(session)
 	for _, e := range exits {
 		m.family("molebridge_exit_info", "gauge", "One series per exit, naming its provider and kind.")
-		m.sample("molebridge_exit_info", 1, "exit", e.ID, "provider", e.Provider, "kind", e.Kind)
+		m.sample("molebridge_exit_info", 1, "exit", e.ID, "provider", e.MetricsProvider(), "kind", e.Kind)
 	}
 	for _, e := range exits {
 		v := statuses[e.ID].Verdict
@@ -141,7 +141,8 @@ func (s *Server) metrics(session *oidc.Session) []byte {
 	}
 	var snapshots []snapshot
 	for _, e := range exits {
-		if meta, relays := s.cachedSnapshot(e); meta != nil {
+		// A multi-provider exit's is its active provider's catalogue.
+		if meta, relays := s.cachedSnapshotFor(e, shownProvider(e, statuses[e.ID])); meta != nil {
 			snapshots = append(snapshots, snapshot{e.ID, meta, relays.Len()})
 		}
 	}

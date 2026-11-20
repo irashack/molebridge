@@ -604,9 +604,9 @@ start with `molebridge panel: PANEL_NETWORK_EXITS: '<id>' is not an exit in PANE
 **Experimental, not for use yet.** One NetBird exit that can carry Mullvad,
 PIA or NordVPN, one at a time ([its design](design/multi-provider.md)). The
 settings, files and the exit's provider change are built and covered by unit
-tests and a drill against fake servers; the panel can't pick a provider yet,
-only a drill build's `molebridge init` offers it, and the shipped Compose
-files don't pass `PROVIDERS`. The live pass on real accounts and the memory measurement of an
+tests and a drill against fake servers, and the panel picks the provider
+with the server; only a drill build's `molebridge init` offers it, and the
+shipped Compose files don't pass `PROVIDERS`. The live pass on real accounts and the memory measurement of an
 exit holding NordVPN's catalog have **not run**.
 
 **Built but switched off.** This release's exit refuses to start, and
@@ -616,7 +616,10 @@ The owner decided it must not ship before NordVPN's memory has been measured
 on a live exit ([its design](design/multi-provider.md), decision 4).
 A later release will switch it on once that measurement and the live pass
 have run; its changelog will say so. Until then only builds with the `drill`
-tag (the drills and the system rig's `molebridge-drill`) accept it. The rest
+tag (the drills and the system rig's `molebridge-drill`) accept it. The
+panel follows the same switch: this release's panel refuses `PROVIDERS` and
+a `+` in `PANEL_EXITS` with the same sentence, so it never offers a
+provider the exit can't change to. The rest
 of this section describes what that release will do.
 
 ```sh
@@ -653,6 +656,12 @@ EXIT_IF=vpn                     # the one interface name; vpn by default with PR
 - The status record names the exit's providers ([the status
   record](architecture.md#the-status-record)); `molebridge status` judges it
   for `PROVIDERS`, and `check-config` prints every provider's config.
+- **The panel.** A single-exit panel reads `PROVIDERS` and `PROVIDER` the
+  way the exit does, with the same refusals. In `PANEL_EXITS` the exit is
+  `id=mullvad+pia+nordvpn[:label]` (two or three providers joined with `+`,
+  overlay only; the default label is "Mullvad + PIA + NordVPN"). Such an
+  exit can't be in `PANEL_PROXY_STATUS` or `PANEL_NETWORK_EXITS`. See
+  [a multi-provider exit in Switchyard](switchyard.md#a-multi-provider-exit).
 
 To try it, an override for `compose.yaml` sets `PROVIDERS`, `PROVIDER`,
 `EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` on the `exit` service, or a drill

@@ -231,7 +231,7 @@ failures still come from the pipeline's own checks and re-applies, and every swi
 `TestSystemRigMultiProviderSwitch` (`systemrig_multiprovider_test.go`) runs a [multi-provider
 exit](docs/configuration.md#multi-provider-exit) on the `molebridge-drill` binary, not the release
 build: the release build refuses `PROVIDERS` until multi-provider exits are switched on, and the
-`drill` tag switches them on (`internal/exit/multi_available_drill.go`). It runs with
+`drill` tag switches them on (`internal/buildgate/multi_provider_drill.go`). It runs with
 `PROVIDERS=mullvad,nordvpn` beside a fake
 NordVPN network: the fixture's catalogue (`tools/fixtures/nordvpn`) cut to one server, which is a
 kernel WireGuard server on port 51820 for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4 only,
