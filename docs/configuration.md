@@ -1,6 +1,28 @@
 # Configuration
 
-## `.env`
+This is the reference: every setting Molebridge reads, the files it reads and
+writes, and the panel's endpoints. The guides say how to use them. It is
+grouped the way Molebridge is put together:
+
+- [The core](#the-core): the settings, files and timing every way in shares.
+- [NetBird exit node](#netbird-exit-node): NetBird's settings, and the
+  [gluetun backend](#gluetun-backend).
+- [Sidecars](#sidecars): the [gluetun sidecar](#gluetun-sidecar) and the
+  [native sidecar](#native-sidecar).
+- [The proxy](#the-proxy).
+- [Switchyard](#switchyard): the panel's sign-in, isolation check,
+  proxy view and endpoints.
+- [Automatic failover](#automatic-failover), the
+  [multi-provider exit](#multi-provider-exit) and
+  [the network exchange](#the-network-exchange): the extras' settings.
+
+[`molebridge init`](setup.md#molebridge-init) writes a Compose file and an
+`.env` for the ways in and extras you choose; the settings below are the ones
+those files hold.
+
+## The core
+
+### `.env`
 
 Start from `.env.example`. These are non-secret settings read by Compose.
 There are eighteen, and each is commented in the file. Everything else has a
@@ -28,8 +50,7 @@ default in the binary and appears here as an [override](#overrides).
 have the same shape for the other three forms; see [gluetun backend](#gluetun-backend),
 [gluetun sidecar](#gluetun-sidecar) and [native sidecar](#native-sidecar).
 
-### Overrides
-
+#### Overrides
 These work when you add them to `.env` (Compose passes them on) or, for the
 ones marked "override file", when you set them on the named service in a
 `compose.override.yaml`. Compose reads that file by itself unless
@@ -57,11 +78,11 @@ they differ the row says so.
 | `PANEL_SESSION_TTL` | switchyard | `3600` | Seconds a sign-in lasts; see [panel sign-in](#panel-sign-in). |
 | `GATUS_ENDPOINT` | exit | `molebridge` | Gatus external endpoint key. |
 | `ROUTING_RECONCILE_INTERVAL` | exit | `30` | Seconds between full repair passes, 2 to 60; see [repair and lease timing](#repair-and-lease-timing). |
-| `FAILOVER` | exit | `off` | Experimental: `on` (backups in the same city), `same-city`, `same-country` or `servers` moves a native exit to a backup when its server keeps failing. See [automatic failover](#automatic-failover). |
-| `FAILOVER_SERVERS` | exit | empty | With `FAILOVER=servers`: 1 to 8 server names, comma-separated, in order of preference. |
-| `FAILOVER_AFTER` | exit | `300` | Seconds the server must keep failing before a failover, 120 to 3600. |
-| `FAILOVER_RETURN` | exit | `auto` | `auto` tries the selected server again after 15, 30 and 60 minutes, then every 120; `manual` stays on the backup until you pick a server. |
 | `GUARD_GRACE` | exit | `30` | Seconds without an accepted lease renewal before the supervisor stops NetBird, 5 to 30; see [repair and lease timing](#repair-and-lease-timing). |
+
+The [automatic failover](#automatic-failover) settings are not in this
+table because no Compose file passes them from `.env`: set them on the `exit`
+service in a `compose.override.yaml`.
 
 `PUID`, `PGID` and `OWNER_RECORD`, which earlier releases used, are gone:
 Molebridge no longer reads them, and an `.env` that still sets them works.
@@ -72,54 +93,7 @@ while `.env` points at them. Remove the line (keep it only for a gluetun form),
 and use `PROVIDER` and `EXIT_IF` to choose the provider
 ([upgrading from 0.7](operations.md#upgrading-from-07x)).
 
-### What Compose fixes for NetBird
-
-`compose.yaml` sets these on the `exit` service; they are not in `.env`.
-`NB_DISABLE_DNS=true` stops NetBird configuring the namespace's resolver.
-`NB_LOG_LEVEL=info`. `NB_INTERFACE_NAME` takes `OVERLAY_IF`,
-`NB_EXTRA_IFACE_BLACKLIST` takes `EXIT_IF`, and `NB_HOSTNAME` and
-`NB_MANAGEMENT_URL` are the settings above. `NB_DISABLE_USERSPACE_ROUTING=true`
-is part of Molebridge's supported NetBird configuration, and the exit
-refuses to start NetBird without it.
-
-NetBird's settings are validated before the NetBird client starts, and again
-after `netbird up`. A refusal is one line, `NetBird gate: refusing to start
-NetBird: <reason> (see docs/troubleshooting.md)`. The line still says "NetBird
-gate", the name of the 0.7 container that printed it; there is no gate
-container now. Besides `NB_DISABLE_USERSPACE_ROUTING`, the exit refuses:
-
-- `NB_FORCE_USERSPACE_FIREWALL`, `NB_FORCE_USERSPACE_ROUTER`,
-  `NB_ENABLE_ROSENPASS` or `WT_ENABLE_ROSENPASS` set to a value NetBird reads
-  as true (Go's `strconv.ParseBool`: `1`, `t`, `T`, `TRUE`, `true`, `True`);
-- `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` set to `true`, the only
-  value NetBird acts on for these two;
-- `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE` set to anything,
-  or an active profile other than NetBird's `default` one: Molebridge
-  supports only the default profile, at its default location;
-- `NB_FOREGROUND_MODE` or `WT_FOREGROUND_MODE` set to a value NetBird reads
-  as true: Molebridge supports only NetBird's daemon mode, which the exit
-  starts;
-- an empty `NB_INTERFACE_NAME` (Compose sets it from `OVERLAY_IF`), or a
-  `WT_INTERFACE_NAME` that names another interface;
-- a default profile (or a legacy `/etc/netbird/config.json` or
-  `/etc/wiretrustee/config.json`, which NetBird copies into it) with
-  Rosenpass on, with a `WgIface` other than `OVERLAY_IF` (none, or an empty
-  one, means `wt0`), with either field repeated, with a field name outside
-  printable ASCII, or that isn't valid JSON;
-- a stored profile whose `IFaceBlackList` doesn't exclude the tunnel
-  interface. That refusal names the repair tool `fix-blacklist`
-  ([operations](operations.md#netbird-interface-blacklist)).
-
-Two names are the exit's own and don't come from NetBird: `NB_STATE_DIR`
-(default `/var/lib/netbird`) is where the exit looks for the stored profile,
-which is where the `netbird-data` volume is mounted, and `NB_LOG_FILE` keeps
-NetBird's default of `console,/var/log/netbird/client.log` unless you set it
-(the gluetun form reads its log).
-
-See [architecture](architecture.md#netbird-and-its-checks) and
-[troubleshooting](troubleshooting.md#startup).
-
-### Other settings the Compose files fix
+#### Other settings the Compose files fix
 
 These are read by the binary, set in the Compose files, and not meant to be
 changed in `.env`:
@@ -142,8 +116,12 @@ one group read the published files
 ([readers in another group](#readers-in-another-group)).
 `MOLEBRIDGE_PANEL_LISTEN` replaces the panel's listen address, `0.0.0.0:8080`,
 for its tests; Compose never sets it. `MOLEBRIDGE_GENERATION`,
-`MOLEBRIDGE_RTNL_NOTIFY_LOCKED` and `MOLEBRIDGE_DRILL_CPUPROFILE` are
-internal to the supervisor and the test drills.
+`MOLEBRIDGE_EXCHANGE_MARK` (the control mark the supervisor hands the exchange
+client), `MOLEBRIDGE_RTNL_NOTIFY_LOCKED` and `MOLEBRIDGE_DRILL_CPUPROFILE` are
+internal to the supervisor and the test drills, and `MOLEBRIDGE_DRILL_FAILOVER_AFTER`,
+`MOLEBRIDGE_DRILL_FAILOVER_RETURN`, `MOLEBRIDGE_DRILL_FAILOVER_TRACE` and
+`MOLEBRIDGE_DRILL_PIA_CA` are read only by binaries built with the `drill` tag
+([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)).
 
 ### Repair and lease timing
 
@@ -220,46 +198,515 @@ With gluetun, `GLUETUN_SERVER_*` filters still control gluetun's first
 connection, before the exit runs. `SERVER` takes over once the exit has a
 fresh catalog and can apply it.
 
-### Automatic failover
+### The tunnel config
 
-**Experimental, off by default.** The live drill on a real provider has not
-run: the behavior is covered by unit tests and by drills against fake
-servers only ([its design](design/failover.md), "Testing"). Native
-exits only (Mullvad, PIA, NordVPN, the NetBird exit or the native sidecar);
-with `TUNNEL_BACKEND=gluetun` the exit refuses to start with it on, as
-gluetun reconnects by itself.
+The exit reads one file, `tunnel/wg_confs/<EXIT_IF>.conf`
+(`/config/wg_confs/<EXIT_IF>.conf` inside the container); a [multi-provider
+exit](#multi-provider-exit) reads `<provider>.conf` for each of its providers
+instead. Any other `.conf`
+file in that directory is ignored, with the warning `molebridge-exit:
+warning: <n> other .conf file(s) in /config/wg_confs are ignored; only
+<EXIT_IF>.conf is used`. Only a native exit reads it; the gluetun forms take
+the provider's key from `secrets/gluetun/wireguard_private_key`.
 
-```sh
-FAILOVER=on               # or same-city, same-country, servers
-FAILOVER_SERVERS=         # with servers: se-got-wg-001,se-got-wg-002
-FAILOVER_AFTER=300        # seconds, 120 to 3600
-FAILOVER_RETURN=auto      # or manual
+Before anything changes, the exit checks the file against what Molebridge's
+own tools write: `prepare-config` for Mullvad, the same with `--pia` for PIA,
+and the same with `--nordvpn`, or `nordvpn-key`, for NordVPN
+([tools](tools-reference.md)). Anything else is
+refused, including fields `wg-quick` itself would accept; the exit does not
+run `wg-quick`, or any other program, to bring the tunnel up. The file must
+be a regular file, not a symlink, readable by the container, at most 4 KiB,
+with no NUL bytes and no carriage returns (so no Windows line endings). Each
+line is blank, a comment starting with `#`, a section header written exactly
+`[Interface]` or `[Peer]`, or `Field = value` with a field from this table.
+Use the field names exactly as shown; each may appear once. Case matters:
+`wg-quick` would read `address` or `ADDRESS` as `Address`, but the exit refuses
+any spelling but the one in the table with `unsupported field on line <n>`.
+
+| Field | Rule |
+|---|---|
+| `[Interface]` | Once, first. |
+| `PrivateKey` | Required. A WireGuard key: 44 characters of base64 ending in `=`. |
+| `Address` | Mullvad and NordVPN: required. PIA: must be absent; the exit sets the address. Comma-separated: one IPv4 address and, for Mullvad only, at most one IPv6 address, each with `/32` or `/128` or no prefix. IPv4 without leading zeroes. |
+| `MTU` | Required, 1280 to 1500. The tools write 1420. |
+| `Table` | Required, `off`. |
+| `PostUp` | Required, exactly `ip route replace default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route replace default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
+| `PreDown` | Required, exactly `ip route del default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route del default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
+| `[Peer]` | Mullvad: once, after `[Interface]`. PIA and NordVPN: must be absent; the exit sets the peer. |
+| `PublicKey` | Required in `[Peer]`. A WireGuard key. |
+| `Endpoint` | Required in `[Peer]`. An IPv4 address without leading zeroes and a port, 1 to 65535, such as `192.0.2.10:51820`. |
+| `AllowedIPs` | Required in `[Peer]`. `0.0.0.0/0`, followed by `, ::/0` exactly when the config has an IPv6 address. |
+| `PersistentKeepalive` | Optional in `[Peer]`, 1 to 65535. The tools write 25. |
+
+`PostUp` and `PreDown` stay in the file because the tools write them and the
+exit checks them, but the exit never runs them. It reads them as the route
+operations they stand for (the default route into the exit table) and does
+those itself, through the kernel's netlink interface.
+
+So `DNS`, `ListenPort`, `FwMark`, `SaveConfig`, `PreUp`, `PostDown`,
+`PresharedKey`, a `Table` other than `off` and every other field are refused,
+as is a second `[Peer]`. A refusal stops the container with status 1 before
+it changes any routing or creates the tunnel, and logs one line:
+
+```text
+molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not supported: unsupported field on line 4; regenerate it with prepare-config (docs/setup.md)
 ```
 
-With it on, when the selected server (the panel's, or `SERVER`) has failed
-at least three checks over `FAILOVER_AFTER` seconds, the failures are the
-server's (a stale handshake, a tunnel that gets nothing back but the
-server's own handshake requests, a switch or repair that didn't verify) and the host's own network answers, the exit
-moves to a backup: another server in the same city, the same country, or
-the next one in `FAILOVER_SERVERS` that a fresh catalog lists (same city
-and same country need the selected server to have been verified on this
-exit once, so that its location is known). A failure of
-the provider's check service, an answer that doesn't confirm the egress, or
-a host without a network never fails over. If a backup doesn't verify, the
-next is tried, up to three; if none verifies, the exit stays on the
-selected server, retries it as before and doesn't fail over again for 30
-minutes. With PIA port forwarding on, only regions that forward ports are
-backups.
+The reason is one of `unsupported field on line <n>`, `<field> on line <n> is
+not valid`, `<field> is missing`, `<field> appears more than once`,
+`[Interface] on line <n> is not supported; it must come once, first`,
+`[Peer] on line <n> is not supported`, `[Interface] is missing`, `[Peer] is
+missing`, `[Peer] is not supported for this provider` or `Address on line <n>
+is not supported for PIA`. The field names come from the table above, never
+from the file: no message quotes the config, which holds the private key. The
+end names the tool for your `PROVIDER` (`prepare-config --pia` for PIA,
+`prepare-config --nordvpn` for NordVPN).
 
-The panel shows "connected to backup" and says which server keeps failing
-and when it is tried again; `/readyz`, the proxy and PIA's port forwarding
-treat the backup as connected. With `FAILOVER_RETURN=auto` the exit tries
-the selected server again after 15, 30 and 60 minutes, then every 120, each
-a short interruption; if it still fails, the exit goes back to the backup.
-Picking any server in the panel ends the failover at once. The selected
-server stays the panel's selection and `SERVER` throughout: the backup is
-never remembered as your choice. The episode is kept in
-`applier/failover.json` across a restart ([state files](#state-files)).
+To change the exit table of an existing exit while keeping its key, set
+`EXIT_TABLE` in `.env` and edit only these two lines in its tunnel config
+(here for table `51822`):
+
+```ini
+PostUp = ip route replace default dev %i table 51822
+PreDown = ip route del default dev %i table 51822
+```
+
+Keep the file mode 0600. For Mullvad and NordVPN, change the table in both
+hooks too, including their `ip -6` commands if present. Apply the change with
+[recovery](operations.md#recovery), then run [verification](verification.md).
+A new config made by the tools takes the table from `-e EXIT_TABLE=<n>`.
+
+To check a config without starting anything, run
+`docker compose run --rm --no-deps exit check-config`
+([setup](setup.md#5-check-then-start)).
+
+### Secret files
+
+All mode 0600 and ignored by git. Document them by name only; never paste their
+contents anywhere.
+
+| File | Contents | Needed |
+|---|---|---|
+| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | With Mullvad |
+| `tunnel/wg_confs/pia.conf` | PIA tunnel private key only; no address or peer | With PIA |
+| `tunnel/wg_confs/nordvpn.conf` | NordLynx private key and the address `10.5.0.2/32`; no peer | With NordVPN |
+| `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file; each a regular file, not a symbolic link | With PIA |
+| `secrets/netbird.env` | `NB_SETUP_KEY` (NetBird's older name `WT_SETUP_KEY` is handled the same way) | Until the peer first enrolls |
+| `secrets/applier.env` | `GATUS_TOKEN`; `EXCHANGE_TOKEN` | `GATUS_TOKEN` only with `GATUS_URL`, `EXCHANGE_TOKEN` only with `EXCHANGE_URL` |
+| `EXCHANGE_TOKENS_DIR/<id>` | One exit's exchange token, on the panel's side | With the [network exchange](#the-network-exchange) |
+| `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
+| `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `gluetun-auth` | With the gluetun backend |
+| `secrets/gluetun/api_key` | The same API key, for the exit. It is full gluetun administration | With the gluetun backend |
+| `secrets/proxy/password` | The [proxy](proxy.md)'s password, one line; mode 0600 (0640 or 0440 also accepted), owned by `PANEL_USER` | With the proxy |
+
+Neither NordVPN's downloaded config nor its access token is one of these:
+each is needed only while `prepare-config --nordvpn` or `nordvpn-key` runs.
+Delete the download afterwards, and the token file if you saved one. `secrets/netbird.env` and `secrets/applier.env` reach the exit
+through `env_file`, so their permissions are a host check
+([operations](operations.md#host-checks)). The supervisor hands `NB_SETUP_KEY`
+only to `netbird up`, the command that enrolls, not to NetBird's daemon, its
+liveness probes or the worker, and hands NetBird only its own `NB_*` and
+`WT_*` settings, so `GATUS_TOKEN`, `EXCHANGE_TOKEN` and PIA's files never reach NetBird. The
+supervisor itself, PID 1, keeps both in its environment for the life of the
+container, so root in the container (and on the host) can read them in
+`/proc/1/environ`, and the engine keeps them in the container's configuration
+(`docker inspect`). Once the peer has enrolled, delete `secrets/netbird.env`
+as [setup](setup.md#5-check-then-start) says, then recreate the exit
+(`docker compose up -d --force-recreate exit`) so that neither holds the key
+any more.
+
+### State files
+
+Under `state/`, written with temp-file-and-rename. None hold secrets. These
+names, paths, fields and timestamp formats are the same as in 0.7.0, so a
+bridge that reads `result.json` keeps working; what later releases keep is in
+[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the files only the exit reads
+(`attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json` and `tunnel.json`) are in that
+directory instead of `applier/`
+([below](#keeping-the-published-files-in-memory)). For a healthy
+`result.json` of each exit kind, see [the example
+records](architecture.md#example-records).
+
+| File | Writer | Reader | Contents |
+|---|---|---|---|
+| `applier/relays.json` | exit | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. Every IPv4 address in it is public: a relay naming a private, loopback, link-local, multicast, unspecified, shared (100.64.0.0/10) or reserved address is dropped. A snapshot for another provider is ignored. |
+| `applier/gluetun-selection.json` | exit | exit | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
+| `applier/attempt.json` | exit | exit | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
+| `applier/location.json` | exit | exit | Since 0.11.0: the last verified `server`, its `city` and `country`, `port_forward` (a PIA region that forwards ports) and `replacement`, the server standing in for it while the catalog doesn't list it, or null ([a server the provider retires](architecture.md#a-server-the-provider-retires)). |
+| `applier/failover.json` | exit | exit | With [automatic failover](#automatic-failover) on (experimental): the episode in progress, for the selected server it belongs to: its phase, the backup, the servers tried, the failures counted and the return schedule (on the boot clock, with `boot_id`). Mode 0600. Missing or malformed means no episode; removed when failover is off. No secret. |
+| `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
+| `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
+| `applier/relays-<provider>.json`, `applier/relay-error-<provider>.json` | exit | — | A [multi-provider exit](#multi-provider-exit)'s catalog and refresh error for each of its providers, in the forms above. It writes no `relays.json`, so a reader that expects one provider's catalog there finds none. |
+| `applier/tunnel-provider.json` | exit | exit | A [multi-provider exit](#multi-provider-exit)'s active provider, `{"provider": "<id>"}`, written before each change of provider; a start comes back on it. Mode 0600, under `PRIVATE_STATE_DIR` when set. No secret. |
+| `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
+| `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
+| `proxy/proxy.json` | proxy | `molebridge status --proxy`, `health --proxy` | The [proxy](proxy.md#status)'s own status record, never part of `result.json`: `schema` (1), `kind` (`proxy`), `provider`, `guarantee` (`opt-in`), `status` (`ok`, `refusing` or `failed`), `message`, `checked_at`, `listen`, `tunnel` (the exit's `verdict`, `server` and `checked_at` as the proxy last read them), `servers` (`known`, and `benched` with each `server`, `until` and `reason`), `sessions`, and `connections` (`open`, `total`, `failed`). Rewritten every 10 seconds; over 30 seconds old counts as unknown. |
+| `<id>/exchange.json` | exchange | panel | With the [network exchange](#the-network-exchange), on the panel's side: `schema` (1), `exit`, `last_contact_at` (the exchange's clock), `clock_offset_s` (the exit's clock minus the exchange's, or null) and `files`, each file name to its `received_at` and `sha256`. The panel's `<id>/applier/` files are then the exchange's copies of the exit's. |
+
+**`owner_record`.** The check means "the exit's owner is live", and since
+0.8.0 carries one more member on a native exit: `expires_at`, the lease
+expiry the supervisor accepted, on the wall clock, in the same timestamp
+format as `at`. A passing check is
+`{"state": "pass", "at": "…", "expires_at": "…"}`; a failing one has no
+`expires_at`. A reader since 0.8.0 treats `expires_at` as an extra upper bound on
+the check, never an extension: a record without it is judged as in 0.7.0, and
+a malformed one, or one that has passed, fails the check. A 0.7.0 reader
+ignores the member. For the gluetun backend and the sidecar the check stays
+`n/a`, as schema 2 fixes it; their liveness shows in the other checks. Schema
+2 itself is unchanged.
+
+Between full inspections, which publish about every 60 seconds, the supervisor
+rewrites `result.json` every 2 seconds on a native exit, changing only the
+`owner_record` check. `checked_at` and every other check's time stay those of
+the last full inspection, so a reader that judges by those times still sees
+old evidence as old.
+
+Routing installs the return-path rule and its backstop (rules 94 and 98)
+from the tunnel config's `Address` line (a PIA config has none; the exit
+installs both per registration); `compose.yaml` sets
+`net.ipv4.icmp_errors_use_inbound_ifaddr` on the `exit` service for the
+same reason. A native overlay exit doesn't start NetBird while it is not `1`;
+with gluetun the exit warns. See
+[requirements](prerequisites.md#kernel-settings-in-the-exits-namespace) and
+[architecture](architecture.md#routing-contract).
+
+#### Keeping the published files in memory
+
+`state/applier` holds two kinds of file:
+
+- **Published**: `result.json`, `relays.json` and `relay-error.json`, which
+  the panel and other readers read. The exit rebuilds them. It publishes a
+  status record when it starts and again after each inspection, and it
+  downloads the server list at start (with gluetun, reads gluetun's file).
+- **Private**: `attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json`
+  (gluetun backend) and `tunnel.json` (PIA). Only the exit reads them, and they carry its
+  state across a restart ([retries](operations.md#retries),
+  [backups](operations.md#backups)).
+
+A native exit rewrites `result.json` every 2 seconds. To keep those writes
+off your disk, move the private files out and put `state/applier` in
+memory:
+
+1. Stop the exit.
+2. Set `PRIVATE_STATE_DIR` on the exit to an absolute path on persistent
+   storage, and mount a directory there, for example in a
+   `compose.override.yaml`:
+
+   ```yaml
+   services:
+     exit:
+       environment:
+         PRIVATE_STATE_DIR: /state/exit
+       volumes:
+         - ./state/exit:/state/exit
+   ```
+
+3. Move whichever of the four private files exist from `state/applier/`
+   to the new directory (`state/exit/` above).
+4. Mount a tmpfs on `state/applier` on the host, with the owner and mode the
+   directory has now (`stat -c '%u:%g %a' state/applier`), mounted before
+   the containers start (an `/etc/fstab` line), and at least 40 MiB: the
+   largest server list is 16 MiB and is written beside the old one before
+   the rename. Every container that reads the exit's files keeps its
+   existing mount of `state/applier`. On Kubernetes, an `emptyDir` with
+   `medium: Memory` works only when every reader is in the exit's pod.
+5. Start the exit.
+
+The exit refuses to start when `PRIVATE_STATE_DIR` is not an absolute path
+without `.` or `..` elements or a trailing slash, when it is under
+`<STATE_DIR>/panel` or `<STATE_DIR>/applier`, or when the directory can't be written. It creates a
+missing directory with mode 0700. Setting it to `<STATE_DIR>/applier` is the
+same as leaving it unset. An older release doesn't read the setting. If you
+roll back, move the files back first, or the exit starts idle
+([retries](operations.md#retries)) and, with gluetun, without its last
+verified server.
+
+With `state/applier` in memory, a host restart loses only what the exit
+rebuilds. Until its first server-list download succeeds (it retries every
+minute), the exit has no server list, so its peer check fails with the
+reason `catalogue-stale` (the panel shows `no fresh server list`).
+
+This was tested with the unit tests at the commit that added it. No exit
+has been run live this way ([testing](testing.md)).
+
+The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
+exit snapshots are mode 0644 so the non-root panel can read them (0640 for
+one group with `STATE_GID`, [below](#readers-in-another-group)); requests
+are mode 0600. The panel cannot write the applier directory. Catalog refresh
+is every six hours (after a failure, retries from one minute doubling to an hour, or to five minutes while there is no catalog under 24 hours old), maximum catalog age is 24
+hours, and maximum status age is 150 seconds. A server list download may take
+20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. With the
+gluetun backend nothing is downloaded: the exit reads gluetun's server
+file, up to 32 MiB, every minute when it changed and at least every six
+hours. The validated `relays.json` may be 10 MiB, NordVPN's and gluetun's
+16 MiB; the exit refuses to write a larger one and keeps the last good
+catalog, reporting it in `relay-error.json` like any failed refresh, and
+neither the exit nor the panel reads a larger one. These are fixed safety
+defaults, set per provider in `internal/providers`.
+
+#### Readers in another group
+
+The panel and the [proxy](proxy.md) read `state/applier` and never write
+it. With the Compose files the exit's published files are mode 0644 in a
+directory others may enter, so any user can read them. Where the state
+directory is the exit's alone, as on Kubernetes when the exit runs as root
+and the directory is root's 0770, a reader running as another user is
+refused: the proxy then refuses connections with `the exit's verdict is
+unknown` and the file it couldn't read
+([the proxy](proxy.md#on-kubernetes)).
+
+`STATE_GID` on the exit (unset by default) names a group id, 0 to
+2147483647, that may read the published files instead:
+
+- At start the exit makes `<STATE_DIR>/applier` mode 0750 with that group,
+  and gives each published file already there (a regular file of mode 0644
+  or 0640: `result.json`, `relays.json`, `relay-error.json`) mode 0640 with
+  that group. Every file it publishes afterwards is written 0640 with that
+  group. Others can no longer read them.
+- The private files (`attempt.json`, `location.json` and the rest, mode
+  0600) stay the exit's alone, and the directory stays writable by its
+  owner only. Links are not followed.
+- The exit must be able to give files that group: it is a member of the
+  group (Compose `group_add`, Kubernetes `supplementalGroups` or
+  `runAsGroup`) or holds `CHOWN`, which the Compose files don't grant. It
+  must also own the directory, or hold `FOWNER`, to change its mode.
+  Otherwise it refuses to start with a line that begins `STATE_GID <gid>:`
+  and names the file and the reason.
+- Every reader must run in that group: the panel (`PANEL_USER`'s group, or a
+  supplementary group) and the proxy. A reader outside it, the panel
+  included, can no longer read the files once the exit has started with
+  the setting.
+
+`check-config` checks the value but changes nothing. An older release
+ignores the setting and writes mode 0644 again. This was tested with the
+unit tests at the commit that added it; no exit has run live with it
+([testing](testing.md)).
+
+## NetBird exit node
+
+The NetBird exit node is the `exit` service of `compose.yaml` (native
+backend) or `compose.gluetun.yaml` (gluetun backend). Its `.env` settings are
+in the [`.env` table](#env); the guide is [the NetBird exit
+node](netbird-exit.md).
+
+### What Compose fixes for NetBird
+
+`compose.yaml` sets these on the `exit` service; they are not in `.env`.
+`NB_DISABLE_DNS=true` stops NetBird configuring the namespace's resolver.
+`NB_LOG_LEVEL=info`. `NB_INTERFACE_NAME` takes `OVERLAY_IF`,
+`NB_EXTRA_IFACE_BLACKLIST` takes `EXIT_IF` (the exit also reads NetBird's
+older name, `WT_EXTRA_IFACE_BLACKLIST`), and `NB_HOSTNAME` and
+`NB_MANAGEMENT_URL` are the settings above. `NB_DISABLE_USERSPACE_ROUTING=true`
+is part of Molebridge's supported NetBird configuration, and the exit
+refuses to start NetBird without it.
+
+NetBird's settings are validated before the NetBird client starts, and again
+after `netbird up`. A refusal is one line, `NetBird gate: refusing to start
+NetBird: <reason> (see docs/troubleshooting.md)`. The line still says "NetBird
+gate", the name of the 0.7 container that printed it; there is no gate
+container now. Besides `NB_DISABLE_USERSPACE_ROUTING`, the exit refuses:
+
+- `NB_FORCE_USERSPACE_FIREWALL`, `NB_FORCE_USERSPACE_ROUTER`,
+  `NB_ENABLE_ROSENPASS` or `WT_ENABLE_ROSENPASS` set to a value NetBird reads
+  as true (Go's `strconv.ParseBool`: `1`, `t`, `T`, `TRUE`, `true`, `True`);
+- `NB_USE_NETSTACK_MODE` or `NB_WG_KERNEL_DISABLED` set to `true`, the only
+  value NetBird acts on for these two;
+- `NB_CONFIG`, `WT_CONFIG`, `NB_PROFILE` or `WT_PROFILE` set to anything,
+  or an active profile other than NetBird's `default` one: Molebridge
+  supports only the default profile, at its default location;
+- `NB_FOREGROUND_MODE` or `WT_FOREGROUND_MODE` set to a value NetBird reads
+  as true: Molebridge supports only NetBird's daemon mode, which the exit
+  starts;
+- an empty `NB_INTERFACE_NAME` (Compose sets it from `OVERLAY_IF`), or a
+  `WT_INTERFACE_NAME` that names another interface;
+- a default profile (or a legacy `/etc/netbird/config.json` or
+  `/etc/wiretrustee/config.json`, which NetBird copies into it) with
+  Rosenpass on, with a `WgIface` other than `OVERLAY_IF` (none, or an empty
+  one, means `wt0`), with either field repeated, with a field name outside
+  printable ASCII, or that isn't valid JSON;
+- a stored profile whose `IFaceBlackList` doesn't exclude the tunnel
+  interface. That refusal names the repair tool `fix-blacklist`
+  ([operations](operations.md#netbird-interface-blacklist)).
+
+Two names are the exit's own and don't come from NetBird: `NB_STATE_DIR`
+(default `/var/lib/netbird`) is where the exit looks for the stored profile,
+which is where the `netbird-data` volume is mounted, and `NB_LOG_FILE` keeps
+NetBird's default of `console,/var/log/netbird/client.log` unless you set it
+(the gluetun form reads its log).
+
+See [architecture](architecture.md#netbird-and-its-checks) and
+[troubleshooting](troubleshooting.md#startup).
+
+### gluetun backend
+
+Experimental. Live passes used NordVPN only ([testing](testing.md)). The design is in [architecture](architecture.md#gluetun-backend) and
+what differs for you in [providers](providers.md#the-gluetun-backend). Copy
+`.env.gluetun.example` to `.env`; it sets `COMPOSE_FILE=compose.gluetun.yaml`,
+and that file replaces `compose.yaml`. `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
+`OVERLAY_IF`, `EXIT_TABLE`, `NB_HOSTNAME`, `NB_MANAGEMENT_URL` and the panel
+settings above keep their meaning. `PROVIDER` and the PIA settings don't apply.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `GLUETUN_PROVIDER` | required | gluetun's `VPN_SERVICE_PROVIDER`. The panel can select servers for `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`, `surfshark` and `windscribe`; the exit refuses any other. `compose.gluetun.yaml` gives the exit and the panel `PROVIDER=gluetun-<this value>`. |
+| `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The routing contract and NetBird's ICE blacklist use the same value. (The native default is `mullvad`.) |
+| `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
+| `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). When `SERVER` is set, the exit converges to it and restores it after gluetun restarts. Otherwise a selection in the panel replaces these filters while gluetun runs, and the exit restores your last verified selection after a restart. |
+| `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the exit also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. Hours, minutes and seconds only, such as `24h`, `1h30m` or `90s`; anything else stops the exit at start with `invalid GLUETUN_UPDATER_PERIOD`. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. It can't be `lo`, `OVERLAY_IF` or `EXIT_IF`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. A [native sidecar](#native-sidecar) reads it too, with no host table. |
+| `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256 to 2147483647). Must differ from `EXIT_TABLE`; neither may be 51820 (gluetun) or 7120 (NetBird). |
+| `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. A [native sidecar](#native-sidecar) uses it for the exit's own host-path sockets, with the same format. |
+| `NB_WIREGUARD_PORT` | `51820` | NetBird's WireGuard port, opened in gluetun's firewall. |
+| `FWMARK_GRACE` | `30` | See [repair and lease timing](#repair-and-lease-timing). |
+
+`compose.gluetun.yaml` also sets fixed values: gluetun with `VPN_TYPE=wireguard`,
+`WIREGUARD_IMPLEMENTATION=kernelspace`, its control server on
+`127.0.0.1:8000` inside the namespace and its server list at
+`/gluetun/servers/servers.json` (`STORAGE_FILEPATH`), in a volume of its
+own; `TUNNEL_BACKEND=gluetun` for the exit; and for the exit
+`GLUETUN_CONTROL_URL` (`http://127.0.0.1:8000`), `GLUETUN_API_KEY_FILE`
+(`/run/secrets/gluetun/api_key`) and `GLUETUN_SERVERS_FILE`
+(`/gluetun-servers/servers.json`), where it finds the control server, the API
+key and the read-only server list. With this backend the exit also refuses
+`NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` and `NB_DISABLE_CUSTOM_ROUTING`
+set to a true value, and an `NB_FWMARK_BASE` other than `CONTROL_MARK`.
+
+Before the first start:
+
+1. Put the provider's WireGuard private key in
+   `secrets/gluetun/wireguard_private_key`, one line, mode 0600.
+2. Run the `gluetun-auth` tool ([tools](tools-reference.md#gluetun-auth)). It
+   generates an API key and writes it twice, both mode 0600: into
+   `secrets/gluetun/auth.toml`, gluetun's role file, with one role allowed
+   exactly `PUT /v1/vpn/settings`, `GET /v1/vpn/status`, `GET
+   /v1/publicip/ip`, and `GET` and `PUT /v1/updater/status` (to refresh the
+   server list); and into `secrets/gluetun/api_key`, which only the exit
+   mounts. The key is never printed. Run it again with `--rotate` to replace
+   both, then recreate gluetun and the exit ([recovery](operations.md#recovery)).
+   Compose refuses to start without the role file: without one, gluetun
+   answers several routes with no authentication, including one that stops
+   the VPN.
+3. Run the `gluetun-post-rules` tool ([tools](tools-reference.md#gluetun-post-rules))
+   to write `tunnel/gluetun/post-rules.txt` from these settings; add
+   `--ipv4-only` if gluetun logs that it found no working ip6tables. It does
+   not read `.env`: pass the settings that differ from the defaults with
+   `-e`. Only `HOST_IF`, `EXIT_IF`, `OVERLAY_IF` and `NB_WIREGUARD_PORT` appear
+   in the file; run it again after changing one of them, then recreate gluetun
+   and the exit.
+
+## Sidecars
+
+A sidecar gives other containers the tunnel: they join its network namespace.
+The guides are [gluetun sidecar](gluetun-sidecar.md) and
+[native sidecar](native-sidecar.md).
+
+### gluetun sidecar
+
+Experimental; see [the gluetun sidecar](gluetun-sidecar.md) for setup and
+what has been tested. Copy `.env.sidecar.example` to `.env`; it sets
+`COMPOSE_FILE=compose.sidecar.yaml`. `GLUETUN_PROVIDER`, `EXIT_IF`,
+`GLUETUN_WIREGUARD_ADDRESSES`, `GLUETUN_SERVER_*`, `GLUETUN_UPDATER_PERIOD`,
+`SERVER`, the panel settings and the Gatus settings mean what they mean
+above. The NetBird, overlay, table and mark settings don't apply.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, a record of your list that `docker inspect` shows. Nothing in Molebridge reads or checks it, and neither does the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace): you name every container to check, and one you leave out is not checked. `.env.sidecar.example` sets `example-app`. |
+| `GLUETUN_FIREWALL_INPUT_PORTS` | empty | gluetun's `FIREWALL_INPUT_PORTS`: ports your applications listen on, comma-separated, which you also publish on the `gluetun` service. Never 8000, the control server. |
+| `COMPOSE_PROFILES` | empty | `.env.sidecar.example` sets `example`, which runs the example application, a busybox that only sleeps; remove it once yours are listed. |
+
+`compose.sidecar.yaml` sets `EXIT_KIND=sidecar` on the exit and the panel;
+it isn't read from `.env`. `EXIT_KIND` is `overlay` when unset, as in
+`compose.yaml` and `compose.gluetun.yaml`. The exit refuses to start with any
+other value. With `TUNNEL_BACKEND=gluetun` a sidecar needs a `gluetun-*`
+provider; with `TUNNEL_BACKEND=native` it is the [native sidecar](#native-sidecar).
+A separate Switchyard names
+the kind in `PANEL_EXITS` instead, as `id=<provider>/sidecar`. The exit's and
+the panel's kind must agree, or the panel shows "kind mismatch".
+
+### Native sidecar
+
+Experimental; see [the native sidecar](native-sidecar.md) for setup
+and what has been tested. Copy `.env.native-sidecar.example` to `.env`; it sets
+`COMPOSE_FILE=compose.native-sidecar.yaml`. `PROVIDER`, `EXIT_IF`, `SERVER`,
+the tunnel config, the PIA login, the panel settings and the Gatus settings
+mean what they mean for a native overlay exit. The NetBird and overlay settings
+don't apply: `OVERLAY_CIDR`, `OVERLAY6_CIDR` and `OVERLAY_IF` are refused when
+set, and `NB_*` and `WT_*` are ignored. Tables 51820 and 7120 are not reserved,
+because no gluetun and no NetBird runs.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SIDECAR_LAN_CIDRS` | empty | The networks the applications may reach outside the tunnel, as comma-separated IPv4 and IPv6 prefixes written with their network addresses: no `/0`, no duplicates, at most 16 entries in all, spaces around an entry dropped. In Compose, the engine's network; in Kubernetes, the pod and Service ranges and anything that connects to the application. Anything in the namespace can reach these without the tunnel, and a resolver inside them answers outside it ([DNS](native-sidecar.md#dns)). The refusals are in [the native sidecar](native-sidecar.md#settings). `.env.native-sidecar.example` sets the documentation range `198.51.100.0/24`; replace it. |
+| `SIDECAR_HOST_RESOLVERS` | empty | Up to three resolver IP addresses, comma-separated, that the exit's own lookups ask (port 53) in place of `/etc/resolv.conf`'s, for when the namespace's resolvers are reachable only through the tunnel ([DNS](native-sidecar.md#dns)). Setting it also drops the applications' DNS (ports 53 and 853) to `SIDECAR_LAN_CIDRS`. No port, name or zone; no duplicates |
+| `PROVIDER`, `EXIT_IF` | `pia`, `pia` in `.env.native-sidecar.example` | As in `.env`; `EXIT_IF` names the tunnel interface and its config file. |
+| `HOST_IF` | `eth0` | The namespace's interface toward the host (not `lo`, not `EXIT_IF`). The deletion check judges the exit's control-marked path against it (that path may leave by it or by the tunnel interface) and the watcher follows it; the firewall does not use it. An override in `.env`. |
+| `EXIT_TABLE` | `51821` | The exit table, whole number 256 to 2147483647; also the tunnel device's firewall mark, so it must differ from `CONTROL_MARK`. An override. |
+| `CONTROL_MARK` | `0x1bd00` | The mark on the exit's own host-path sockets (the provider's login and downloads, PIA's registration, the Gatus push, and their name lookups): lowercase hexadecimal, leading `0x`, no leading zero, low byte zero. Set in the exit's environment only; the Compose file doesn't pass it. |
+| `PIA_PORT_FORWARD` | `off` | `on` forwards one PIA port to the namespace itself ([port forwarding](native-sidecar.md#port-forwarding)). `PIA_PORT_FORWARD_TARGET` is refused. |
+| `COMPOSE_PROFILES` | `example` in `.env.native-sidecar.example` | `example` runs a busybox that only sleeps, standing in for your applications; remove it once yours are in. `port-sync` runs the port-sync service. |
+| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | Where the `port-sync` service reaches qBittorrent's Web API. Passed from `.env` by the Compose file; the other port-sync settings below are fixed there. |
+
+`compose.native-sidecar.yaml` sets `EXIT_KIND=sidecar` and `TUNNEL_BACKEND=native`
+on the exit, and `EXIT_KIND=sidecar` on the panel; neither is read from `.env`.
+The combinations the exit accepts are:
+
+| `EXIT_KIND` | `TUNNEL_BACKEND` | `PROVIDER` | Result |
+|---|---|---|---|
+| `overlay` | `native` | `mullvad`, `pia`, `nordvpn` | A native overlay exit |
+| `overlay` | `gluetun` | `gluetun-*` | A gluetun overlay exit |
+| `sidecar` | `gluetun` | `gluetun-*` | A gluetun sidecar |
+| `sidecar` | `native` | `mullvad`, `pia`, `nordvpn` | A native sidecar |
+
+Anything else is refused: `PROVIDER must be mullvad, pia or nordvpn` for a
+`gluetun-*` provider with the native backend, and
+`TUNNEL_BACKEND=gluetun needs a gluetun provider (PROVIDER=gluetun-<name>)` for
+a native provider with gluetun.
+
+#### The port-sync role
+
+`molebridge port-sync` is a separate container with no capabilities, in the
+namespace of the application whose port it sets
+([tools reference](tools-reference.md#port-sync)). It reads
+`STATE_DIR/applier/result.json` and writes nothing.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PORT_SYNC_CLIENT` | required | The only value is `qbittorrent`. |
+| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | qBittorrent's Web API: an `http` URL to a loopback IP address, with no user name, path, query or fragment. |
+| `PORT_SYNC_USERNAME_FILE`, `PORT_SYNC_PASSWORD_FILE` | empty | Files holding qBittorrent's Web UI login, one value per file, at most 1 KiB, not empty. Set both or neither. With neither, the role sends no login and relies on qBittorrent's setting that skips authentication for clients on localhost. |
+| `PORT_SYNC_INTERVAL` | `30` | Seconds between passes: a whole number from 10 to 300. |
+| `STATE_DIR` | `/state` | Where the role finds `applier/result.json`; mount the exit's `state/applier` read-only. |
+
+## The proxy
+
+Experimental, and drilled live on Mullvad only; see [the proxy](proxy.md) for
+its guarantee, setup and limits. `compose.proxy.yaml` adds the `proxy`
+service on top of `compose.yaml` or `compose.native-sidecar.yaml`
+(`COMPOSE_FILE=compose.yaml:compose.proxy.yaml`). It passes the exit's
+`PROVIDER`, `EXIT_IF` (as `TUNNEL_INTERFACE`), `OVERLAY_IF` and
+`PANEL_USER` (the user it runs as), and these of its own from `.env`:
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port: loopback, or an address of the interface `OVERLAY_IF` names (NetBird's, or on Kubernetes the pod's own: [the proxy](proxy.md#on-kubernetes)). Anything else, `0.0.0.0` included, is refused at start. |
+| `PROXY_MAX_CONNS` | `512` | The most open client connections, 1 to 65535. |
+| `PROXY_DNS` | empty: the provider's | The resolver for the names the proxy resolves itself, an IP address with an optional port, asked through the tunnel. Empty means Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53` or NordVPN `103.86.96.100:53`. |
+
+The password is the one line in `secrets/proxy/password` (mode `0600`, owned
+by `PANEL_USER`), mounted read-only at `/run/secrets/proxy/password`
+(`PROXY_PASSWORD_FILE`). The proxy refuses to start as root, with any
+capability, with a provider other than `mullvad`, `pia` or `nordvpn`, or with
+a setting that doesn't parse, and names every bad setting at once;
+[the proxy](proxy.md#settings) lists every setting the role reads. With
+`STATE_GID` on the exit, run it in that group
+([readers in another group](#readers-in-another-group)).
+
+## Switchyard
+
+Switchyard is the `switchyard` service in every form. Its display settings
+are [overrides](#overrides), and `PANEL_EXITS` and the sign-in settings are in
+the [`.env` table](#env); the guide is [Switchyard](switchyard.md).
 
 ### Panel sign-in
 
@@ -350,638 +797,7 @@ strict parsing as the exit's state files (256 KiB at most); a missing,
 unreadable, stale (over 30 seconds) or malformed file shows as unknown, never
 as an error. The exit's verdict never depends on it.
 
-## gluetun backend
-
-Experimental. Live passes used NordVPN only ([testing](testing.md)). The design is in [architecture](architecture.md#gluetun-backend) and
-what differs for you in [providers](providers.md#the-gluetun-backend). Copy
-`.env.gluetun.example` to `.env`; it sets `COMPOSE_FILE=compose.gluetun.yaml`,
-and that file replaces `compose.yaml`. `OVERLAY_CIDR`, `OVERLAY6_CIDR`,
-`OVERLAY_IF`, `EXIT_TABLE`, `NB_HOSTNAME`, `NB_MANAGEMENT_URL` and the panel
-settings above keep their meaning. `PROVIDER` and the PIA settings don't apply.
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `GLUETUN_PROVIDER` | required | gluetun's `VPN_SERVICE_PROVIDER`. The panel can select servers for `fastestvpn`, `ivpn`, `mullvad`, `nordvpn`, `surfshark` and `windscribe`; the exit refuses any other. `compose.gluetun.yaml` gives the exit and the panel `PROVIDER=gluetun-<this value>`. |
-| `EXIT_IF` | `wg0` | The name gluetun gives its tunnel interface (its `VPN_INTERFACE`): letters, digits and underscores only. The routing contract and NetBird's ICE blacklist use the same value. (The native default is `mullvad`.) |
-| `GLUETUN_WIREGUARD_ADDRESSES` | empty | gluetun's `WIREGUARD_ADDRESSES`, the tunnel address your provider assigned to your key. Most providers need it; gluetun fills it in for NordVPN. |
-| `GLUETUN_SERVER_COUNTRIES`, `GLUETUN_SERVER_CITIES`, `GLUETUN_SERVER_HOSTNAMES` | empty | gluetun's `SERVER_COUNTRIES`, `SERVER_CITIES` and `SERVER_HOSTNAMES`: the server gluetun starts with. For a first start, set only `GLUETUN_SERVER_COUNTRIES`, to your own country as gluetun names it: gluetun picks among the servers in its data, and on a fresh install that is its built-in list, where some servers may be gone; a whole country rarely is. Empty lets gluetun pick from every country. A value must name a server, city or country in the data gluetun has when it starts, which on a fresh install is its built-in list, years old for some providers; otherwise gluetun refuses to start (`the hostname specified is not valid`, or the same for a country or city). When `SERVER` is set, the exit converges to it and restores it after gluetun restarts. Otherwise a selection in the panel replaces these filters while gluetun runs, and the exit restores your last verified selection after a restart. |
-| `GLUETUN_UPDATER_PERIOD` | `24h` | gluetun's `UPDATER_PERIOD`: how often gluetun refreshes the server list the panel shows. gluetun first refreshes one period after it starts, so the exit also asks it for one refresh when it starts, once gluetun's tunnel has a fresh handshake, if the data is older than this period or than 7 days. `0` turns both off; the list then keeps the date of gluetun's built-in data and soon shows as stale. Hours, minutes and seconds only, such as `24h`, `1h30m` or `90s`; anything else stops the exit at start with `invalid GLUETUN_UPDATER_PERIOD`. |
-| `HOST_IF` | `eth0` | The namespace's interface toward the host. Docker names it `eth0`; rootless Podman with pasta copies the host's interface name, such as `enp3s0`. It can't be `lo`, `OVERLAY_IF` or `EXIT_IF`. The host table copies this interface's default and on-link routes, and the post-rules accept output on it. A [native sidecar](#native-sidecar) reads it too, with no host table. |
-| `HOST_TABLE` | `51822` | Molebridge's table for NetBird's control traffic (256 to 2147483647). Must differ from `EXIT_TABLE`; neither may be 51820 (gluetun) or 7120 (NetBird). |
-| `CONTROL_MARK` | `0x1bd00` | NetBird's control-plane mark, in lowercase hexadecimal with the low byte zero. `compose.gluetun.yaml` passes it to NetBird as `NB_FWMARK_BASE`, which moves NetBird's whole mark range; change it only if another program on the host uses those marks. A [native sidecar](#native-sidecar) uses it for the exit's own host-path sockets, with the same format. |
-| `NB_WIREGUARD_PORT` | `51820` | NetBird's WireGuard port, opened in gluetun's firewall. |
-| `FWMARK_GRACE` | `30` | See [repair and lease timing](#repair-and-lease-timing). |
-
-`compose.gluetun.yaml` also sets fixed values: gluetun with `VPN_TYPE=wireguard`,
-`WIREGUARD_IMPLEMENTATION=kernelspace`, its control server on
-`127.0.0.1:8000` inside the namespace and its server list at
-`/gluetun/servers/servers.json` (`STORAGE_FILEPATH`), in a volume of its
-own; `TUNNEL_BACKEND=gluetun` for the exit; and for the exit
-`GLUETUN_CONTROL_URL` (`http://127.0.0.1:8000`), `GLUETUN_API_KEY_FILE`
-(`/run/secrets/gluetun/api_key`) and `GLUETUN_SERVERS_FILE`
-(`/gluetun-servers/servers.json`), where it finds the control server, the API
-key and the read-only server list. With this backend the exit also refuses
-`NB_USE_LEGACY_ROUTING`, `NB_SKIP_SOCKET_MARK` and `NB_DISABLE_CUSTOM_ROUTING`
-set to a true value, and an `NB_FWMARK_BASE` other than `CONTROL_MARK`.
-
-Before the first start:
-
-1. Put the provider's WireGuard private key in
-   `secrets/gluetun/wireguard_private_key`, one line, mode 0600.
-2. Run the `gluetun-auth` tool ([tools](tools-reference.md#gluetun-auth)). It
-   generates an API key and writes it twice, both mode 0600: into
-   `secrets/gluetun/auth.toml`, gluetun's role file, with one role allowed
-   exactly `PUT /v1/vpn/settings`, `GET /v1/vpn/status`, `GET
-   /v1/publicip/ip`, and `GET` and `PUT /v1/updater/status` (to refresh the
-   server list); and into `secrets/gluetun/api_key`, which only the exit
-   mounts. The key is never printed. Run it again with `--rotate` to replace
-   both, then recreate gluetun and the exit ([recovery](operations.md#recovery)).
-   Compose refuses to start without the role file: without one, gluetun
-   answers several routes with no authentication, including one that stops
-   the VPN.
-3. Run the `gluetun-post-rules` tool ([tools](tools-reference.md#gluetun-post-rules))
-   to write `tunnel/gluetun/post-rules.txt` from these settings; add
-   `--ipv4-only` if gluetun logs that it found no working ip6tables. It does
-   not read `.env`: pass the settings that differ from the defaults with
-   `-e`. Only `HOST_IF`, `EXIT_IF`, `OVERLAY_IF` and `NB_WIREGUARD_PORT` appear
-   in the file; run it again after changing one of them, then recreate gluetun
-   and the exit.
-
-## gluetun sidecar
-
-Experimental; see [the gluetun sidecar](gluetun-sidecar.md) for setup and
-what has been tested. Copy `.env.sidecar.example` to `.env`; it sets
-`COMPOSE_FILE=compose.sidecar.yaml`. `GLUETUN_PROVIDER`, `EXIT_IF`,
-`GLUETUN_WIREGUARD_ADDRESSES`, `GLUETUN_SERVER_*`, `GLUETUN_UPDATER_PERIOD`,
-`SERVER`, the panel settings and the Gatus settings mean what they mean
-above. The NetBird, overlay, table and mark settings don't apply.
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `SIDECAR_APPS` | empty | The Compose services of your applications that use the tunnel, comma-separated, each with `network_mode: service:gluetun`. `compose.sidecar.yaml` puts it on the exit container as the label `io.molebridge.sidecar-apps`, a record of your list that `docker inspect` shows. Nothing in Molebridge reads or checks it, and neither does the [attachment procedure](operations.md#checking-that-containers-share-gluetuns-namespace): you name every container to check, and one you leave out is not checked. `.env.sidecar.example` sets `example-app`. |
-| `GLUETUN_FIREWALL_INPUT_PORTS` | empty | gluetun's `FIREWALL_INPUT_PORTS`: ports your applications listen on, comma-separated, which you also publish on the `gluetun` service. Never 8000, the control server. |
-| `COMPOSE_PROFILES` | empty | `.env.sidecar.example` sets `example`, which runs the example application, a busybox that only sleeps; remove it once yours are listed. |
-
-`compose.sidecar.yaml` sets `EXIT_KIND=sidecar` on the exit and the panel;
-it isn't read from `.env`. `EXIT_KIND` is `overlay` when unset, as in
-`compose.yaml` and `compose.gluetun.yaml`. The exit refuses to start with any
-other value. With `TUNNEL_BACKEND=gluetun` a sidecar needs a `gluetun-*`
-provider; with `TUNNEL_BACKEND=native` it is the [native sidecar](#native-sidecar).
-A separate Switchyard names
-the kind in `PANEL_EXITS` instead, as `id=<provider>/sidecar`. The exit's and
-the panel's kind must agree, or the panel shows "kind mismatch".
-
-## Native sidecar
-
-Experimental; see [the native sidecar](native-sidecar.md) for setup
-and what has been tested. Copy `.env.native-sidecar.example` to `.env`; it sets
-`COMPOSE_FILE=compose.native-sidecar.yaml`. `PROVIDER`, `EXIT_IF`, `SERVER`,
-the tunnel config, the PIA login, the panel settings and the Gatus settings
-mean what they mean for a native overlay exit. The NetBird and overlay settings
-don't apply: `OVERLAY_CIDR`, `OVERLAY6_CIDR` and `OVERLAY_IF` are refused when
-set, and `NB_*` and `WT_*` are ignored. Tables 51820 and 7120 are not reserved,
-because no gluetun and no NetBird runs.
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `SIDECAR_LAN_CIDRS` | empty | The networks the applications may reach outside the tunnel, as comma-separated IPv4 and IPv6 prefixes written with their network addresses: no `/0`, no duplicates, at most 16 entries in all, spaces around an entry dropped. In Compose, the engine's network; in Kubernetes, the pod and Service ranges and anything that connects to the application. Anything in the namespace can reach these without the tunnel, and a resolver inside them answers outside it ([DNS](native-sidecar.md#dns)). The refusals are in [the native sidecar](native-sidecar.md#settings). `.env.native-sidecar.example` sets the documentation range `198.51.100.0/24`; replace it. |
-| `SIDECAR_HOST_RESOLVERS` | empty | Up to three resolver IP addresses, comma-separated, that the exit's own lookups ask (port 53) in place of `/etc/resolv.conf`'s, for when the namespace's resolvers are reachable only through the tunnel ([DNS](native-sidecar.md#dns)). Setting it also drops the applications' DNS (ports 53 and 853) to `SIDECAR_LAN_CIDRS`. No port, name or zone; no duplicates |
-| `PROVIDER`, `EXIT_IF` | `pia`, `pia` in `.env.native-sidecar.example` | As in `.env`; `EXIT_IF` names the tunnel interface and its config file. |
-| `HOST_IF` | `eth0` | The namespace's interface toward the host (not `lo`, not `EXIT_IF`). The deletion check judges the exit's control-marked path against it (that path may leave by it or by the tunnel interface) and the watcher follows it; the firewall does not use it. An override in `.env`. |
-| `EXIT_TABLE` | `51821` | The exit table, whole number 256 to 2147483647; also the tunnel device's firewall mark, so it must differ from `CONTROL_MARK`. An override. |
-| `CONTROL_MARK` | `0x1bd00` | The mark on the exit's own host-path sockets (the provider's login and downloads, PIA's registration, the Gatus push, and their name lookups): lowercase hexadecimal, leading `0x`, no leading zero, low byte zero. Set in the exit's environment only; the Compose file doesn't pass it. |
-| `PIA_PORT_FORWARD` | `off` | `on` forwards one PIA port to the namespace itself ([port forwarding](native-sidecar.md#port-forwarding)). `PIA_PORT_FORWARD_TARGET` is refused. |
-| `COMPOSE_PROFILES` | `example` in `.env.native-sidecar.example` | `example` runs a busybox that only sleeps, standing in for your applications; remove it once yours are in. `port-sync` runs the port-sync service. |
-| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | Where the `port-sync` service reaches qBittorrent's Web API. Passed from `.env` by the Compose file; the other port-sync settings below are fixed there. |
-
-`compose.native-sidecar.yaml` sets `EXIT_KIND=sidecar` and `TUNNEL_BACKEND=native`
-on the exit, and `EXIT_KIND=sidecar` on the panel; neither is read from `.env`.
-The combinations the exit accepts are:
-
-| `EXIT_KIND` | `TUNNEL_BACKEND` | `PROVIDER` | Result |
-|---|---|---|---|
-| `overlay` | `native` | `mullvad`, `pia`, `nordvpn` | A native overlay exit |
-| `overlay` | `gluetun` | `gluetun-*` | A gluetun overlay exit |
-| `sidecar` | `gluetun` | `gluetun-*` | A gluetun sidecar |
-| `sidecar` | `native` | `mullvad`, `pia`, `nordvpn` | A native sidecar |
-
-Anything else is refused: `PROVIDER must be mullvad, pia or nordvpn` for a
-`gluetun-*` provider with the native backend, and
-`TUNNEL_BACKEND=gluetun needs a gluetun provider (PROVIDER=gluetun-<name>)` for
-a native provider with gluetun.
-
-### The port-sync role
-
-`molebridge port-sync` is a separate container with no capabilities, in the
-namespace of the application whose port it sets
-([tools reference](tools-reference.md#port-sync)). It reads
-`STATE_DIR/applier/result.json` and writes nothing.
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `PORT_SYNC_CLIENT` | required | The only value is `qbittorrent`. |
-| `PORT_SYNC_URL` | `http://127.0.0.1:8080` | qBittorrent's Web API: an `http` URL to a loopback IP address, with no user name, path, query or fragment. |
-| `PORT_SYNC_USERNAME_FILE`, `PORT_SYNC_PASSWORD_FILE` | empty | Files holding qBittorrent's Web UI login, one value per file, at most 1 KiB, not empty. Set both or neither. With neither, the role sends no login and relies on qBittorrent's setting that skips authentication for clients on localhost. |
-| `PORT_SYNC_INTERVAL` | `30` | Seconds between passes: a whole number from 10 to 300. |
-| `STATE_DIR` | `/state` | Where the role finds `applier/result.json`; mount the exit's `state/applier` read-only. |
-
-## The proxy
-
-Experimental, and drilled live on Mullvad only; see [the proxy](proxy.md) for
-its guarantee, setup and limits. `compose.proxy.yaml` adds the `proxy`
-service on top of `compose.yaml` or `compose.native-sidecar.yaml`
-(`COMPOSE_FILE=compose.yaml:compose.proxy.yaml`). It passes the exit's
-`PROVIDER`, `EXIT_IF` (as `TUNNEL_INTERFACE`), `OVERLAY_IF` and
-`PANEL_USER` (the user it runs as), and these of its own from `.env`:
-
-| Setting | Default | Purpose |
-|---|---|---|
-| `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port: loopback, or an address of the interface `OVERLAY_IF` names (NetBird's, or on Kubernetes the pod's own: [the proxy](proxy.md#on-kubernetes)). Anything else, `0.0.0.0` included, is refused at start. |
-| `PROXY_MAX_CONNS` | `512` | The most open client connections, 1 to 65535. |
-| `PROXY_DNS` | empty: the provider's | The resolver for the names the proxy resolves itself, an IP address with an optional port, asked through the tunnel. Empty means Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53` or NordVPN `103.86.96.100:53`. |
-
-The password is the one line in `secrets/proxy/password` (mode `0600`, owned
-by `PANEL_USER`), mounted read-only at `/run/secrets/proxy/password`
-(`PROXY_PASSWORD_FILE`). The proxy refuses to start as root, with any
-capability, with a provider other than `mullvad`, `pia` or `nordvpn`, or with
-a setting that doesn't parse, and names every bad setting at once;
-[the proxy](proxy.md#settings) lists every setting the role reads. With
-`STATE_GID` on the exit, run it in that group
-([readers in another group](#readers-in-another-group)).
-
-## The network exchange
-
-**Experimental; run live on Kubernetes with a NordVPN exit only**
-([testing](testing.md#v0100-rc2-2026-11-03-released)). By
-default the panel and an exit share files: the panel reads the exit's
-`state/applier/` through a read-only mount, and the exit reads the panel's
-`state/panel/`. When they can't share a filesystem (on Kubernetes, an exit and
-a panel in different pods or on different nodes), the network exchange
-carries the same files over HTTP instead, and neither mounts the other's
-directory ([architecture](architecture.md#the-network-exchange)).
-
-It takes three pieces:
-
-- **On the exit**, `EXCHANGE_URL` and its settings below. The exit's
-  supervisor then starts `molebridge exit --exchange`, which every 2 seconds
-  fetches the panel's request into the exit's own `state/panel/desired.json`
-  and sends `result.json`, `relay-error.json` and `relays.json` when they
-  changed. The exit makes outbound requests only; it still serves no HTTP.
-- **On the panel's side**, a container running the `exchange` role, which
-  receives the files and writes them to `state/<id>/applier/`, and hands out
-  `state/<id>/panel/desired.json`. It shares the panel's state directory, in
-  the panel's pod or on the panel's host.
-- **In the panel**, `PANEL_NETWORK_EXITS`, so that the panel judges each of
-  those exits by the link as well as by its record.
-
-The file exchange stays the default, and nothing changes for an exit without
-`EXCHANGE_URL`.
-
-### On the exit
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `EXCHANGE_URL` | empty | The exchange's base URL, `https://` or `http://`, with a host and no credentials, query or fragment. Empty: files only. |
-| `EXCHANGE_EXIT_ID` | empty | The exit's id at the exchange: its id in the panel's `PANEL_EXITS`. Required with `EXCHANGE_URL`. |
-| `EXCHANGE_TOKEN` | empty | In `secrets/applier.env`, beside `GATUS_TOKEN`: the exit's token, at least 32 printable characters with no spaces. Required with `EXCHANGE_URL`. |
-| `EXCHANGE_CA_FILE` | empty | A PEM file of the authority the exchange's certificate must chain to, instead of the system's. |
-| `EXCHANGE_TLS_NAME` | empty | The name the exchange's certificate must carry, when it isn't the URL's host. |
-
-A bad value stops the exit at start with one line, before anything changes.
-With an `http://` URL whose host isn't `localhost` or a loopback address, the
-exit logs at start `molebridge-exit: exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)`.
-The client's connections carry the control mark (`CONTROL_MARK`), so they
-take the exit's host path in every form, as the provider downloads do. It
-gets only its own settings, the state directory, the provider and the mark:
-never the tunnel key, the provider's login, the setup key or the Gatus token.
-When it ends, the supervisor starts it again after a second, doubling to a
-minute; nothing else stops. A failed round is logged as
-`molebridge-exit: exchange: round failed: <reason>` when it starts, when the
-reason changes and every 10 minutes, and `molebridge-exit: exchange: works again`
-follows once a round succeeds. A 401 means a wrong `EXCHANGE_TOKEN` or
-`EXCHANGE_EXIT_ID`.
-
-The client writes `desired.json` only when the panel's request differs from
-the one there, after checking it as the exit itself does, and never deletes
-it. An exchange that can't be reached, or has no request, leaves the exit on
-its last one.
-
-So the exit's `state/panel/` is the exit's own here, not the panel's: keep it
-on the exit's volume, writable by the exit, beside `state/applier/`. The
-exit's whole `state/` then belongs to it, and moving the exit means moving
-that one volume (with `netbird-data` and the mounted secrets).
-
-### The exchange role
-
-`molebridge exchange` runs with no capabilities, not as root (as
-`PANEL_USER`, so it can read the panel's `desired.json`; `PANEL_ALLOW_ROOT`
-works as for the panel), and refuses to start otherwise, with
-`molebridge exchange: refusing to start: <reason>`.
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `PANEL_EXITS` | empty | The panel's list. The exchange serves each exit in it, by id; it can't be empty. |
-| `STATE_DIR` | `/state` | The panel's state directory, shared with the panel. The exchange writes `<id>/applier/` and `<id>/exchange.json` and reads `<id>/panel/desired.json`. |
-| `EXCHANGE_LISTEN` | `0.0.0.0:8097` | Address and port, with a host. Publish it to the exits only, never through the panel's proxy or sign-in. |
-| `EXCHANGE_TOKENS_DIR` | `/run/secrets/exchange` | One file per exit, named by its id, holding that exit's token: a regular file, not a symbolic link. It is read on every request, so a changed file takes effect at once. |
-| `EXCHANGE_CERT_FILE`, `EXCHANGE_KEY_FILE` | empty | A certificate and key to serve HTTPS; both or neither. |
-
-Make a token with `head -c 32 /dev/urandom | base64 | tr -d '=+/'`, put it in
-`secrets/applier.env` on the exit as `EXCHANGE_TOKEN=…` and in the tokens
-directory as the exit's file, mode 0600 for the exchange's user. The
-exchange answers an unknown exit and a wrong token alike, with 401. It refuses
-a file over its limit (the status record 16 KiB, the refresh error 4 KiB, the
-catalog its provider's), invalid UTF-8, duplicate keys or anything but a JSON
-object, and writes what it accepts with mode 0644. At start it warns
-`molebridge exchange: warning: no usable token for exit <id>; its requests are refused`
-for each exit without a usable token file.
-
-On Kubernetes, mount each token with `subPath`: a Secret volume presents its
-files as symbolic links, which the exchange refuses, as the exit refuses them
-for its own key and token files. The exchange then warns about the token at
-start and answers that exit with 401. A file mounted with `subPath` doesn't
-follow later changes to the Secret, so after you rotate a token, restart the
-exchange (and the exit, whose `EXCHANGE_TOKEN` comes from its environment).
-
-### In the panel
-
-`PANEL_NETWORK_EXITS` lists, comma-separated, the ids of the exits in
-`PANEL_EXITS` that are reached through the exchange. For each, the panel
-reads `state/<id>/exchange.json`, which the exchange writes after each
-request: with none, or none in the last 15 seconds, the verdict is `unknown`
-with the reason `exit-unreachable` and the label "exit unreachable", whatever
-the copy of the record says; with the two clocks more than 10 seconds apart,
-`unknown` with `clock-skew` ("clocks differ"). Keep the exit's and the
-panel's hosts on time sync. An id not in `PANEL_EXITS` stops the panel at
-start with `molebridge panel: PANEL_NETWORK_EXITS: '<id>' is not an exit in PANEL_EXITS`.
-
-## Multi-provider exit
-
-**Experimental, not for use yet.** One NetBird exit that can carry Mullvad,
-PIA or NordVPN, one at a time ([its design](design/multi-provider.md)). The
-settings, files and the exit's provider change are built and covered by unit
-tests and a drill against fake servers, and the panel picks the provider
-with the server; only a drill build's `molebridge init` offers it, and the
-shipped Compose files don't pass `PROVIDERS`. The live pass on real accounts and the memory measurement of an
-exit holding NordVPN's catalog have **not run**.
-
-**Built but switched off.** This release's exit refuses to start, and
-`check-config` refuses, whenever `PROVIDERS` is set: "multi-provider exits
-are not available in this release yet; see docs/design/multi-provider.md".
-The owner decided it must not ship before NordVPN's memory has been measured
-on a live exit ([its design](design/multi-provider.md), decision 4).
-A later release will switch it on once that measurement and the live pass
-have run; its changelog will say so. Until then only builds with the `drill`
-tag (the drills and the system rig's `molebridge-drill`) accept it. The
-panel follows the same switch: this release's panel refuses `PROVIDERS` and
-a `+` in `PANEL_EXITS` with the same sentence, so it never offers a
-provider the exit can't change to. The rest
-of this section describes what that release will do.
-
-```sh
-PROVIDERS=mullvad,pia,nordvpn   # two or three, comma-separated, each once
-PROVIDER=mullvad                # one of them: where the tunnel starts the first time
-EXIT_IF=vpn                     # the one interface name; vpn by default with PROVIDERS
-```
-
-- **The overlay exit with the native backend only.** The exit refuses to
-  start with `PROVIDERS` and `TUNNEL_BACKEND=gluetun`, `EXIT_KIND=sidecar`, a
-  gluetun provider, fewer than two or more than three providers, a repeat,
-  `PROVIDER` unset or not among them, `FAILOVER` on (failover stays within one
-  provider and is for single-provider exits), or `EXCHANGE_URL` (the network
-  exchange carries one provider's files). The [proxy](proxy.md) refuses to
-  start with `PROVIDERS` set, and its result gate stays closed on a
-  multi-provider record. An empty `PROVIDERS` is a single-provider exit, as
-  before.
-- **One tunnel config per provider**: `tunnel/wg_confs/<provider>.conf` for
-  each of `PROVIDERS` (`mullvad.conf`, `pia.conf`, `nordvpn.conf`), not
-  `<EXIT_IF>.conf`, each checked at start against its own provider's form
-  ([the tunnel config](#the-tunnel-config)). A missing or refused one refuses
-  the start; any other `.conf` file is ignored with a warning.
-- **One interface.** Every provider's tunnel is `EXIT_IF`, so the routing
-  contract and NetBird's interface exclusion never change; set
-  `NB_EXTRA_IFACE_BLACKLIST` to the same name (`vpn` by default).
-- **Back to one provider.** The stored NetBird profile keeps the interface
-  blacklist it was enrolled with, so a multi-provider exit's profile excludes
-  `vpn`, not a single-provider exit's `EXIT_IF` (`mullvad` by default). To
-  move the exit back to one provider on the same NetBird profile, set
-  `EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` for it, then, with the exit
-  stopped, run [`fix-blacklist`](tools-reference.md#fix-blacklist) with the
-  new `EXIT_IF` ([the steps](operations.md#netbird-interface-blacklist));
-  otherwise the exit refuses to start because the profile doesn't exclude the
-  tunnel interface. Keeping `EXIT_IF=vpn` on the single-provider exit (its
-  tunnel config is then `tunnel/wg_confs/vpn.conf`) avoids the step.
-- **`SERVER` names the provider**: `SERVER=nordvpn/nl9001.nordvpn.com`
-  locks the exit to that provider's server ([a server set in
-  configuration](#a-server-set-in-configuration)).
-- **After a restart** the tunnel comes back on the provider it was last on
-  (`tunnel-provider.json`, [state files](#state-files)), not on `PROVIDER`.
-- **Credentials in one container.** The exit holds every provider's key and,
-  with `pia` in the set, PIA's login (`secrets/pia/`, as for a PIA exit). A
-  compromised multi-provider exit gives away all of them, not one: where that
-  matters, run single-provider exits side by side instead.
-- `PIA_PORT_FORWARD` and `PIA_PORT_FORWARD_TARGET` apply while PIA is
-  active; the forwarded port is removed before the tunnel leaves PIA.
-- The status record names the exit's providers ([the status
-  record](architecture.md#the-status-record)); `molebridge status` judges it
-  for `PROVIDERS`, and `check-config` prints every provider's config.
-- **The panel.** A single-exit panel reads `PROVIDERS` and `PROVIDER` the
-  way the exit does, with the same refusals. In `PANEL_EXITS` the exit is
-  `id=mullvad+pia+nordvpn[:label]` (two or three providers joined with `+`,
-  overlay only; the default label is "Mullvad + PIA + NordVPN"). Such an
-  exit can't be in `PANEL_PROXY_STATUS` or `PANEL_NETWORK_EXITS`. See
-  [a multi-provider exit in Switchyard](switchyard.md#a-multi-provider-exit).
-
-To try it, an override for `compose.yaml` sets `PROVIDERS`, `PROVIDER`,
-`EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` on the `exit` service, or a drill
-build of [`molebridge init`](setup.md#molebridge-init) writes the Compose
-file and `.env` for it.
-
-## The tunnel config
-
-The exit reads one file, `tunnel/wg_confs/<EXIT_IF>.conf`
-(`/config/wg_confs/<EXIT_IF>.conf` inside the container); a [multi-provider
-exit](#multi-provider-exit) reads `<provider>.conf` for each of its providers
-instead. Any other `.conf`
-file in that directory is ignored, with the warning `molebridge-exit:
-warning: <n> other .conf file(s) in /config/wg_confs are ignored; only
-<EXIT_IF>.conf is used`. Only a native exit reads it; the gluetun forms take
-the provider's key from `secrets/gluetun/wireguard_private_key`.
-
-Before anything changes, the exit checks the file against what Molebridge's
-own tools write: `prepare-config` for Mullvad, the same with `--pia` for PIA,
-and the same with `--nordvpn`, or `nordvpn-key`, for NordVPN
-([tools](tools-reference.md)). Anything else is
-refused, including fields `wg-quick` itself would accept; the exit does not
-run `wg-quick`, or any other program, to bring the tunnel up. The file must
-be a regular file, not a symlink, readable by the container, at most 4 KiB,
-with no NUL bytes and no carriage returns (so no Windows line endings). Each
-line is blank, a comment starting with `#`, a section header written exactly
-`[Interface]` or `[Peer]`, or `Field = value` with a field from this table.
-Use the field names exactly as shown; each may appear once. Case matters:
-`wg-quick` would read `address` or `ADDRESS` as `Address`, but the exit refuses
-any spelling but the one in the table with `unsupported field on line <n>`.
-
-| Field | Rule |
-|---|---|
-| `[Interface]` | Once, first. |
-| `PrivateKey` | Required. A WireGuard key: 44 characters of base64 ending in `=`. |
-| `Address` | Mullvad and NordVPN: required. PIA: must be absent; the exit sets the address. Comma-separated: one IPv4 address and, for Mullvad only, at most one IPv6 address, each with `/32` or `/128` or no prefix. IPv4 without leading zeroes. |
-| `MTU` | Required, 1280 to 1500. The tools write 1420. |
-| `Table` | Required, `off`. |
-| `PostUp` | Required, exactly `ip route replace default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route replace default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
-| `PreDown` | Required, exactly `ip route del default dev %i table <EXIT_TABLE>`, followed by `; ip -6 route del default dev %i table <EXIT_TABLE>` when the config has an IPv6 address. |
-| `[Peer]` | Mullvad: once, after `[Interface]`. PIA and NordVPN: must be absent; the exit sets the peer. |
-| `PublicKey` | Required in `[Peer]`. A WireGuard key. |
-| `Endpoint` | Required in `[Peer]`. An IPv4 address without leading zeroes and a port, 1 to 65535, such as `192.0.2.10:51820`. |
-| `AllowedIPs` | Required in `[Peer]`. `0.0.0.0/0`, followed by `, ::/0` exactly when the config has an IPv6 address. |
-| `PersistentKeepalive` | Optional in `[Peer]`, 1 to 65535. The tools write 25. |
-
-`PostUp` and `PreDown` stay in the file because the tools write them and the
-exit checks them, but the exit never runs them. It reads them as the route
-operations they stand for (the default route into the exit table) and does
-those itself, through the kernel's netlink interface.
-
-So `DNS`, `ListenPort`, `FwMark`, `SaveConfig`, `PreUp`, `PostDown`,
-`PresharedKey`, a `Table` other than `off` and every other field are refused,
-as is a second `[Peer]`. A refusal stops the container with status 1 before
-it changes any routing or creates the tunnel, and logs one line:
-
-```text
-molebridge-exit: the tunnel config /config/wg_confs/mullvad.conf is not supported: unsupported field on line 4; regenerate it with prepare-config (docs/setup.md)
-```
-
-The reason is one of `unsupported field on line <n>`, `<field> on line <n> is
-not valid`, `<field> is missing`, `<field> appears more than once`,
-`[Interface] on line <n> is not supported; it must come once, first`,
-`[Peer] on line <n> is not supported`, `[Interface] is missing`, `[Peer] is
-missing`, `[Peer] is not supported for this provider` or `Address on line <n>
-is not supported for PIA`. The field names come from the table above, never
-from the file: no message quotes the config, which holds the private key. The
-end names the tool for your `PROVIDER` (`prepare-config --pia` for PIA,
-`prepare-config --nordvpn` for NordVPN).
-
-To change the exit table of an existing exit while keeping its key, set
-`EXIT_TABLE` in `.env` and edit only these two lines in its tunnel config
-(here for table `51822`):
-
-```ini
-PostUp = ip route replace default dev %i table 51822
-PreDown = ip route del default dev %i table 51822
-```
-
-Keep the file mode 0600. For Mullvad and NordVPN, change the table in both
-hooks too, including their `ip -6` commands if present. Apply the change with
-[recovery](operations.md#recovery), then run [verification](verification.md).
-A new config made by the tools takes the table from `-e EXIT_TABLE=<n>`.
-
-To check a config without starting anything, run
-`docker compose run --rm --no-deps exit check-config`
-([setup](setup.md#5-check-then-start)).
-
-## Secret files
-
-All mode 0600 and ignored by git. Document them by name only; never paste their
-contents anywhere.
-
-| File | Contents | Needed |
-|---|---|---|
-| `tunnel/wg_confs/mullvad.conf` | Mullvad private key, tunnel addresses (one IPv4, at most one IPv6), starting server | With Mullvad |
-| `tunnel/wg_confs/pia.conf` | PIA tunnel private key only; no address or peer | With PIA |
-| `tunnel/wg_confs/nordvpn.conf` | NordLynx private key and the address `10.5.0.2/32`; no peer | With NordVPN |
-| `secrets/pia/username`, `secrets/pia/password` | The PIA login, one value per file; each a regular file, not a symbolic link | With PIA |
-| `secrets/netbird.env` | `NB_SETUP_KEY` | Until the peer first enrolls |
-| `secrets/applier.env` | `GATUS_TOKEN`; `EXCHANGE_TOKEN` | `GATUS_TOKEN` only with `GATUS_URL`, `EXCHANGE_TOKEN` only with `EXCHANGE_URL` |
-| `EXCHANGE_TOKENS_DIR/<id>` | One exit's exchange token, on the panel's side | With the [network exchange](#the-network-exchange) |
-| `secrets/gluetun/wireguard_private_key` | The provider's WireGuard private key | With the [gluetun backend](#gluetun-backend) |
-| `secrets/gluetun/auth.toml` | gluetun's control-server role, with the API key; written by `gluetun-auth` | With the gluetun backend |
-| `secrets/gluetun/api_key` | The same API key, for the exit. It is full gluetun administration | With the gluetun backend |
-| `secrets/proxy/password` | The [proxy](proxy.md)'s password, one line; mode 0600 (0640 or 0440 also accepted), owned by `PANEL_USER` | With the proxy |
-
-Neither NordVPN's downloaded config nor its access token is one of these:
-each is needed only while `prepare-config --nordvpn` or `nordvpn-key` runs.
-Delete the download afterwards, and the token file if you saved one. `secrets/netbird.env` and `secrets/applier.env` reach the exit
-through `env_file`, so their permissions are a host check
-([operations](operations.md#host-checks)). The supervisor hands `NB_SETUP_KEY`
-only to `netbird up`, the command that enrolls, not to NetBird's daemon, its
-liveness probes or the worker, and hands NetBird only its own `NB_*` and
-`WT_*` settings, so `GATUS_TOKEN`, `EXCHANGE_TOKEN` and PIA's files never reach NetBird. The
-supervisor itself, PID 1, keeps both in its environment for the life of the
-container, so root in the container (and on the host) can read them in
-`/proc/1/environ`, and the engine keeps them in the container's configuration
-(`docker inspect`). Once the peer has enrolled, delete `secrets/netbird.env`
-as [setup](setup.md#5-check-then-start) says, then recreate the exit
-(`docker compose up -d --force-recreate exit`) so that neither holds the key
-any more.
-
-## State files
-
-Under `state/`, written with temp-file-and-rename. None hold secrets. These
-names, paths, fields and timestamp formats are the same as in 0.7.0, so a
-bridge that reads `result.json` keeps working; what later releases keep is in
-[compatibility](compatibility.md#the-state-files). With `PRIVATE_STATE_DIR` set, the files only the exit reads
-(`attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json` and `tunnel.json`) are in that
-directory instead of `applier/`
-([below](#keeping-the-published-files-in-memory)). For a healthy
-`result.json` of each exit kind, see [the example
-records](architecture.md#example-records).
-
-| File | Writer | Reader | Contents |
-|---|---|---|---|
-| `applier/relays.json` | exit | panel (read-only) | `fetched_at`, `provider` and validated `relays`. Mullvad: hostname → `hostname`, `country`, `city`, `location_code`, `public_key`, `ipv4_addr_in`, and when Mullvad publishes them well formed, `owned` and `stboot` (booleans) and `provider` (text, at most 64 characters). PIA: region id → `hostname` (the id), `country`, `city`, `location_code`, `ipv4_addr_in` (the latency target), `port_forward`, `geo` and `servers` (`ip`, `cn`). NordVPN: hostname → `hostname`, `country`, `country_code`, `city`, `location_code`, `public_key` (shared by the servers of a location), `ipv4_addr_in` (the entry address and endpoint), `virtual` (boolean), and `load` (0–100) when NordVPN publishes it well formed. gluetun backend: also `source` (`gluetun`) and `data_timestamp` (when gluetun's data for the provider last changed); hostname → `id` and `hostname` (the same), `selection_filter` (`hostnames`), `public_key`, `ipv4_addr_in` (the first IPv4 address, the latency target), `ipv4_addrs` and `ipv6_addrs` (every address gluetun may connect to), `country`, `city`, and `region` and `categories` where gluetun lists them. Every IPv4 address in it is public: a relay naming a private, loopback, link-local, multicast, unspecified, shared (100.64.0.0/10) or reserved address is dropped. A snapshot for another provider is ignored. |
-| `applier/gluetun-selection.json` | exit | exit | `desired`, `last_put`, `last_applied` and `last_successful`: server hostnames: the panel's last request, the last server put, the last one live after a change, and the last one verified. The last verified one (for a tunnel-tier sidecar, the last one live) is put back after gluetun restarts when `SERVER` is unset and the panel's request is absent or refused. With `SERVER`, configuration wins. No secret. |
-| `applier/attempt.json` | exit | exit | The [admission pipeline](architecture.md#the-admission-pipeline)'s current attempt: `source`, `target` and its identity, `state` (`idle`, `pending`, `rejected`, `attempting`, `unverified` or `failed`), the outcome and message, the number of changes, `backoff_step`, `next_action` and its time and the last change's time (on the boot clock, with `boot_id`), `mutation_certainty`, the owner generation already given a re-apply, and the last refused panel request. Mode 0600. Missing or unreadable means idle; see [retries](operations.md#retries) before deleting it. No secret. |
-| `applier/location.json` | exit | exit | Since 0.11.0: the last verified `server`, its `city` and `country`, `port_forward` (a PIA region that forwards ports) and `replacement`, the server standing in for it while the catalog doesn't list it, or null ([a server the provider retires](architecture.md#a-server-the-provider-retires)). |
-| `applier/failover.json` | exit | exit | With [automatic failover](#automatic-failover) on (experimental): the episode in progress, for the selected server it belongs to: its phase, the backup, the servers tried, the failures counted and the return schedule (on the boot clock, with `boot_id`). Mode 0600. Missing or malformed means no episode; removed when failover is off. No secret. |
-| `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
-| `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
-| `applier/relays-<provider>.json`, `applier/relay-error-<provider>.json` | exit | — | A [multi-provider exit](#multi-provider-exit)'s catalog and refresh error for each of its providers, in the forms above. It writes no `relays.json`, so a reader that expects one provider's catalog there finds none. |
-| `applier/tunnel-provider.json` | exit | exit | A [multi-provider exit](#multi-provider-exit)'s active provider, `{"provider": "<id>"}`, written before each change of provider; a start comes back on it. Mode 0600, under `PRIVATE_STATE_DIR` when set. No secret. |
-| `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
-| `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
-| `proxy/proxy.json` | proxy | `molebridge status --proxy`, `health --proxy` | The [proxy](proxy.md#status)'s own status record, never part of `result.json`: `schema` (1), `kind` (`proxy`), `provider`, `guarantee` (`opt-in`), `status` (`ok`, `refusing` or `failed`), `message`, `checked_at`, `listen`, `tunnel` (the exit's `verdict`, `server` and `checked_at` as the proxy last read them), `servers` (`known`, and `benched` with each `server`, `until` and `reason`), `sessions`, and `connections` (`open`, `total`, `failed`). Rewritten every 10 seconds; over 30 seconds old counts as unknown. |
-| `<id>/exchange.json` | exchange | panel | With the [network exchange](#the-network-exchange), on the panel's side: `schema` (1), `exit`, `last_contact_at` (the exchange's clock), `clock_offset_s` (the exit's clock minus the exchange's, or null) and `files`, each file name to its `received_at` and `sha256`. The panel's `<id>/applier/` files are then the exchange's copies of the exit's. |
-
-**`owner_record`.** The check means "the exit's owner is live", and since
-0.8.0 carries one more member on a native exit: `expires_at`, the lease
-expiry the supervisor accepted, on the wall clock, in the same timestamp
-format as `at`. A passing check is
-`{"state": "pass", "at": "…", "expires_at": "…"}`; a failing one has no
-`expires_at`. A reader since 0.8.0 treats `expires_at` as an extra upper bound on
-the check, never an extension: a record without it is judged as in 0.7.0, and
-a malformed one, or one that has passed, fails the check. A 0.7.0 reader
-ignores the member. For the gluetun backend and the sidecar the check stays
-`n/a`, as schema 2 fixes it; their liveness shows in the other checks. Schema
-2 itself is unchanged.
-
-Between full inspections, which publish about every 60 seconds, the supervisor
-rewrites `result.json` every 2 seconds on a native exit, changing only the
-`owner_record` check. `checked_at` and every other check's time stay those of
-the last full inspection, so a reader that judges by those times still sees
-old evidence as old.
-
-Routing installs the return-path rule and its backstop (rules 94 and 98)
-from the tunnel config's `Address` line (a PIA config has none; the exit
-installs both per registration); `compose.yaml` sets
-`net.ipv4.icmp_errors_use_inbound_ifaddr` on the `exit` service for the
-same reason. A native overlay exit doesn't start NetBird while it is not `1`;
-with gluetun the exit warns. See
-[requirements](prerequisites.md#kernel-settings-in-the-exits-namespace) and
-[architecture](architecture.md#routing-contract).
-
-### Keeping the published files in memory
-
-`state/applier` holds two kinds of file:
-
-- **Published**: `result.json`, `relays.json` and `relay-error.json`, which
-  the panel and other readers read. The exit rebuilds them. It publishes a
-  status record when it starts and again after each inspection, and it
-  downloads the server list at start (with gluetun, reads gluetun's file).
-- **Private**: `attempt.json`, `location.json`, `failover.json`, `gluetun-selection.json`
-  (gluetun backend) and `tunnel.json` (PIA). Only the exit reads them, and they carry its
-  state across a restart ([retries](operations.md#retries),
-  [backups](operations.md#backups)).
-
-A native exit rewrites `result.json` every 2 seconds. To keep those writes
-off your disk, move the private files out and put `state/applier` in
-memory:
-
-1. Stop the exit.
-2. Set `PRIVATE_STATE_DIR` on the exit to an absolute path on persistent
-   storage, and mount a directory there, for example in a
-   `compose.override.yaml`:
-
-   ```yaml
-   services:
-     exit:
-       environment:
-         PRIVATE_STATE_DIR: /state/exit
-       volumes:
-         - ./state/exit:/state/exit
-   ```
-
-3. Move whichever of the four private files exist from `state/applier/`
-   to the new directory (`state/exit/` above).
-4. Mount a tmpfs on `state/applier` on the host, with the owner and mode the
-   directory has now (`stat -c '%u:%g %a' state/applier`), mounted before
-   the containers start (an `/etc/fstab` line), and at least 40 MiB: the
-   largest server list is 16 MiB and is written beside the old one before
-   the rename. Every container that reads the exit's files keeps its
-   existing mount of `state/applier`. On Kubernetes, an `emptyDir` with
-   `medium: Memory` works only when every reader is in the exit's pod.
-5. Start the exit.
-
-The exit refuses to start when `PRIVATE_STATE_DIR` is not an absolute path
-without `.` or `..` elements or a trailing slash, when it is under
-`<STATE_DIR>/panel` or `<STATE_DIR>/applier`, or when the directory can't be written. It creates a
-missing directory with mode 0700. Setting it to `<STATE_DIR>/applier` is the
-same as leaving it unset. An older release doesn't read the setting. If you
-roll back, move the files back first, or the exit starts idle
-([retries](operations.md#retries)) and, with gluetun, without its last
-verified server.
-
-With `state/applier` in memory, a host restart loses only what the exit
-rebuilds. Until its first server-list download succeeds (it retries every
-minute), the exit has no server list, so its peer check fails with the
-reason `catalogue-stale` (the panel shows `no fresh server list`).
-
-This was tested with the unit tests at the commit that added it. No exit
-has been run live this way ([testing](testing.md)).
-
-The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
-exit snapshots are mode 0644 so the non-root panel can read them (0640 for
-one group with `STATE_GID`, [below](#readers-in-another-group)); requests
-are mode 0600. The panel cannot write the applier directory. Catalog refresh
-is every six hours (after a failure, retries from one minute doubling to an hour, or to five minutes while there is no catalog under 24 hours old), maximum catalog age is 24
-hours, and maximum status age is 150 seconds. A server list download may take
-20 seconds and 10 MiB, except NordVPN's: 60 seconds and 32 MiB. With the
-gluetun backend nothing is downloaded: the exit reads gluetun's server
-file, up to 32 MiB, every minute when it changed and at least every six
-hours. The validated `relays.json` may be 10 MiB, NordVPN's and gluetun's
-16 MiB; the exit refuses to write a larger one and keeps the last good
-catalog, reporting it in `relay-error.json` like any failed refresh, and
-neither the exit nor the panel reads a larger one. These are fixed safety
-defaults, set per provider in `internal/providers`.
-
-### Readers in another group
-
-The panel and the [proxy](proxy.md) read `state/applier` and never write
-it. With the Compose files the exit's published files are mode 0644 in a
-directory others may enter, so any user can read them. Where the state
-directory is the exit's alone, as on Kubernetes when the exit runs as root
-and the directory is root's 0770, a reader running as another user is
-refused: the proxy then refuses connections with `the exit's verdict is
-unknown` and the file it couldn't read
-([the proxy](proxy.md#on-kubernetes)).
-
-`STATE_GID` on the exit (unset by default) names a group id, 0 to
-2147483647, that may read the published files instead:
-
-- At start the exit makes `<STATE_DIR>/applier` mode 0750 with that group,
-  and gives each published file already there (a regular file of mode 0644
-  or 0640: `result.json`, `relays.json`, `relay-error.json`) mode 0640 with
-  that group. Every file it publishes afterwards is written 0640 with that
-  group. Others can no longer read them.
-- The private files (`attempt.json`, `location.json` and the rest, mode
-  0600) stay the exit's alone, and the directory stays writable by its
-  owner only. Links are not followed.
-- The exit must be able to give files that group: it is a member of the
-  group (Compose `group_add`, Kubernetes `supplementalGroups` or
-  `runAsGroup`) or holds `CHOWN`, which the Compose files don't grant. It
-  must also own the directory, or hold `FOWNER`, to change its mode.
-  Otherwise it refuses to start with a line that begins `STATE_GID <gid>:`
-  and names the file and the reason.
-- Every reader must run in that group: the panel (`PANEL_USER`'s group, or a
-  supplementary group) and the proxy. A reader outside it, the panel
-  included, can no longer read the files once the exit has started with
-  the setting.
-
-`check-config` checks the value but changes nothing. An older release
-ignores the setting and writes mode 0644 again. This was tested with the
-unit tests at the commit that added it; no exit has run live with it
-([testing](testing.md)).
-
-## Panel endpoints
+### Panel endpoints
 
 In multi-exit mode, use `?exit=<id>` to select an exit. `/` without it returns
 303 to `/?exit=<id>`, using the last-exit cookie or the first configured exit;
@@ -1036,7 +852,7 @@ for an exit the person isn't granted on the page, the embed, `/api/status` and
 `/api/latency` (404 `unknown exit`) and on `POST /select` (400 `unknown exit`).
 The Host check comes first for all of these except `/healthz`.
 
-### Metrics
+#### Metrics
 
 `GET /metrics` answers in the Prometheus text format (version 0.0.4) with
 what the panel already reads for `/readyz` and `/api/status`. Each scrape reads
@@ -1088,3 +904,77 @@ in a container reaches the panel under another name, which the Host check
 answers 421 until you add it to `PANEL_PUBLIC_HOSTS`. An alert on a
 switched-off or failing exit could be `molebridge_exit_state{state="ok"} == 0`
 held for a few minutes, since a switch passes through `applying`.
+
+## Automatic failover
+Experimental and off by default. What it does, and what has and hasn't been
+tested, is in [failover](failover.md). It works on native exits only. The exit
+refuses to start with it on and `TUNNEL_BACKEND=gluetun` (`FAILOVER needs
+TUNNEL_BACKEND=native: gluetun reconnects by itself`), or with `PROVIDERS`
+set. No Compose file passes these settings from `.env`: set them on the
+`exit` service in a `compose.override.yaml`.
+
+| Setting | Service | Default | Purpose |
+|---|---|---|---|
+| `FAILOVER` | exit | `off` | `on` (backups in the same city), `same-city`, `same-country` or `servers`. Any other value stops the exit at start. |
+| `FAILOVER_SERVERS` | exit | empty | With `FAILOVER=servers`: 1 to 8 server names, comma-separated, in order of preference. |
+| `FAILOVER_AFTER` | exit | `300` | Seconds the selected server must keep failing (at least three failed checks) before a failover, 120 to 3600. |
+| `FAILOVER_RETURN` | exit | `auto` | `auto` tries the selected server again after 15, 30 and 60 minutes, then every 120; `manual` stays on the backup until you pick a server. |
+
+An episode is kept in `applier/failover.json` across a restart
+([state files](#state-files)).
+
+## Multi-provider exit
+Experimental. [Multi-provider exit](multi-provider.md) says what it is and
+whether this release accepts it. These are the settings and files it uses.
+
+| Setting | Service | Default | Purpose |
+|---|---|---|---|
+| `PROVIDERS` | exit, switchyard | empty | Two or three of `mullvad`, `pia` and `nordvpn`, comma-separated, each once. Empty means a single-provider exit. The overlay exit with the native backend only: the exit refuses it with `TUNNEL_BACKEND=gluetun`, `EXIT_KIND=sidecar`, `FAILOVER` on or `EXCHANGE_URL`, and the [proxy](#the-proxy) refuses to start with it set. No shipped Compose file passes it; [`molebridge init`](setup.md#molebridge-init)'s Compose file does when it writes a multi-provider exit. |
+| `PROVIDER` | exit, switchyard | required | One of `PROVIDERS`: the provider the tunnel starts on the first time. After that the exit comes back on the provider it was last on (`tunnel-provider.json`). |
+| `EXIT_IF` | exit | `vpn` | The one interface every provider's tunnel uses. |
+| `NB_EXTRA_IFACE_BLACKLIST` | exit | empty | Set it to `EXIT_IF` (`vpn`). Moving back to one provider on the same NetBird profile needs [`fix-blacklist`](tools-reference.md#fix-blacklist) unless you keep `EXIT_IF=vpn`. |
+| `SERVER` | exit | empty | `<provider>/<server>`, as `nordvpn/nl9001.nordvpn.com` ([a server set in configuration](#a-server-set-in-configuration)). |
+| `PANEL_EXITS` | switchyard | empty | The exit as `id=mullvad+pia+nordvpn[:label]`, two or three providers joined with `+`, overlay only. It can't also be in `PANEL_PROXY_STATUS` or `PANEL_NETWORK_EXITS`. |
+
+The exit reads one tunnel config per provider, `tunnel/wg_confs/<provider>.conf`
+(`mullvad.conf`, `pia.conf`, `nordvpn.conf`), each checked against its own
+provider's form ([the tunnel config](#the-tunnel-config)); it ignores any other
+`.conf` file with a warning. `PIA_PORT_FORWARD` and `PIA_PORT_FORWARD_TARGET`
+apply while PIA is active.
+
+## The network exchange
+Experimental. The network exchange carries the files the panel and an exit
+share over HTTP, for an exit and a panel that can't share a filesystem. The
+guide is [the network exchange](exchange.md); the design is in
+[architecture](architecture.md#the-network-exchange). Nothing changes for an
+exit without `EXCHANGE_URL`.
+
+### On the exit
+| Setting | Default | Meaning |
+|---|---|---|
+| `EXCHANGE_URL` | empty | The exchange's base URL, `https://` or `http://`, with a host and no credentials, query or fragment. Empty: files only. Not accepted with `PROVIDERS`. |
+| `EXCHANGE_EXIT_ID` | empty | The exit's id at the exchange: its id in the panel's `PANEL_EXITS`. Required with `EXCHANGE_URL`. |
+| `EXCHANGE_TOKEN` | empty | In `secrets/applier.env`, beside `GATUS_TOKEN`: the exit's token, at least 32 printable characters with no spaces. Required with `EXCHANGE_URL`. |
+| `EXCHANGE_CA_FILE` | empty | A PEM file of the authority the exchange's certificate must chain to, instead of the system's. |
+| `EXCHANGE_TLS_NAME` | empty | The name the exchange's certificate must carry, when it isn't the URL's host. |
+
+A bad value stops the exit at start with one line. With `EXCHANGE_URL` set,
+the exit's `state/panel/` is the exit's own: the exchange client writes
+`desired.json` there. Keep it on the exit's volume, writable by the exit.
+
+### The exchange role
+`molebridge exchange` runs on the panel's side with no capabilities and not as
+root (as `PANEL_USER`; `PANEL_ALLOW_ROOT` works as for the panel).
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `PANEL_EXITS` | empty | The panel's list. The exchange serves each exit in it, by id; it can't be empty. |
+| `STATE_DIR` | `/state` | The panel's state directory, shared with the panel. The exchange writes `<id>/applier/` and `<id>/exchange.json` and reads `<id>/panel/desired.json`. |
+| `EXCHANGE_LISTEN` | `0.0.0.0:8097` | Address and port, with a host. Publish it to the exits only, never through the panel's proxy or sign-in. |
+| `EXCHANGE_TOKENS_DIR` | `/run/secrets/exchange` | One file per exit, named by its id, holding that exit's token: a regular file, not a symbolic link (on Kubernetes, mount each with `subPath`). It is read on every request. |
+| `EXCHANGE_CERT_FILE`, `EXCHANGE_KEY_FILE` | empty | A certificate and key to serve HTTPS; both or neither. |
+
+### In the panel
+| Setting | Default | Meaning |
+|---|---|---|
+| `PANEL_NETWORK_EXITS` | empty | Comma-separated ids of the exits in `PANEL_EXITS` reached through the exchange. For each, the panel reads `state/<id>/exchange.json` and shows `unknown` (`exit-unreachable`) with no contact in the last 15 seconds, or (`clock-skew`) with the clocks more than 10 seconds apart. An id not in `PANEL_EXITS` stops the panel at start. |
