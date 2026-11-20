@@ -109,9 +109,17 @@ Press **Retry** to try at once, or pick something else;
 failed check doesn't always mean traffic stopped: the previous or new tunnel
 may still be carrying it. What can't happen is forwarded traffic leaving
 through the host's own connection. Molebridge never picks a different server
-as failover. With PIA, choosing the region you're already on (it asks
-"reconnect?") registers again; PIA may pick the same server. With gluetun, the exit puts your
-selection back when gluetun restarts on another one.
+by itself unless you turned on [automatic failover](failover.md) (or the
+provider retired yours: [a server the provider
+retires](architecture.md#a-server-the-provider-retires)). With PIA, choosing
+the region you're already on (it asks "reconnect?") registers again; PIA may
+pick the same server. With gluetun, the exit puts your selection back when
+gluetun restarts on another one.
+
+With failover on, an exit on a backup reads **connected to backup**, with a
+note naming the backup, your server and when the exit tries yours again; its
+tab says "backup" beside the place. Picking works as usual and ends the
+failover. [What it shows](failover.md#what-it-shows) has the wording.
 
 Some parts appear only once they're useful:
 
@@ -334,30 +342,30 @@ or use sign-in to give people different exits.
 
 ### A multi-provider exit
 
-**Experimental, and refused by this release** ([multi-provider
-exit](configuration.md#multi-provider-exit)): the panel follows the exit's
-switch, so a release build refuses a `+` in `PANEL_EXITS` and `PROVIDERS`.
-What follows is what the panel does in a build that has it on.
-
-Write such an exit as `id=mullvad+pia[+nordvpn][:label]`, or give a
-single-exit panel the exit's `PROVIDERS` and `PROVIDER`:
+**Experimental, and refused by release builds**: the panel follows the
+exit's switch, so a release build refuses a `+` in `PANEL_EXITS` and
+`PROVIDERS` ([multi-provider exit](multi-provider.md#status)). In a build
+that has it on, write such an exit as `id=mullvad+pia[+nordvpn][:label]`:
 
 ```sh
 PANEL_EXITS='home=mullvad:Home,both=mullvad+pia'
 ```
 
-Its page has a row of provider tabs above the server list. The provider
-the exit is on is marked "in use", and the list is that provider's
-(`applier/relays-<provider>.json`). Another provider's tab lists its
-servers with a note before you pick: "Picking a PIA server moves every
-device on this exit from Mullvad to PIA." The provider is the exit's, not
-yours, so everyone using the exit moves with it. A pick writes the
-provider with the server, and the panel checks the server against that
-provider's list. The status line names both ("Connected: PIA,
-ex_example"), and PIA's forwarded port shows only while PIA is in use.
-Switching, a set-in-configuration lock (`pia/<server>`) and sign-in work as
-for any exit. Such an exit can't be in `PANEL_PROXY_STATUS` or
-`PANEL_NETWORK_EXITS`.
+Its page has a row of provider tabs above the server list, marks the
+provider in use, and warns before a pick that every device on the exit moves
+to the other provider. [Using it in
+Switchyard](multi-provider.md#using-it-in-switchyard) has the details. Such
+an exit can't be in `PANEL_PROXY_STATUS` or `PANEL_NETWORK_EXITS`.
+
+### Exits reached through the network exchange
+
+An exit in another pod or on another node, which can't share the panel's
+state directory, reaches the panel through the [network
+exchange](exchange.md) (experimental). List its id in `PANEL_NETWORK_EXITS`
+as well as in `PANEL_EXITS`: the panel then shows it as `unknown`, "exit
+unreachable", when it has not been heard from in 15 seconds, and "clocks
+differ" when the exit's and the exchange's clocks are more than 10 seconds
+apart. Otherwise it looks and switches like any other exit.
 
 ### Per-person exits
 
@@ -389,7 +397,7 @@ uses it.
 
 ## The proxy view
 
-If the exit has a [proxy](design/menu.md) beside it, Switchyard
+If the exit has a [proxy](proxy.md) beside it, Switchyard
 can show the proxy's state under the exit, on the full page (not in `/embed`). It
 is off unless you name the proxy's status file in `PANEL_PROXY_STATUS`
 ([configuration](configuration.md#the-proxy-view)) and mount it read-only.
@@ -420,9 +428,8 @@ provider, so the panel refuses the setting for a `gluetun-*` exit, and for an
 exit in `PANEL_NETWORK_EXITS`, whose files the exchange copies without
 `proxy.json`.
 
-There is no `molebridge proxy` role in a release yet. The view has been tested
-against fixture files only (`internal/panel/testdata/proxy`), not against a
-running proxy.
+The view's tests use fixture files (`internal/panel/testdata/proxy`); the
+proxy itself is drilled live on Mullvad only ([testing](testing.md)).
 
 ## Privilege isolation
 

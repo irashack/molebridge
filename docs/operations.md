@@ -109,16 +109,16 @@ The reason codes in `status` and in `/api/status` come from the
 `<check>-unmeasured`, `rejected`, `status-failed`, `status-unknown`, and for a
 connection on the wrong server `not-configured-server`, `not-requested-server`
 or `not-target-server` (and, on a [multi-provider
-exit](design/multi-provider.md), being
-built, `not-configured-provider` or `not-requested-provider` for one on the
+exit](multi-provider.md), switched off in release builds,
+`not-configured-provider` or `not-requested-provider` for one on the
 wrong provider). A connected exit may carry `no-selection`: nothing has
 been selected yet, or `server-moved`: its server stands in for one the
 provider retired ([a server the provider retires](architecture.md#a-server-the-provider-retires)),
 or `failover`: it is connected to a backup ([automatic
-failover](configuration.md#automatic-failover), experimental and off by default). A
+failover](failover.md), experimental and off by default). A
 failed or unknown verdict may end with `failover-exhausted`: no backup
 verified. An exit reached through the [network
-exchange](configuration.md#the-network-exchange) may also be `unknown` with
+exchange](exchange.md) may also be `unknown` with
 `exit-unreachable` or `clock-skew`, in the panel only. [Troubleshooting](troubleshooting.md#the-panel) explains the
 labels the panel shows for them.
 
@@ -698,6 +698,11 @@ a usage error is 2. The full messages are in [the tools
 reference](tools-reference.md#fix-blacklist) and
 [troubleshooting](troubleshooting.md#netbirds-settings-and-profile).
 
+**Changing `EXIT_IF`** on an enrolled exit needs the same run, with the new
+name in `EXIT_IF`: the profile excludes the old name only. One case is
+moving a [multi-provider exit](multi-provider.md#moving-back-to-one-provider),
+whose interface is `vpn`, back to one provider.
+
 **Moving an enrolled exit to another runtime** (Podman to Kubernetes, say)
 keeps its identity, but the stored profile still describes the old place. Two
 more edits, in the same run with the exit stopped:
@@ -751,7 +756,11 @@ last one live after a change and the last one it verified, which it puts
 back after gluetun restarts when the panel's request is absent or was
 refused. Without it, the request in
 `state/panel/desired.json` is still applied again; only that fallback is
-lost. Saved and recent servers in
+lost. With [failover](failover.md) on, `failover.json` in the same
+directory keeps the episode in progress; without it the exit starts on your
+server with no episode. A [multi-provider exit](multi-provider.md) keeps the
+provider it is on in `tunnel-provider.json`; without it the next start is on
+`PROVIDER`. Saved and recent servers in
 the panel live in each browser, not on the exit. The key files, `secrets/` and
 the volume are secrets: back them up only to encrypted storage.
 
