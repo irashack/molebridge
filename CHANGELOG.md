@@ -60,8 +60,12 @@ what changed is below.
 
 ## 0.14.0 — 2026-11-20
 - Experimental, not for use yet: piece 6 of the [multi-provider
+- Built but switched off: piece 6 of the [multi-provider
   exit](docs/configuration.md#multi-provider-exit), its settings, files and
-  credentials. `PROVIDERS` (two or three of `mullvad`, `pia`, `nordvpn`)
+  credentials. This release refuses `PROVIDERS` at start ("multi-provider
+  exits are not available in this release yet"); a later release switches
+  it on once NordVPN's memory has been measured on a live exit. Only drill
+  builds accept it. `PROVIDERS` (two or three of `mullvad`, `pia`, `nordvpn`)
   makes the overlay exit carry one provider at a time, each from its own
   `tunnel/wg_confs/<provider>.conf`, on one interface (`EXIT_IF`, `vpn` by
   default with `PROVIDERS`); a change of provider replaces the whole tunnel,

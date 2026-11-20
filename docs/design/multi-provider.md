@@ -416,6 +416,18 @@ child environments and starting record byte for byte
 (`single_provider_test.go`, generated before this piece); the replacement
 on a kernel is the rig drill's.
 
+As built (the switch): the release build refuses `PROVIDERS` at start and
+in `check-config` with "multi-provider exits are not available in this
+release yet; see docs/design/multi-provider.md", before any other setting is
+read (decision 4: no shipping before NordVPN's memory is measured). The
+switch is one constant, `multiProviderAvailable` in `internal/exit`
+(`multi_available.go`), false in the release build and true only under the
+`drill` build tag (`multi_available_drill.go`), the way `molebridge init`
+keeps the proxy behind `proxyAvailable`. A later release, with the live
+measurement and the live pass behind it, turns it on. Until then the
+package's own tests reach a multi-provider exit through a test-only load
+option, and the drills through the `drill` build.
+
 ## The catalogs in one process
 
 This is why piece 0 comes first. A single NordVPN exit used about 190 MB
