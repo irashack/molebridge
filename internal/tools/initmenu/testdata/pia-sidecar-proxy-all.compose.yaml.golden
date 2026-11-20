@@ -234,7 +234,7 @@ services:
           pids: 128
 
   proxy:
-    # EXPERIMENTAL (docs/proxy.md), and untested on a real tunnel. An image
+    # EXPERIMENTAL (docs/proxy.md); drilled live on Mullvad only. An image
     # from before the proxy role exits at once with "unknown role". Its
     # guarantee: every connection the proxy opens leaves through the tunnel,
     # or fails. It promises nothing about traffic not sent to it.

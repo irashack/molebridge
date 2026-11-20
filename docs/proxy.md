@@ -11,7 +11,7 @@ without switching the exit); the password keeps others out. It never changes
 the exit's status record, verdict or switching, and the exit doesn't know it
 is there.
 
-**Experimental, and untested on a real tunnel.** The role, its settings and
+**Experimental, and drilled live on Mullvad only.** The role, its settings and
 its status have unit tests, against fakes and on loopback. CI's
 [system rig](../CONTRIBUTING.md#the-system-rig) runs the release build's
 proxy, unprivileged and without capabilities, in a native Mullvad overlay
@@ -19,8 +19,11 @@ exit's namespace with kernel WireGuard tunnels to fake relays, against fake
 Mullvad relay proxies and DNS: locations, sessions, benching, refusal while
 the exit switches or its tunnel is stopped, and a packet counter showing
 nothing of the proxy's outside the tunnel. The live drill on a real Mullvad
-exit has not run yet, so nothing here has carried traffic through a real
-Mullvad relay proxy, and the native sidecar's namespace is not on the rig. It is in no release yet: an image from before it exits
+exit passed once on a candidate of 0.14.0, before its release: locations,
+a session, HTTP `CONNECT`, a wrong password, and nothing of the proxy's
+outside the tunnel. Since acceptance policy 18 it runs on every release
+candidate ([the proxy](verification.md#the-proxy)). The native sidecar's
+namespace has not been drilled, on the rig or live. It is in no release yet: an image from before it exits
 at once with `unknown role "proxy"`.
 
 ## How it keeps the guarantee
@@ -178,7 +181,7 @@ connections because the exit's tunnel is down is unhealthy.
 
 ## Limits
 
-- **Untested on a real tunnel** ([above](#the-proxy)).
+- **Drilled live on Mullvad only**, on its overlay exit ([above](#the-proxy)); PIA, NordVPN and the native sidecar have not been drilled.
 - **Relay choice is Mullvad only.** PIA and NordVPN offer only the exit's
   current server; to leave elsewhere, switch the exit.
 - **Mullvad's relay proxies are Mullvad's.** Whether a relay's proxy answers,
