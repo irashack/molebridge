@@ -4,7 +4,10 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## Unreleased
+## 0.14.0 — unreleased
+
+**Experimental.** Upgrade from 0.13.0 by moving to the new image;
+what changed is below.
 
 - The system rig drills automatic failover (`TestSystemRigFailover*`, CI
   only): a relay that drops WireGuard and the move to the other relay in its
