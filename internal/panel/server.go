@@ -262,7 +262,65 @@ type ExitStatus struct {
 }
 
 func (s *Server) exitConfig(ex Exit) verdict.ExitConfig {
-	return verdict.ExitConfig{Provider: ex.Provider, Kind: ex.Kind, ID: ex.ID}
+	return verdict.ExitConfig{Provider: ex.Provider, Kind: ex.Kind, ID: ex.ID, Providers: ex.Providers}
+}
+
+// recordProvider is the provider of the tunnel in place, as a
+// multi-provider exit's record names it, when it is one of the exit's; ""
+// otherwise.
+func recordProvider(ex Exit, result map[string]any) string {
+	if p, ok := result["provider"].(string); ok && ex.Has(p) {
+		return p
+	}
+	return ""
+}
+
+// requestProvider is the provider a multi-provider exit's request names,
+// when it is one of the exit's; "" otherwise (a three-member request is the
+// active provider's).
+func requestProvider(ex Exit, desired map[string]any) string {
+	if p, ok := desired["provider"].(string); ok && ex.Has(p) {
+		return p
+	}
+	return ""
+}
+
+// shownProvider is the provider whose server the exit's current view shows:
+// a single-provider exit's own; on a multi-provider exit the configured
+// lock's, else during a switch the request's, else the record's, else the
+// first configured (no record names one yet). panel.js reloads the page when
+// it changes.
+func shownProvider(ex Exit, st ExitStatus) string {
+	if !ex.Multi() {
+		return ex.Provider
+	}
+	if c := st.Verdict.ConfiguredServer; c != "" {
+		if p, _, ok := verdict.SplitTarget(c, ex.Providers); ok {
+			return p
+		}
+	}
+	if st.Verdict.State == "applying" {
+		if p := requestProvider(ex, st.Desired); p != "" {
+			return p
+		}
+	}
+	if p := recordProvider(ex, st.Result); p != "" {
+		return p
+	}
+	return ex.Provider
+}
+
+// viewProvider is the provider whose servers a multi-provider exit's page
+// lists: the query's provider when it is one of the exit's, else the shown
+// provider. A single-provider exit lists its own.
+func viewProvider(ex Exit, query map[string][]string, st ExitStatus) string {
+	if !ex.Multi() {
+		return ex.Provider
+	}
+	if p := first(query, "provider"); ex.Has(p) {
+		return p
+	}
+	return shownProvider(ex, st)
 }
 
 // judge is the verdict on result for this exit. The panel's own request is
@@ -281,7 +339,10 @@ func (s *Server) judge(ex Exit, desired, result any) ExitStatus {
 	if desiredMap != nil {
 		desiredArg = desiredMap
 	}
-	v := verdict.Assess(s.exitConfig(ex), resultArg, verdict.TargetForPanel(resultArg, desiredArg, ex.Provider), s.now())
+	// TargetFor is TargetForPanel on a single-provider exit; on a
+	// multi-provider exit it reads the four-member request.
+	config := s.exitConfig(ex)
+	v := verdict.Assess(config, resultArg, verdict.TargetFor(config, resultArg, desiredArg), s.now())
 	return ExitStatus{Desired: desiredMap, Result: resultMap, Verdict: v}
 }
 
@@ -386,12 +447,19 @@ func (s *Server) statusPayload(ex Exit, status ExitStatus) validate.Obj {
 // replaced or changes. For display and latency only (the page, the exit
 // tabs, /api/latency); a switch always re-reads the file (loadAllowlist).
 func (s *Server) cachedSnapshot(ex Exit) (map[string]any, *providers.Entries) {
-	info, err := os.Stat(ex.RelaysPath)
+	return s.cachedSnapshotFor(ex, ex.Provider)
+}
+
+// cachedSnapshotFor is cachedSnapshot for one of the exit's providers: on a
+// multi-provider exit, its relays-<provider>.json.
+func (s *Server) cachedSnapshotFor(ex Exit, provider string) (map[string]any, *providers.Entries) {
+	path, _ := ex.CatalogFiles(provider)
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, providers.NewEntries()
 	}
 	s.relayMu.Lock()
-	cached, ok := s.relayCache[ex.RelaysPath]
+	cached, ok := s.relayCache[path]
 	s.relayMu.Unlock()
 	// The exit replaces the file by rename, so a new snapshot is a new file
 	// even when its size and modification time (kept to the kernel's tick)
@@ -399,7 +467,7 @@ func (s *Server) cachedSnapshot(ex Exit) (map[string]any, *providers.Entries) {
 	if ok && os.SameFile(cached.info, info) && cached.info.ModTime().Equal(info.ModTime()) && cached.info.Size() == info.Size() {
 		return cached.meta, cached.relays
 	}
-	snapshot := providers.ReadSnapshot(ex.RelaysPath, ex.Provider)
+	snapshot := providers.ReadSnapshot(path, provider)
 	var meta map[string]any
 	if snapshot != nil {
 		meta = make(map[string]any, len(snapshot))
@@ -409,9 +477,9 @@ func (s *Server) cachedSnapshot(ex Exit) (map[string]any, *providers.Entries) {
 			}
 		}
 	}
-	relays := providers.SnapshotRelays(snapshot, ex.Provider)
+	relays := providers.SnapshotRelays(snapshot, provider)
 	s.relayMu.Lock()
-	s.relayCache[ex.RelaysPath] = relayCacheEntry{info, meta, relays}
+	s.relayCache[path] = relayCacheEntry{info, meta, relays}
 	s.relayMu.Unlock()
 	return meta, relays
 }
@@ -422,21 +490,39 @@ func (s *Server) cachedRelays(ex Exit) *providers.Entries {
 	return relays
 }
 
+// cachedRelaysFor is cachedSnapshotFor's catalogue.
+func (s *Server) cachedRelaysFor(ex Exit, provider string) *providers.Entries {
+	_, relays := s.cachedSnapshotFor(ex, provider)
+	return relays
+}
+
 // loadAllowlist is the set of names a switch may request: the fresh
 // catalogue's, or none.
 func (s *Server) loadAllowlist(ex Exit) *providers.Entries {
-	snapshot := providers.ReadSnapshot(ex.RelaysPath, ex.Provider)
+	return s.loadAllowlistFor(ex, ex.Provider)
+}
+
+// loadAllowlistFor is loadAllowlist for one of the exit's providers.
+func (s *Server) loadAllowlistFor(ex Exit, provider string) *providers.Entries {
+	path, _ := ex.CatalogFiles(provider)
+	snapshot := providers.ReadSnapshot(path, provider)
 	if snapshot == nil || !state.Recent(snapshot["fetched_at"], state.CatalogMaxAge, s.now()) {
 		return providers.NewEntries()
 	}
-	return providers.SnapshotRelays(snapshot, ex.Provider)
+	return providers.SnapshotRelays(snapshot, provider)
 }
 
 // fetchError is the page's relay refresh error: the applier's message, or a
 // fixed one when there is no fresh catalogue. meta is the snapshot without
 // its relays (cachedSnapshot), nil when there is none.
 func (s *Server) fetchError(ex Exit, meta map[string]any) (message, at string) {
-	data, _ := state.ReadObject(ex.RelayErrorPath, 4096)
+	return s.fetchErrorFor(ex, ex.Provider, meta)
+}
+
+// fetchErrorFor is fetchError for one of the exit's providers.
+func (s *Server) fetchErrorFor(ex Exit, provider string, meta map[string]any) (message, at string) {
+	_, errorPath := ex.CatalogFiles(provider)
+	data, _ := state.ReadObject(errorPath, 4096)
 	if meta == nil || !state.Recent(meta["fetched_at"], state.CatalogMaxAge, s.now()) {
 		return "No fresh trusted relay catalogue; selections are unavailable.", ""
 	}
@@ -447,7 +533,8 @@ func (s *Server) fetchError(ex Exit, meta map[string]any) (message, at string) {
 }
 
 // exitSummary is what an exit tab shows: name, provider, state and where it
-// exits.
+// exits. A multi-provider exit's tab takes its shown provider's colours and
+// finds the place in that provider's catalogue.
 func (s *Server) exitSummary(ex Exit, status *ExitStatus) ExitSummary {
 	var st ExitStatus
 	if status != nil {
@@ -455,13 +542,14 @@ func (s *Server) exitSummary(ex Exit, status *ExitStatus) ExitSummary {
 	} else {
 		st = s.readStatus(ex)
 	}
+	provider := shownProvider(ex, st)
 	place := ""
 	if server, ok := st.Result["server"].(string); ok && st.Verdict.State == "ok" {
-		if info, found := s.cachedRelays(ex).Get(server); found {
+		if info, found := s.cachedRelaysFor(ex, provider).Get(server); found {
 			place = info.City
 		}
 	}
-	return ExitSummary{ID: ex.ID, Label: ex.Label, Provider: ex.Provider, State: st.Verdict.State,
+	return ExitSummary{ID: ex.ID, Label: ex.Label, Provider: provider, State: st.Verdict.State,
 		Status: st.Verdict.Label, Place: place, Backup: st.Verdict.State == "ok" && st.Verdict.Failover != nil}
 }
 
@@ -898,6 +986,10 @@ func (s *Server) handleLatency(w http.ResponseWriter, r *http.Request, query map
 	func() {
 		defer s.latency.release(ex.ID)
 		relays := s.cachedRelays(ex)
+		if ex.Multi() {
+			// The servers of the provider the page lists (?provider=).
+			relays = s.cachedRelaysFor(ex, viewProvider(ex, query, s.readStatus(ex)))
+		}
 		fresh := first(query, "fresh") == "1"
 		measured := s.measureLatency(relays, latencyTargets(query, relays), fresh, ex.ID)
 		latency := make(validate.Obj, 0, len(measured))
@@ -1060,11 +1152,18 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 		nonce = newCSRFNonce()
 	}
 	token := s.csrfToken(nonce, s.csrfBinding(session))
-	// One reading of the catalogue for the page, its error line and the tabs.
-	meta, relays := s.cachedSnapshot(ex)
-	fetchError, fetchErrorAt := s.fetchError(ex, meta)
 	// One verdict on this exit for the page and its own tab.
 	status := s.readStatus(ex)
+	// One reading of the catalogue for the page, its error line and the tabs:
+	// on a multi-provider exit, the listed provider's, and the shown
+	// provider's for the current server.
+	listed, shown := viewProvider(ex, query, status), shownProvider(ex, status)
+	meta, relays := s.cachedSnapshotFor(ex, listed)
+	fetchError, fetchErrorAt := s.fetchErrorFor(ex, listed, meta)
+	shownRelays := relays
+	if shown != listed {
+		shownRelays = s.cachedRelaysFor(ex, shown)
+	}
 	var summaries []ExitSummary
 	for _, e := range s.visibleExits(session) {
 		if e.ID == ex.ID {
@@ -1079,6 +1178,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, query map[s
 	}
 	body := s.renderIndex(IndexPage{
 		Exit: ex, Status: status, Relays: relays, RelaysData: meta,
+		ListedProvider: listed, ShownProvider: shown, ShownRelays: shownRelays,
 		FetchError: fetchError, FetchErrAt: fetchErrorAt, CSRFToken: token, Embed: embed, Exits: summaries, User: user,
 		// A home dashboard is the operator's; people granted a single exit are
 		// not sent there.
@@ -1163,6 +1263,26 @@ func (s *Server) processSelect(server string, haveServer bool, allowlist *provid
 		return 400, "unknown or unlisted server"
 	}
 	request := validate.Members("server", server, "requested_at", validate.FormatTime(s.now()), "request_id", randomHex(16))
+	return s.writeRequest(request, desiredPath)
+}
+
+// processSelectFor is processSelect on a multi-provider exit: the provider
+// must be one of the exit's and the server one of that provider's fresh
+// catalogue, and the request names the provider in a fourth member
+// (state.DesiredRequestFor reads it).
+func (s *Server) processSelectFor(ex Exit, provider, server string, haveServer bool) (int, string) {
+	if !ex.Has(provider) {
+		return 400, "unknown provider"
+	}
+	if !haveServer || !state.ValidServerName(server, provider) || !s.loadAllowlistFor(ex, provider).Has(server) {
+		return 400, "unknown or unlisted server"
+	}
+	request := state.Request{Provider: provider, Server: server, RequestedAt: validate.FormatTime(s.now()), RequestID: randomHex(16)}
+	return s.writeRequest(request.JSONObject(), ex.DesiredPath)
+}
+
+// writeRequest writes the request file.
+func (s *Server) writeRequest(request validate.Obj, desiredPath string) (int, string) {
 	err := os.MkdirAll(filepath.Dir(desiredPath), 0o777)
 	if err == nil {
 		err = state.WriteJSONAtomic(desiredPath, request, false, 0)
@@ -1248,6 +1368,9 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 		// or unreadable (unknown) a request goes through, and the applier
 		// admits it or not.
 		code, message = 409, "A switch is in progress; wait for it to finish."
+	case ex.Multi():
+		server, have := fields["server"]
+		code, message = s.processSelectFor(ex, fields["provider"], server, have)
 	default:
 		server, have := fields["server"]
 		code, message = s.processSelect(server, have, s.loadAllowlist(ex), ex.DesiredPath, ex.Provider)
@@ -1259,7 +1382,11 @@ func (s *Server) doPOST(w http.ResponseWriter, r *http.Request) {
 			if exitID == "" {
 				exitID = "-"
 			}
-			s.logEvent(fmt.Sprintf("switch: user=%s sub=%s exit=%s server=%s", session.Name, oidc.LogSafe(session.Sub), exitID, fields["server"]))
+			if ex.Multi() {
+				s.logEvent(fmt.Sprintf("switch: user=%s sub=%s exit=%s provider=%s server=%s", session.Name, oidc.LogSafe(session.Sub), exitID, fields["provider"], fields["server"]))
+			} else {
+				s.logEvent(fmt.Sprintf("switch: user=%s sub=%s exit=%s server=%s", session.Name, oidc.LogSafe(session.Sub), exitID, fields["server"]))
+			}
 		}
 		location := "/"
 		if fields["return"] == "embed" {

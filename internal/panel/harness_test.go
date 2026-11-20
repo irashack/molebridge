@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/irashack/molebridge/internal/buildgate"
 	"github.com/irashack/molebridge/internal/panel/oidc/oidctest"
 	"github.com/irashack/molebridge/internal/state"
 )
@@ -61,12 +62,24 @@ type harness struct {
 // nil.
 func newHarness(t *testing.T, env map[string]string, opt func(*Options)) *harness {
 	t.Helper()
+	return startHarness(t, env, opt, buildgate.MultiProvider)
+}
+
+// newProviderSetHarness is newHarness with multi-provider exits switched on,
+// whatever the build says, as the drill build has them.
+func newProviderSetHarness(t *testing.T, env map[string]string, opt func(*Options)) *harness {
+	t.Helper()
+	return startHarness(t, env, opt, true)
+}
+
+func startHarness(t *testing.T, env map[string]string, opt func(*Options), multiAvailable bool) *harness {
+	t.Helper()
 	h := &harness{t: t, dir: t.TempDir(), log: &syncBuffer{}, clock: &oidctest.Clock{}}
 	full := map[string]string{"STATE_DIR": h.dir}
 	for k, v := range env {
 		full[k] = v
 	}
-	cfg, err := ConfigFromEnv(full)
+	cfg, err := configFromEnv(full, multiAvailable)
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}

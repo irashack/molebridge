@@ -106,6 +106,22 @@ what changed is below.
   ([setup](docs/setup.md#molebridge-init)). Checked by CI only; no stack
   init wrote has been started.
 
+- Built but switched off: piece 7 of the [multi-provider
+  exit](docs/configuration.md#multi-provider-exit), the panel. This
+  release's panel refuses a multi-provider exit ("multi-provider exits are
+  not available in this release yet") by the same switch as the exit, so
+  it never offers a provider the exit can't change to; only drill builds
+  accept it. In such a build `PANEL_EXITS` takes
+  `id=mullvad+pia+nordvpn[:label]` (overlay only), and a single exit's panel
+  reads `PROVIDERS` as the exit does. The exit's page has provider tabs
+  above the server list, marks the provider in use, warns before a pick
+  that every device on the exit moves to another provider, and writes the
+  provider with the server. The status line names the provider
+  ("Connected: PIA, us_chicago"); PIA's forwarded port shows only while PIA
+  is in use. Refused in `PANEL_PROXY_STATUS` and `PANEL_NETWORK_EXITS`.
+  Single-provider views are byte for byte as before (a new golden test
+  locks them).
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;

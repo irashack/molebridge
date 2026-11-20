@@ -391,6 +391,25 @@ dd { margin: 0; color: var(--color-text-paragraph); overflow-wrap: anywhere; }
 .filter-chip[aria-pressed="true"] { border-color: var(--color-primary); color: var(--color-primary); }
 .link-button[aria-expanded="true"] { color: var(--color-primary); }
 
+/* A multi-provider exit: the provider switch above the server list, the
+   warning while another provider's servers are listed, and the status line. */
+.provider-switch { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0 0 1.2rem; }
+.provider-tab {
+  border: 1px solid var(--color-widget-content-border);
+  border-radius: 999px;
+  padding: 0.2rem 1.2rem;
+  font-size: var(--font-size-h5);
+  color: var(--color-text-base);
+  text-decoration: none;
+}
+.provider-tab:hover { border-color: var(--color-text-subdue); }
+.provider-tab.is-selected { border-color: var(--color-primary); color: var(--color-primary); }
+.provider-in-use { font-size: var(--font-size-h6); color: var(--color-text-subdue); }
+.provider-warning { margin: 0 0 1.2rem; }
+.provider-warning.is-armed { color: var(--color-negative); }
+.provider-line { margin: 0.4rem 0 0; font-size: var(--font-size-h5); color: var(--color-text-subdue); }
+.provider-tab:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
 .note .relay-switch { margin-left: 0.6rem; }
 
 .sr-only {

@@ -658,6 +658,16 @@ refused:
   `PANEL_EXITS: labels are at most 40 printable characters, in '<entry>'` and
   `PANEL_EXITS: duplicate exit id '<id>'`. An entry is `id=provider[/kind][:label]`
   ([several exits](switchyard.md#several-exits-in-one-panel)).
+- `PANEL_EXITS: multi-provider exits are not available in this release yet; see
+  docs/design/multi-provider.md, in '<entry>'` and `PROVIDERS is set, but
+  multi-provider exits are not available in this release yet; see
+  docs/design/multi-provider.md`: the panel follows the exit's switch, which is off
+  in release builds ([multi-provider exit](configuration.md#multi-provider-exit)).
+  With it on, `PANEL_EXITS: a multi-provider exit takes two or three of mullvad, pia
+  and nordvpn, each once, in '<entry>'`, `PANEL_EXITS: a multi-provider exit is an
+  overlay exit, in '<entry>'`, `PANEL_PROXY_STATUS: '<id>' is a multi-provider exit;
+  the proxy does not run beside one` and `PANEL_NETWORK_EXITS: '<id>' is a
+  multi-provider exit, which the network exchange does not carry`.
 - `PANEL_PUBLIC_HOSTS: entries are host names with an optional :port, such as
   exit.example.net or host.docker.internal:8095 (no scheme or path), in '<entry>'`.
   Write `exit.example.net`, not `https://exit.example.net` or `exit.example.net/`, and

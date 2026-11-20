@@ -65,11 +65,22 @@ func TestWritePayloads(t *testing.T) {
 		proxyCases = append(proxyCases, validate.Pair{Key: name,
 			Value: validate.Members("payload", ph.srv.proxyPayload(ex), "describe", ph.srv.proxyView(ex))})
 	}
+	// A multi-provider exit's status line for each case's verdict label, with
+	// and without a provider and a server.
+	providerLines := []any{}
+	for _, name := range caseNames() {
+		for _, pv := range [][2]string{{"PIA", "us_chicago"}, {"NordVPN", ""}, {"", "se-sto-wg-001"}} {
+			label := consumerCases[name].label
+			providerLines = append(providerLines, validate.Members("label", label, "provider", pv[0], "server", pv[1],
+				"line", providerLine(label, pv[0], pv[1])))
+		}
+	}
 	var wording any
 	if err := json.Unmarshal([]byte(textJSON), &wording); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := validate.MarshalJSON(validate.Members("text", wording, "cases", cases, "proxy_cases", proxyCases))
+	raw, err := validate.MarshalJSON(validate.Members("text", wording, "cases", cases, "proxy_cases", proxyCases,
+		"provider_lines", providerLines))
 	if err != nil {
 		t.Fatal(err)
 	}

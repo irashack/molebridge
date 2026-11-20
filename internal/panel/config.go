@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/irashack/molebridge/internal/buildgate"
 	"github.com/irashack/molebridge/internal/exchange"
 	"github.com/irashack/molebridge/internal/panel/oidc"
 	"github.com/irashack/molebridge/internal/panel/pystr"
@@ -20,10 +22,19 @@ var exitIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // ParseExits parses PANEL_EXITS: comma-separated `id=provider[/kind][:label]`,
 // kind being overlay (the default) or sidecar (a gluetun provider's, or since
-// 0.9.0 a native provider's: the native sidecar). Each exit's state is
-// $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one exit
-// whose state is $STATE_DIR itself (no exits are returned).
+// 0.9.0 a native provider's: the native sidecar). A multi-provider exit is
+// `id=mullvad+pia+nordvpn[/overlay][:label]`: two or three native providers
+// joined by + (no provider id contains it), overlay only, accepted only where
+// multi-provider exits are switched on (buildgate.MultiProvider). Each exit's
+// state is $STATE_DIR/<id>/panel and $STATE_DIR/<id>/applier. Empty means one
+// exit whose state is $STATE_DIR itself (no exits are returned).
 func ParseExits(raw, stateDir string) ([]Exit, error) {
+	return parseExits(raw, stateDir, buildgate.MultiProvider)
+}
+
+// parseExits is ParseExits with multi-provider exits switched on or off:
+// this package's tests cover them in the release build too.
+func parseExits(raw, stateDir string, multiAvailable bool) ([]Exit, error) {
 	var exits []Exit
 	for _, piece := range strings.Split(raw, ",") {
 		entry := pystr.Strip(piece)
@@ -39,6 +50,20 @@ func ParseExits(raw, stateDir string) ([]Exit, error) {
 		if !sep || !exitIDRE.MatchString(exitID) {
 			return nil, fmt.Errorf("PANEL_EXITS: exit ids are 1-32 of a-z, 0-9 and -, in %s", repr)
 		}
+		var set []string
+		if strings.Contains(provider, "+") {
+			if !multiAvailable {
+				return nil, fmt.Errorf("PANEL_EXITS: %s, in %s", multiProviderUnavailable, repr)
+			}
+			var err error
+			if set, err = parseProviderSet(strings.Split(provider, "+")); err != nil {
+				return nil, fmt.Errorf("PANEL_EXITS: %v, in %s", err, repr)
+			}
+			if slash && kind != "overlay" {
+				return nil, fmt.Errorf("PANEL_EXITS: a multi-provider exit is an overlay exit, in %s", repr)
+			}
+			provider = set[0]
+		}
 		spec, known := providers.Lookup(provider)
 		if !known {
 			return nil, fmt.Errorf("PANEL_EXITS: provider must be one of %s, in %s", strings.Join(providers.IDs(), ", "), repr)
@@ -51,6 +76,9 @@ func ParseExits(raw, stateDir string) ([]Exit, error) {
 		}
 		if label == "" {
 			label = spec.Label
+			if set != nil {
+				label = setLabel(set)
+			}
 		}
 		if utf8.RuneCountInString(label) > 40 || !pystr.IsPrintable(label) {
 			return nil, fmt.Errorf("PANEL_EXITS: labels are at most 40 printable characters, in %s", repr)
@@ -60,9 +88,101 @@ func ParseExits(raw, stateDir string) ([]Exit, error) {
 				return nil, fmt.Errorf("PANEL_EXITS: duplicate exit id %s", pystr.Repr(exitID))
 			}
 		}
-		exits = append(exits, ExitUnder(exitID, provider, label, joinPath(stateDir, exitID), kind))
+		ex := ExitUnder(exitID, provider, label, joinPath(stateDir, exitID), kind)
+		ex.Providers = set
+		exits = append(exits, ex)
 	}
 	return exits, nil
+}
+
+// multiProviderUnavailable is the refusal of a multi-provider exit while
+// they are switched off in this build, worded as the exit's.
+const multiProviderUnavailable = "multi-provider exits are not available in this release yet; see docs/design/multi-provider.md"
+
+// providerSetBad is the refusal of a provider set that isn't two or three
+// distinct native providers.
+const providerSetBad = "a multi-provider exit takes two or three of mullvad, pia and nordvpn, each once"
+
+// parseProviderSet checks a multi-provider exit's providers as the exit
+// checks PROVIDERS: two or three of mullvad, pia and nordvpn, each once.
+func parseProviderSet(parts []string) ([]string, error) {
+	var ids []string
+	for _, part := range parts {
+		id := pystr.Strip(part)
+		spec, ok := providers.Lookup(id)
+		if ok && spec.Backend != providers.BackendNative {
+			return nil, &nativeOnly{id}
+		}
+		if !ok || slices.Contains(ids, id) {
+			return nil, errors.New(providerSetBad)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) < 2 || len(ids) > verdict.MaxProviders {
+		return nil, errors.New(providerSetBad)
+	}
+	return ids, nil
+}
+
+// nativeOnly refuses a gluetun provider in a provider set.
+type nativeOnly struct{ id string }
+
+func (e *nativeOnly) Error() string {
+	return "a multi-provider exit takes native providers only (mullvad, pia, nordvpn), not " + e.id
+}
+
+// setLabel is a multi-provider exit's default label: its providers' labels
+// joined by " + ".
+func setLabel(ids []string) string {
+	labels := make([]string, len(ids))
+	for i, id := range ids {
+		spec, _ := providers.Lookup(id)
+		labels[i] = spec.Label
+	}
+	return strings.Join(labels, " + ")
+}
+
+// providersEnvMax bounds PROVIDERS, as the exit does: three ids, commas and
+// some spaces.
+const providersEnvMax = 64
+
+// singleProviders reads a single-exit panel's PROVIDERS the way the exit
+// does (internal/exit's parseProviders): set, the exit is a multi-provider
+// exit, refused with EXIT_KIND=sidecar or TUNNEL_BACKEND=gluetun, with
+// PROVIDER required and one of them. Empty is unset, as Compose passes it.
+func singleProviders(env map[string]string, multiAvailable bool) ([]string, error) {
+	list := env["PROVIDERS"]
+	if list == "" {
+		return nil, nil
+	}
+	if !multiAvailable {
+		return nil, errors.New("PROVIDERS is set, but " + multiProviderUnavailable)
+	}
+	if env["TUNNEL_BACKEND"] == "gluetun" {
+		return nil, errors.New("PROVIDERS needs TUNNEL_BACKEND=native: a gluetun exit carries one provider")
+	}
+	if kind := env["EXIT_KIND"]; kind != "" && kind != "overlay" {
+		return nil, errors.New("PROVIDERS is for the overlay exit (EXIT_KIND=overlay); a sidecar carries one provider")
+	}
+	bad := errors.New("PROVIDERS must be two or three of mullvad, pia and nordvpn, comma-separated, each once")
+	if len(list) > providersEnvMax {
+		return nil, bad
+	}
+	ids, err := parseProviderSet(strings.Split(list, ","))
+	if err != nil {
+		var native *nativeOnly
+		if errors.As(err, &native) {
+			return nil, errors.New("PROVIDERS takes native providers only (mullvad, pia, nordvpn), not " + native.id)
+		}
+		return nil, bad
+	}
+	switch provider := env["PROVIDER"]; {
+	case provider == "":
+		return nil, errors.New("PROVIDER is required with PROVIDERS: the provider the tunnel starts on the first time")
+	case !slices.Contains(ids, provider):
+		return nil, errors.New("PROVIDER must be one of PROVIDERS")
+	}
+	return ids, nil
 }
 
 // joinPath is Path(a) / b without cleaning a: STATE_DIR is used as given.
@@ -84,13 +204,19 @@ type Config struct {
 // variable, STATE_DIR, PROVIDER, EXIT_KIND and PANEL_EXITS, with the
 // defaults and refusals app.py had. An error stops the panel at start.
 func ConfigFromEnv(env map[string]string) (*Config, error) {
+	return configFromEnv(env, buildgate.MultiProvider)
+}
+
+// configFromEnv is ConfigFromEnv with multi-provider exits switched on or
+// off.
+func configFromEnv(env map[string]string, multiAvailable bool) (*Config, error) {
 	getenv := func(name string) string { return env[name] }
 	provider, err := state.ProviderFromEnv(getenv)
 	if err != nil {
 		return nil, err
 	}
 	stateDir := envDefault(env, "STATE_DIR", "/state")
-	exits, err := ParseExits(env["PANEL_EXITS"], stateDir)
+	exits, err := parseExits(env["PANEL_EXITS"], stateDir, multiAvailable)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +231,17 @@ func ConfigFromEnv(env map[string]string) (*Config, error) {
 	}
 	spec, _ := providers.Lookup(provider)
 	single := ExitUnder("", provider, spec.Label, stateDir, exitKind)
+	if len(exits) == 0 {
+		set, err := singleProviders(env, multiAvailable)
+		if err != nil {
+			return nil, err
+		}
+		if set != nil {
+			// PROVIDER is the provider the exit starts on, one of the set.
+			single.Providers = set
+			single.Label = setLabel(set)
+		}
+	}
 
 	settings := presentation(env)
 	ids := make([]string, len(exits))
@@ -151,6 +288,11 @@ func markNetworkExits(raw string, exits []Exit, stateDir string) error {
 		found := false
 		for i := range exits {
 			if exits[i].ID == id {
+				if exits[i].Multi() {
+					// The exchange carries one provider's requests and
+					// catalogue; the exit refuses EXCHANGE_URL with PROVIDERS.
+					return fmt.Errorf("PANEL_NETWORK_EXITS: %s is a multi-provider exit, which the network exchange does not carry", pystr.Repr(id))
+				}
 				exits[i].Network = true
 				exits[i].LinkPath = filepath.Join(stateDir, id, exchange.LinkFile)
 				found = true
@@ -186,6 +328,9 @@ func setProxyStatus(raw string, exits []Exit, single *Exit) error {
 		if err := native("this exit", single.Provider); err != nil {
 			return err
 		}
+		if single.Multi() {
+			return errors.New("PANEL_PROXY_STATUS: this is a multi-provider exit; " + proxyMultiReason)
+		}
 		single.ProxyPath = path
 		return nil
 	}
@@ -213,6 +358,9 @@ func setProxyStatus(raw string, exits []Exit, single *Exit) error {
 			if err := native(pystr.Repr(id), exits[i].Provider); err != nil {
 				return err
 			}
+			if exits[i].Multi() {
+				return fmt.Errorf("PANEL_PROXY_STATUS: %s is a multi-provider exit; %s", pystr.Repr(id), proxyMultiReason)
+			}
 			if exits[i].Network {
 				return fmt.Errorf("PANEL_PROXY_STATUS: %s is reached through the network exchange, which does not carry proxy.json", pystr.Repr(id))
 			}
@@ -224,6 +372,11 @@ func setProxyStatus(raw string, exits []Exit, single *Exit) error {
 	}
 	return nil
 }
+
+// proxyMultiReason is why a multi-provider exit has no proxy: the proxy
+// refuses PROVIDERS at start, since its provider would be wrong after a
+// switch.
+const proxyMultiReason = "the proxy does not run beside one"
 
 // proxyPathOK: an absolute, clean path of printable characters.
 func proxyPathOK(path string) bool {
