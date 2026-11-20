@@ -473,7 +473,7 @@ namespace of the application whose port it sets
 
 ## The proxy
 
-Experimental, and untested on a real tunnel; see [the proxy](proxy.md) for
+Experimental, and drilled live on Mullvad only; see [the proxy](proxy.md) for
 its guarantee, setup and limits. `compose.proxy.yaml` adds the `proxy`
 service on top of `compose.yaml` or `compose.native-sidecar.yaml`
 (`COMPOSE_FILE=compose.yaml:compose.proxy.yaml`). It passes the exit's

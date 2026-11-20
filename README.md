@@ -88,7 +88,7 @@ sidecar.
   share the exit's namespace, for providers gluetun can't drive over
   WireGuard with Molebridge, PIA first, with `port-sync` to hand PIA's
   forwarded port to qBittorrent ([native sidecar](docs/native-sidecar.md)).
-- **A proxy, experimental and untested on a real tunnel**: SOCKS5 and HTTP
+- **A proxy, experimental, drilled live on Mullvad only**: SOCKS5 and HTTP
   `CONNECT` in a native exit's namespace for programs that opt in, the
   username choosing the location (any Mullvad country, city or server,
   without switching the exit). Every connection it opens leaves through the
@@ -344,7 +344,7 @@ Podman details, is in [requirements](docs/prerequisites.md).
 - [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
 - [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): the gluetun form, its routing rules and its checks; experimental.
 - [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that other containers share; experimental.
-- [The proxy](docs/proxy.md): SOCKS5 and HTTP `CONNECT` through a native exit's tunnel for programs that opt in, choosing the location per connection; experimental, untested on a real tunnel.
+- [The proxy](docs/proxy.md): SOCKS5 and HTTP `CONNECT` through a native exit's tunnel for programs that opt in, choosing the location per connection; experimental, drilled live on Mullvad only.
 - [Native sidecar](docs/native-sidecar.md): Molebridge's own tunnel, routing contract and firewall for containers that share the exit's namespace, including Kubernetes pods and PIA's forwarded port; experimental.
 - [Architecture](docs/architecture.md): the processes, routing, trust boundaries and the switching sequence.
 - [Testing](docs/testing.md): what has been tested, where and at which revision.

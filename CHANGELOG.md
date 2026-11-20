@@ -6,6 +6,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Acceptance policy 18: every release candidate also passes `proxy-live`,
+  the proxy on a real Mullvad exit ([the proxy](docs/verification.md#the-proxy)):
+  locations by any, country, city and server, a session kept, HTTP
+  `CONNECT`, a wrong password refused, and an nftables counter on the
+  proxy's uid seeing nothing outside the tunnel. It passed once on
+  v0.14.0-rc.1's image before joining the policy. The proxy's docs and
+  Compose comments now say it is drilled live on Mullvad only, no longer
+  untested on a real tunnel.
+
 - Internal, no user-visible change: piece 3 of the [multi-provider
   exit](docs/design/multi-provider.md), the (provider, server) target. On a
   multi-provider applier a request may name its provider (`desired.json`'s

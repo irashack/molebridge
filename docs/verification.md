@@ -485,6 +485,37 @@ by `go test` ([testing](testing.md)).
 gluetun reads `servers.json` when it starts and its updater may rewrite it;
 don't restart gluetun between steps 2 and 4.
 
+### The proxy
+
+The acceptance drill `proxy-live` (since policy 18) runs the candidate's
+[proxy](proxy.md) beside a native Mullvad exit that is `ok`, as its Compose
+service runs it: `molebridge proxy` in the exit's network namespace, as a
+non-root user with no capabilities, a read-only root and the exit's applier
+directory read-only. A client in the same namespace, under another user,
+connects to it over loopback.
+
+1. Through SOCKS5 (`socks5h://`, so the name resolves on the far side) ask
+   `https://am.i.mullvad.net/json` with the usernames `any`, a country, a city
+   and a server of the exit's catalogue. Each must answer `mullvad_exit_ip`
+   true, with `country` and `city` matching the location asked for. For a
+   server, `mullvad_exit_ip_hostname` names that relay's SOCKS5 host
+   (`<cc>-<city>-wg-socks5-<n>` for the relay `<cc>-<city>-wg-<n>`).
+2. Two connections with the same `<location>.<session>` username must leave
+   by the same server.
+3. The same request through HTTP `CONNECT` on the same port must pass as in
+   step 1.
+4. A wrong password must be refused before any connection is made.
+5. Throughout, an nftables counter in the exit's namespace on the proxy's uid
+   (`meta skuid`) must see its packets go out the tunnel and nothing else,
+   apart from its answers to the client over loopback. Kernel WireGuard's own
+   encrypted packets to the relay's endpoint keep the uid of the socket whose
+   packet they carry. Count UDP to the relay endpoint's port apart: it is the
+   tunnel, not a leak. CI's [system rig](../CONTRIBUTING.md#the-system-rig)
+   counts the same way.
+
+`molebridge status --proxy` must say `ok` at the end, with no server benched
+that the drill didn't fail on purpose.
+
 ## From a client
 
 With the exit selected on a device in `exit-users`:
