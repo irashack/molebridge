@@ -180,12 +180,14 @@ CORE=$(grep -o 'ghcr.io/irashack/molebridge-core:[^ "]*' compose.native-sidecar.
 **Experimental.** `molebridge init` asks three questions (the provider, the
 ways in, the extras) and writes `compose.yaml` and `.env` for your answers
 into a directory of your own. Run it from the verified image into a new
-directory, here `~/molebridge`:
+directory, here `~/molebridge`, and give it the two verified references, so
+that every Molebridge image it writes is one you verified:
 
 ```sh
 DIR=$HOME/molebridge
 mkdir -p "$DIR"
-docker run --rm -it --user "$(id -u):$(id -g)" -v "$DIR:/out" "$IMAGE" init --out /out
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$DIR:/out" "$IMAGE" \
+  init --out /out --image "$IMAGE" --core-image "$CORE"
 ```
 
 The names it takes are those on [the menu](menu.md): a provider (`mullvad`,
@@ -208,8 +210,14 @@ may be left out), and mount it:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$DIR:/out" \
-  -v "$PWD/answers.json:/answers.json:ro" "$IMAGE" init --out /out --answers /answers.json
+  -v "$PWD/answers.json:/answers.json:ro" "$IMAGE" \
+  init --out /out --answers /answers.json --image "$IMAGE" --core-image "$CORE"
 ```
+
+The file may carry the two references instead of the flags, as `"image"`
+and `"core_image"`; if both give them, they must be the same, or `init`
+stops with `molebridge init: --image and --core-image name other images
+than the answers file's image and core_image: give them in one place.`
 
 Unknown members, repeated keys and names listed twice are refused. So are
 the combinations that don't exist, such as `netbird-exit` with `sidecar` or
@@ -252,18 +260,37 @@ it also writes `routing/gluetun-preflight`, the script the `gluetun` service
 mounts, as the [`gluetun-preflight`](tools-reference.md#gluetun-preflight)
 tool does.
 
-**Put the verified pins in.** `init` writes the image pins of the source it
-was built from, and a release's source pins the release before it, so the
-`compose.yaml` that the 0.14.0 image writes names the 0.13.0 images. Replace
-them with the ones you verified, and check the result:
+**Why `--image` and `--core-image`.** A release's source pins the release
+before it, and a binary can't know its own image's digest, so without them
+`init` writes the pins of the source it was built from: the 0.14.0 image's
+`init` writes the 0.13.0 images. Without them it says so on stderr after
+writing, for example from a 0.14.1 image: `molebridge init: compose.yaml
+pins the Molebridge images at v0.14.0, the pins of the source this binary
+was built from: this is v0.14.1 (built as v0.14.1-rc.1); the pins are
+v0.14.0's. To pin the release you verified, pass --image and --core-image
+(docs/setup.md#molebridge-init).` A build that reports no release tag
+(`molebridge dev`), or the pins' own release, says `, possibly an older
+release.` in place of the part from `: this is`.
+
+**The 0.14.0 image's `init` has neither flag.** It stops with `molebridge
+init: flag provided but not defined: -image`. With that release, leave the
+two flags out and replace the `ghcr.io/irashack/molebridge:` and
+`ghcr.io/irashack/molebridge-core:` references in `$DIR/compose.yaml` with
+`$IMAGE` and `$CORE` in an editor.
+
+Each reference must be exactly `ghcr.io/irashack/molebridge:<tag>@sha256:<digest>`
+and `ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>`, both with the
+same tag (`vX.Y.Z` or `vX.Y.Z-rc.N`) and each with its index digest of 64
+lowercase hexadecimal digits; `init` refuses anything else, saying what is
+wrong, and writes nothing. The [tool reference](tools-reference.md#init)
+quotes the messages. Check the result:
 
 ```sh
-sed -i "s#ghcr.io/irashack/molebridge:[^ \"]*#$IMAGE#; s#ghcr.io/irashack/molebridge-core:[^ \"]*#$CORE#" "$DIR/compose.yaml"
 grep -n 'image:' "$DIR/compose.yaml"
 cd "$DIR"
 ```
 
-Every Molebridge `image:` line must now name `$TAG` and a digest from the
+Every Molebridge `image:` line must name `$TAG` and a digest from the
 release notes. The gluetun and busybox pins come from the
 same source as the bundle's and need no change. Work in `$DIR` from here
 on.

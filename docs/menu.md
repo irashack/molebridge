@@ -128,7 +128,9 @@ for the sidecars)`.
 
 ## What doesn't change
 
-`init` writes the same services, settings and image pins as the Compose files
-shipped with the release, and writes `EXIT_KIND` and `TUNNEL_BACKEND` as they
-do. Those files stay valid: an exit set up from them needs no change, and you
+`init` writes the same services and settings as the Compose files in the
+source it was built from, and writes `EXIT_KIND` and `TUNNEL_BACKEND` as they
+do. Its Molebridge images are the two you give it with `--image` and
+`--core-image`; without them, that source's pins, which may be an older
+release's ([setup](setup.md#molebridge-init)). Those files stay valid: an exit set up from them needs no change, and you
 can keep using them instead of `init` ([without init](setup.md#without-init)).

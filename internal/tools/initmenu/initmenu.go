@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"text/template"
@@ -108,6 +109,8 @@ type Plan struct {
 	Proxy      bool
 	Switchyard bool
 	PortSync   bool
+	// Images, when set, replace compose.tmpl's Molebridge pins.
+	Images Images
 }
 
 // Refusal is an answer or combination init refuses, with a message for the
@@ -118,14 +121,17 @@ func (r Refusal) Error() string { return string(r) }
 
 func refuse(format string, a ...any) error { return Refusal(fmt.Sprintf(format, a...)) }
 
+// usage is the line a wrong argument prints.
+const usage = "usage: molebridge init --out DIR [--answers FILE] [--image REF --core-image REF] [--force]"
+
 // helpText is the usage text.
-const helpText = `Usage: molebridge init --out DIR [--answers FILE] [--force]
+const helpText = `Usage: molebridge init --out DIR [--answers FILE] [--image REF --core-image REF] [--force]
 
 EXPERIMENTAL. Asks for the provider, the ways in and the extras, or reads
 the same answers from FILE, and writes DIR/compose.yaml and DIR/.env (and,
 for a gluetun provider, DIR/routing/gluetun-preflight). The services,
-settings and image pins are those of the Compose files shipped with this
-release. It never overwrites a file unless --force is given.
+settings and image pins are those of the Compose files in the source this
+binary was built from. It never overwrites a file unless --force is given.
 
   provider   mullvad, pia, nordvpn, or gluetun-<id> for a provider gluetun
              drives (gluetun-fastestvpn, gluetun-ivpn, gluetun-mullvad,
@@ -142,6 +148,17 @@ The answers file is JSON, at most 4096 bytes, with exactly these members
 
   {"schema": 1, "provider": "pia", "ways_in": ["sidecar"],
    "extras": ["switchyard", "port-sync"]}
+
+The source a release is built from pins the release before it, so the
+Molebridge pins init writes may be an older release's. Give the two images
+you verified, and every Molebridge image init writes is one of them:
+
+  --image REF       ghcr.io/irashack/molebridge:<tag>@sha256:<digest>
+  --core-image REF  ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>
+
+Both or neither, with the same tag (vX.Y.Z or vX.Y.Z-rc.N) and each with
+its index digest (64 lowercase hex digits). The answers file may give them
+instead, as "image" and "core_image"; if both give them, they must match.
 
 docs/setup.md#molebridge-init says what to do with the result.
 `
@@ -306,42 +323,178 @@ func checkNames(kind string, got, known []string) error {
 	return nil
 }
 
-// ParseAnswers reads an answers file: one JSON object with "schema": 1,
-// "provider", "ways_in" and optionally "extras", nothing else. Duplicate
-// keys, unknown members and wrong types are refused.
+// ParseAnswers reads an answers file: ParseAnswersFile without the images.
 func ParseAnswers(raw []byte) (Answers, error) {
+	a, _, err := ParseAnswersFile(raw)
+	return a, err
+}
+
+// ParseAnswersFile reads an answers file: one JSON object with "schema": 1,
+// "provider", "ways_in", optionally "extras", and optionally both of "image"
+// and "core_image", nothing else. Duplicate keys, unknown members, wrong
+// types and image references ParseImages refuses are refused.
+func ParseAnswersFile(raw []byte) (Answers, Images, error) {
+	a, obj, err := parseAnswers(raw)
+	if err != nil {
+		return a, Images{}, err
+	}
+	var refs [2]*string
+	for i, key := range []string{"image", "core_image"} {
+		v, present := obj[key]
+		if !present {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			return a, Images{}, refuse("the answers file's %s must be a string.", key)
+		}
+		refs[i] = &s
+	}
+	img, err := ParseImages("the answers file's image", refs[0], "the answers file's core_image", refs[1])
+	return a, img, err
+}
+
+func parseAnswers(raw []byte) (Answers, map[string]any, error) {
 	var a Answers
 	if len(raw) > MaxAnswers {
-		return a, refuse("the answers file is larger than %d bytes.", MaxAnswers)
+		return a, nil, refuse("the answers file is larger than %d bytes.", MaxAnswers)
 	}
 	v, err := validate.DecodeJSON(raw)
 	if err != nil {
-		return a, refuse("the answers file is not valid JSON: %v.", err)
+		return a, nil, refuse("the answers file is not valid JSON: %v.", err)
 	}
 	obj, ok := v.(map[string]any)
 	if !ok {
-		return a, refuse("the answers file must hold one JSON object.")
+		return a, nil, refuse("the answers file must hold one JSON object.")
 	}
 	for key := range obj {
-		if !slices.Contains([]string{"schema", "provider", "ways_in", "extras"}, key) {
-			return a, refuse("the answers file has an unknown member %q: only schema, provider, ways_in and extras.", key)
+		if !slices.Contains([]string{"schema", "provider", "ways_in", "extras", "image", "core_image"}, key) {
+			return a, nil, refuse("the answers file has an unknown member %q: only schema, provider, ways_in, extras, image and core_image.", key)
 		}
 	}
 	if n, ok := validate.IsInt(obj["schema"]); !ok || n != 1 {
-		return a, refuse(`the answers file must say "schema": 1.`)
+		return a, nil, refuse(`the answers file must say "schema": 1.`)
 	}
 	s, ok := obj["provider"].(string)
 	if !ok || s == "" || len(s) > 64 {
-		return a, refuse("the answers file's provider must be a name such as \"mullvad\".")
+		return a, nil, refuse("the answers file's provider must be a name such as \"mullvad\".")
 	}
 	a.Provider = s
 	if a.WaysIn, err = stringList(obj, "ways_in", true); err != nil {
-		return a, err
+		return a, nil, err
 	}
 	if a.Extras, err = stringList(obj, "extras", false); err != nil {
-		return a, err
+		return a, nil, err
 	}
-	return a, nil
+	return a, obj, nil
+}
+
+// The repositories of the two Molebridge images.
+const (
+	MolebridgeRepo = "ghcr.io/irashack/molebridge"
+	CoreRepo       = "ghcr.io/irashack/molebridge-core"
+)
+
+// Images are the two Molebridge images init writes in place of compose.tmpl's
+// pins: both of one release, each by tag and index digest.
+type Images struct {
+	Molebridge string // ghcr.io/irashack/molebridge:<tag>@sha256:<digest>
+	Core       string // ghcr.io/irashack/molebridge-core:<tag>@sha256:<digest>
+	Tag        string // their tag
+}
+
+var (
+	releaseTagRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
+	digestRE     = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	// molebridgePinRE matches a pin of either Molebridge image.
+	molebridgePinRE = regexp.MustCompile(`ghcr\.io/irashack/molebridge(-core)?:([A-Za-z0-9._-]+)@sha256:[0-9a-f]{64}`)
+)
+
+// checkImage returns the tag of ref, which must be exactly
+// repo:<tag>@sha256:<64 lowercase hex digits>, or a Refusal saying what is
+// wrong with it. what names where ref came from.
+func checkImage(what, ref, repo string) (string, error) {
+	if ref == "" {
+		return "", refuse("%s is empty: give %s:<tag>@sha256:<digest>.", what, repo)
+	}
+	bad := func(format string, a ...any) error {
+		return refuse("%s %q is not %s:<tag>@sha256:<digest>: %s.", what, ref, repo, fmt.Sprintf(format, a...))
+	}
+	for _, r := range ref {
+		if r <= ' ' || r >= 0x7f {
+			return "", bad("it holds a space, a control character or a non-ASCII character")
+		}
+	}
+	name, digest, hasDigest := strings.Cut(ref, "@")
+	gotRepo, tag, hasTag := name, "", false
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		gotRepo, tag, hasTag = name[:i], name[i+1:], true
+	}
+	switch {
+	case gotRepo != repo:
+		return "", bad("the repository is %s, not %s", gotRepo, repo)
+	case !hasTag || tag == "":
+		return "", bad("it has no tag; give the release's tag, such as v0.14.1, before the digest")
+	case !releaseTagRE.MatchString(tag):
+		return "", bad("the tag %s is not a release tag such as v0.14.1 or a candidate tag such as v0.14.1-rc.1", tag)
+	case !hasDigest:
+		return "", bad("it has no digest; init needs the index digest from the release notes, not a tag alone")
+	case !digestRE.MatchString(digest):
+		return "", bad("the digest must be sha256: and 64 lowercase hexadecimal digits")
+	}
+	return tag, nil
+}
+
+// ParseImages checks a pair of image references, the Molebridge image and
+// the core image; nil is a reference not given. Neither gives no Images;
+// both must be valid and have one tag.
+func ParseImages(whatImage string, image *string, whatCore string, core *string) (Images, error) {
+	if image == nil && core == nil {
+		return Images{}, nil
+	}
+	if image == nil || core == nil {
+		return Images{}, refuse("%s and %s go together: give both, the two images of one release.", whatImage, whatCore)
+	}
+	tag, err := checkImage(whatImage, *image, MolebridgeRepo)
+	if err != nil {
+		return Images{}, err
+	}
+	coreTag, err := checkImage(whatCore, *core, CoreRepo)
+	if err != nil {
+		return Images{}, err
+	}
+	if tag != coreTag {
+		return Images{}, refuse("%s has tag %s but %s has tag %s: give the two images of one release.", whatImage, tag, whatCore, coreTag)
+	}
+	return Images{Molebridge: *image, Core: *core, Tag: tag}, nil
+}
+
+// PinnedTag is the tag compose.tmpl pins the Molebridge images at.
+func PinnedTag() string {
+	raw, _ := templateFS.ReadFile("compose.tmpl")
+	if m := molebridgePinRE.FindSubmatch(raw); m != nil {
+		return string(m[2])
+	}
+	return ""
+}
+
+// pinsNotice is what init says on stderr when it wrote compose.tmpl's pins.
+// version is the binary's own (`molebridge version`); when it is a release
+// or candidate tag of another release than the pins', the line says so.
+func pinsNotice(version, pinned string) string {
+	line := "molebridge init: compose.yaml pins the Molebridge images at " + pinned +
+		", the pins of the source this binary was built from"
+	release, _, rc := strings.Cut(version, "-rc.")
+	if releaseTagRE.MatchString(version) && release != pinned {
+		this := release
+		if rc {
+			this += " (built as " + version + ")"
+		}
+		line += ": this is " + this + "; the pins are " + pinned + "'s."
+	} else {
+		line += ", possibly an older release."
+	}
+	return line + " To pin the release you verified, pass --image and --core-image (docs/setup.md#molebridge-init)."
 }
 
 func stringList(obj map[string]any, key string, required bool) ([]string, error) {
@@ -458,6 +611,11 @@ func Render(p Plan) (map[string][]byte, error) {
 # directory (docs/configuration.md#multi-provider-exit; experimental).
 `
 	}
+	if p.Images.Tag != "" {
+		multi += `# The Molebridge images are not that file's pins: they are the ` + p.Images.Tag + `
+# images init was given (--image and --core-image, or the answers file).
+`
+	}
 	fmt.Fprintf(&c, `# Written by `+"`molebridge init`"+` (experimental, docs/setup.md#molebridge-init).
 #   provider: %s
 #   ways in:  %s
@@ -508,11 +666,20 @@ services:
 			fmt.Fprintf(&c, "  %s:\n", v)
 		}
 	}
+	compose := c.Bytes()
+	if p.Images.Tag != "" {
+		compose = molebridgePinRE.ReplaceAllFunc(compose, func(pin []byte) []byte {
+			if bytes.HasPrefix(pin, []byte(CoreRepo+":")) {
+				return []byte(p.Images.Core)
+			}
+			return []byte(p.Images.Molebridge)
+		})
+	}
 	var e bytes.Buffer
 	if err := envT.ExecuteTemplate(&e, p.Form, p.data()); err != nil {
 		return nil, err
 	}
-	files := map[string][]byte{ComposeFile: c.Bytes(), EnvFile: e.Bytes()}
+	files := map[string][]byte{ComposeFile: compose, EnvFile: e.Bytes()}
 	if p.GluetunProvider != "" {
 		files[PreflightFile] = routing.GluetunPreflight
 	}
@@ -533,6 +700,9 @@ type Options struct {
 	Stdout, Stderr io.Writer
 	// Terminal reports whether Stdin is a terminal to ask on.
 	Terminal func() bool
+	// Version is the release the binary was built as (`molebridge
+	// version`), for the line about the pins.
+	Version string
 }
 
 // Defaults are the process's own streams.
@@ -550,24 +720,47 @@ func Main(args []string, o Options) int {
 	out := fs.String("out", "", "")
 	answersPath := fs.String("answers", "", "")
 	force := fs.Bool("force", false, "")
+	image := fs.String("image", "", "")
+	coreImage := fs.String("core-image", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			io.WriteString(o.Stdout, helpText)
 			return 0
 		}
 		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
-		fmt.Fprintln(o.Stderr, "usage: molebridge init --out DIR [--answers FILE] [--force]")
+		fmt.Fprintln(o.Stderr, usage)
 		return 2
 	}
 	if fs.NArg() != 0 || *out == "" {
-		fmt.Fprintln(o.Stderr, "usage: molebridge init --out DIR [--answers FILE] [--force]")
+		fmt.Fprintln(o.Stderr, usage)
+		return 2
+	}
+	var imageRef, coreRef *string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "image":
+			imageRef = image
+		case "core-image":
+			coreRef = coreImage
+		}
+	})
+	images, err := ParseImages("--image", imageRef, "--core-image", coreRef)
+	if err != nil {
+		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
 		return 2
 	}
 	var a Answers
 	if *answersPath != "" {
 		raw, err := readBounded(*answersPath)
+		var fileImages Images
 		if err == nil {
-			a, err = ParseAnswers(raw)
+			a, fileImages, err = ParseAnswersFile(raw)
+		}
+		if err == nil && fileImages.Tag != "" {
+			if images.Tag != "" && images != fileImages {
+				err = refuse("--image and --core-image name other images than the answers file's image and core_image: give them in one place.")
+			}
+			images = fileImages
 		}
 		if err != nil {
 			fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
@@ -589,6 +782,7 @@ func Main(args []string, o Options) int {
 		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
 		return 1
 	}
+	p.Images = images
 	files, err := Render(p)
 	if err != nil {
 		fmt.Fprintf(o.Stderr, "molebridge init: %v\n", err)
@@ -614,6 +808,9 @@ func Main(args []string, o Options) int {
 			confs[i] = "tunnel/wg_confs/" + name + ".conf"
 		}
 		fmt.Fprintf(o.Stdout, "This multi-provider exit needs a tunnel config for each provider: %s.\n", strings.Join(confs, ", "))
+	}
+	if images.Tag == "" {
+		fmt.Fprintln(o.Stderr, pinsNotice(o.Version, PinnedTag()))
 	}
 	return 0
 }

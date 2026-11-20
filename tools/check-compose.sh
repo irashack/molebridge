@@ -573,5 +573,46 @@ init_all() {
 init_all "$work/molebridge" 76
 "$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
     fail "init overwrote an earlier output without --force"
+# --image and --core-image (issue 130). Given the shipped files' own pins,
+# init writes what it writes without them but for two header lines. Given
+# another release's images, every Molebridge image it writes is one of them,
+# and the result still resolves.
+shipped_image=$(jq -r .services.exit.image "$work/native.json")
+shipped_core=$(jq -r .services.exit.image "$work/nsc.json")
+zero=sha256:0000000000000000000000000000000000000000000000000000000000000000
+other_image=ghcr.io/irashack/molebridge:v99.0.0@$zero
+other_core=ghcr.io/irashack/molebridge-core:v99.0.0@$zero
+for answers in '{"schema":1,"provider":"pia","ways_in":["netbird-exit","proxy"],"extras":["switchyard"]}' \
+        '{"schema":1,"provider":"pia","ways_in":["sidecar","proxy"],"extras":["switchyard","port-sync"]}' \
+        '{"schema":1,"provider":"gluetun-ivpn","ways_in":["netbird-exit"],"extras":["switchyard"]}' \
+        '{"schema":1,"provider":"gluetun-ivpn","ways_in":["sidecar"],"extras":["switchyard"]}'; do
+    n=$((n + 1))
+    printf '%s\n' "$answers" > "$work/answers-$n.json"
+    for out in plain pinned other; do
+        case $out in
+            plain) set -- ;;
+            pinned) set -- --image "$shipped_image" --core-image "$shipped_core" ;;
+            other) set -- --image "$other_image" --core-image "$other_core" ;;
+        esac
+        "$work/molebridge" init --out "$work/init-$n-$out" --answers "$work/answers-$n.json" "$@" > "$work/init-$n-$out.log" 2>&1 ||
+            fail "init-$n: init failed with ${*:-no images} ($answers): $(cat "$work/init-$n-$out.log")"
+    done
+    grep -v -e '^# The Molebridge images are not that file' -e '^# images init was given' "$work/init-$n-pinned/compose.yaml" |
+        cmp -s - "$work/init-$n-plain/compose.yaml" ||
+        fail "init-$n: --image and --core-image with the shipped pins changed more than the header ($answers)"
+    dir="$work/init-$n-other"
+    docker compose --project-directory "$dir" -f "$dir/compose.yaml" --env-file "$dir/.env" config --format json > "$work/init-$n-other.json" ||
+        fail "init-$n: with --image and --core-image its compose.yaml does not resolve ($answers)"
+    jq -e --arg i "$other_image" --arg c "$other_core" '
+      [.services[] | .image | select(test("^ghcr.io/irashack/"))] as $m |
+      ($m | length) > 0 and ($m | all(. == $i or . == $c))' "$work/init-$n-other.json" >/dev/null ||
+        fail "init-$n: with --image and --core-image a Molebridge image is not one of them ($answers)"
+    # Swapped back, the two outputs are the same: each pin became the image
+    # of its own repository.
+    sed -e "s#$other_image#$shipped_image#g" -e "s#$other_core#$shipped_core#g" -e '/^# The Molebridge images are not that file/d' \
+        -e '/^# images init was given/d' "$dir/compose.yaml" | cmp -s - "$work/init-$n-plain/compose.yaml" ||
+        fail "init-$n: --image and --core-image changed more than the Molebridge pins and the header ($answers)"
+done
+pass "init: --image and --core-image replace every Molebridge pin and nothing else"
 pass "init: 76 combinations written, each resolving as the shipped forms' services, the proxy hardened, the 24 multi-provider exits with PROVIDERS and one tunnel-config mount per provider"
 echo "all Compose checks passed"

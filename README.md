@@ -64,11 +64,13 @@ needed on the host: the tools run from the signed image.
    [verify the bundle and the images](docs/setup.md#1-download-and-verify)
    before you extract or run anything.
 2. Let `molebridge init`, run from the verified image (`IMAGE`), write a
-   Compose file and an `.env` for the ways in and extras you choose, then put
-   the verified image pins in ([molebridge init](docs/setup.md#molebridge-init)):
+   Compose file and an `.env` for the ways in and extras you choose, pinned
+   to the two verified images (`IMAGE` and `CORE`;
+   [molebridge init](docs/setup.md#molebridge-init)):
 
    ```sh
-   docker run --rm -it --user "$(id -u):$(id -g)" -v "$HOME/molebridge:/out" "$IMAGE" init --out /out
+   docker run --rm -it --user "$(id -u):$(id -g)" -v "$HOME/molebridge:/out" "$IMAGE" \
+     init --out /out --image "$IMAGE" --core-image "$CORE"
    ```
 
 3. Create the tunnel config and the secrets, then check and start:

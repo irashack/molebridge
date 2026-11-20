@@ -163,6 +163,23 @@ what changed is below.
   fictitious state, serves it with the real panel binary and captures it
   with Playwright ([how](tools/screenshots/README.md)). The README banner's
   footer lines fall back to a sans-serif font where Arial is missing.
+- `molebridge init` takes `--image` and `--core-image`: the two Molebridge
+  images you verified, each exactly
+  `ghcr.io/irashack/molebridge[-core]:<tag>@sha256:<digest>`, both with one
+  tag. Every Molebridge image it writes is then one of them. The answers
+  file may carry them as `"image"` and `"core_image"`; if the flags give
+  them too, they must match. Anything else is refused with what is wrong
+  and writes nothing ([tool reference](docs/tools-reference.md#init)).
+  Without them `init` still writes the pins of the source it was built
+  from, which pins the release before it, and now says so on stderr after
+  writing, naming both releases when the binary's own tag differs:
+  `molebridge init: compose.yaml pins the Molebridge images at v0.14.0, the
+  pins of the source this binary was built from: this is v0.14.1 (built as
+  v0.14.1-rc.1); the pins are v0.14.0's. To pin the release you verified,
+  pass --image and --core-image (docs/setup.md#molebridge-init).`
+  [Setup](docs/setup.md#molebridge-init) passes the two verified references
+  and drops its `sed` step, which never ran on a host. Not run on a host:
+  unit tests and `tools/check-compose.sh` (in CI) cover it. Closes #130.
 
 ## 0.14.1 — 2026-11-20
 
