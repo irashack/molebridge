@@ -236,23 +236,39 @@ the episode is applied at once and ends it; and with both relays dropping, the e
 (`failover-exhausted` in the panel, "No backup verified"). The leak counter must stay at zero. The
 failures still come from the pipeline's own checks and re-applies, and every switch waits out the
 90-second reapply guard, so these are the longest drills, about fifteen minutes.
-`TestSystemRigMultiProviderSwitch` (`systemrig_multiprovider_test.go`) runs a [multi-provider
-exit](docs/configuration.md#multi-provider-exit) on the `molebridge-drill` binary, not the release
-build: the release build refuses `PROVIDERS` until multi-provider exits are switched on, and the
-`drill` tag switches them on (`internal/buildgate/multi_provider_drill.go`). It runs with
-`PROVIDERS=mullvad,nordvpn` beside a fake
-NordVPN network: the fixture's catalogue (`tools/fixtures/nordvpn`) cut to one server, which is a
-kernel WireGuard server on port 51820 for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4 only,
-with an SNAT to its own egress address, and the `ips/insights` check, protected only from that
-address. Requests written to `desired.json` change the tunnel from Mullvad relay A to the NordVPN
-server and on to Mullvad relay B without a restart; each change must end verified for its request
-with its provider's own check, the client's traffic following (IPv4 only on NordVPN, its IPv6 with
-no way out), and the leak counter at zero throughout. The panel has no provider choice yet, so the
-drill does without it; PIA has no fake network on the rig. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
+The `TestSystemRigMultiProvider*` drills (`systemrig_multiprovider_test.go`,
+`systemrig_mpdrills_test.go`) run a [multi-provider exit](docs/configuration.md#multi-provider-exit)
+on the `molebridge-drill` binary, not the release build: the release build refuses `PROVIDERS`
+until multi-provider exits are switched on, and the `drill` tag switches them on
+(`internal/buildgate/multi_provider_drill.go`). Beside the Mullvad relays the rig then has a fake
+NordVPN network (the fixture's catalogue in `tools/fixtures/nordvpn` cut to one server, a kernel
+WireGuard server on port 51820 for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4 only, with an
+SNAT to its own egress address, and the `ips/insights` check, protected only from that address)
+and a fake PIA network (`systemrig_pia_test.go`: a region list with one port-forwarding region, the
+login and the status check, connected only from the server's egress address, and a kernel
+WireGuard server on port 1337 with its `addKey` registration API at its public address and its
+`getSignature` and `bindPort` port-forwarding API at its tunnel address, both by TLS name). The
+drill build's hook `MOLEBRIDGE_DRILL_PIA_CA` (`internal/exit/pia_hook_drill.go`) makes PIA's pinned
+calls trust the rig's certificate authority; the release build trusts PIA's own CA only. Requests
+are written to `desired.json` directly, as the panel would write them. The drills:
+`TestSystemRigMultiProviderSwitch` changes the tunnel between every pair of the three providers in
+both directions without a restart, each change verified for its request with its provider's own
+check, the client's traffic following (IPv4 only on NordVPN and PIA, its IPv6 with no way out),
+and on each provider's tunnel deletes each contract rule, the tunnel route and the exit table's
+routes in turn, each repaired back to the routing it had (a subset of the namespace drills' drift
+table, whose own rig has no providers); `TestSystemRigMultiProviderTunnelLoss` deletes the tunnel
+link right after each change and requires it back as the new provider's, never the previous one's;
+`TestSystemRigMultiProviderInterruptedReplace` holds a `Replace` between its links (the drill
+build's `hold-replace` hook, `internal/exit/worker_hook_drill_linux.go`), kills the worker there,
+starts the exit again and requires the request finished on the new provider with no rule of the
+old tunnel left; `TestSystemRigMultiProviderPIAForwardLeft` forwards PIA's port to the client,
+changes to Mullvad while sampling the exit, and requires the forwarding table gone before Mullvad's
+peer is up, then the port forwarded again back on PIA. The leak counter must stay at zero
+throughout. Every drill runs at once. CI runs them in the "System rig" job; on a disposable Linux machine with kernel
 WireGuard, nftables, iproute2 and util-linux you can run them as root:
 
 ```sh
-go test -count=1 -v -timeout 25m -parallel 12 -tags drill,systemrig -run TestSystemRig ./internal/exit/
+go test -count=1 -v -timeout 25m -parallel 16 -tags drill,systemrig -run TestSystemRig ./internal/exit/
 ```
 
 A stopped container takes its namespace with it; on the rig the exit's namespace stays, so the stopped

@@ -154,7 +154,9 @@ are in the expected state, and the repairer's pass after a failure puts
 them back if they went, before the tunnel loop's next attempt. The worker
 reads its tunnel from a `TunnelSource`; a single-provider exit uses the
 single-provider source, which is today's code moved (piece 6 sets the
-multi-provider one).
+multi-provider one). On the system rig, a `Replace` killed between its
+links and a tunnel lost right after a change both come back as the new
+provider's ([System rig drills](#system-rig-drills)).
 
 ## The provider set
 
@@ -335,8 +337,11 @@ PIA's return-path rules are left to the exit's `Replace`, which is piece
 forgotten before the tunnel is replaced, a table that can't be removed
 refuses the change and is retried, and the port is forwarded again after
 coming back to PIA) and a namespace drill that removes a real forwarding
-table (`internal/exit/pia_leave_drill_test.go`, in CI); not on the rig or a
-real tunnel.
+table (`internal/exit/pia_leave_drill_test.go`, in CI), and on the system
+rig with a fake PIA server forwarding a port
+(`TestSystemRigMultiProviderPIAForwardLeft`: the table is gone before
+Mullvad's tunnel is up; see [System rig drills](#system-rig-drills)); not on
+a real tunnel.
 
 ## One interface name
 
@@ -431,21 +436,14 @@ measurement and the live pass behind it, turns it on. Until then the
 package's own tests reach a multi-provider exit through a test-only load
 option, and the drills through the `drill` build.
 
-As built (the rig drill): `TestSystemRigMultiProviderSwitch`
-(`internal/exit/systemrig_multiprovider_test.go`) grows the system rig by a
-fake NordVPN network only: one server cut from the fixture catalogue,
-kernel WireGuard for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4
-only, an SNAT to its egress address, and `ips/insights` protected only from
-it. The rig's `molebridge-drill` (the release build's flags plus the
-`drill` tag, which switches multi-provider exits on; the release build
-refuses `PROVIDERS`) with `PROVIDERS=mullvad,nordvpn` changes from Mullvad
-relay A to NordVPN and on to Mullvad relay B, by requests written to
-`desired.json` (the rig drives the exit without a panel), each change
-verified with its provider's check, the client following, and the leak
-counter at zero throughout. Not on the rig yet, from the drills below: PIA's
-fake network and every pair with it, tunnel loss right after a change, a
-`Replace` interrupted by a restart, and the routing-repair drills per
-provider.
+As built (the rig drills): the `TestSystemRigMultiProvider*` drills
+(`internal/exit/systemrig_multiprovider_test.go`,
+`systemrig_mpdrills_test.go`) run the rig's `molebridge-drill` (the release
+build's flags plus the `drill` tag, which switches multi-provider exits on;
+the release build refuses `PROVIDERS`) beside a fake NordVPN network and a
+fake PIA network (`systemrig_pia_test.go`), by requests written to
+`desired.json` (the rig drives the exit without a panel). What they
+cover is under [System rig drills](#system-rig-drills).
 
 ## The catalogs in one process
 
@@ -671,6 +669,49 @@ replacement; tunnel loss right after a provider change, recovered as the
 new provider; a `Replace` interrupted by a worker restart; PIA with port
 forwarding left for Mullvad, with the forward table gone before the new
 tunnel is up; the routing-repair drills on each provider.
+
+**As built.** All five run in CI's "System rig" job, on fake networks only.
+The fake NordVPN network is one server cut from the fixture catalogue,
+kernel WireGuard for the exit's `nordvpn.conf` key and `10.5.0.2`, IPv4
+only, an SNAT to its egress address, and `ips/insights` protected only from
+it. The fake PIA network is a region list with one port-forwarding region,
+the login and the status check (connected only from the server's egress
+address), and one kernel WireGuard server whose `addKey` answers at its
+public address and whose `getSignature` and `bindPort` answer at its tunnel
+address, by TLS name; the drill build trusts the rig's certificate authority
+for those calls (`MOLEBRIDGE_DRILL_PIA_CA`, `internal/exit/pia_hook_drill.go`),
+and every registration hands out the same tunnel address.
+
+- `TestSystemRigMultiProviderSwitch`: Mullvad, NordVPN, PIA, Mullvad, PIA,
+  NordVPN, Mullvad, every ordered pair once, each change verified for its
+  request with its provider's check, the client's traffic following, the
+  tunnel's peer and `tunnel-provider.json` the new provider's, PIA's
+  registration and port-forward fields gone after leaving it, and the leak
+  counter at zero.
+- `TestSystemRigMultiProviderTunnelLoss`: the tunnel link deleted right
+  after the changes to PIA, NordVPN and Mullvad; every peer the link shows
+  until it is verified again is the new provider's.
+- `TestSystemRigMultiProviderInterruptedReplace`: Mullvad to PIA, then PIA
+  to NordVPN, each `Replace` held between deleting the old link and
+  creating the new one (`tunnel.Options.BetweenLinks`, set only by the drill
+  build's worker when `<run dir>/hold-replace` exists) and the worker killed
+  there. The exit stops, `tunnel-provider.json` already names the new
+  provider; started again, it finishes the same request on the new
+  provider, and no rule 94 or 98 of the old tunnel's addresses is left.
+- `TestSystemRigMultiProviderPIAForwardLeft`: PIA forwards its port to the
+  client (`PIA_PORT_FORWARD_TARGET`), then the exit changes to Mullvad while
+  a loop samples the tunnel's peer and then the forwarding table; no sample
+  shows Mullvad's peer with the table, and the table is last seen before
+  Mullvad's peer first is. Back on PIA, it registers and forwards again.
+- The repair drills: the namespace drills' drift table
+  (`internal/drill/drift_drill_test.go`) has a rig of its own with no
+  providers, so rather than parameterise it, the switch drill applies a
+  subset of its faults on each provider's tunnel: each of rules 1, 90, 94,
+  95, 96, 97 and 98 deleted, the tunnel's default route deleted and the exit
+  table flushed, in each family where the exit has them, each repaired back
+  to the routing it had before. The drift table's other faults (foreign
+  rules and routes, a replaced rule 97, the interface down) and its
+  250-millisecond bound are not checked per provider.
 
 ### The live pass
 

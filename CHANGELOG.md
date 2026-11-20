@@ -139,6 +139,19 @@ what changed is below.
   forwarded without its SNAT go to a separate counter the drills log
   ([the system rig](CONTRIBUTING.md#the-system-rig)).
 
+- Internal, no user-visible change: the system rig drills a multi-provider
+  exit across all three providers. Beside a new fake PIA network (region
+  list, login, status check, and a WireGuard server with its registration
+  and port-forwarding APIs), the drill build changes between every pair of
+  Mullvad, NordVPN and PIA in both directions, recovers a tunnel lost right
+  after a change as the new provider's, finishes a change whose `Replace`
+  was killed with the worker between its links, removes PIA's forwarding
+  table before Mullvad's tunnel is up, and repairs routing faults on each
+  provider's tunnel, with no client packet by the host path. Two hooks
+  exist only in drill builds: trusting the rig's certificate authority for
+  PIA, and holding a replacement between its links. Fake networks only:
+  the live pass has not run.
+
 ## 0.14.0 — 2026-11-20
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
