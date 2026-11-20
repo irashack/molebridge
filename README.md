@@ -3,354 +3,160 @@
 </p>
 
 <p align="center">
-  <strong>A NetBird exit node that leaves through a commercial VPN.</strong><br>
-  Self-hosted. It uses Mullvad, PIA or NordVPN directly, or gluetun for
-  FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and Windscribe. Routing
-  fails closed, and a small web panel switches servers.
+  <strong>A commercial VPN tunnel you run yourself, reached the way you choose.</strong><br>
+  A NetBird exit node for your devices, a sidecar for your containers, or a
+  proxy for programs that opt in, through Mullvad, PIA or NordVPN, or six
+  providers through gluetun.
 </p>
 
 <p align="center">
-  <a href="docs/setup.md"><strong>Setup</strong></a> ·
+  <a href="docs/menu.md"><strong>The menu</strong></a> ·
+  <a href="docs/setup.md">Setup</a> ·
   <a href="docs/prerequisites.md">Requirements</a> ·
   <a href="docs/testing.md">Testing</a> ·
-  <a href="docs/switchyard.md">The panel</a> ·
-  <a href="docs/architecture.md">Architecture</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
 
-Phones can usually run only one VPN at a time, so turning on Mullvad, PIA or
-NordVPN means turning off NetBird. Molebridge moves the commercial VPN tunnel
-onto a machine you keep running. That machine joins your NetBird network as an
-exit node. Your devices stay on NetBird, select the exit, and their Internet
-traffic leaves through the VPN provider.
+Molebridge runs one VPN tunnel on a Linux machine you keep running and lets
+traffic into it in the ways you pick. For the NetBird exit and the native
+sidecar, its routing fails closed: traffic forwarded into the tunnel leaves
+through it or not at all, and the exit repairs a changed rule or route as
+soon as the kernel reports it. The gluetun sidecar relies on gluetun's
+firewall for that, and the proxy makes a narrower promise of its own. A small
+web panel, Switchyard, picks the server and shows whether the exit has
+verified where your traffic leaves.
 
-By default Molebridge builds the tunnel itself (Mullvad, PIA, NordVPN).
-An experimental second backend hands the tunnel to
-[gluetun](https://github.com/qdm12/gluetun) instead, and Switchyard then
-chooses servers for FastestVPN, IVPN, Mullvad, NordVPN, Surfshark and
-Windscribe through it ([the gluetun form](docs/gluetun-netbird-exit.md)).
-Either way, the devices using the exit are NetBird peers.
+## The menu
 
-Separately, an experimental [gluetun sidecar](docs/gluetun-sidecar.md) lets
-Switchyard choose and check the server of an ordinary gluetun container
-that your other containers share, with no NetBird involved. The experimental
-[native sidecar](docs/native-sidecar.md) gives those containers a
-tunnel that Molebridge builds itself, with PIA over WireGuard among the providers,
-and keeps their traffic in it with its own routing contract and firewall; it has
-run live with PIA on Kubernetes only ([testing](docs/testing.md)).
+| Way in | For | Status | Guide |
+|---|---|---|---|
+| NetBird exit | phones and laptops on your NetBird network, which select the exit instead of running a second VPN | experimental; run live with Mullvad, PIA and NordVPN | [NetBird exit](docs/netbird-exit.md) |
+| NetBird exit with gluetun | the same, for FastestVPN, IVPN, Surfshark or Windscribe (or Mullvad, NordVPN) | experimental; run live with NordVPN only | [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md) |
+| Native sidecar | containers that must use the tunnel and nothing else, PIA first, with `port-sync` for qBittorrent | experimental; run live with PIA on Kubernetes only | [native sidecar](docs/native-sidecar.md) |
+| gluetun sidecar | containers behind a gluetun you already run, with Switchyard picking its server | experimental; run live with NordVPN only | [gluetun sidecar](docs/gluetun-sidecar.md) |
+| Proxy | programs that opt in (agents, scrapers, CI jobs), choosing a country, city or server per connection on Mullvad | experimental; drilled live on Mullvad only | [proxy](docs/proxy.md) |
 
-You choose the server (Mullvad, NordVPN, the gluetun providers) or region
-(PIA) in a small web panel called Switchyard. Every device using the exit
-follows the switch without any client changes. Alternatively, set
-[SERVER](docs/configuration.md#a-server-set-in-configuration) to keep the
-exit on a configured server; the panel then shows it read-only. Connections
-open through the exit drop when it switches.
+The extras: [Switchyard](docs/switchyard.md), the panel;
+[failover](docs/failover.md) to a backup server, off by default; the
+[multi-provider exit](docs/multi-provider.md); and the
+[network exchange](docs/exchange.md) for an exit and panel that share no
+files. [The menu](docs/menu.md) says who each is for, what combines with
+what, and each one's guarantee. The proxy's: every connection it opens
+leaves through the tunnel, or fails, and it promises nothing about traffic
+not sent to it.
 
 <p align="center">
   <img src="docs/assets/switchyard.png" alt="Switchyard with four exits as tabs: Mullvad, PIA, NordVPN, and Surfshark through gluetun; the Mullvad exit is selected" width="900">
 </p>
 
-## What Molebridge is
+## Quick start
 
-You pull one signed image and run it: `ghcr.io/irashack/molebridge` for a
-NetBird exit, `ghcr.io/irashack/molebridge-core` for a gluetun or native
-sidecar.
-
-- **Two images, one binary.** `ghcr.io/irashack/molebridge` (amd64 and arm64)
-  holds one Go binary, `molebridge`, and the pinned NetBird client.
-  `ghcr.io/irashack/molebridge-core` holds the same binary without NetBird;
-  the sidecar Compose files run it, and its exit refuses a NetBird exit. Both
-  come from one commit and are released together. The first argument picks
-  the role: `exit`, `panel`, `health`, `status`,
-  `check-config`, `prepare-config`, `nordvpn-key`, `gluetun-auth`,
-  `gluetun-post-rules`, `gluetun-preflight`, `fix-blacklist`, `port-sync`,
-  `exchange` (the experimental [network exchange](docs/configuration.md#the-network-exchange)),
-  `proxy` (the experimental [proxy](docs/proxy.md)) and `init` (an experimental [menu](docs/setup.md#molebridge-init) that writes
-  a Compose file).
-  GitHub Actions builds and signs
-  the image with cosign, with build provenance and SBOMs, and promotes a
-  release only after a maintainer's live-acceptance run attested that the
-  exact image passed ([verification of a release](docs/setup.md#1-download-and-verify)).
-- **NetBird runs inside the exit container.** A native exit is two containers,
-  `exit` and `switchyard`. `molebridge exit` is PID 1 and
-  supervises the worker and NetBird ([how it works](#how-it-works)).
-- **Nothing to build, no Python on the host.** The setup tools run from the
-  same image as throwaway containers. Only `routing/gluetun-preflight`
-  remains a shell script, and it runs inside gluetun's container (the image
-  carries it as the `gluetun-preflight` role).
-- **Repair follows the kernel.** The exit repairs a changed routing rule,
-  route, link or address when the kernel reports it, and runs a full pass
-  every 30 seconds as the fallback. In the live drills a deleted rule was back
-  within tens of milliseconds ([testing](docs/testing.md)).
-- **A native sidecar**: Molebridge's own tunnel for containers that
-  share the exit's namespace, for providers gluetun can't drive over
-  WireGuard with Molebridge, PIA first, with `port-sync` to hand PIA's
-  forwarded port to qBittorrent ([native sidecar](docs/native-sidecar.md)).
-- **A proxy, experimental, drilled live on Mullvad only**: SOCKS5 and HTTP
-  `CONNECT` in a native exit's namespace for programs that opt in, the
-  username choosing the location (any Mullvad country, city or server,
-  without switching the exit). Every connection it opens leaves through the
-  tunnel, or fails; it promises nothing about traffic not sent to it
-  ([the proxy](docs/proxy.md)).
-
-The routing contract, the status record (schema 2) and the state files keep
-the names and fields they had in 0.7.0. What later releases promise to keep,
-and how something is deprecated, is in [compatibility](docs/compatibility.md).
-Upgrading from 0.7 needs new
-Compose files: follow [the upgrade steps](docs/operations.md#upgrading-from-07x).
-What changed in each release is in the [changelog](CHANGELOG.md).
-
-## Status: experimental
-
-**Molebridge is experimental software with one maintainer, not a 1.0.**
-[Testing](docs/testing.md) is the record, and the only place the results are
-written out in full; in short:
-
-- **Tested live** ([the latest record](docs/testing.md#094)): one Debian host
-  (amd64) against a self-hosted NetBird server. On Kubernetes (k0s with
-  Cilium): native Mullvad, PIA and NordVPN overlay exits, a gluetun overlay
-  exit, a PIA native sidecar beside qBittorrent with a forwarded port, and a
-  gluetun sidecar with NordVPN, which has also run on rootless Podman 5.8 with
-  Quadlet units. Each release candidate is upgraded from the release before
-  it and comes back `ok` before it is released, and the native overlay exits
-  pass the tunnel-loss drill, run from inside the exit's namespace with no
-  client device held on it. Rule-drift repair and the lease lapse were run
-  live the same way through 0.11.1; since then CI's namespace drills test
-  them on every commit instead ([releasing](docs/releasing.md#3-run-the-live-acceptance)). The client switch, the status
-  drills and the full network exchange were run live through 0.12.0; since
-  then CI's system rig runs them on every commit with the release build
-  against fake Mullvad servers, and a short exchange run between two nodes
-  stays live. A Linux client was last held on
-  an exit through those drills at 0.7.0, whose routing the Go exit ports
-  ([testing](docs/testing.md#070-on-rootless-podman-at-d5a234a)).
-- **Run in CI:** unit, fuzz, namespace-drill and system-rig suites and the
-  release checks on amd64; the image checks on amd64 and arm64.
-- **Not tested:** Docker Engine, podman-compose and NetBird Cloud; running the
-  shipped Compose files on any engine (CI validates them with
-  `docker compose config`; the live exits ran from Quadlet units and
-  Kubernetes manifests this repository doesn't ship); installing from the
-  signed bundle on a clean host; phones; a reboot; the panel's sign-in against
-  a real identity provider; PIA port forwarding on an overlay exit; Mullvad
-  and NordVPN as native sidecars; gluetun with providers other than NordVPN.
-  The full lists are in [testing](docs/testing.md#not-tested-at-090).
-
-Verify the release on your own host with the [checks](docs/verification.md)
-before you rely on it, and keep a way into the host that doesn't depend on the
-exit. Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
-
-## Install
-
-You pull a signed image and run it with Compose; the commands are in
-[setup](docs/setup.md).
+You need an always-on Linux host (amd64 or arm64, kernel WireGuard) with
+Docker Engine and Compose 2.24 or later, or rootless Podman, and a VPN
+account; for a NetBird exit, also a NetBird network where you are an admin
+([requirements](docs/prerequisites.md)). Nothing is built and no Python is
+needed on the host: the tools run from the signed image.
 
 1. Download `molebridge-<tag>.tar.gz` and its `.sigstore.json` from the
-   [latest release](https://github.com/irashack/molebridge/releases), then
-   [verify the bundle, the image and its provenance](docs/setup.md#1-download-and-verify)
+   [latest release](https://github.com/irashack/molebridge/releases) and
+   [verify the bundle and the images](docs/setup.md#1-download-and-verify)
    before you extract or run anything.
-2. Extract the bundle and copy `.env.example` to `.env`. Set `OVERLAY_CIDR`
-   to your NetBird range and read the other settings: the example has
-   eighteen, each commented.
-3. Create the tunnel config for your provider with the image's tools, put the
-   NetBird setup key in `secrets/netbird.env`, then check and start:
+2. Let `molebridge init`, run from the verified image (`IMAGE`), write a
+   Compose file and an `.env` for the ways in and extras you choose, then put
+   the verified image pins in ([molebridge init](docs/setup.md#molebridge-init)):
+
+   ```sh
+   docker run --rm -it --user "$(id -u):$(id -g)" -v "$HOME/molebridge:/out" "$IMAGE" init --out /out
+   ```
+
+3. Create the tunnel config and the secrets, then check and start:
 
    ```sh
    docker compose run --rm --no-deps exit check-config
    docker compose up -d
    ```
 
-The bundle pins each image by tag and digest (`ghcr.io/irashack/molebridge:v0.14.0@sha256:...`,
-and `ghcr.io/irashack/molebridge-core` in the two sidecar forms),
-so the image that runs is the one you verified. A release tag never moves;
-`:0.9`, without the `v`, follows the newest 0.9 patch release
-([image tags](docs/compatibility.md#image-tags)). To build from source instead,
-see [CONTRIBUTING](CONTRIBUTING.md#building-the-image).
+[Setup](docs/setup.md) has every command. The shipped Compose files work
+without `init` too.
 
-## How it works
+## Status
 
-```mermaid
-flowchart LR
-    device("Your devices<br/>on NetBird")
-    provider("Mullvad, PIA or<br/>NordVPN server")
+**Molebridge is experimental software with one maintainer, not a 1.0.**
+[Testing](docs/testing.md) is the record: what ran live, where and at which
+revision, and what hasn't. In short, each release candidate is upgraded from
+the release before it on Kubernetes (native Mullvad, PIA and NordVPN exits, a
+gluetun exit, a gluetun sidecar and a PIA native sidecar) and on rootless
+Podman with Quadlet units (a gluetun sidecar), and comes back verified before
+it is released. The native exits pass a tunnel-loss drill there, and since
+acceptance policy 18 the proxy a live drill on a Mullvad exit. CI runs the unit, namespace-drill and
+system-rig suites on every commit. Docker Engine, NetBird Cloud, phones, a
+clean install from the signed bundle, a stack written by `molebridge init`,
+and the shipped Compose files on any engine have not been tested.
 
-    subgraph host["Exit host"]
-        subgraph exit["exit container · one network namespace"]
-            peer("NetBird<br/>exit peer")
-            route("Policy<br/>routing")
-            tunnel("WireGuard<br/>tunnel")
-            blocked("Tunnel down:<br/>unreachable")
-            peer --> route
-            route --> tunnel
-            route -.-> blocked
-        end
-        panel("switchyard container<br/>the web panel")
-    end
-
-    device --> peer
-    tunnel --> provider
-    panel -. "files under ./state" .-> exit
-
-    classDef endpoint fill:#24273a,stroke:#8aadf4,color:#cad3f5,stroke-width:2px
-    classDef routing fill:#24273a,stroke:#a6da95,color:#cad3f5,stroke-width:2px
-    classDef stopped fill:#24273a,stroke:#ed8796,color:#f4dbd6,stroke-width:2px
-    classDef panelc fill:#24273a,stroke:#c6a0f6,color:#cad3f5,stroke-width:2px
-    class device,peer,provider endpoint
-    class route,tunnel routing
-    class blocked stopped
-    class panel panelc
-    style host fill:#1e2030,stroke:#494d64,color:#cad3f5
-    style exit fill:#181926,stroke:#494d64,color:#cad3f5
-    linkStyle default stroke:#8087a2,stroke-width:2px
-```
-
-A native exit is two containers from one image. The `exit` container owns the
-network namespace. Its first process is a supervisor; it starts a worker that
-checks the tunnel config, installs the routing rules before the tunnel
-exists, brings the tunnel up, runs the provider logic and keeps all of it in
-place, and the supervisor starts the pinned NetBird client once the worker
-reports ready. The `switchyard` container is the panel, with no capabilities
-and no network in common with the exit. With the gluetun backend, gluetun owns the namespace
-and the tunnel, and the `exit` container joins it and keeps the same routing
-rules in place ([architecture](docs/architecture.md#gluetun-backend)).
-
-Traffic forwarded from your devices can only go into the tunnel. If the
-tunnel or its routes disappear, that traffic is dropped, not sent over the
-host's own connection. The exit's own NetBird and VPN control traffic uses the
-host's normal route. If the worker stops responding, the supervisor stops
-NetBird, removes the interfaces it owns, leaves the routing rules in place
-and exits, and the engine's restart policy starts the container again.
-
-The panel holds no VPN credentials, no gluetun control-server key and no
-capabilities, and runs no commands. With OpenID Connect sign-in it can hold
-that sign-in's client secret. It writes one file naming the server you
-picked. The exit checks that name against the provider's server list, which
-it downloads itself (or reads from gluetun), then changes the tunnel and
-reports back.
-
-The panel shows an exit as connected only after the exit has checked the
-live peer and the address your traffic leaves from. How far that check goes
-depends on the provider, and the panel says which one an exit got:
-
-- **provider-confirmed:** the provider itself says the address is theirs.
-  Mullvad, PIA and NordVPN, and Mullvad and NordVPN through gluetun.
-- **tunnel checks only:** a fresh handshake with the selected server, and the
-  address seen through the tunnel differs from the host's own and matches the
-  provider's server list where that list gives exit addresses. No provider
-  confirms it. FastestVPN, IVPN, Surfshark and Windscribe through gluetun.
-
-Details: [architecture](docs/architecture.md).
-
-## What you need
-
-- **An always-on Linux host**, amd64 or arm64, with kernel WireGuard (Linux
-  5.6 or later) and Docker Engine with Compose 2.24 or later, or rootless
-  Podman. Windows hosts are not supported. Of these, only rootless Podman
-  with Quadlet units has run an exit live; the other live runs were on
-  Kubernetes ([requirements](docs/prerequisites.md#host)).
-- **Resources:** measured at 0.8.0 on the rootless Podman host with no client
-  traffic, a native Mullvad or PIA exit (NetBird included) idled at 0.3 to
-  0.5 % of one core and 67 to 78 MB; a NordVPN exit used 189 MB and a gluetun
-  exit 123 MB, because they hold a large server list. The image was 61 MB
-  unpacked. 0.9.3 changed how the server lists are parsed, and nothing has
-  been measured the same way since
-  ([testing](docs/testing.md#resources-at-080-on-rootless-podman)). Every
-  byte your devices send crosses the host twice, so the host's upload speed
-  caps throughput.
-- **A NetBird network**, either NetBird Cloud or self-hosted, with admin
-  access to create groups, a policy, a setup key and an exit-node route.
-- **A VPN account:**
-  - Mullvad, which uses one free device slot;
-  - or PIA, which needs your username and password on the host;
-  - or NordVPN (experimental), whose downloaded WireGuard config is
-    needed only once, at setup;
-  - or, through the gluetun backend, an account with one of
-    gluetun's providers that Molebridge can select servers for: FastestVPN,
-    IVPN, Mullvad, NordVPN, Surfshark or Windscribe.
-- **A way to reach the panel with authentication.** Unless you set up
-  OpenID Connect sign-in, the panel has no login of its own; see
-  [panel access](docs/access.md).
-
-No Python is needed on the host. The setup tools run from the same image as
-throwaway containers ([tools reference](docs/tools-reference.md)).
-
-The full list, with the NetBird groups, the outbound ports and the rootless
-Podman details, is in [requirements](docs/prerequisites.md).
+Verify the release on your own host with the [checks](docs/verification.md)
+before you rely on it, and keep a way into the host that doesn't depend on the
+exit. Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
 ## Limits
 
-- **The panel has no login unless you configure one.** By default, anyone who
+- **Switchyard has no login unless you configure one.** By default anyone who
   can reach it can change the exit for every device that uses it. Reach it
   through an SSH tunnel or an authenticating proxy, or turn on
-  [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect). The
-  current panel's sign-in has not run against a real identity provider; the
-  earlier Python panel's was tried live with one provider and an admin account
-  only ([testing](docs/testing.md#sign-in-pass-at-62a0170)).
-- **This is not a kill switch on your devices.** The exit fails closed for
-  traffic it receives. If a device deselects the exit or NetBird disconnects,
-  that device uses its own connection.
-- **Molebridge configures no DNS.** Devices keep their own resolvers. With
-  Mullvad, plain DNS that passes through the exit ends up at the Mullvad
-  server, so a DNS leak test shows Mullvad; this is observed, not documented
-  by Mullvad. PIA and NordVPN are untested. See [DNS](docs/operations.md#dns).
-- **Six gluetun providers and three native ones, no others.** The gluetun
-  backend accepts only the providers named above; the
-  exit refuses any other. [Other providers](docs/other-providers.md) says which
-  could be added, and what that support would realistically look like.
-- **One provider per exit.** To offer more than one, run one exit per
-  provider on the same host and serve them from one
-  [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
-- **PIA and NordVPN are IPv4 only.** PIA's port forwarding is experimental
-  and opens a port to the Internet.
-- **Automatic failover is experimental and off by default.** Unless you
-  turn on [automatic failover](docs/configuration.md#automatic-failover)
-  (native exits only; its live drill has not run), Molebridge never picks a
-  different server or region when one fails. It retries the one you chose, with growing pauses;
-  PIA re-registers within the same region when its server stops answering,
-  and with gluetun the exit puts your selection back after gluetun
-  restarts on another server.
-- **NetBird only.** It relies on NetBird's exit-node routes and was never
-  built or tested for Tailscale or other overlays.
-- **Exits only, with one exception.** Molebridge carries traffic for NetBird
-  devices, not for other containers, except in the
-  [native sidecar](docs/native-sidecar.md), which exists for providers gluetun
-  can't drive over WireGuard with Molebridge, PIA first. Its routing contract and
-  firewall keep the containers' traffic in the tunnel. To send a container's
-  traffic through any other VPN, use [gluetun](https://github.com/qdm12/gluetun)
-  directly; the [gluetun sidecar](docs/gluetun-sidecar.md) adds
-  Switchyard to pick and check its server. There, gluetun's firewall alone keeps
-  the containers' traffic in the tunnel, and only Mullvad and NordVPN can be
-  verified.
+  [OpenID Connect sign-in](docs/access.md#sign-in-with-openid-connect), which
+  has not run against a real identity provider.
+- **The NetBird exit is not a kill switch on your devices.** It fails closed
+  for the traffic it receives; a device that deselects the exit or loses
+  NetBird uses its own connection. The proxy covers only connections sent to
+  it.
+- **Molebridge configures no DNS** for the NetBird exit: devices keep their
+  own resolvers ([DNS](docs/operations.md#dns)).
+- **Three native providers and six through gluetun, no others**
+  ([other providers](docs/other-providers.md)). PIA and NordVPN are IPv4
+  only.
+- **One provider per exit.** Run one exit per provider and serve them from
+  one [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
+- **NetBird only** for the exit; it was never built or tested for Tailscale or
+  other overlays.
 
 ## Documentation
 
-**Install**
-- [Requirements](docs/prerequisites.md): accounts, host, NetBird groups and ports.
-- [Setup](docs/setup.md): from the signed bundle to a working exit.
+**Start**
+- [The menu](docs/menu.md): the ways in and extras, who each is for, what combines.
+- [Requirements](docs/prerequisites.md): host, accounts, NetBird and network, per way in.
+- [Setup](docs/setup.md): from the signed bundle through `molebridge init` to a running stack.
 - [Verification](docs/verification.md): the checks and failure drills to run before you rely on it.
-- [Panel access](docs/access.md): SSH forwarding, an authenticating proxy, or OpenID Connect sign-in.
 
-**Use**
-- [Switchyard](docs/switchyard.md): switching, embedding in a dashboard, phones, several exits.
+**Ways in**
+- [NetBird exit](docs/netbird-exit.md): the exit node for devices on your NetBird network.
+- [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): the same with gluetun holding the tunnel.
+- [Native sidecar](docs/native-sidecar.md): Molebridge's own tunnel, routing contract and firewall for containers.
+- [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that your containers share.
+- [Proxy](docs/proxy.md): SOCKS5 and HTTP `CONNECT` for programs that opt in.
+- [Providers](docs/providers.md) and [other providers](docs/other-providers.md): how the providers differ, and why others aren't offered.
+
+**Extras**
+- [Switchyard](docs/switchyard.md) and [panel access](docs/access.md): the panel, and signing in to it.
+- [Failover](docs/failover.md): moving to a backup server when the selected one keeps failing.
+- [Multi-provider exit](docs/multi-provider.md): one NetBird exit for several providers.
+- [Network exchange](docs/exchange.md): an exit and its panel without shared files.
+
+**Run it**
 - [Operations](docs/operations.md): health, upgrades, recovery, backups, rootless Podman, removal.
 - [Troubleshooting](docs/troubleshooting.md): symptoms and fixes.
-- [Mullvad's SOCKS5 proxies](docs/mullvad-socks5.md): one application on another Mullvad server, through the same exit.
 
 **Reference**
 - [Configuration](docs/configuration.md): every setting, file and endpoint.
-- [Compatibility](docs/compatibility.md): what stays the same across releases, and the deprecation policy.
-- [Tools](docs/tools-reference.md): the setup and repair tools that run from the image.
-- [Providers](docs/providers.md): how PIA and NordVPN differ from Mullvad, port forwarding, adding a provider.
-- [Other providers](docs/other-providers.md): unsupported VPNs, and what adding one would take.
-- [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md): the gluetun form, its routing rules and its checks; experimental.
-- [gluetun sidecar](docs/gluetun-sidecar.md): Switchyard for an ordinary gluetun that other containers share; experimental.
-- [The proxy](docs/proxy.md): SOCKS5 and HTTP `CONNECT` through a native exit's tunnel for programs that opt in, choosing the location per connection; experimental, drilled live on Mullvad only.
-- [Native sidecar](docs/native-sidecar.md): Molebridge's own tunnel, routing contract and firewall for containers that share the exit's namespace, including Kubernetes pods and PIA's forwarded port; experimental.
-- [Architecture](docs/architecture.md): the processes, routing, trust boundaries and the switching sequence.
-- [Testing](docs/testing.md): what has been tested, where and at which revision.
-- [Roadmap](ROADMAP.md): ideas that aren't scheduled or built.
+- [Tools](docs/tools-reference.md): the roles and tools that run from the image.
+- [Architecture](docs/architecture.md): the core, each way in, trust boundaries and switching.
+- [Compatibility](docs/compatibility.md): what stays the same across releases, image tags, deprecation.
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+**Project**
+- [Testing](docs/testing.md): what has been tested, where and at which revision.
+- [Roadmap](ROADMAP.md): the direction, what is built, and ideas not scheduled.
+- [Changelog](CHANGELOG.md), [releasing](docs/releasing.md), [security](SECURITY.md).
+- [Contributing](CONTRIBUTING.md): ground rules, layout, checks, building the image.
 
 ---
 
