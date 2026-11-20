@@ -19,6 +19,10 @@ ARG TARGETARCH
 # lines). The release workflow passes the candidate tag; tools/check-reproducible.sh
 # builds with the same flags.
 ARG VERSION=dev
+# Build tags: empty for every release. `drill` only for the drill image
+# (.github/workflows/drill-image.yml), which lifts the gates the system rig's
+# drills need (the multi-provider exit among them); it is never released.
+ARG GO_TAGS=
 WORKDIR /src
 # The build context is the allowlist in Dockerfile.dockerignore (Go sources, vendor/,
 # embedded assets). vendor/ is used when the module has dependencies; a module
@@ -28,8 +32,9 @@ RUN set -eu; \
     case "$VERSION" in \
       ""|*[!0-9A-Za-z.+-]*) echo "VERSION must be a tag such as v0.10.0-rc.1, not '$VERSION'" >&2; exit 1 ;; \
     esac; \
+    case "$GO_TAGS" in ""|drill) ;; *) echo "GO_TAGS must be empty or drill, not '$GO_TAGS'" >&2; exit 1 ;; esac; \
     CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" GOTOOLCHAIN=local GOFLAGS=-mod=vendor \
-    go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$VERSION" -o /out/molebridge ./cmd/molebridge
+    go build -trimpath -buildvcs=false -tags "$GO_TAGS" -ldflags="-s -w -X main.version=$VERSION" -o /out/molebridge ./cmd/molebridge
 
 # Stage 2: the NetBird client release archive, checked against the hashes
 # committed here. The hashes are the linux_amd64 and linux_arm64 lines of

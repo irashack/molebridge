@@ -151,6 +151,15 @@ extra-selector rules, event loss by flood, the PIA address transaction, a hung a
 worker with the namespace held by another container, and the stop budget
 ([architecture](docs/architecture.md#drift-and-repair)).
 
+### The drill image
+
+Live drills and measurements of what release builds keep switched off (the
+multi-provider exit) need the `drill` build in a real image. The **Drill image**
+workflow (`.github/workflows/drill-image.yml`, run by hand) builds the image with
+NetBird with `GO_TAGS=drill` and pushes it to `ghcr.io/irashack/molebridge-ci` as
+`drill-<commit>-<run id>`; the run's summary has the digest. It is unsigned and never
+released; use it by digest on a test host only.
+
 ### The system rig
 
 The system rig (`internal/exit/systemrig_test.go`, build tags `drill` and `systemrig`) runs the
