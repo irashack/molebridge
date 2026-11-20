@@ -6,10 +6,9 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
-- Releases come at most weekly: the release automation prepares a minor
-  release only once seven days have passed since the last release, and only
-  when the changelog has an entry people can see, so several changes ship
-  together. Alpine security fixes still get a prompt patch release
+- Changes ship as patch releases (0.14.1, 0.14.2, ...): the release
+  automation no longer moves the middle number. A person prepares a minor
+  release by hand, for a milestone or a breaking change
   ([automatic releases](docs/releasing.md#automatic-releases)).
 - Acceptance policy 18: every release candidate also passes `proxy-live`,
   the proxy on a real Mullvad exit ([the proxy](docs/verification.md#the-proxy)):
