@@ -4,11 +4,13 @@ Molebridge is experimental. Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
-## 0.15.0 — unreleased
+## Unreleased
 
-**Experimental.** Upgrade from 0.14.0 by moving to the new image;
-what changed is below.
-
+- Releases come at most weekly: the release automation prepares a minor
+  release only once seven days have passed since the last release, and only
+  when the changelog has an entry people can see, so several changes ship
+  together. Alpine security fixes still get a prompt patch release
+  ([automatic releases](docs/releasing.md#automatic-releases)).
 - Acceptance policy 18: every release candidate also passes `proxy-live`,
   the proxy on a real Mullvad exit ([the proxy](docs/verification.md#the-proxy)):
   locations by any, country, city and server, a session kept, HTTP

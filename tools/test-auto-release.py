@@ -65,6 +65,20 @@ class Changelog(unittest.TestCase):
         self.assertIn("## 0.12.0 — 2026-11-20\n", dated)
         self.assertIsNone(ar.pending_heading(dated))
 
+    def test_release_due(self):
+        from datetime import datetime, timedelta, timezone
+        last = datetime(2026, 11, 19, 12, tzinfo=timezone.utc)
+        visible = "- A thing.\n- Internal, a test.\n"
+        internal = "- Internal, a test.\n- Internal: the rig.\n"
+        week = timedelta(days=ar.RELEASE_EVERY_DAYS)
+        self.assertEqual(ar.release_due(visible, last, last + week)[0], True)
+        due, why = ar.release_due(visible, last, last + week - timedelta(hours=1))
+        self.assertFalse(due)
+        self.assertIn("days ago", why)
+        due, why = ar.release_due(internal, last, last + 4 * week)
+        self.assertFalse(due)
+        self.assertIn("internal", why)
+
     def test_prep_rebuild(self):
         text = "# Changelog\n\nIntro.\n\n## 0.11.1 — 2026-11-19\n\nOld.\n"
         out = ar.prep_changelog(text, "0.11.2", "0.11.1", ["zlib 1.4-r0"])

@@ -12,7 +12,9 @@ is, and this does those steps in order:
              a fix for the current release's image: open a release-prep pull
              request (the changelog heading, the acceptance policy's version
              and upgrade drill), merge it on green CI, and tag vX.Y.Z-rc.1 on
-             main once CI has passed on that commit
+             main once CI has passed on that commit. A minor release waits
+             RELEASE_EVERY_DAYS after the last release and needs an entry
+             that isn't "- Internal"; an Alpine rebuild doesn't wait
   hand-off   ask for live acceptance on issue #45 with both images' digests;
              the homelab runs the canary and posts "Live acceptance result:
              <rc>" with fenced JSON (result, digests, coverage, evidence)
@@ -58,6 +60,10 @@ HANDOFF_ISSUE = 45
 SCAN_TITLE = "Scheduled scan findings"
 BLOCKED = "Release blocked: "
 HOLD_LABEL = "hold-release"
+# The owner (2026-11-20): roll several changes into a release instead of one
+# release per merge. A minor release is prepared at most this many days after
+# the last release, and only for a change people can see.
+RELEASE_EVERY_DAYS = 7
 # Who may post a live acceptance result: the homelab's GitHub identity
 # (homelab-ops#3118 names it). Nobody else's comment counts.
 RESULT_AUTHORS = ("irashack-homelab-broker", "irashack-homelab-broker[bot]")
@@ -128,6 +134,23 @@ def has_entries(body: str) -> bool:
 
 def has_breaking(body: str) -> bool:
     return re.search(r"\*\*Breaking", body) is not None
+
+
+def user_visible(body: str) -> bool:
+    """An entry that isn't marked internal ("- Internal, ..." or "- Internal:")."""
+    return any(line.startswith("- ") and not line.startswith("- Internal")
+               for line in body.splitlines())
+
+
+def release_due(body: str, last_release: datetime, now: datetime):
+    """Whether a minor release is due for these Unreleased entries, and why not."""
+    if not user_visible(body):
+        return False, "only internal changes since the last release"
+    days = (now - last_release).total_seconds() / 86400
+    if days < RELEASE_EVERY_DAYS:
+        return False, (f"the last release was {days:.1f} days ago; the next minor "
+                       f"waits until {RELEASE_EVERY_DAYS} days")
+    return True, ""
 
 
 def pending_heading(changelog: str):
@@ -720,7 +743,14 @@ def step_prepare(w: World, stable: str) -> str:
     body = unreleased(changelog)
     x, y, z = (int(n) for n in stable.split("."))
     fixes = []
+    due = False
     if has_entries(body):
+        published = w.api(f"repos/{REPO}/releases/tags/v{stable}")["published_at"]
+        last = datetime.fromisoformat(published.replace("Z", "+00:00"))
+        due, why = release_due(body, last, datetime.now(timezone.utc))
+        if not due:
+            print(f"not yet: {why}")
+    if due:
         if has_breaking(body):
             raise Blocked(f"{BLOCKED}Breaking changes need an attended release",
                           "CHANGELOG.md's Unreleased section has a **Breaking** item. The "
