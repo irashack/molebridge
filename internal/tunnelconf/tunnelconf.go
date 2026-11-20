@@ -541,9 +541,14 @@ func Load(dir, exitIf string, provider Provider, table uint32) (*Conf, error) {
 	return conf, nil
 }
 
-// OtherConfs counts the .conf files in dir besides <exitIf>.conf, which the
-// exit ignores and warns about.
-func OtherConfs(dir, exitIf string) int {
+// OtherConfs counts the .conf files in dir besides <name>.conf for each of
+// names (the exit's: <EXIT_IF>.conf, or a multi-provider exit's
+// <provider>.conf), which the exit ignores and warns about.
+func OtherConfs(dir string, names ...string) int {
+	used := map[string]bool{}
+	for _, n := range names {
+		used[n+".conf"] = true
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0
@@ -551,7 +556,7 @@ func OtherConfs(dir, exitIf string) int {
 	n := 0
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasSuffix(name, ".conf") && name != exitIf+".conf" && !e.IsDir() {
+		if strings.HasSuffix(name, ".conf") && !used[name] && !e.IsDir() {
 			n++
 		}
 	}

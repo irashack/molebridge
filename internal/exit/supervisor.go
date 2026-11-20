@@ -448,7 +448,7 @@ func (s *Supervisor) checkRecord(rec map[string]any) error {
 	if n, ok := validate.IsInt(rec["schema"]); !ok || n != 2 {
 		return violation("the record's schema is not 2")
 	}
-	if rec["kind"] != s.s.Kind() || rec["backend"] != s.s.BackendName() || rec["provider"] != s.s.Provider {
+	if rec["kind"] != s.s.Kind() || rec["backend"] != s.s.BackendName() || !s.ownProvider(rec) {
 		return violation("the record is for another kind, backend or provider")
 	}
 	if _, ok := rec["checks"].(map[string]any); !ok {
@@ -458,6 +458,26 @@ func (s *Supervisor) checkRecord(rec map[string]any) error {
 		return violation("the record has no status")
 	}
 	return nil
+}
+
+// ownProvider is whether a record names this exit's provider: PROVIDER, or
+// on a multi-provider exit one of PROVIDERS, with providers naming them all
+// in order.
+func (s *Supervisor) ownProvider(rec map[string]any) bool {
+	if !s.s.MultiProvider() {
+		return rec["provider"] == s.s.Provider
+	}
+	id, _ := rec["provider"].(string)
+	list, _ := rec["providers"].([]any)
+	if !contains(s.s.Providers, id) || len(list) != len(s.s.Providers) {
+		return false
+	}
+	for i, v := range list {
+		if v != s.s.Providers[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // maybeStartWayIn starts the way in when the worker wants it and the lease is

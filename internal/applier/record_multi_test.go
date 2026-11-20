@@ -158,3 +158,28 @@ func TestAConfiguredMultiProviderRecord(t *testing.T) {
 		t.Fatalf("the applier's own target: %+v", v)
 	}
 }
+
+// The exit reads tunnel-provider.json the way the applier does: one member,
+// a provider of the set, from the private directory.
+func TestTheExitReadsTheActiveProviderAsTheApplierWritesIt(t *testing.T) {
+	m := newMulti(t, "", "mullvad", allThree, nil)
+	if err := m.a.set.SetActive("nordvpn"); err != nil {
+		t.Fatal(err)
+	}
+	path := m.a.tunnelProviderPath()
+	if id, ok := ReadTunnelProvider(path, allThree); !ok || id != "nordvpn" {
+		t.Fatalf("%q %v", id, ok)
+	}
+	if _, ok := ReadTunnelProvider(path, []string{"mullvad", "pia"}); ok {
+		t.Fatal("a provider outside the set")
+	}
+	if _, ok := ReadTunnelProvider(path+".missing", allThree); ok {
+		t.Fatal("a missing file")
+	}
+	if got := TunnelProviderPath("/state", ""); got != "/state/applier/tunnel-provider.json" {
+		t.Fatal(got)
+	}
+	if got := TunnelProviderPath("/state", "/private"); got != "/private/tunnel-provider.json" {
+		t.Fatal(got)
+	}
+}

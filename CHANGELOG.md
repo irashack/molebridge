@@ -54,6 +54,20 @@ what changed is below.
   a true record of its own provider. Single-provider records are unchanged.
 
 ## 0.14.0 — 2026-11-20
+- Experimental, not for use yet: piece 6 of the [multi-provider
+  exit](docs/configuration.md#multi-provider-exit), its settings, files and
+  credentials. `PROVIDERS` (two or three of `mullvad`, `pia`, `nordvpn`)
+  makes the overlay exit carry one provider at a time, each from its own
+  `tunnel/wg_confs/<provider>.conf`, on one interface (`EXIT_IF`, `vpn` by
+  default with `PROVIDERS`); a change of provider replaces the whole tunnel,
+  PIA's return-path rules included, and a restart comes back on the last
+  active provider. Refused with gluetun, the sidecar, failover, the network
+  exchange and the proxy. The panel can't pick a provider yet, and the live
+  pass and the memory measurement with NordVPN have not run. A
+  single-provider exit is byte for byte as before (a new golden test locks
+  its settings, child environments and starting record).
+
+## 0.14.0 — unreleased
 
 **Experimental.** Upgrade from 0.13.0 by moving to the new image;
 what changed is below.

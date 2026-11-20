@@ -599,10 +599,61 @@ the copy of the record says; with the two clocks more than 10 seconds apart,
 panel's hosts on time sync. An id not in `PANEL_EXITS` stops the panel at
 start with `molebridge panel: PANEL_NETWORK_EXITS: '<id>' is not an exit in PANEL_EXITS`.
 
+## Multi-provider exit
+
+**Experimental, not for use yet.** One NetBird exit that can carry Mullvad,
+PIA or NordVPN, one at a time ([its design](design/multi-provider.md)). The
+settings, files and the exit's provider change are built and covered by unit
+tests and a drill against fake servers; the panel can't pick a provider yet,
+`molebridge init` doesn't offer it, and the Compose files don't pass
+`PROVIDERS`. The live pass on real accounts and the memory measurement of an
+exit holding NordVPN's catalog have **not run**: don't run one for real until
+they have.
+
+```sh
+PROVIDERS=mullvad,pia,nordvpn   # two or three, comma-separated, each once
+PROVIDER=mullvad                # one of them: where the tunnel starts the first time
+EXIT_IF=vpn                     # the one interface name; vpn by default with PROVIDERS
+```
+
+- **The overlay exit with the native backend only.** The exit refuses to
+  start with `PROVIDERS` and `TUNNEL_BACKEND=gluetun`, `EXIT_KIND=sidecar`, a
+  gluetun provider, fewer than two or more than three providers, a repeat,
+  `PROVIDER` unset or not among them, `FAILOVER` on (failover stays within one
+  provider and is for single-provider exits), or `EXCHANGE_URL` (the network
+  exchange carries one provider's files). The [proxy](proxy.md) refuses to
+  start with `PROVIDERS` set, and its result gate stays closed on a
+  multi-provider record. An empty `PROVIDERS` is a single-provider exit, as
+  before.
+- **One tunnel config per provider**: `tunnel/wg_confs/<provider>.conf` for
+  each of `PROVIDERS` (`mullvad.conf`, `pia.conf`, `nordvpn.conf`), not
+  `<EXIT_IF>.conf`, each checked at start against its own provider's form
+  ([the tunnel config](#the-tunnel-config)). A missing or refused one refuses
+  the start; any other `.conf` file is ignored with a warning.
+- **One interface.** Every provider's tunnel is `EXIT_IF`, so the routing
+  contract and NetBird's interface exclusion never change; set
+  `NB_EXTRA_IFACE_BLACKLIST` to the same name (`vpn` by default).
+- **After a restart** the tunnel comes back on the provider it was last on
+  (`tunnel-provider.json`, [state files](#state-files)), not on `PROVIDER`.
+- **Credentials in one container.** The exit holds every provider's key and,
+  with `pia` in the set, PIA's login (`secrets/pia/`, as for a PIA exit). A
+  compromised multi-provider exit gives away all of them, not one: where that
+  matters, run single-provider exits side by side instead.
+- `PIA_PORT_FORWARD` and `PIA_PORT_FORWARD_TARGET` apply while PIA is
+  active; the forwarded port is removed before the tunnel leaves PIA.
+- The status record names the exit's providers ([the status
+  record](architecture.md#the-status-record)); `molebridge status` judges it
+  for `PROVIDERS`, and `check-config` prints every provider's config.
+
+To try it, an override for `compose.yaml` sets `PROVIDERS`, `PROVIDER`,
+`EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` on the `exit` service.
+
 ## The tunnel config
 
 The exit reads one file, `tunnel/wg_confs/<EXIT_IF>.conf`
-(`/config/wg_confs/<EXIT_IF>.conf` inside the container). Any other `.conf`
+(`/config/wg_confs/<EXIT_IF>.conf` inside the container); a [multi-provider
+exit](#multi-provider-exit) reads `<provider>.conf` for each of its providers
+instead. Any other `.conf`
 file in that directory is ignored, with the warning `molebridge-exit:
 warning: <n> other .conf file(s) in /config/wg_confs are ignored; only
 <EXIT_IF>.conf is used`. Only a native exit reads it; the gluetun forms take
@@ -735,6 +786,8 @@ records](architecture.md#example-records).
 | `applier/failover.json` | exit | exit | With [automatic failover](#automatic-failover) on (experimental): the episode in progress, for the selected server it belongs to: its phase, the backup, the servers tried, the failures counted and the return schedule (on the boot clock, with `boot_id`). Mode 0600. Missing or malformed means no episode; removed when failover is off. No secret. |
 | `applier/tunnel.json` | exit (PIA) | exit (PIA) | Current registration (`region`, `cn`, `server_ip`, `server_port`, `server_key`, `peer_ip`, `server_vip`, `registered_at`), read to match the live peer and reconcile tunnel state. No secret. |
 | `applier/relay-error.json` | exit | panel (read-only) | Sanitized last refresh error and timestamp, or an empty object after success |
+| `applier/relays-<provider>.json`, `applier/relay-error-<provider>.json` | exit | — | A [multi-provider exit](#multi-provider-exit)'s catalog and refresh error for each of its providers, in the forms above. It writes no `relays.json`, so a reader that expects one provider's catalog there finds none. |
+| `applier/tunnel-provider.json` | exit | exit | A [multi-provider exit](#multi-provider-exit)'s active provider, `{"provider": "<id>"}`, written before each change of provider; a start comes back on it. Mode 0600, under `PRIVATE_STATE_DIR` when set. No secret. |
 | `panel/desired.json` | panel | exit (read-only) | `server`, `requested_at`, `request_id`. Ignored entirely when `SERVER` is set. Otherwise each selection gets a new ID so the same server can be retried. Old two-field requests remain readable. |
 | `applier/result.json` | exit's supervisor | panel (read-only) | The status record, schema 2 ([the status record](architecture.md#the-status-record)): `schema`, `kind`, `backend`, `provider`, `status` (`unknown`/`applying`/`ok`/`failed`), `message`, `checked_at`, observed `server`, `requested_server`, `configured_server` (the `SERVER` setting, null when unset; invalid values longer than 256 characters are truncated for reporting), acknowledged `request_id`, `selection` (`source`, `outcome`, `attempt`, `target`, `next_action`, `next_action_at`), `checks` (`routing`, `traffic_protection`, `netbird`, `owner_record`, `peer`, `handshake`, `egress`, `app_attachment`, each with a `state` and, when measured, `at`), egress fields (`egress_ip` is IPv4; `egress_ips` maps `4`/`6` to the addresses of the passing families; `egress_city`, `egress_country`), `port_forward`, `forwarded_port` and `port_forward_error` (PIA only), and with the gluetun backend `server_list_update` (`updating`, `failed`, a waiting reason since 0.9.1, `waiting-for-tunnel`, `waiting-for-vpn`, `waiting-for-control-server` or `waiting-to-retry`, or null: the refresh of gluetun's server list the exit starts; [architecture](architecture.md#the-exit-with-gluetun)). Records written before 0.7.0 have no `schema` and carry `routing_ok`, `netbird_native`, `exit_confirmed`, `egress_tier`, `handshake_age_s` and `unreachable_fallback` instead of `checks`; the panel still reads them. |
 | `proxy/proxy.json` | proxy | `molebridge status --proxy`, `health --proxy` | The [proxy](proxy.md#status)'s own status record, never part of `result.json`: `schema` (1), `kind` (`proxy`), `provider`, `guarantee` (`opt-in`), `status` (`ok`, `refusing` or `failed`), `message`, `checked_at`, `listen`, `tunnel` (the exit's `verdict`, `server` and `checked_at` as the proxy last read them), `servers` (`known`, and `benched` with each `server`, `until` and `reason`), `sessions`, and `connections` (`open`, `total`, `failed`). Rewritten every 10 seconds; over 30 seconds old counts as unknown. |
