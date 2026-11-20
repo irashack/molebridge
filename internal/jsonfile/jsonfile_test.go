@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -237,5 +238,80 @@ func TestEncodingStopsAtTheLimitWithBoundedMemory(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(after) != string(before) || len(names(t, dir)) != 1 {
 		t.Error("old file changed or temporary left behind")
+	}
+}
+
+func TestSetPublicGroupMakesPublicFilesTheGroups(t *testing.T) {
+	gid := os.Getegid() // a group the test can give files to without CHOWN
+	SetPublicGroup(gid)
+	t.Cleanup(func() { SetPublicGroup(-1) })
+	dir := t.TempDir()
+	public, private := filepath.Join(dir, "result.json"), filepath.Join(dir, "attempt.json")
+	if err := Write(public, validate.Obj{}, Options{Public: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(private, validate.Obj{}, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{public: 0o640, private: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want || int(info.Sys().(*syscall.Stat_t).Gid) != gid {
+			t.Errorf("%s: mode %04o group %d", filepath.Base(path), info.Mode().Perm(), info.Sys().(*syscall.Stat_t).Gid)
+		}
+	}
+	// Unset again, a public file is 0644.
+	SetPublicGroup(-1)
+	if err := Write(public, validate.Obj{}, Options{Public: true}); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(public); info.Mode().Perm() != 0o644 {
+		t.Errorf("unset: %04o", info.Mode().Perm())
+	}
+	// A group the process can't give fails the write and leaves nothing.
+	if os.Geteuid() != 0 {
+		groups, _ := os.Getgroups()
+		foreign := 1
+		for foreign == gid || slices.Contains(groups, foreign) {
+			foreign++
+		}
+		SetPublicGroup(foreign)
+		if err := Write(filepath.Join(dir, "other.json"), validate.Obj{}, Options{Public: true}); err == nil {
+			t.Error("wrote a file for a foreign group")
+		}
+		if got := names(t, dir); strings.Join(got, ",") != "attempt.json,result.json" {
+			t.Errorf("left %v", got)
+		}
+	}
+}
+
+func TestReadBytesErrSaysWhy(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ReadBytesErr(filepath.Join(dir, "missing.json"), 10); !errors.Is(err, os.ErrNotExist) ||
+		!strings.Contains(err.Error(), "missing.json") {
+		t.Errorf("missing: %v", err)
+	}
+	if _, err := ReadBytesErr(dir, 10); !errors.Is(err, ErrNotRegular) {
+		t.Errorf("directory: %v", err)
+	}
+	big := filepath.Join(dir, "big.json")
+	if err := os.WriteFile(big, []byte("[1,2,3,4,5,6]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadBytesErr(big, 4); !errors.Is(err, ErrSizeLimit) {
+		t.Errorf("too large: %v", err)
+	}
+	if raw, err := ReadBytesErr(big, 100); err != nil || string(raw) != "[1,2,3,4,5,6]" {
+		t.Errorf("%q %v", raw, err)
+	}
+	if os.Geteuid() != 0 {
+		if err := os.Chmod(big, 0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadBytesErr(big, 100); !errors.Is(err, os.ErrPermission) {
+			t.Errorf("unreadable: %v", err)
+		}
 	}
 }

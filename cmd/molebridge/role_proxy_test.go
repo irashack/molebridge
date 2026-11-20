@@ -132,6 +132,80 @@ func TestProxySettingsRefusals(t *testing.T) {
 	}
 }
 
+func TestProxySettingsRefuseEveryBadSettingAtOnce(t *testing.T) {
+	env := map[string]string{
+		"STATE_DIR":           "state",
+		"PROVIDER":            "ivpn",
+		"TUNNEL_INTERFACE":    "a/b",
+		"OVERLAY_IF":          "wt 0",
+		"PROXY_LISTEN":        "localhost:1080",
+		"PROXY_MAX_CONNS":     "0",
+		"PROXY_PASSWORD_FILE": "secrets/password",
+		"PROXY_DNS":           "dns.example.net",
+	}
+	_, err := proxySettingsFrom(env)
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	want := []string{
+		"STATE_DIR must be a clean absolute path",
+		`PROVIDER "ivpn": the proxy supports mullvad, pia and nordvpn`,
+		"TUNNEL_INTERFACE is not a valid interface name",
+		"OVERLAY_IF is not a valid interface name",
+		"PROXY_LISTEN: the host must be an IP address (for example 127.0.0.1:1080)",
+		"PROXY_MAX_CONNS must be a whole number from 1 to 65535",
+		"PROXY_PASSWORD_FILE must be an absolute path",
+		"PROXY_DNS must be an IP address",
+	}
+	got := proxyStartRefusals(proxySettings{}, err, nil)
+	if len(got) != len(want) {
+		t.Fatalf("got %d refusals, want %d:\n%s", len(got), len(want), strings.Join(got, "\n"))
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(got[i], w) {
+			t.Errorf("refusal %d: got %q, want %q", i, got[i], w)
+		}
+	}
+}
+
+func TestProxyStartRefusalsIncludeThePasswordFileAndTheListenAddress(t *testing.T) {
+	dir := t.TempDir()
+	password := filepath.Join(dir, "password")
+	if err := os.WriteFile(password, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := proxyEnv()
+	env["PROXY_PASSWORD_FILE"] = password
+	env["PROXY_LISTEN"] = "192.0.2.10:1080"
+	env["OVERLAY_IF"] = "eth0"
+	env["PROXY_MAX_CONNS"] = "x"
+	s, err := proxySettingsFrom(env)
+	addrs := func(string) ([]net.Addr, error) {
+		return []net.Addr{&net.IPNet{IP: net.ParseIP("203.0.113.7").To4(), Mask: net.CIDRMask(32, 32)}}, nil
+	}
+	got := proxyStartRefusals(s, err, addrs)
+	want := []string{"PROXY_MAX_CONNS", "the password file is readable by others",
+		`listen address "192.0.2.10:1080" is neither loopback nor an address of eth0`}
+	if len(got) != len(want) {
+		t.Fatalf("got %q", got)
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(got[i], w) {
+			t.Errorf("refusal %d: got %q, want %q", i, got[i], w)
+		}
+	}
+	// The pod's own address on a cluster interface is accepted.
+	if err := os.Chmod(password, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delete(env, "PROXY_MAX_CONNS")
+	env["PROXY_LISTEN"] = "203.0.113.7:1080"
+	s, err = proxySettingsFrom(env)
+	if got := proxyStartRefusals(s, err, addrs); len(got) != 0 {
+		t.Fatalf("refused: %q", got)
+	}
+}
+
 func TestProxyIsolation(t *testing.T) {
 	ok := identity{UID: 1000, EUID: 1000, CapKnown: true}
 	if r := checkProxyIsolation(ok); len(r) != 0 {

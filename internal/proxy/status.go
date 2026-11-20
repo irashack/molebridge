@@ -40,7 +40,7 @@ func (s *server) statusRecord(status, message string) (validate.Obj, string) {
 		benched = benched[:maxBenchedListed]
 	}
 	var sig strings.Builder
-	sig.WriteString(tunnel.Verdict)
+	sig.WriteString(tunnel.Verdict + "\x00" + tunnel.Unreadable)
 	list := make([]any, 0, len(benched))
 	for _, b := range benched {
 		until := validate.FormatTime(b.BenchedUntil)
@@ -92,9 +92,13 @@ func shortReason(reason string) string {
 
 // servingStatus is the status while the listener is up.
 func (s *server) servingStatus() (string, string) {
-	if v := s.cfg.Tunnel().Verdict; v != "ok" {
+	if t := s.cfg.Tunnel(); t.Verdict != "ok" {
+		v := t.Verdict
 		if v == "" {
 			v = "unknown"
+		}
+		if t.Unreadable != "" {
+			return "refusing", "Refusing new connections: the exit's verdict is " + v + ": " + shortReason(t.Unreadable) + "."
 		}
 		return "refusing", "Refusing new connections: the exit's verdict is " + v + "."
 	}

@@ -373,6 +373,9 @@ func (a *Applier) configurationError() string {
 	quoted := string(raw)
 	request := a.configuredRequest()
 	if request == nil {
+		if a.multiProvider() {
+			return "Invalid SERVER " + quoted + "; " + a.targetForm() + "; no change applied."
+		}
 		return "Invalid SERVER " + quoted + "; no change applied."
 	}
 	catalog := a.set.Catalog(a.providerOfRequest(request))

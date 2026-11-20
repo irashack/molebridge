@@ -69,7 +69,7 @@ func TestResultGateRereadsOncePerSecond(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "result.json")
 	clock := &fakeClock{t: tunnelNow}
 	gate := ResultGate(path, exit, clock.now)
-	if got := gate(); got.Verdict != "unknown" {
+	if got := gate(); got.Verdict != "unknown" || got.Unreadable != "can't read "+path+": no such file or directory" {
 		t.Fatalf("no file: %+v", got)
 	}
 	if err := os.WriteFile(path, []byte(healthyRecord(validate.FormatTime(tunnelNow))), 0o644); err != nil {
@@ -79,14 +79,24 @@ func TestResultGateRereadsOncePerSecond(t *testing.T) {
 		t.Fatalf("read again within a second: %+v", got)
 	}
 	clock.advance(time.Second)
-	if got := gate(); got.Verdict != "ok" {
+	if got := gate(); got.Verdict != "ok" || got.Unreadable != "" {
 		t.Fatalf("%+v", got)
 	}
 	// A record with a duplicate key is not read.
 	os.WriteFile(path, []byte(`{"schema": 2, "schema": 2}`), 0o644)
 	clock.advance(time.Second)
-	if got := gate(); got.Verdict != "unknown" {
+	if got := gate(); got.Verdict != "unknown" || got.Unreadable != "" {
 		t.Fatalf("%+v", got)
+	}
+	// A record the proxy may not read says so, and names the setting.
+	if os.Geteuid() != 0 {
+		os.WriteFile(path, []byte(healthyRecord(validate.FormatTime(tunnelNow))), 0o644)
+		os.Chmod(path, 0)
+		clock.advance(time.Second)
+		want := "can't read " + path + ": permission denied (run the proxy in the exit's STATE_GID group; docs/proxy.md)"
+		if got := gate(); got.Verdict != "unknown" || got.Unreadable != want {
+			t.Fatalf("%+v", got)
+		}
 	}
 }
 

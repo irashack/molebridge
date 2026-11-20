@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -9,28 +10,20 @@ import (
 
 // CheckListen refuses a listen address the proxy must not take: it must be an
 // IP literal and a port from 1 to 65535, and the IP must be loopback or one
-// of the addresses of iface (NetBird's interface), as addrs reports them
+// of the addresses of iface (OVERLAY_IF: NetBird's interface, or on
+// Kubernetes the pod's own, such as eth0), as addrs reports them
 // (nil: the system's). Any other address, including the unspecified one, is
 // refused, so the proxy is never offered on the host's other networks.
 func CheckListen(address, iface string, addrs func(name string) ([]net.Addr, error)) error {
-	host, portText, err := net.SplitHostPort(address)
+	ip, err := ParseListen(address)
 	if err != nil {
 		return fmt.Errorf("proxy: listen address %q: %w", address, err)
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return fmt.Errorf("proxy: listen address %q: the port must be 1 to 65535", address)
-	}
-	ip, err := netip.ParseAddr(host)
-	if err != nil || ip.Zone() != "" {
-		return fmt.Errorf("proxy: listen address %q: the host must be an IP address", address)
-	}
-	ip = ip.Unmap()
 	if ip.IsLoopback() {
 		return nil
 	}
 	if iface == "" {
-		return fmt.Errorf("proxy: listen address %q is not loopback, and no NetBird interface is configured", address)
+		return fmt.Errorf("proxy: listen address %q is not loopback, and no interface (OVERLAY_IF) is configured", address)
 	}
 	if addrs == nil {
 		addrs = systemAddrs
@@ -52,6 +45,25 @@ func CheckListen(address, iface string, addrs func(name string) ([]net.Addr, err
 		}
 	}
 	return fmt.Errorf("proxy: listen address %q is neither loopback nor an address of %s", address, iface)
+}
+
+// ParseListen is the IP of a listen address that has the form CheckListen
+// takes, an IP literal without a zone and a port from 1 to 65535; it does
+// not look at the interfaces.
+func ParseListen(address string) (netip.Addr, error) {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return netip.Addr{}, errors.New("not an IP address and a port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return netip.Addr{}, errors.New("the port must be 1 to 65535")
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Zone() != "" {
+		return netip.Addr{}, errors.New("the host must be an IP address")
+	}
+	return ip.Unmap(), nil
 }
 
 func systemAddrs(name string) ([]net.Addr, error) {

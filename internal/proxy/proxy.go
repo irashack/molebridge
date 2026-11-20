@@ -157,11 +157,10 @@ func newServer(cfg Config) (*server, error) {
 	if cfg.Upstream == nil || cfg.Tunnel == nil {
 		return nil, errors.New("proxy: no upstream or tunnel state configured")
 	}
-	if err := CheckListen(cfg.Listen, cfg.Interface, cfg.InterfaceAddrs); err != nil {
-		return nil, err
-	}
+	// Both are checked, so a refusal names every problem at once.
+	listenErr := CheckListen(cfg.Listen, cfg.Interface, cfg.InterfaceAddrs)
 	password, err := ReadPassword(cfg.PasswordFile)
-	if err != nil {
+	if err := errors.Join(listenErr, err); err != nil {
 		return nil, err
 	}
 	return &server{

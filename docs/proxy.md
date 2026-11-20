@@ -74,6 +74,11 @@ is in `compose.proxy.yaml`, added on top of the exit's file:
    COMPOSE_FILE=compose.native-sidecar.yaml:compose.proxy.yaml   # the native sidecar
    ```
 
+   podman-compose doesn't read `COMPOSE_FILE` from `.env`; pass the same
+   files with `-f` on every command instead
+   (`podman-compose -f compose.yaml -f compose.proxy.yaml up -d`;
+   [rootless Podman](prerequisites.md#rootless-podman)).
+
 3. Set where it listens (`PROXY_LISTEN`, [below](#where-it-listens)), then
    `docker compose up -d`. The proxy starts once the exit is healthy and is
    restarted with it.
@@ -91,18 +96,20 @@ is in `compose.proxy.yaml`, added on top of the exit's file:
 | `PROXY_PASSWORD_FILE` | required | The password file. Compose mounts `secrets/proxy` and sets `/run/secrets/proxy/password`. |
 | `PROXY_MAX_CONNS` | `512` | The most client connections open at once, 1 to 65535. One more is closed before anything is read. |
 | `PROXY_DNS` | the provider's | The resolver, an IP address with an optional port (53 when left out), for the names the proxy resolves itself: Mullvad relay proxy names, and every target with PIA and NordVPN. Asked through the tunnel. The defaults are each provider's own: Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53`, NordVPN `103.86.96.100:53`. |
-| `OVERLAY_IF` | `wt0` | NetBird's interface, as the exit's own `OVERLAY_IF`: the only interface besides loopback whose addresses `PROXY_LISTEN` may use. It must differ from `TUNNEL_INTERFACE`. |
+| `OVERLAY_IF` | `wt0` | The only interface besides loopback whose addresses `PROXY_LISTEN` may use: NetBird's, as the exit's own `OVERLAY_IF`, or on Kubernetes the pod's own interface ([below](#on-kubernetes)). It must differ from `TUNNEL_INTERFACE`. |
 | `STATE_DIR` | `/state` | The exit's `applier/` is read from here (mounted read-only: `relays.json` and `result.json`), and the proxy writes `proxy/proxy.json`. |
 
-An empty value is the same as an unset one. A setting that doesn't parse
-stops the proxy with a line naming it, before it listens.
+An empty value is the same as an unset one. Before it listens, the proxy
+checks every setting, the password file and the listen address, and stops
+with one `molebridge proxy: refusing to start: ...` line for each problem
+it finds, so a configuration you write by hand is corrected in one pass.
 
 ## Where it listens
 
 One address, taking both SOCKS5 and HTTP `CONNECT`. It must be loopback or an
-address of NetBird's interface (`OVERLAY_IF`); anything else, including
-`0.0.0.0`, is refused at start, so the proxy is never offered on the host's
-other networks.
+address of the interface `OVERLAY_IF` names (NetBird's with Compose);
+anything else, including `0.0.0.0`, is refused at start, so the proxy is
+never offered on the host's other networks.
 
 - **With the NetBird exit**, set `PROXY_LISTEN` to the exit's NetBird address
   and a port (for example `192.0.2.10:1080`; `netbird status` inside the exit shows its address),
@@ -113,6 +120,66 @@ other networks.
   namespace (`network_mode: service:exit`) reach it at `127.0.0.1:1080`.
 
 Nothing is published on the host.
+
+### A client container outside the stack
+
+A container you start yourself, outside the Compose project, is in another
+network namespace, so it doesn't reach a proxy on loopback. Start it in the
+exit's namespace. With Docker, `--network container:<exit container>`. With
+podman-compose, which puts the project's containers in a pod, start it in
+that pod: `podman pod ps` lists it (`pod_<project>` by default), and
+
+```sh
+podman run --rm --pod pod_molebridge docker.io/curlimages/curl:<tag> \
+  --proxy socks5h://any:<password>@127.0.0.1:1080 https://example.net/
+```
+
+reaches it at `127.0.0.1:1080`. On the podman-compose host where this was found
+(2026-11-20) a client started without `--pod` didn't reach the proxy; the
+Docker form is not recorded in [testing](testing.md).
+
+### On Kubernetes
+
+`OVERLAY_IF` doesn't have to be NetBird's: the proxy accepts any interface
+name other than the tunnel's and requires `PROXY_LISTEN` to be one of that
+interface's addresses. In a pod beside the exit (the [native
+sidecar](native-sidecar.md#kubernetes)) you can offer it to the cluster on
+the pod's own interface and address, taken from the downward API:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.podIP
+  - name: OVERLAY_IF
+    value: eth0
+  - name: PROXY_LISTEN
+    value: $(POD_IP):1080
+```
+
+That offers the proxy to everything that can reach the pod, so put a
+NetworkPolicy in front of it that admits only the clients you mean, as well
+as the password. Interface names depend on the cluster's network plugin;
+check with `ip -br addr` in the pod.
+
+The proxy reads the exit's `applier/` files as its own non-root user. When
+the exit runs as root and its state directory is root's, for example mode
+0770, the proxy can't read them and refuses every
+connection with a status message such as
+
+```text
+Refusing new connections: the exit's verdict is unknown: can't read /state/applier/result.json: permission denied (run the proxy in the exit's STATE_GID group; docs/proxy.md).
+```
+
+Set `STATE_GID` on the exit to a group id, make the exit a member of that
+group, and run the proxy (and the panel) in it, for example with
+`supplementalGroups: [<gid>]` on the pod
+([readers in another group](configuration.md#readers-in-another-group)).
+Running the proxy in group 0 works too, but gives it everything root's
+group may read. The proxy has run this way on one Kubernetes cluster
+in group 0, not with `STATE_GID`; nothing of it is recorded in
+[testing](testing.md).
 
 ## The password
 

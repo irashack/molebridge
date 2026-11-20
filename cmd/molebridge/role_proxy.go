@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/irashack/molebridge/internal/exit"
@@ -67,7 +69,9 @@ type proxySettings struct {
 
 // proxySettingsFrom reads and checks the settings. Every refusal names the
 // setting; none repeats a value that could be a secret (there is none here:
-// the password stays in its file).
+// the password stays in its file). Every setting is checked, and the error
+// joins one refusal per bad setting (errors.Join), so a hand-written
+// configuration is corrected in one pass rather than one field at a time.
 func proxySettingsFrom(env map[string]string) (proxySettings, error) {
 	s := proxySettings{
 		StateDir:        orDefault(env["STATE_DIR"], exit.DefaultStateDir),
@@ -78,56 +82,97 @@ func proxySettingsFrom(env map[string]string) (proxySettings, error) {
 		PasswordFile:    env["PROXY_PASSWORD_FILE"],
 		OverlayIf:       orDefault(env["OVERLAY_IF"], defaultProxyOverlayIf),
 	}
+	var refusals []error
+	refuse := func(err error) { refusals = append(refusals, err) }
 	if !filepath.IsAbs(s.StateDir) || filepath.Clean(s.StateDir) != s.StateDir {
-		return s, errors.New("STATE_DIR must be a clean absolute path")
+		refuse(errors.New("STATE_DIR must be a clean absolute path"))
 	}
 	if env["PROVIDERS"] != "" {
 		// The proxy's PROVIDER would be wrong after a provider change (the
 		// design's decision 6); its result gate also closes on any
 		// multi-provider record, which names providers.
-		return s, errors.New("PROVIDERS is set: the proxy is not supported on a multi-provider exit")
+		refuse(errors.New("PROVIDERS is set: the proxy is not supported on a multi-provider exit"))
 	}
 	switch s.Provider {
 	case "mullvad", "pia", "nordvpn":
 	case "":
-		return s, errors.New("PROVIDER is required: mullvad, pia or nordvpn")
+		refuse(errors.New("PROVIDER is required: mullvad, pia or nordvpn"))
 	default:
-		return s, fmt.Errorf("PROVIDER %q: the proxy supports mullvad, pia and nordvpn (a native exit or native sidecar), nothing else", s.Provider)
+		refuse(fmt.Errorf("PROVIDER %q: the proxy supports mullvad, pia and nordvpn (a native exit or native sidecar), nothing else", s.Provider))
 	}
-	if s.TunnelInterface == "" {
-		return s, errors.New("TUNNEL_INTERFACE is required: the exit's tunnel interface (its EXIT_IF)")
+	tunnelOK := false
+	switch {
+	case s.TunnelInterface == "":
+		refuse(errors.New("TUNNEL_INTERFACE is required: the exit's tunnel interface (its EXIT_IF)"))
+	case !tunneldial.ValidInterfaceName(s.TunnelInterface):
+		refuse(errors.New("TUNNEL_INTERFACE is not a valid interface name"))
+	default:
+		tunnelOK = true
 	}
-	if !tunneldial.ValidInterfaceName(s.TunnelInterface) {
-		return s, errors.New("TUNNEL_INTERFACE is not a valid interface name")
+	overlayOK := tunneldial.ValidInterfaceName(s.OverlayIf)
+	if !overlayOK {
+		refuse(errors.New("OVERLAY_IF is not a valid interface name"))
 	}
-	if !tunneldial.ValidInterfaceName(s.OverlayIf) {
-		return s, errors.New("OVERLAY_IF is not a valid interface name")
+	if tunnelOK && overlayOK && s.OverlayIf == s.TunnelInterface {
+		refuse(errors.New("OVERLAY_IF and TUNNEL_INTERFACE name the same interface; the proxy must never listen on the tunnel"))
 	}
-	if s.OverlayIf == s.TunnelInterface {
-		return s, errors.New("OVERLAY_IF and TUNNEL_INTERFACE name the same interface; the proxy must never listen on the tunnel")
+	if _, err := proxy.ParseListen(s.Listen); err != nil {
+		// Its form only: whether the address is loopback or one of
+		// OVERLAY_IF's is proxy.CheckListen's, against the live interface.
+		refuse(fmt.Errorf("PROXY_LISTEN: %v (for example 127.0.0.1:1080)", err))
 	}
 	if v := env["PROXY_MAX_CONNS"]; v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > maxProxyConns || strconv.Itoa(n) != v {
-			return s, fmt.Errorf("PROXY_MAX_CONNS must be a whole number from 1 to %d", maxProxyConns)
+			refuse(fmt.Errorf("PROXY_MAX_CONNS must be a whole number from 1 to %d", maxProxyConns))
+		} else {
+			s.MaxConns = n
 		}
-		s.MaxConns = n
 	}
-	if s.PasswordFile == "" {
-		return s, errors.New("PROXY_PASSWORD_FILE is required")
+	switch {
+	case s.PasswordFile == "":
+		refuse(errors.New("PROXY_PASSWORD_FILE is required"))
+	case !filepath.IsAbs(s.PasswordFile):
+		refuse(errors.New("PROXY_PASSWORD_FILE must be an absolute path"))
 	}
-	if !filepath.IsAbs(s.PasswordFile) {
-		return s, errors.New("PROXY_PASSWORD_FILE must be an absolute path")
+	if dns, err := parseProxyDNS(env["PROXY_DNS"], s.Provider); err != nil {
+		refuse(err)
+	} else {
+		s.DNS = dns
 	}
-	dns, err := parseProxyDNS(env["PROXY_DNS"], s.Provider)
-	if err != nil {
-		return s, err
+	return s, errors.Join(refusals...)
+}
+
+// proxyStartRefusals are the refusals before the proxy serves, one line
+// each: every bad setting (settingsErr, from proxySettingsFrom), then, where
+// the settings they need are good, the password file (proxy.ReadPassword)
+// and the listen address against OVERLAY_IF's live addresses
+// (proxy.CheckListen, with addrs; nil is the system's). proxy.Serve checks
+// those two again.
+func proxyStartRefusals(s proxySettings, settingsErr error, addrs func(string) ([]net.Addr, error)) []string {
+	var refusals []string
+	add := func(err error) {
+		if err == nil {
+			return
+		}
+		errs := []error{err}
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			errs = joined.Unwrap()
+		}
+		for _, e := range errs {
+			refusals = append(refusals, strings.TrimPrefix(e.Error(), "proxy: "))
+		}
 	}
-	s.DNS = dns
-	// The listen address's own rules (loopback or an address of OVERLAY_IF)
-	// are proxy.CheckListen's, applied by proxy.Serve against the live
-	// interface.
-	return s, nil
+	add(settingsErr)
+	if s.PasswordFile != "" && filepath.IsAbs(s.PasswordFile) {
+		_, err := proxy.ReadPassword(s.PasswordFile)
+		add(err)
+	}
+	if _, err := proxy.ParseListen(s.Listen); err == nil &&
+		tunneldial.ValidInterfaceName(s.OverlayIf) && s.OverlayIf != s.TunnelInterface {
+		add(proxy.CheckListen(s.Listen, s.OverlayIf, addrs))
+	}
+	return refusals
 }
 
 // parseProxyDNS is PROXY_DNS as "ip:port": an IP literal (no zone) with an
@@ -204,8 +249,10 @@ func proxyMain(ctx context.Context, env map[string]string, id identity, stderr i
 		return 1
 	}
 	s, err := proxySettingsFrom(env)
-	if err != nil {
-		fmt.Fprintf(stderr, "molebridge proxy: refusing to start: %v\n", err)
+	if refusals := proxyStartRefusals(s, err, nil); len(refusals) > 0 {
+		for _, r := range refusals {
+			fmt.Fprintf(stderr, "molebridge proxy: refusing to start: %s\n", r)
+		}
 		return 1
 	}
 	return runProxy(ctx, s, stderr)

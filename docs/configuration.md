@@ -34,7 +34,9 @@ These work when you add them to `.env` (Compose passes them on) or, for the
 ones marked "override file", when you set them on the named service in a
 `compose.override.yaml`. Compose reads that file by itself unless
 `COMPOSE_FILE` is set, as it is for the gluetun forms; then add it to the
-list ([an example](operations.md#exits-on-a-private-container-network)). A
+list ([an example](operations.md#exits-on-a-private-container-network)).
+podman-compose doesn't read `COMPOSE_FILE` from `.env`: pass the files with
+`-f` instead ([rootless Podman](prerequisites.md#rootless-podman)). A
 default shown here is the one in the binary or in the Compose file; where
 they differ the row says so.
 
@@ -134,7 +136,10 @@ Four more have defaults the Compose files leave alone: `TUNNEL_CONF_DIR`
 its heartbeat and lease files), `PIA_SECRETS_DIR` (`/run/secrets/pia`) and
 `PRIVATE_STATE_DIR` (unset: the files only the exit reads stay in
 `<STATE_DIR>/applier`; see [keeping the published files in
-memory](#keeping-the-published-files-in-memory)).
+memory](#keeping-the-published-files-in-memory)). `STATE_GID` is unset
+too; set it on the exit, in an override or a Kubernetes manifest, to let
+one group read the published files
+([readers in another group](#readers-in-another-group)).
 `MOLEBRIDGE_PANEL_LISTEN` replaces the panel's listen address, `0.0.0.0:8080`,
 for its tests; Compose never sets it. `MOLEBRIDGE_GENERATION`,
 `MOLEBRIDGE_RTNL_NOTIFY_LOCKED` and `MOLEBRIDGE_DRILL_CPUPROFILE` are
@@ -178,6 +183,15 @@ failed status with the name quoted, for example:
 ```text
 Invalid SERVER "--bad"; no change applied.
 Unknown SERVER "absent.example.test"; not in a fresh trusted relay catalogue; no change applied.
+```
+
+On a [multi-provider exit](#multi-provider-exit) `SERVER` is
+`<provider>/<server>`, and an invalid one says so. When a bare name fits
+the naming of one or more of `PROVIDERS`, the message suggests it with each
+of them in front:
+
+```text
+Invalid SERVER "nl9001.nordvpn.com"; with PROVIDERS set, SERVER is <provider>/<server> with one of mullvad, pia, nordvpn, for example "nordvpn/nl9001.nordvpn.com"; no change applied.
 ```
 
 A configured server the exit verified and the provider later retires is not
@@ -482,7 +496,7 @@ service on top of `compose.yaml` or `compose.native-sidecar.yaml`
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port: loopback, or an address of NetBird's interface (`OVERLAY_IF`). Anything else, `0.0.0.0` included, is refused at start. |
+| `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port: loopback, or an address of the interface `OVERLAY_IF` names (NetBird's, or on Kubernetes the pod's own: [the proxy](proxy.md#on-kubernetes)). Anything else, `0.0.0.0` included, is refused at start. |
 | `PROXY_MAX_CONNS` | `512` | The most open client connections, 1 to 65535. |
 | `PROXY_DNS` | empty: the provider's | The resolver for the names the proxy resolves itself, an IP address with an optional port, asked through the tunnel. Empty means Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53` or NordVPN `103.86.96.100:53`. |
 
@@ -490,8 +504,10 @@ The password is the one line in `secrets/proxy/password` (mode `0600`, owned
 by `PANEL_USER`), mounted read-only at `/run/secrets/proxy/password`
 (`PROXY_PASSWORD_FILE`). The proxy refuses to start as root, with any
 capability, with a provider other than `mullvad`, `pia` or `nordvpn`, or with
-a setting that doesn't parse; [the proxy](proxy.md#settings) lists every
-setting the role reads.
+a setting that doesn't parse, and names every bad setting at once;
+[the proxy](proxy.md#settings) lists every setting the role reads. With
+`STATE_GID` on the exit, run it in that group
+([readers in another group](#readers-in-another-group)).
 
 ## The network exchange
 
@@ -645,6 +661,19 @@ EXIT_IF=vpn                     # the one interface name; vpn by default with PR
 - **One interface.** Every provider's tunnel is `EXIT_IF`, so the routing
   contract and NetBird's interface exclusion never change; set
   `NB_EXTRA_IFACE_BLACKLIST` to the same name (`vpn` by default).
+- **Back to one provider.** The stored NetBird profile keeps the interface
+  blacklist it was enrolled with, so a multi-provider exit's profile excludes
+  `vpn`, not a single-provider exit's `EXIT_IF` (`mullvad` by default). To
+  move the exit back to one provider on the same NetBird profile, set
+  `EXIT_IF` and `NB_EXTRA_IFACE_BLACKLIST` for it, then, with the exit
+  stopped, run [`fix-blacklist`](tools-reference.md#fix-blacklist) with the
+  new `EXIT_IF` ([the steps](operations.md#netbird-interface-blacklist));
+  otherwise the exit refuses to start because the profile doesn't exclude the
+  tunnel interface. Keeping `EXIT_IF=vpn` on the single-provider exit (its
+  tunnel config is then `tunnel/wg_confs/vpn.conf`) avoids the step.
+- **`SERVER` names the provider**: `SERVER=nordvpn/nl9001.nordvpn.com`
+  locks the exit to that provider's server ([a server set in
+  configuration](#a-server-set-in-configuration)).
 - **After a restart** the tunnel comes back on the provider it was last on
   (`tunnel-provider.json`, [state files](#state-files)), not on `PROVIDER`.
 - **Credentials in one container.** The exit holds every provider's key and,
@@ -900,7 +929,8 @@ This was tested with the unit tests at the commit that added it. No exit
 has been run live this way ([testing](testing.md)).
 
 The old `panel/relays.json` and `applier/.last-server` files are ignored. Public
-exit snapshots are mode 0644 so the non-root panel can read them; requests
+exit snapshots are mode 0644 so the non-root panel can read them (0640 for
+one group with `STATE_GID`, [below](#readers-in-another-group)); requests
 are mode 0600. The panel cannot write the applier directory. Catalog refresh
 is every six hours (after a failure, retries from one minute doubling to an hour, or to five minutes while there is no catalog under 24 hours old), maximum catalog age is 24
 hours, and maximum status age is 150 seconds. A server list download may take
@@ -912,6 +942,44 @@ hours. The validated `relays.json` may be 10 MiB, NordVPN's and gluetun's
 catalog, reporting it in `relay-error.json` like any failed refresh, and
 neither the exit nor the panel reads a larger one. These are fixed safety
 defaults, set per provider in `internal/providers`.
+
+### Readers in another group
+
+The panel and the [proxy](proxy.md) read `state/applier` and never write
+it. With the Compose files the exit's published files are mode 0644 in a
+directory others may enter, so any user can read them. Where the state
+directory is the exit's alone, as on Kubernetes when the exit runs as root
+and the directory is root's 0770, a reader running as another user is
+refused: the proxy then refuses connections with `the exit's verdict is
+unknown` and the file it couldn't read
+([the proxy](proxy.md#on-kubernetes)).
+
+`STATE_GID` on the exit (unset by default) names a group id, 0 to
+2147483647, that may read the published files instead:
+
+- At start the exit makes `<STATE_DIR>/applier` mode 0750 with that group,
+  and gives each published file already there (a regular file of mode 0644
+  or 0640: `result.json`, `relays.json`, `relay-error.json`) mode 0640 with
+  that group. Every file it publishes afterwards is written 0640 with that
+  group. Others can no longer read them.
+- The private files (`attempt.json`, `location.json` and the rest, mode
+  0600) stay the exit's alone, and the directory stays writable by its
+  owner only. Links are not followed.
+- The exit must be able to give files that group: it is a member of the
+  group (Compose `group_add`, Kubernetes `supplementalGroups` or
+  `runAsGroup`) or holds `CHOWN`, which the Compose files don't grant. It
+  must also own the directory, or hold `FOWNER`, to change its mode.
+  Otherwise it refuses to start with a line that begins `STATE_GID <gid>:`
+  and names the file and the reason.
+- Every reader must run in that group: the panel (`PANEL_USER`'s group, or a
+  supplementary group) and the proxy. A reader outside it, the panel
+  included, can no longer read the files once the exit has started with
+  the setting.
+
+`check-config` checks the value but changes nothing. An older release
+ignores the setting and writes mode 0644 again. This was tested with the
+unit tests at the commit that added it; no exit has run live with it
+([testing](testing.md)).
 
 ## Panel endpoints
 

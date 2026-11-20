@@ -17,6 +17,7 @@ import (
 
 	"github.com/irashack/molebridge/internal/bootclock"
 	"github.com/irashack/molebridge/internal/contract"
+	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/mutator"
 	"github.com/irashack/molebridge/internal/rtnl"
 	"github.com/irashack/molebridge/internal/tunnel"
@@ -129,6 +130,9 @@ func RunWorker(environ []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	// STATE_GID: the files the worker publishes (the catalogue, the
+	// applier's records) are its group's, as the supervisor's are.
+	jsonfile.SetPublicGroup(s.StateGID)
 	// The worker's lines go through the same bounded queue as the
 	// supervisor's (boundedLog): a log driver that stops reading must not
 	// stall a supervised loop, the mutation owner or the watcher among them,

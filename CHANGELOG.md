@@ -49,6 +49,26 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   exist only in drill builds: trusting the rig's certificate authority for
   PIA, and holding a replacement between its links. Fake networks only:
   the live pass has not run.
+- Follow-ups from a test host (issue 120). `STATE_GID` on the exit (unset
+  by default) lets one group read the published files: at start the exit
+  makes `state/applier` mode 0750 with that group and its published files
+  0640, and writes every later one the same way; the private files stay
+  0600. The exit must be able to give files that group, and the panel and
+  the proxy must run in it ([readers in another
+  group](docs/configuration.md#readers-in-another-group)). The proxy now
+  names every bad setting, the password file and the listen address in one
+  refusal instead of one at a time, checks `PROXY_LISTEN`'s form with the
+  other settings, and while it can't read the exit's `result.json` its
+  status says which file and why ("can't read
+  /state/applier/result.json: permission denied"). On a multi-provider
+  exit, an invalid `SERVER` names the `<provider>/<server>` form and, for
+  a bare name that fits a provider's naming, suggests it with that
+  provider in front. Docs: podman-compose doesn't read `COMPOSE_FILE` from
+  `.env`, so pass `-f`; a client container outside a podman-compose stack
+  needs `--pod`; the proxy on Kubernetes (`OVERLAY_IF=eth0`, the pod's
+  address, a NetworkPolicy); and moving a multi-provider exit back to one
+  provider on the same NetBird profile needs `fix-blacklist`. Unit tests
+  only; nothing of this has run live.
 
 ## 0.14.1 — unreleased
 

@@ -222,7 +222,7 @@ native exit and says where this form differs.
 
    | Setting | Value |
    |---|---|
-   | `COMPOSE_FILE` | `compose.gluetun.yaml` (the example sets it) |
+   | `COMPOSE_FILE` | `compose.gluetun.yaml` (the example sets it). podman-compose doesn't read it from `.env`: pass `-f compose.gluetun.yaml` on every command ([rootless Podman](prerequisites.md#rootless-podman)) |
    | `EXIT_IF` | `wg0`: the name gluetun gives its tunnel (`VPN_INTERFACE`). Letters, digits and underscores only. The exit and NetBird's ICE blacklist use the same value |
    | `OVERLAY_CIDR` | Your NetBird peer range, `100.64.0.0/10` for NetBird's default |
    | `OVERLAY6_CIDR` | Your NetBird IPv6 range, if you have one |

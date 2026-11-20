@@ -1041,6 +1041,17 @@ check, which today means FastestVPN, IVPN, Surfshark and Windscribe through the 
 backend: the IP echo services disagreed, or answered with the host's own address or one the
 server list doesn't name. See [egress tiers](architecture.md#egress-tiers).
 
+**`Invalid SERVER "<name>"; no change applied.`** `SERVER` is not a valid name for the
+exit's provider: a typo, a port, a URL or a list. Fix it and apply the change with
+[recovery](operations.md#recovery) ([a server set in
+configuration](configuration.md#a-server-set-in-configuration)). On a
+[multi-provider exit](configuration.md#multi-provider-exit) `SERVER` names its provider too,
+and the message says so: `Invalid SERVER "nl9001.nordvpn.com"; with PROVIDERS set, SERVER is
+<provider>/<server> with one of mullvad, pia, nordvpn, for example
+"nordvpn/nl9001.nordvpn.com"; no change applied.` The example appears when the bare name
+fits a provider's naming, and names every provider it fits (a Mullvad hostname is also a
+valid PIA region id, so both are offered); put the right provider in front.
+
 **"Waiting for a fresh trusted relay catalogue; request will retry automatically."** The
 selection is saved and will be applied once the exit has a current catalog. If this
 persists, the provider's API is unreachable from the exit.

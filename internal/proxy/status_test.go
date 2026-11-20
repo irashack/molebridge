@@ -61,6 +61,16 @@ func TestStatusRecordShape(t *testing.T) {
 	}
 }
 
+func TestRefusingStatusSaysWhyTheRecordIsUnreadable(t *testing.T) {
+	s := &server{cfg: Config{Tunnel: func() TunnelState {
+		return TunnelState{Verdict: "unknown", Unreadable: "can't read /state/applier/result.json: permission denied"}
+	}}}
+	status, message := s.servingStatus()
+	if status != "refusing" || message != "Refusing new connections: the exit's verdict is unknown: can't read /state/applier/result.json: permission denied." {
+		t.Fatalf("%s: %s", status, message)
+	}
+}
+
 func TestStatusFollowsTheTunnelAndTheListener(t *testing.T) {
 	r := startRig(t, nil)
 	waitStatus(t, r, "ok", nil)
