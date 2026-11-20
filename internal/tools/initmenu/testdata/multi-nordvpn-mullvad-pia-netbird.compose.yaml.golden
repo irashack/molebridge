@@ -1,0 +1,182 @@
+# Written by `molebridge init` (experimental, docs/setup.md#molebridge-init).
+#   provider: nordvpn, mullvad, pia (a multi-provider exit)
+#   ways in:  netbird-exit
+#   extras:   none
+# The services are those of compose.yaml in the Molebridge source
+# of the same release, with its settings and image pins; that file's
+# comments say more.
+# The exit differs from it in two things: it passes PROVIDERS, and it
+# mounts one tunnel config per provider instead of the tunnel/wg_confs
+# directory (docs/configuration.md#multi-provider-exit; experimental).
+# Your settings are in .env beside this file.
+#
+# Secrets live in the mode-0600 files under ./tunnel and ./secrets; never
+# print them or paste `docker compose config` output anywhere.
+name: molebridge
+
+services:
+  exit:
+    image: ghcr.io/irashack/molebridge:<pin>
+    command: ["exit"]
+    container_name: "${COMPOSE_PROJECT_NAME:-molebridge}-exit"
+    restart: unless-stopped
+    cap_drop: [ALL]
+    # NET_ADMIN: the routing contract, the tunnel and NetBird's interface.
+    # NET_RAW: NetBird opens an IPv4 raw socket while bringing the overlay
+    # interface up. Docker grants NET_RAW by default and Podman does not,
+    # where the engine then fails with "failed to create ipv4 raw socket:
+    # operation not permitted", the interface never appears, and the exit
+    # carries no traffic.
+    # DAC_OVERRIDE: reads the mode-0600 tunnel config, credential files and
+    # panel requests, and creates, syncs and replaces files in a state
+    # directory your host user owns (rootful Docker; a rootless engine's
+    # container root is that user already).
+    cap_add: [NET_ADMIN, NET_RAW, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      # The supervisor's runtime files and NetBird's control socket.
+      - /run:size=4m,mode=0755,noexec,nosuid,nodev
+      # NetBird's client log, kept off the read-only root; the exit reads its
+      # own launch's lines from it.
+      - /var/log/netbird:size=16m,mode=0755,noexec,nosuid,nodev
+    # The stop sequence ends NetBird and the worker and removes the tunnel
+    # within 13 seconds; this leaves room so the engine never cuts it short.
+    stop_grace_period: 15s
+    sysctls:
+      # The namespace forwards overlay traffic into the tunnel.
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      # ICMP errors for tunnel traffic (fragmentation needed) are sourced from
+      # the tunnel address so the priority-94 rule returns them through the
+      # tunnel. Without it, path MTU discovery through the exit silently fails.
+      net.ipv4.icmp_errors_use_inbound_ifaddr: "1"
+      net.ipv6.conf.all.disable_ipv6: "0"
+      net.ipv6.conf.default.disable_ipv6: "0"
+    environment:
+      TZ: "${TZ:-Etc/UTC}"
+      # Molebridge creates the provider tunnel itself, on an overlay exit.
+      # compose.gluetun.yaml and compose.sidecar.yaml set the other forms.
+      TUNNEL_BACKEND: native
+      EXIT_KIND: overlay
+      PROVIDER: "${PROVIDER:-mullvad}"
+      # A multi-provider exit (experimental): the providers it switches
+      # between, PROVIDER the one its tunnel starts on the first time
+      # (docs/configuration.md#multi-provider-exit).
+      PROVIDERS: "${PROVIDERS:?set PROVIDERS in .env (docs/configuration.md#multi-provider-exit)}"
+      EXIT_IF: "${EXIT_IF:-mullvad}"
+      EXIT_TABLE: "${EXIT_TABLE:-51821}"
+      OVERLAY_IF: "${OVERLAY_IF:-wt0}"
+      OVERLAY_CIDR: "${OVERLAY_CIDR:?set OVERLAY_CIDR in .env (docs/configuration.md)}"
+      OVERLAY6_CIDR: "${OVERLAY6_CIDR:-}"
+      SERVER: "${SERVER:-}"
+      # PIA only, off by default; see docs/providers.md#port-forwarding.
+      PIA_PORT_FORWARD: "${PIA_PORT_FORWARD:-off}"
+      PIA_PORT_FORWARD_TARGET: "${PIA_PORT_FORWARD_TARGET:-}"
+      GATUS_URL: "${GATUS_URL:-}"
+      GATUS_ENDPOINT: "${GATUS_ENDPOINT:-molebridge}"
+      STATE_DIR: /state
+      # Overrides whose defaults live in the binary (docs/configuration.md).
+      # Seconds between full repair passes, 2 to 60; netlink events repair in
+      # between. And seconds without an accepted lease renewal before the
+      # supervisor stops NetBird, 5 to 30.
+      ROUTING_RECONCILE_INTERVAL: "${ROUTING_RECONCILE_INTERVAL:-30}"
+      GUARD_GRACE: "${GUARD_GRACE:-30}"
+      # NetBird, as the old netbird service set it.
+      NB_INTERFACE_NAME: "${OVERLAY_IF:-wt0}"
+      NB_HOSTNAME: "${NB_HOSTNAME:-molebridge-exit}"
+      NB_MANAGEMENT_URL: "${NB_MANAGEMENT_URL:-https://api.netbird.io}"
+      NB_LOG_LEVEL: info
+      # This peer only forwards traffic; NetBird leaves the namespace's
+      # resolver alone.
+      NB_DISABLE_DNS: "true"
+      # Part of Molebridge's supported NetBird configuration; the exit
+      # refuses to start NetBird without it.
+      NB_DISABLE_USERSPACE_ROUTING: "true"
+      # Keeps ICE off the exit tunnel interface from the peer's first
+      # enrollment: NetBird binds this to `--extra-iface-blacklist` on the
+      # first `netbird up`. An already enrolled peer keeps its stored
+      # blacklist; the exit then refuses to start and names the repair tool
+      # (`fix-blacklist`, docs/operations.md).
+      NB_EXTRA_IFACE_BLACKLIST: "${EXIT_IF:-mullvad}"
+    env_file:
+      # NB_SETUP_KEY, needed only until the peer first enrolls.
+      - path: ./secrets/netbird.env
+        required: false
+      # Optional GATUS_TOKEN for health pushes.
+      - path: ./secrets/applier.env
+        required: false
+    volumes:
+      # One tunnel config per provider, tunnel/wg_confs/<provider>.conf, each
+      # holding that provider's private key (mode 0600). Every key is in this
+      # one container: a compromised exit gives all of them away.
+      # Compose refuses to start, rather than create a directory, when one
+      # is missing.
+      - type: bind
+        source: ./tunnel/wg_confs/nordvpn.conf
+        target: /config/wg_confs/nordvpn.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./tunnel/wg_confs/mullvad.conf
+        target: /config/wg_confs/mullvad.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./tunnel/wg_confs/pia.conf
+        target: /config/wg_confs/pia.conf
+        read_only: true
+        bind:
+          create_host_path: false
+      # The panel's requests in, read-only; the exit's records out.
+      - ./state/panel:/state/panel:ro
+      - ./state/applier:/state/applier
+      # PIA only: the account login the exit registers the tunnel key with,
+      # secrets/pia/username and secrets/pia/password, one value per file,
+      # mode 0600. Compose cannot mount a directory for one PROVIDER only, so
+      # the mount is always there: the directory is empty, and unused, with
+      # Mullvad or NordVPN. Create it for every provider (docs/setup.md);
+      # Compose then refuses to start, rather than create it root-owned, when
+      # it is missing.
+      - type: bind
+        source: ./secrets/pia
+        target: /run/secrets/pia
+        read_only: true
+        bind:
+          create_host_path: false
+      # Durable peer identity; deleting it re-enrolls as a new peer.
+      - netbird-data:/var/lib/netbird
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/molebridge", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    # `json-file` with a size cap is the one bounded driver every supported
+    # engine accepts. Docker's `local` driver does not exist under Podman, and
+    # a container naming an unknown driver fails to create outright; Podman's
+    # log options do not include `max-file`.
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+    deploy:
+      resources:
+        limits:
+          # One process tree where 0.7.0 had 256m (tunnel), 256m (NetBird)
+          # and 128m (applier). 512m is NordVPN's: its server list is about
+          # 8 MB of JSON, downloaded and parsed every six hours and capped at
+          # 32 MiB, and a list near that cap takes about 300 MB to parse, with
+          # NetBird beside it. It is a ceiling, not a reservation: Mullvad and
+          # PIA exits idle far below it.
+          memory: 512m
+          # Every process and thread in the container counts: the
+          # supervisor, the worker, the cleanup child and NetBird are Go
+          # programs, each with up to about one thread per CPU plus a few.
+          # 512 holds them on a 64-CPU host and still stops a runaway fork.
+          pids: 512
+
+volumes:
+  netbird-data:

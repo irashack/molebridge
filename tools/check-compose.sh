@@ -458,30 +458,54 @@ pass "one image tag, no 0.7 leftovers"
 # comes from (resolved with init's .env, mount paths taken relative to each
 # file's directory, `build:` and profiles set aside): so every check above
 # holds for init's services too. Combinations init refuses must say why and
-# write nothing. Needs Go to build the binary.
+# write nothing. Needs Go to build the binary. The release build refuses a
+# multi-provider exit (several providers: PROVIDERS), as its exit does; a
+# second binary, built with the drill tag, whose exit accepts PROVIDERS,
+# writes those too. Their exit is compose.yaml's but for PROVIDERS and one
+# tunnel-config mount per provider in place of the tunnel/wg_confs
+# directory, which get a check of their own.
 if ! command -v go >/dev/null 2>&1; then
     echo "SKIP init: go not found"
     echo "all Compose checks passed"
     exit 0
 fi
 go build -o "$work/molebridge" ./cmd/molebridge || fail "molebridge does not build"
+go build -tags drill -o "$work/molebridge-drill" ./cmd/molebridge || fail "molebridge does not build with the drill tag"
 core_image=$(jq -c .services.exit.image "$work/nsc.json")
 # check_init <n> <shipped file> <expected services>: init's output in $work/init-<n>.
 check_init() {
     n=$1; src=$2; want=$3; dir="$work/init-$n"
+    multi=$(sed -n 's/^PROVIDERS=//p' "$dir/.env")
     docker compose --project-directory "$dir" -f "$dir/compose.yaml" --env-file "$dir/.env" config --format json > "$work/init-$n.json" ||
         fail "init-$n: its compose.yaml does not resolve with its .env ($(cat "$work/answers-$n.json"))"
     profiles=$(sed -n 's/^COMPOSE_PROFILES=//p' "$dir/.env")
     case " $want " in *" port-sync "*) profiles="$profiles,port-sync" ;; esac
     COMPOSE_PROFILES=$profiles docker compose --project-directory "$root" -f "$src" --env-file "$dir/.env" config --format json > "$work/init-$n-shipped.json" ||
         fail "init-$n: $src does not resolve with init's .env"
-    jq -e --slurpfile s "$work/init-$n-shipped.json" --arg di "$dir" --arg dr "$root" --arg want "$want" '
+    jq -e --slurpfile s "$work/init-$n-shipped.json" --arg di "$dir" --arg dr "$root" --arg want "$want" --arg multi "$multi" '
       def strip($d): walk(if type == "string" and startswith($d + "/") then .[($d | length):] else . end);
-      def norm($d): .services | map_values(del(.build, .profiles)) | strip($d);
+      def unmulti: if $multi == "" then . else
+        .exit |= (del(.environment.PROVIDERS) | .volumes |= map(select(.target | startswith("/config/wg_confs") | not))) end;
+      def norm($d): .services | map_values(del(.build, .profiles)) | strip($d) | unmulti;
       norm($di) as $i | ($s[0] | norm($dr)) as $sh |
       (($i | keys) == ($want | split(" ") | sort)) and
       ([$i | to_entries[] | select(.key != "proxy") | .value == $sh[.key]] | all)' "$work/init-$n.json" >/dev/null ||
         fail "init-$n: its services are not $want as $src resolves them ($(cat "$work/answers-$n.json"))"
+    if [ -n "$multi" ]; then
+        [ "$src" = compose.yaml ] || fail "init-$n: a multi-provider exit from $src"
+        jq -e --arg p "$multi" '
+          ($p | split(",")) as $names | .services.exit as $e |
+          ($names | length) >= 2 and ($names | length) <= 3 and
+          $e.environment.PROVIDERS == $p and $e.environment.PROVIDER == $names[0] and
+          $e.environment.EXIT_IF == "vpn" and $e.environment.NB_EXTRA_IFACE_BLACKLIST == "vpn" and
+          $e.environment.EXIT_KIND == "overlay" and $e.environment.TUNNEL_BACKEND == "native" and
+          ([$e.volumes[]? | select(.target | startswith("/config/wg_confs"))] as $v |
+            ($v | map(.target)) == ($names | map("/config/wg_confs/" + . + ".conf")) and
+            ($v | map(.source | sub("^.*/tunnel/wg_confs/"; ""))) == ($names | map(. + ".conf")) and
+            ($v | all(.type == "bind" and .read_only == true and (.bind.create_host_path // false) == false)))' \
+            "$work/init-$n.json" >/dev/null ||
+            fail "init-$n: the multi-provider exit is not PROVIDERS=$multi, PROVIDER its first, EXIT_IF=vpn and one read-only tunnel-config mount per provider"
+    fi
     ok "init-$n" "every Molebridge service has a process limit" "$defs allLimited"
     case " $want " in *" proxy "*)
         ok "init-$n" "the proxy: molebridge-core, no capabilities, non-root, in the exit's namespace, its own state and password only" '
@@ -521,7 +545,11 @@ n=0
 init_all() {
     bin=$1; expect=$2; accepted=0
     for provider in mullvad pia nordvpn gluetun-fastestvpn gluetun-ivpn gluetun-mullvad gluetun-nordvpn \
-            gluetun-surfshark gluetun-windscribe gluetun-airvpn gluetun-protonvpn wireguard; do
+            gluetun-surfshark gluetun-windscribe gluetun-airvpn gluetun-protonvpn wireguard \
+            mullvad,pia mullvad,nordvpn pia,mullvad pia,nordvpn nordvpn,mullvad nordvpn,pia \
+            mullvad,pia,nordvpn mullvad,nordvpn,pia pia,mullvad,nordvpn pia,nordvpn,mullvad \
+            nordvpn,mullvad,pia nordvpn,pia,mullvad \
+            mullvad,mullvad mullvad,gluetun-nordvpn mullvad,pia,nordvpn,gluetun-ivpn; do
         for ways in '"netbird-exit"' '"sidecar"' '"proxy"' '"netbird-exit","sidecar"' '"netbird-exit","proxy"' \
                 '"sidecar","proxy"' '"netbird-exit","sidecar","proxy"'; do
             for extras in '' '"switchyard"' '"port-sync"' '"switchyard","port-sync"'; do
@@ -546,5 +574,9 @@ init_all() {
 init_all "$work/molebridge" 52
 "$work/molebridge" init --out "$work/init-1" --answers "$work/answers-1.json" >/dev/null 2>&1 &&
     fail "init overwrote an earlier output without --force"
-pass "init: 52 combinations written, each resolving as the shipped forms' services, the proxy hardened"
+[ "$(grep -l 'not available in this release yet' "$work"/init-*.log | wc -l | tr -d ' ')" = 420 ] ||
+    fail "the release build did not refuse every multi-provider answer as not available"
+pass "init: 52 combinations written, each resolving as the shipped forms' services, the proxy hardened; multi-provider exits refused"
+init_all "$work/molebridge-drill" 76
+pass "init with the drill tag: 76 combinations, the 24 multi-provider exits with PROVIDERS and one tunnel-config mount per provider"
 echo "all Compose checks passed"

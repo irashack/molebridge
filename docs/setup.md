@@ -451,12 +451,36 @@ on Mullvad only. `init` writes its service as `compose.proxy.yaml` has it,
 and its state and secret directories are yours to create before the first
 start, as that file says.
 
+**A multi-provider exit** ([what it is](configuration.md#multi-provider-exit))
+is offered only by builds with the `drill` tag for now
+(`go run -tags drill ./cmd/molebridge init --out ~/molebridge`), because this
+release's exit refuses `PROVIDERS` and would not start. On such a build the
+first question also takes two or three of `mullvad`, `pia` and `nordvpn`,
+comma-separated; in an answers file, `"provider": "mullvad,nordvpn"`. The
+first one is where the tunnel starts the first time. Choose `netbird-exit`,
+with or without `switchyard`. `init` then writes `compose.yaml`'s `exit` with
+two differences: it passes `PROVIDERS`, and it mounts one tunnel config per
+provider, `tunnel/wg_confs/<provider>.conf`, read-only, in place of the
+whole `tunnel/wg_confs` directory; Compose refuses to start if one of them
+is missing. The `.env` holds `PROVIDERS` in the order you gave, `PROVIDER`
+set to the first and `EXIT_IF=vpn`, and PIA's port-forwarding settings when
+`pia` is one of them. This one container holds every provider's key, and
+PIA's login with `pia`: where that matters, run single-provider exits side
+by side instead. The panel can't pick a provider yet. The release build's
+`init` refuses several providers with `molebridge init: a multi-provider
+exit is not available in this release yet; see docs/design/multi-provider.md.`
+
 It refuses combinations that don't exist, and writes nothing then:
 
 - `molebridge init: netbird-exit and sidecar can't share one exit: the NetBird
   exit is EXIT_KIND=overlay and the sidecar EXIT_KIND=sidecar, and init writes
   one exit. Choose one of them; the other needs a Compose project of its own.`
 - `port-sync` with another provider than PIA, or without `sidecar`.
+- On a drill build, several providers with `sidecar`, the proxy, `port-sync`
+  or a `gluetun-<id>` provider, more than three, or one listed twice, for
+  example `molebridge init: the proxy can't run on a multi-provider exit: it
+  serves one provider's tunnel and refuses to start with PROVIDERS set.
+  Leave the proxy out, or choose one provider.`
 
 It writes `compose.yaml` and `.env` (and `routing/gluetun-preflight`) into
 the `--out` directory, creating it if needed. If one of them is there

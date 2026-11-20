@@ -578,6 +578,24 @@ exit; choosing more than one writes `PROVIDERS`, `PROVIDER` (the first),
 multi-provider exit with a sidecar, the proxy or gluetun, and
 `tools/check-compose.sh` checks the combinations it can write.
 
+As built (piece 8): `internal/tools/initmenu` asks
+`exit.MultiProviderAvailable()`, the same switch as the exit, so the release
+build neither offers several providers (prompt, `--help`) nor writes them:
+it refuses them with "a multi-provider exit is not available in this
+release yet; see docs/design/multi-provider.md.", and a drill build offers
+them. Several providers are one answer, comma-separated, in the order given
+(`"provider": "mullvad,nordvpn"`), so the answers file keeps schema 1. The
+exit is `compose.yaml`'s with `PROVIDERS` added and, in place of the
+`tunnel/wg_confs` directory, one read-only bind of each
+`<provider>.conf` with `create_host_path: false`; port-sync is refused too
+(it needs the sidecar). Each ordering is its own output (the first is
+`PROVIDER`), so a drill build accepts 76 combinations, 24 more than the
+release build's 52. `TestEveryCombination` counts both, and
+`tools/check-compose.sh` builds a release and a drill binary and checks
+each: the multi-provider exits resolve as `compose.yaml`'s exit apart from
+`PROVIDERS` and the config mounts, which it checks on their own. The panel
+still receives `PROVIDER`, the first provider, until piece 7.
+
 ## Testing
 
 ### Unit tests

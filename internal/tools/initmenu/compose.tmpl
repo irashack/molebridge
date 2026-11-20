@@ -7,8 +7,11 @@ three deliberate differences: port-sync has no profile (it is written only
 when chosen), compose.gluetun.yaml's switchyard is written out instead of
 extending compose.yaml, and the proxy comes from compose.proxy.yaml, the
 overlay file that adds it to compose.yaml or compose.native-sidecar.yaml:
-the shipped file is the block as the overlay form renders it (written only
-with the proxy switch on, proxyAvailable in initmenu.go). TestBlocksMatchShippedFiles fails when a block and its shipped
+the shipped file is the block as the overlay form renders it. A
+multi-provider exit (.Multi, offered only where internal/exit accepts
+PROVIDERS) adds PROVIDERS to overlay/exit and mounts one tunnel config per
+provider in place of the tunnel/wg_confs directory; no shipped file has that
+exit yet, and tools/check-compose.sh checks it on its own. TestBlocksMatchShippedFiles fails when a block and its shipped
 service drift apart in anything but comments, so change the shipped file and
 the block together. The release automation rewrites the image pins here as in
 the shipped files (tools/auto-release.py, PIN_FILES).
@@ -59,6 +62,12 @@ the shipped files (tools/auto-release.py, PIN_FILES).
       TUNNEL_BACKEND: native
       EXIT_KIND: overlay
       PROVIDER: "${PROVIDER:-mullvad}"
+{{- if .Multi}}
+      # A multi-provider exit (experimental): the providers it switches
+      # between, PROVIDER the one its tunnel starts on the first time
+      # (docs/configuration.md#multi-provider-exit).
+      PROVIDERS: "${PROVIDERS:?set PROVIDERS in .env (docs/configuration.md#multi-provider-exit)}"
+{{- end}}
       EXIT_IF: "${EXIT_IF:-mullvad}"
       EXIT_TABLE: "${EXIT_TABLE:-51821}"
       OVERLAY_IF: "${OVERLAY_IF:-wt0}"
@@ -102,8 +111,24 @@ the shipped files (tools/auto-release.py, PIN_FILES).
       - path: ./secrets/applier.env
         required: false
     volumes:
+{{- if .Multi}}
+      # One tunnel config per provider, tunnel/wg_confs/<provider>.conf, each
+      # holding that provider's private key (mode 0600). Every key is in this
+      # one container: a compromised exit gives all of them away.
+      # Compose refuses to start, rather than create a directory, when one
+      # is missing.
+{{- range .Providers}}
+      - type: bind
+        source: ./tunnel/wg_confs/{{.}}.conf
+        target: /config/wg_confs/{{.}}.conf
+        read_only: true
+        bind:
+          create_host_path: false
+{{- end}}
+{{- else}}
       # wg_confs/<EXIT_IF>.conf holds the tunnel private key (mode 0600).
       - ./tunnel/wg_confs:/config/wg_confs:ro
+{{- end}}
       # The panel's requests in, read-only; the exit's records out.
       - ./state/panel:/state/panel:ro
       - ./state/applier:/state/applier
