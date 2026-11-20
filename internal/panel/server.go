@@ -512,14 +512,10 @@ func (s *Server) loadAllowlistFor(ex Exit, provider string) *providers.Entries {
 	return providers.SnapshotRelays(snapshot, provider)
 }
 
-// fetchError is the page's relay refresh error: the applier's message, or a
+// fetchErrorFor is the page's relay refresh error: the applier's message, or a
 // fixed one when there is no fresh catalogue. meta is the snapshot without
 // its relays (cachedSnapshot), nil when there is none.
-func (s *Server) fetchError(ex Exit, meta map[string]any) (message, at string) {
-	return s.fetchErrorFor(ex, ex.Provider, meta)
-}
-
-// fetchErrorFor is fetchError for one of the exit's providers.
+// It reads the given provider of the exit.
 func (s *Server) fetchErrorFor(ex Exit, provider string, meta map[string]any) (message, at string) {
 	_, errorPath := ex.CatalogFiles(provider)
 	data, _ := state.ReadObject(errorPath, 4096)

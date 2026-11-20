@@ -486,7 +486,7 @@ check_init() {
       def strip($d): walk(if type == "string" and startswith($d + "/") then .[($d | length):] else . end);
       def unmulti: if $multi == "" then . else
         .exit |= (del(.environment.PROVIDERS) | .volumes |= map(select(.target | startswith("/config/wg_confs") | not))) |
-        if has("panel") then .panel |= del(.environment.PROVIDERS) else . end end;
+        if has("switchyard") then .switchyard |= del(.environment.PROVIDERS) else . end end;
       def norm($d): .services | map_values(del(.build, .profiles)) | strip($d) | unmulti;
       norm($di) as $i | ($s[0] | norm($dr)) as $sh |
       (($i | keys) == ($want | split(" ") | sort)) and
@@ -500,7 +500,7 @@ check_init() {
           $e.environment.PROVIDERS == $p and $e.environment.PROVIDER == $names[0] and
           $e.environment.EXIT_IF == "vpn" and $e.environment.NB_EXTRA_IFACE_BLACKLIST == "vpn" and
           $e.environment.EXIT_KIND == "overlay" and $e.environment.TUNNEL_BACKEND == "native" and
-          (.services.panel == null or .services.panel.environment.PROVIDERS == $p) and
+          (.services.switchyard == null or .services.switchyard.environment.PROVIDERS == $p) and
           ([$e.volumes[]? | select(.target | startswith("/config/wg_confs"))] as $v |
             ($v | map(.target)) == ($names | map("/config/wg_confs/" + . + ".conf")) and
             ($v | map(.source | sub("^.*/tunnel/wg_confs/"; ""))) == ($names | map(. + ".conf")) and
