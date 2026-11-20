@@ -180,6 +180,11 @@ func upgradeDrill(t *testing.T, prev, prevVersion string, stateGID, prevKnowsSta
 	if attemptAfter["rejected"] != nil {
 		t.Errorf("the candidate refused the previous release's request: attempt.json %s", jsonText(attemptAfter))
 	}
+	// The request was already verified: the candidate carries on with the
+	// previous release's attempt rather than making a new one.
+	if attemptAfter["attempt_id"] != attemptBefore["attempt_id"] || attemptAfter["outcome"] != "verified" {
+		t.Errorf("attempt.json after the upgrade: %s, was %s", jsonText(attemptAfter), jsonText(attemptBefore))
+	}
 	r.waitPanelVerified(b, idB, 30*time.Second)
 	r.clientVia(b, 30*time.Second)
 	t.Logf("candidate exit: ok and verified on %s for request %s %v after the stop of the previous one; selection %s; attempt.json %s",

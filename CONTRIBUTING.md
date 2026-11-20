@@ -306,7 +306,7 @@ must read the previous exit's record as `ok`, and the candidate's panel, started
 [upgrades](docs/operations.md#upgrades) orders it, must show the previous exit verified on B. Then
 the candidate's exit starts on the same state directory. It must be verified on B for the same
 request with no new one, `desired.json` byte for byte unchanged, `location.json` still naming B
-and its city, no refusal in `attempt.json`, the panel showing it and the client's traffic leaving
+and its city, `attempt.json` still the previous release's verified attempt with no refusal, the panel showing it and the client's traffic leaving
 by B. A switch back to A through the panel must verify. Last comes the rollback: the previous
 release's exit, then its panel, on the candidate's state, verified on A for that request. It runs
 twice at once. The `same-settings` case changes no setting. The `state-gid` case sets `STATE_GID`
