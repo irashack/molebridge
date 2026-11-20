@@ -112,8 +112,8 @@ candidate's digest. Then run what the policy names:
   [multi-provider exit](multi-provider.md) with Mullvad, PIA and NordVPN
   (`multi-provider-live`: a switch between providers in each direction,
   one through the panel, each verified within 60 seconds; a tunnel lost on
-  each provider, traffic back within 5 seconds and verified within 90 (PIA:
-  60 and 90); no unsafe routing sample and no restart); and CI's namespace drills and system rig on the tag
+  each provider, the interface back within 5 seconds, traffic within 30
+  (PIA 60) and a verified record within 90; no unsafe routing sample and no restart); and CI's namespace drills and system rig on the tag
   (`ci-namespace-drills`, `ci-system-rig`). The procedures are in [verification](verification.md). The policy
   is a list, not a matrix: say in the record which exits each drill ran on,
   and in which address families.
