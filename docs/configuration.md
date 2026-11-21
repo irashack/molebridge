@@ -478,8 +478,15 @@ unknown` and the file it couldn't read
   the setting.
 
 `check-config` checks the value but changes nothing. An older release
-ignores the setting and writes mode 0644 again. This was tested with the
-unit tests at the commit that added it; no exit has run live with it
+ignores the setting and writes mode 0644 again. CI's upgrade drill
+checks the modes and the rollback to the previous release on the system
+rig ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)). It has run live on one
+exit: a native Mullvad exit on Kubernetes at v0.14.3 (2026-11-21), with
+`STATE_GID=1080`, the pod in supplementary group 1080 and the exit's
+container still uid 0. `applier/` was 0750 and group 1080, `result.json`,
+`relays.json` and `relay-error.json` 0640 and group 1080, `attempt.json`
+and `location.json` 0600 and group 0, and a proxy running as 1080:1080
+read the records. Podman and Docker have not run it live
 ([testing](testing.md)).
 
 ## NetBird exit node
