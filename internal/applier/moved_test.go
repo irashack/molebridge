@@ -205,6 +205,28 @@ func TestPickingTheReplacementMakesItTheRememberedServer(t *testing.T) {
 	}
 }
 
+// The retired server picked again while the exit stands in for it: still the
+// move, applied as any request for it (#144 skips only a request for the
+// server itself, verified).
+func TestPickingTheRetiredServerAgainKeepsTheMove(t *testing.T) {
+	a, k, _ := verifiedOn(t)
+	retire(a, testHost)
+	k.now += 600
+	mustTick(t, a)
+	adds := len(k.adds())
+	k.now += 600
+	desire(t, a, requestAt(testHost, map[string]any{"request_id": "44444444444444444444444444444444"}))
+	r := mustTick(t, a)
+	from, to := movedOf(r)
+	if status(r) != "ok" || r.Get("server") != otherHost || r.Get("request_id") != "44444444444444444444444444444444" ||
+		from != testHost || to != otherHost || len(k.adds()) != adds+1 {
+		t.Fatalf("%s %v moved %v -> %v, %d adds: %s", status(r), r.Get("server"), from, to, len(k.adds())-adds, message(r))
+	}
+	if a.location.Server != testHost || a.location.Replacement != otherHost {
+		t.Fatalf("location %+v", a.location)
+	}
+}
+
 // glSettle runs passes until the exit is verified on server.
 func glSettle(t *testing.T, f *glFixture, server string) *Record {
 	t.Helper()

@@ -98,6 +98,26 @@ func TestASwitchOnTheActiveProviderIsTodays(t *testing.T) {
 	}
 }
 
+// The active provider's verified server picked again changes nothing (#144);
+// the attempt names its provider as any request's does.
+func TestTheVerifiedServerPickedAgainOnAMultiProviderExit(t *testing.T) {
+	m := newMulti(t, "", "mullvad", allThree, nil)
+	desire(t, m.a, targetOf("mullvad"))
+	if r := mustTick(t, m.a); status(r) != "ok" {
+		t.Fatalf("%s %s", status(r), message(r))
+	}
+	mutations := len(m.k.mutations)
+	desire(t, m.a, requestAt(testHost, map[string]any{"provider": "mullvad", "request_id": strings.Repeat("5", 32)}))
+	r := mustTick(t, m.a)
+	if status(r) != "ok" || len(m.k.mutations) != mutations || len(m.tunnels.replaced) != 0 ||
+		r.Get("request_id") != strings.Repeat("5", 32) {
+		t.Fatalf("%s %v %v", status(r), m.k.mutations[mutations:], m.tunnels.replaced)
+	}
+	if f := m.attemptFile(t); f["provider"] != "mullvad" || f["state"] != "idle" || f["outcome"] != "verified" {
+		t.Errorf("attempt %v", f)
+	}
+}
+
 func TestAFailedChangeStaysOnTheTarget(t *testing.T) {
 	m := newMulti(t, "", "mullvad", allThree, nil)
 	m.tunnels.fail = errInjected

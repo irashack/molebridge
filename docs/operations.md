@@ -198,6 +198,10 @@ The exit retries by itself
 
 To retry now, press **Retry** in the panel, or select the same server again.
 Either is a new request: it applies at once and starts the backoff over.
+A request for the server the exit is on and verified on changes nothing: the
+exit checks it and records the request as verified, without touching the
+tunnel (with gluetun, without asking it to reconnect). With PIA, choosing the
+connected region registers it again.
 While a switch runs the panel answers 409, "A switch is in progress; wait
 for it to finish.", so wait for it first.
 

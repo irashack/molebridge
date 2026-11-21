@@ -552,10 +552,64 @@ func TestAnOldRequestIsInspectedFirstAFreshOneApplied(t *testing.T) {
 	if r := mustTick(t, a); status(r) != "ok" || len(k.adds()) != 0 {
 		t.Fatalf("%s %v", status(r), k.adds())
 	}
-	desire(t, a, requestAt(testHost, map[string]any{"request_id": strings.Repeat("3", 32)}))
+	desire(t, a, requestAt(otherHost, map[string]any{"request_id": strings.Repeat("3", 32)}))
 	if r := mustTick(t, a); status(r) != "ok" || len(k.adds()) != 1 {
 		t.Fatalf("%s %v", status(r), k.adds())
 	}
+}
+
+// TestARequestForTheVerifiedServerChangesNothing is #144 on the native
+// backend: a request made now for the server the exit is on, verified, is
+// inspected and recorded as verified, the peer left as it is.
+func TestARequestForTheVerifiedServerChangesNothing(t *testing.T) {
+	a, k, dir := pipelineSetup(t)
+	desire(t, a, requestAt(testHost, nil))
+	mustTick(t, a)
+	mutations := len(k.mutations)
+	desire(t, a, requestAt(testHost, map[string]any{"request_id": strings.Repeat("4", 32)}))
+	r := mustTick(t, a)
+	sel := r.Decoded()["selection"].(map[string]any)
+	if status(r) != "ok" || len(k.mutations) != mutations || r.Get("request_id") != strings.Repeat("4", 32) ||
+		sel["source"] != "panel" || sel["outcome"] != "verified" {
+		t.Fatalf("%s %v %v %v", status(r), k.mutations[mutations:], r.Get("request_id"), sel)
+	}
+	if m := saved(t, dir); m["state"] != "idle" || m["outcome"] != "verified" || m["target"] != testHost ||
+		m["target_key"] != a.target.Key() || m["attempts"] != int64(0) {
+		t.Errorf("attempt.json %v", m)
+	}
+}
+
+// A request for the live server is applied when the inspection doesn't
+// verify it, and when the attempt in place isn't at rest verified (Retry).
+func TestARequestForTheLiveServerIsAppliedUnlessVerified(t *testing.T) {
+	t.Run("inspection fails", func(t *testing.T) {
+		a, k, _ := pipelineSetup(t)
+		desire(t, a, requestAt(testHost, nil))
+		mustTick(t, a)
+		k.egressOK = false
+		adds := len(k.adds())
+		desire(t, a, requestAt(testHost, map[string]any{"request_id": strings.Repeat("5", 32)}))
+		mustTick(t, a)
+		if len(k.adds()) != adds+1 {
+			t.Errorf("adds %v", k.adds())
+		}
+	})
+	t.Run("unverified", func(t *testing.T) {
+		a, k, _ := pipelineSetup(t)
+		k.egressOK = false
+		desire(t, a, requestAt(testHost, nil))
+		mustTick(t, a)
+		if a.attempt.State != "unverified" {
+			t.Fatalf("state %s", a.attempt.State)
+		}
+		k.egressOK = true
+		adds := len(k.adds())
+		desire(t, a, requestAt(testHost, map[string]any{"request_id": strings.Repeat("6", 32)}))
+		r := mustTick(t, a)
+		if len(k.adds()) != adds+1 || r.Decoded()["selection"].(map[string]any)["source"] != "operator-retry" {
+			t.Errorf("adds %v, selection %v", k.adds(), r.Decoded()["selection"])
+		}
+	})
 }
 
 func TestNativeAbortsWhenNetbirdIsLostDuringASwitch(t *testing.T) {

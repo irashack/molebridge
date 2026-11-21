@@ -1020,8 +1020,14 @@ What happens next, in precedence order on each pass:
    request id), or a new restore target. It starts a new attempt with the
    backoff from the start. A panel request made within the last 150 seconds
    is applied even when its server is already live (a PIA region registers
-   again); an older one, as after a restart or an upgrade, and every other
-   source inspect first.
+   again), except a request for the server the exit is on and verified on,
+   with the attempt in place at rest: it is inspected first and recorded as
+   verified when it passes every check, so nothing changes (with gluetun, no
+   settings PUT and no reconnect); it is applied only when the inspection
+   fails. Retry after a failed, unverified, pending or refused attempt, a
+   PIA region and a server that stands in for a retired one are applied as
+   before. An older request, as after a restart or an upgrade, and every
+   other source inspect first.
 2. **Pending** goes through the gates again on every pass. **Rejected** is
    tried again when what refused it changes: the catalog's server names,
    or with PIA the credential files.

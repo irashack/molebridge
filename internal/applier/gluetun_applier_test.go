@@ -498,6 +498,92 @@ func TestThePanelsRequestTakesPrecedence(t *testing.T) {
 	}
 }
 
+// glRequestID is a panel request for server with its own request id.
+func glRequestID(server, id string) map[string]any {
+	return requestAt(server, map[string]any{"request_id": strings.Repeat(id, 32)})
+}
+
+// TestPickingTheVerifiedServerAgainPutsNothing is #144: a request for the
+// server gluetun is on, verified, is inspected and verified without a PUT,
+// so gluetun doesn't reconnect. The request is recorded as verified.
+func TestPickingTheVerifiedServerAgainPutsNothing(t *testing.T) {
+	f := newGluetunFixture(t, glOptions{})
+	// gluetun started on A by itself, and the exit verified it with no request.
+	if r := mustTick(t, f.a); status(r) != "ok" || r.Get("server") != hostA {
+		t.Fatalf("%s %q %v", status(r), message(r), r.Get("server"))
+	}
+	desire(t, f.a, glRequestID(hostA, "1"))
+	r := mustTick(t, f.a)
+	if len(f.control.puts) != 0 {
+		t.Fatalf("puts %v", f.control.puts)
+	}
+	sel := selectionOf(r)
+	if status(r) != "ok" || r.Get("server") != hostA || r.Get("request_id") != strings.Repeat("1", 32) ||
+		sel["source"] != "panel" || sel["outcome"] != "verified" || sel["attempt"] != int64(0) {
+		t.Fatalf("%s %q %v %v", status(r), message(r), sel, r.Get("request_id"))
+	}
+	if at := f.a.attempt; at.State != "idle" || at.Outcome != "verified" || at.Target != hostA || at.Attempts != 0 ||
+		at.TargetKey != f.a.target.Key() {
+		t.Errorf("attempt %+v", at)
+	}
+	if f.provider.selection.LastSuccessful != hostA {
+		t.Errorf("selection %+v", f.provider.selection)
+	}
+
+	// After a switch to B, B picked again: no second PUT either.
+	desire(t, f.a, glRequestID(hostB, "2"))
+	mustTick(t, f.a)
+	desire(t, f.a, glRequestID(hostB, "3"))
+	r = mustTick(t, f.a)
+	if len(f.control.puts) != 1 || f.control.puts[0] != hostB || status(r) != "ok" || r.Get("request_id") != strings.Repeat("3", 32) {
+		t.Errorf("puts %v, %s %v", f.control.puts, status(r), r.Get("request_id"))
+	}
+}
+
+// A re-pick of the server live now is applied when it isn't verified: the
+// inspection decides, not the last one.
+func TestPickingTheServerAgainPutsItWhenTheInspectionFails(t *testing.T) {
+	f := newGluetunFixture(t, glOptions{})
+	desire(t, f.a, glRequestID(hostB, "1"))
+	mustTick(t, f.a)
+	f.k.egress = glHost4
+	desire(t, f.a, glRequestID(hostB, "2"))
+	mustTick(t, f.a)
+	if len(f.control.puts) != 2 || f.control.puts[1] != hostB {
+		t.Errorf("puts %v", f.control.puts)
+	}
+}
+
+// Retry, after a failed or an unverified attempt, puts the server again.
+func TestRetryOfTheLiveServerStillPuts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		breaks func(f *glFixture)
+		state  string
+	}{
+		{"unverified", func(f *glFixture) { f.k.egress = glHost4 }, "unverified"},
+		{"failed", func(f *glFixture) { f.control.connectTo = hostC }, "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newGluetunFixture(t, glOptions{})
+			tc.breaks(f)
+			desire(t, f.a, glRequestID(hostB, "1"))
+			mustTick(t, f.a)
+			if f.a.attempt.State != tc.state {
+				t.Fatalf("state %s", f.a.attempt.State)
+			}
+			f.k.egress, f.control.connectTo = glExit4, ""
+			f.k.tunnel = hostB
+			puts := len(f.control.puts)
+			desire(t, f.a, glRequestID(hostB, "2"))
+			r := mustTick(t, f.a)
+			if len(f.control.puts) != puts+1 || selectionOf(r)["source"] != "operator-retry" || status(r) != "ok" {
+				t.Errorf("puts %v, %s %v", f.control.puts, status(r), selectionOf(r))
+			}
+		})
+	}
+}
+
 func TestARefusedRequestFallsBackToTheLastVerifiedServerAfterARestart(t *testing.T) {
 	// D12: a rejected panel request never becomes the target; the last
 	// verified server is still restored, and the rejection stays shown.

@@ -219,6 +219,8 @@ addresses, its table 51820 routes and rule 101 again. A, requested through the p
 from `servers.json` with no restart (the exit polls the file every minute), and the exit must move to
 B through the control server with the log line, `moved`, `location.json` and the panel's note, then
 return once the file lists A again; a client probes throughout and must leave only by a relay. The
+request for A comes while gluetun is on A, verified, so it must be verified without a settings PUT
+and with no failed probe (issue 144). The
 client's underlay reaches the exit through "internet" there, because in gluetun's namespace
 NetBird's marked traffic has the host table only. Real gluetun's own reconnection (its timing, its
 firewall and the rewrite of it, its updater) is not on the rig. `TestSystemRigProxy` runs

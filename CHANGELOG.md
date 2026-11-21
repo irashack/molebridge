@@ -9,6 +9,12 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 - `molebridge init`'s compose.yaml header said its services and pins came
   from the source "of the same release"; it now says the source this binary
   was built from, which may be an older release (the follow-up from #139).
+- Picking the server the exit is already on, and verified on, no longer
+  re-applies it: the exit checks it and records the request as verified.
+  With gluetun this means no settings PUT, so gluetun no longer reconnects
+  and drops clients' open connections for nothing. Retry after a failure,
+  a server that isn't verified and PIA's "reconnect?" still apply at once
+  (#144).
 
 ## 0.14.3 — 2026-11-20
 
