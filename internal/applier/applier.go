@@ -164,6 +164,10 @@ type Applier struct {
 	failures map[string]stepFailure
 	// traced is the attempt as its last log line saw it (traceAttempt).
 	traced string
+	// repick is set while a request made now for the server the exit is on,
+	// verified, is inspected first (repicksCurrent): mutated only when the
+	// inspection doesn't verify it.
+	repick bool
 
 	// Automatic failover (failover.go): the settings, the policy's state
 	// with the key of the primary it is for (failover.json), what was last
@@ -1827,13 +1831,33 @@ func (a *Applier) start(ctx context.Context, target *Selection) (*Record, error)
 		source = "operator-retry"
 	}
 	fresh := a.askedNow(target)
+	repick := fresh && a.repicksCurrent(previous, target, source)
 	a.attempt = attempt.New(a.wall(), attempt.NewParams{Source: source, Target: target.Server, TargetKey: target.Key(),
 		Provider: target.Provider, BootID: a.bootID, Rejected: previous.Rejected, Generation: previous.Generation})
-	return a.runPipeline(ctx, target, source, !fresh, false)
+	if repick {
+		a.repick = true
+		defer func() { a.repick = false }()
+	}
+	return a.runPipeline(ctx, target, source, !fresh || repick, false)
+}
+
+// repicksCurrent: a request made now for the server the exit is on and
+// verified on, at rest, has nothing to change (#144). It is inspected first
+// and mutated only when the inspection doesn't verify it, so gluetun isn't
+// asked to reconnect, and clients' connections dropped, for nothing. Retry
+// (operator-retry, after a failed, unverified, pending or refused attempt),
+// a moved or failover target and a PIA region (chosen again to register
+// anew, as the panel offers) are applied as before.
+func (a *Applier) repicksCurrent(previous *attempt.Attempt, target *Selection, source string) bool {
+	f := a.measurement
+	return source == "panel" && previous.State == "idle" && target.Replaces == "" && target.Failover == nil &&
+		f != nil && f.Status == "ok" && f.Server == target.Server && a.onActive(target) &&
+		a.specOf(a.providerOf(target)).Layout != "regions"
 }
 
 // askedNow is true for a panel request made within FreshRequestSec: the
-// operator asking now, applied even when the server is already live.
+// operator asking now, applied even when the server is already live (but
+// see repicksCurrent).
 func (a *Applier) askedNow(target *Selection) bool {
 	return target.Source == "panel" && target.Request != nil &&
 		validate.Recent(target.Request.RequestedAt, FreshRequestSec, a.wall())
@@ -1974,24 +1998,26 @@ func (a *Applier) runPipeline(ctx context.Context, target *Selection, source str
 			}
 			stale := repair && a.handshakeStale(f, nil)
 			silent := repair && f.Silent
-			if !stale && !silent {
+			switch {
+			case !stale && !silent && !a.repick:
 				a.markUnverified()
 				if err := a.saveAttempt(); err != nil {
 					return nil, err
 				}
 				a.nextHealth = a.clock() + RefreshSec
 				return a.emit(f, false)
+			case stale || silent:
+				a.log("applier: the registration lapsed; registering the same server again")
+				// Repairs pace themselves on the backoff too (D15).
+				at.BackoffStep++
+				reason := "handshake-stale"
+				if !stale {
+					reason = "tunnel-silent"
+				}
+				a.repair = &repairState{reason: reason, since: a.nowISO()}
+				a.passRepaired = true
+				defer func() { a.repair = nil }()
 			}
-			a.log("applier: the registration lapsed; registering the same server again")
-			// Repairs pace themselves on the backoff too (D15).
-			at.BackoffStep++
-			reason := "handshake-stale"
-			if !stale {
-				reason = "tunnel-silent"
-			}
-			a.repair = &repairState{reason: reason, since: a.nowISO()}
-			a.passRepaired = true
-			defer func() { a.repair = nil }()
 		}
 	}
 	return a.mutate(ctx, target)

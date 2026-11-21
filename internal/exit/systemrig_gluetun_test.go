@@ -468,10 +468,17 @@ func TestSystemRigGluetunRetiredServer(t *testing.T) {
 	stop := make(chan struct{})
 	samples := g.probeLoop(stop)
 
-	// Ask for relay A by name, so the exit records where it is.
+	// Ask for relay A by name, so the exit records where it is. gluetun is
+	// on A already, verified: the request is verified without a settings
+	// PUT, so gluetun doesn't reconnect and no client probe fails (#144).
+	repicked := time.Now()
 	id, at := g.panelSwitch(a.host)
 	g.waitVerified(p, a, id, 120*time.Second)
+	repickedUntil := time.Now()
 	t.Logf("request for %s verified %v after the panel's answer", a.host, time.Since(at).Round(time.Millisecond))
+	if n := g.putCount(a.host); n != 0 {
+		t.Errorf("the request for %s, the server gluetun was on, sent %d settings PUTs", a.host, n)
+	}
 	if l := g.location(); l["server"] != a.host || l["city"] != rigCity || l["country"] != rigCountry || l["replacement"] != nil {
 		t.Fatalf("location.json after the request: %s", jsonText(l))
 	}
@@ -565,6 +572,11 @@ func TestSystemRigGluetunRetiredServer(t *testing.T) {
 		}
 	}
 	t.Logf("client probes during the move and the return: %d by %s, %d by %s, %d failed %v", byVia[a.host], a.host, byVia[b.host], b.host, byVia[""], failed)
+	for _, s := range all {
+		if s.via == "" && !s.at.Before(repicked) && !s.at.After(repickedUntil) {
+			t.Errorf("a client probe at %s failed during the request for %s, the server gluetun was on", s.at.UTC().Format("15:04:05.000"), a.host)
+		}
+	}
 	if byVia[b.host] == 0 {
 		t.Errorf("no client probe came by %s during the move", b.host)
 	}

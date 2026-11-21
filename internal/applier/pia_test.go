@@ -589,6 +589,21 @@ func TestPIASavedRegionIsRegisteredAfterTunnelRecreation(t *testing.T) {
 	}
 }
 
+// A connected region chosen again registers anew, as the panel offers (#144
+// leaves it as it was).
+func TestPIATheConnectedRegionChosenAgainRegistersAnew(t *testing.T) {
+	a, k, _, _, _ := piaSetup(t, false)
+	piaDesire(t, a)
+	if r := mustTick(t, a); status(r) != "ok" {
+		t.Fatalf("%s", status(r))
+	}
+	registrations := k.addKeys()
+	desire(t, a, piaRequest(map[string]any{"request_id": strings.Repeat("2", 32)}))
+	if r := mustTick(t, a); status(r) != "ok" || k.addKeys() != registrations+1 {
+		t.Fatalf("%s %d/%d", status(r), k.addKeys(), registrations)
+	}
+}
+
 func TestPIAStaleHandshakeReregistersTheSameRegionOnTheBackoff(t *testing.T) {
 	// D15: PIA can forget a registration while the peer stays; a handshake
 	// stale for 180 s re-registers the same region, paced by the backoff.

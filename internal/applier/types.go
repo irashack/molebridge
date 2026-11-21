@@ -61,7 +61,8 @@ const (
 	PollSec = 5
 	// FreshRequestSec: a panel request this recent is the operator asking now:
 	// it is applied even when the server is already live (a PIA region
-	// registers anew). An older one, as after an upgrade, is re-inspected first.
+	// registers anew), but for the server the exit is verified on
+	// (repicksCurrent). An older one, as after an upgrade, is re-inspected first.
 	FreshRequestSec = 150
 	// ServerReportChars: a valid provider hostname fits within 253 characters.
 	// Invalid input is bounded too, so even JSON-escaped Unicode fits the
