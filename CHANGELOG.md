@@ -6,6 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+## 0.14.4 — unreleased
+
+**Experimental.** Upgrade from 0.14.3 by moving to the new image;
+what changed is below.
+
 - Docs: `STATE_GID` has run live on one exit, native Mullvad on Kubernetes
   at v0.14.3 ([configuration](docs/configuration.md#readers-in-another-group)).
 
