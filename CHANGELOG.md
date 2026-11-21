@@ -6,6 +6,9 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Docs: `STATE_GID` has run live on one exit, native Mullvad on Kubernetes
+  at v0.14.3 ([configuration](docs/configuration.md#readers-in-another-group)).
+
 - `molebridge init`'s compose.yaml header said its services and pins came
   from the source "of the same release"; it now says the source this binary
   was built from, which may be an older release (the follow-up from #139).
