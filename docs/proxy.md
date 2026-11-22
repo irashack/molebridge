@@ -280,7 +280,13 @@ and the open connections. It exits 0 only while the proxy serves.
 
 The container's health check is `molebridge health --proxy`: healthy only
 while `proxy.json` is fresh and says `ok`. A proxy that refuses new
-connections because the exit's tunnel is down is unhealthy. Switchyard shows
+connections because the exit's tunnel is down is unhealthy. Compose only
+marks the container unhealthy; it doesn't restart it. On Kubernetes, use it
+as a `readinessProbe` only, never as a `livenessProbe` or a `startupProbe`:
+those restart the proxy every time the exit's tunnel isn't `ok`, which
+changes nothing, since the proxy recovers by itself once the exit's verdict
+is `ok` again
+([#155](https://github.com/irashack/molebridge/issues/155)). Switchyard shows
 the same record when you turn on its
 [proxy view](switchyard.md#the-proxy-view) (`PANEL_PROXY_STATUS`,
 [configuration](configuration.md#the-proxy-view)).
