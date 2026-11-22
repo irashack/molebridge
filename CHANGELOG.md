@@ -6,6 +6,10 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Docs: on Kubernetes, use `molebridge health --proxy` as a readiness probe
+  only; as a liveness or startup probe it restarts the proxy whenever the
+  exit's tunnel is down ([proxy](docs/proxy.md#status), #155).
+
 ## 0.14.4 — 2026-11-21
 
 **Experimental.** Upgrade from 0.14.3 by moving to the new image;
