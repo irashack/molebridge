@@ -19,7 +19,8 @@ To find what has run for one part, read the newest release sections first:
   every commit, against fake servers
   ([CONTRIBUTING](../CONTRIBUTING.md#the-system-rig)).
 - **The sidecars**: the gluetun sidecar's lines in each release's acceptance
-  (rootless Podman with Quadlet, and Kubernetes); the native sidecar from
+  (Kubernetes, and rootless Podman with Quadlet up to 0.14.4, policy 25);
+  the native sidecar from
   [0.9.0](#090) on.
 - **The proxy** (experimental): its acceptance drill is `proxy-live`, on a
   native Mullvad exit; Mullvad's relay proxies used directly were tested at

@@ -6,18 +6,23 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+## 0.14.5 — unreleased
+
+**Experimental.** Upgrade from 0.14.4 by moving to the new image;
+what changed is below.
+
+- Releases: the live acceptance no longer needs rootless Podman with
+  Quadlet (acceptance policy 26): its test host could not bring up the
+  previous release, so every candidate waited for a person. Kubernetes
+  stays, with every kind and provider. Rootless Podman is still supported, but no release is tested on
+  it ([releasing](docs/releasing.md#3-run-the-live-acceptance)). 0.14.5's
+  first candidate, `v0.14.5-rc.1`, was not released for this reason.
 - Tests: fuzz targets for the exit's settings, the state files the panel and
   the exit share, and the panel's views of hostile state files; a test that
   renders every view with markup in each string of each state file; a fuzz
   target holding that the panel writes no request without its CSRF token;
   and a benchmark of a large NordVPN catalogue's memory
   ([contributing](CONTRIBUTING.md#checks)). Nothing changes at run time.
-
-## 0.14.5 — unreleased
-
-**Experimental.** Upgrade from 0.14.4 by moving to the new image;
-what changed is below.
-
 - Docs: on Kubernetes, use `molebridge health --proxy` as a readiness probe
   only; as a liveness or startup probe it restarts the proxy whenever the
   exit's tunnel is down ([proxy](docs/proxy.md#status), #155).

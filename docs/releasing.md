@@ -163,6 +163,17 @@ candidate's digest. Then run what the policy names:
   exits; the rig runs both on fakes, and the upgrade on the native Mullvad
   exit only ([#54](https://github.com/irashack/molebridge/issues/54)).
 
+  Since policy 26, rootless Podman with Quadlet is no longer a platform the
+  acceptance needs: the policy names Kubernetes only. Up to policy 25, its
+  `upgrade-from-<previous>` moved a gluetun sidecar's Quadlet units from the
+  previous release to the candidate on a separate test host, and when that
+  host could not bring the previous release up, every candidate waited for
+  a person. The sidecar kind still runs live on Kubernetes, and
+  `multi-provider-live` is unchanged. Rootless Podman is still a supported
+  host, but no candidate's acceptance runs on it
+  ([prerequisites](prerequisites.md#host),
+  [#45](https://github.com/irashack/molebridge/issues/45)).
+
 Write down what ran, where and with which results as you go. The record goes
 into [testing](testing.md) afterwards, in the form of the earlier candidates'
 records, and the evidence you attest should point at notes you keep.
@@ -187,7 +198,7 @@ with NetBird and another on molebridge-core. It takes three inputs:
 For the policy above, the coverage is:
 
 ```json
-{"platforms":["podman-rootless-quadlet","kubernetes"],
+{"platforms":["kubernetes"],
  "providers":["mullvad","pia","nordvpn"],
  "kinds":["native","gluetun","sidecar","native-sidecar"],
  "drills":[{"id":"ci-namespace-drills","result":"passed"},
