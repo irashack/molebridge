@@ -5,10 +5,13 @@
 // It offers:
 //
 //   - DecodeJSON / DecodeJSONString: strict decoding (duplicate keys rejected
-//     at every depth, strict UTF-8, no BOM, no NaN or Infinity, bounded
-//     nesting) into map[string]any, []any, string, bool, nil, float64 and
-//     int64 (an integer written without fraction or exponent is an int64, as
-//     in Python; one beyond int64 is a *big.Int).
+//     at every depth, strict UTF-8, no BOM, no NaN or Infinity literals,
+//     bounded nesting) into map[string]any, []any, string, bool, nil, float64
+//     and int64 (an integer written without fraction or exponent is an int64,
+//     as in Python; one beyond int64 is a *big.Int). A number with a fraction
+//     or exponent beyond float64's range, such as 1e999, overflows to ±Inf
+//     as in Python, and EncodeJSON refuses it (ErrNonFiniteFloat): a reader
+//     of a decoded number checks math.IsInf itself.
 //   - CheckJSON and DecodeJSONMembers: the same checks and errors without
 //     building the parts of a document nobody reads (skip.go), for the large
 //     server lists.

@@ -125,6 +125,23 @@ With `-short` or `-race`, the property tests of `internal/policy` and
 the full draw takes most of `go test`'s 10-minute timeout. The plain
 `go test ./...` draws them all.
 
+`go test` runs each fuzz target's seed corpus. To fuzz one, name it and give
+a time, for example
+`go test ./internal/exit -run '^$' -fuzz '^FuzzLoadSettings$' -fuzztime 60s`.
+The targets cover the exit's settings (`internal/exit`), the state files both
+sides read (`internal/state`: the panel's request, the configured server and
+the write-then-read round trip), the panel's views of hostile state files and
+its select form without a token (`internal/panel`), the provider catalogues
+(`internal/providers`), the tunnel config, the stored NetBird profile, the
+OIDC sign-in and the decoders under them. A failure writes its input under the
+package's `testdata/fuzz`; commit it with the fix, so `go test` keeps it.
+
+The large-catalogue memory benchmark builds NordVPN lists of 5,300, 10,600 and
+19,000 servers (8, 16 and 30 MiB, the last close to the 32 MiB download cap)
+and reports the heap while parsing, publishing and reading back the snapshot:
+`go test ./internal/providers -run '^$' -bench BenchmarkNordLargeCatalog -benchtime 1x`.
+It measures heap in a test process, not a running exit's memory.
+
 The panel script tests need Node 18 or later and nothing from npm. They run
 `go test -run TestWritePayloads ./internal/panel` for the panel's own answers, so they need
 the Go toolchain too.
