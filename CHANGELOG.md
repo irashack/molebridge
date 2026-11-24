@@ -6,6 +6,13 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Tests: fuzz targets for the exit's settings, the state files the panel and
+  the exit share, and the panel's views of hostile state files; a test that
+  renders every view with markup in each string of each state file; a fuzz
+  target holding that the panel writes no request without its CSRF token;
+  and a benchmark of a large NordVPN catalogue's memory
+  ([contributing](CONTRIBUTING.md#checks)). Nothing changes at run time.
+
 ## 0.14.5 — unreleased
 
 **Experimental.** Upgrade from 0.14.4 by moving to the new image;
