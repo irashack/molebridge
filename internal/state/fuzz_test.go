@@ -96,7 +96,7 @@ func FuzzConfiguredServer(f *testing.F) {
 	for _, seed := range []string{
 		`{"configured_server":"se-sto-wg-001"}`,
 		`{"configured_server":"\ud800x"}`,
-		`{"configured_server":"a\u0007b‮"}`,
+		`{"configured_server":"a\u0007b\u202e"}`,
 		`{"configured_server":""}`,
 		`{"configured_server":7}`,
 	} {
