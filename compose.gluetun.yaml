@@ -140,7 +140,7 @@ services:
     # stop it removes only NetBird's overlay interface, never gluetun's
     # tunnel. NET_ADMIN as with the native exit; the API key is full gluetun
     # administration, part of the same trusted base.
-    image: ghcr.io/irashack/molebridge:v0.14.4@sha256:08724000bdfc0533b551b4dcfa4a9f3099ce0b9adede31e1d34a0969f20722b6
+    image: ghcr.io/irashack/molebridge:v0.14.5@sha256:0aa9cd4900cd4120a77b17c74b5fcb915c3cc7365760767e9067b3ac3e3a4e68
     # Only for people who build from a checkout, with a local image name in
     # compose.override.yaml (CONTRIBUTING.md#building-the-image); the release
     # bundle has no Dockerfile and leaves this key out (tools/make-bundle.sh).
