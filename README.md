@@ -91,9 +91,10 @@ without `init` too.
 [Testing](docs/testing.md) is the record: what ran live, where and at which
 revision, and what hasn't. In short, each release candidate is upgraded from
 the release before it on Kubernetes (native Mullvad, PIA and NordVPN exits, a
-gluetun exit, a gluetun sidecar and a PIA native sidecar) and on rootless
-Podman with Quadlet units (a gluetun sidecar), and comes back verified before
-it is released. The native exits pass a tunnel-loss drill there, and since
+gluetun exit, a gluetun sidecar and a PIA native sidecar) and comes back
+verified before it is released. Rootless Podman with Quadlet units is
+supported, but since 0.14.5 no release is tested on it
+([releasing](docs/releasing.md#3-run-the-live-acceptance)). The native exits pass a tunnel-loss drill there, and since
 acceptance policy 18 the proxy a live drill on a Mullvad exit. CI runs the unit, namespace-drill and
 system-rig suites on every commit. Docker Engine, NetBird Cloud, phones, a
 clean install from the signed bundle, a stack written by `molebridge init`,

@@ -36,8 +36,10 @@ services:
     # guarantee: every connection the proxy opens leaves through the tunnel,
     # or fails. It promises nothing about traffic not sent to it.
     # SOCKS5 and HTTP CONNECT on one address in the exit's namespace, for
-    # programs you point at it. No capabilities: binding its connections to
-    # the tunnel interface needs none. It reads the exit's records, read-only,
+    # programs you point at it. No capabilities: on Linux 5.7 and later,
+    # binding its connections to the tunnel interface needs none (before
+    # 5.7 it needs CAP_NET_RAW, which the proxy refuses to hold, so its
+    # connections fail there). It reads the exit's records, read-only,
     # and writes only its own state.
     image: ghcr.io/irashack/molebridge-core:v0.14.5@sha256:58a719aca05ce7c4a5c58ec9400f0307c221fc78ba110fca14b0d4cca472a3d2
     command: ["proxy"]
