@@ -304,11 +304,11 @@ func (s *server) handle(ctx context.Context, conn net.Conn) {
 		s.failed.Add(1)
 		return
 	}
-	pinned := s.sessions.pinned(req.location, req.session)
 	dctx, cancel := context.WithTimeout(ctx, dialTimeout)
+	pinned, chosen := s.sessions.acquire(dctx, req.location, req.session)
 	up, used, err := s.cfg.Upstream.Dial(dctx, req.location, pinned, req.target)
 	cancel()
-	s.sessions.update(req.location, req.session, used)
+	chosen(used)
 	s.kickStatus()
 	replyDeadline()
 	if err != nil {

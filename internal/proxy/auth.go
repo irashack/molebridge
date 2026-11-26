@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 )
 
 // maxPasswordBytes is the longest password RFC 1929 can carry.
@@ -22,7 +23,9 @@ func ReadPassword(path string) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("proxy: no password file (PROXY_PASSWORD_FILE)")
 	}
-	f, err := os.Open(path)
+	// Opened without blocking, so a FIFO is refused below rather than
+	// stalling the start.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("proxy: password file: %w", err)
 	}

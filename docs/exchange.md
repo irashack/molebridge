@@ -158,6 +158,13 @@ a loopback address, the exit warns at start:
 molebridge-exit: exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)
 ```
 
+With an `http://` URL and `EXCHANGE_CA_FILE` or `EXCHANGE_TLS_NAME` set, it
+warns that those settings do nothing:
+
+```text
+molebridge-exit: exchange: warning: EXCHANGE_CA_FILE and EXCHANGE_TLS_NAME apply only to an https:// EXCHANGE_URL; with http:// they are ignored
+```
+
 On the exchange, at start, for each exit without a usable token file:
 
 ```text
