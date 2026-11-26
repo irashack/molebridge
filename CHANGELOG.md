@@ -6,10 +6,19 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Releases: the release automation acts only on a "Release blocked" issue it
+  or a maintainer opened and on the scan issue the scan workflow opened; it
+  copies only package names and versions from that issue into the
+  changelog; it reads the token command with shell-style quoting; and it
+  stops for a person when the acceptance result it promoted was edited
+  before the record is written. A Breaking item is now a `**Breaking**`
+  heading or item at the start of a line, not the word in an entry's prose.
+  Nothing changes in the images.
+
 - Releases: the release automation (`tools/auto-release.py`) is stricter
   about what it acts on. It merges only the release-prep pull requests it
   opened itself; tags a candidate only once every CI job has passed on the
-  commit; checks the changelog for a **Breaking** item again before each
+  commit; checks the changelog for a Breaking item again before each
   candidate tag; stops rather than guess when more than one acceptance run
   starts after it dispatched one; and in
   `--dry-run` works in a throwaway clone instead of resetting the checkout
