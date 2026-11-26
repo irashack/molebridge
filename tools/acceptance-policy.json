@@ -1,7 +1,7 @@
 {
-  "version": "26",
+  "version": "27",
   "platforms": ["kubernetes"],
   "providers": ["mullvad", "pia", "nordvpn"],
   "kinds": ["native", "gluetun", "sidecar", "native-sidecar"],
-  "drills": ["ci-namespace-drills", "ci-system-rig", "ci-upgrade-drill", "tunnel-loss", "upgrade-from-0.14.4", "network-exchange-smoke", "proxy-live", "multi-provider-live"]
+  "drills": ["ci-namespace-drills", "ci-system-rig", "ci-upgrade-drill", "tunnel-loss", "upgrade-from-0.14.5", "network-exchange-smoke", "proxy-live", "multi-provider-live"]
 }

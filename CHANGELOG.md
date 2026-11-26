@@ -6,6 +6,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+## 0.14.6 — unreleased
+
+**Experimental.** Upgrade from 0.14.5 by moving to the new image;
+what changed is below.
+
 - Releases: the release automation acts only on a "Release blocked" issue it
   or a maintainer opened and on the scan issue the scan workflow opened; it
   copies only package names and versions from that issue into the
