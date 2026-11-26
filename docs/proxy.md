@@ -212,8 +212,8 @@ in group 0, not with `STATE_GID`; nothing of it is recorded in
 
 ## The password
 
-One line in `secrets/proxy/password`, at most 1 KiB; a trailing newline is
-dropped. The proxy refuses to start when the file is missing, empty, not a
+One line in `secrets/proxy/password`, at most 255 bytes (the longest a
+SOCKS5 password can be); one trailing newline (`\n` or `\r\n`) is dropped. The proxy refuses to start when the file is missing, empty, not a
 regular file, or readable by others (its group may read it: mode `0600`,
 `0640` or `0440`). It is compared in constant time, and never logged.
 
@@ -232,12 +232,19 @@ A location is 1 to 63 characters of `a-z`, `0-9`, `_` and `-`. The session is
 1 to 32 of `a-z`, `0-9` and `_`. Connections with the same location and
 session keep the same server while it works and the session has been used in
 the last 30 minutes; without a session each connection chooses again. For
-example, with `curl`:
+example, with `curl`, which reads the username and password from its
+standard input (`-K -`) so the password never appears on its command line,
+where other users of the host could see it in the process list:
 
 ```sh
-curl --proxy socks5h://se-got.browser:$(cat secrets/proxy/password)@127.0.0.1:1080 https://am.i.mullvad.net/json
-curl --proxy http://de:$(cat secrets/proxy/password)@127.0.0.1:1080 https://am.i.mullvad.net/json
+printf 'proxy-user = "se-got.browser:%s"\n' "$(cat secrets/proxy/password)" |
+  curl -K - --proxy socks5h://127.0.0.1:1080 https://am.i.mullvad.net/json
+printf 'proxy-user = "de:%s"\n' "$(cat secrets/proxy/password)" |
+  curl -K - --proxy http://127.0.0.1:1080 https://am.i.mullvad.net/json
 ```
+
+`printf` is a shell built-in, so the password is not passed to another
+program's arguments either.
 
 Use `socks5h://` (not `socks5://`) so the client sends the host name and the
 name is resolved at the far end.

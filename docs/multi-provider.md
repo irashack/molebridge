@@ -16,8 +16,8 @@ retries on the provider you picked.
 
 ## Status
 
-**Experimental, in release builds since the next release** (the
-[changelog](../CHANGELOG.md) entry that turns it on names it). Every piece
+**Experimental, in release builds since 0.14.2** (see the
+[changelog](../CHANGELOG.md)). Every piece
 described on this page is built and covered by unit tests and by system rig
 drills in CI against fake Mullvad, PIA and NordVPN networks. The exit, the
 panel and `molebridge init` of a release build accept it.
