@@ -86,6 +86,37 @@ func ReadBytesErr(path string, limit int64) ([]byte, error) {
 	return raw, nil
 }
 
+// ReadMountedErr is ReadBytesErr for a file you mount, a secret or a
+// certificate named in the settings: it follows a symbolic link, as a
+// Kubernetes secret volume presents each file as one, but what the link names
+// must still be a regular file of at most limit bytes, and it is opened
+// without blocking, so a FIFO is refused rather than stalling the start.
+func ReadMountedErr(path string, limit int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, ErrNotRegular
+	}
+	if info.Size() > limit {
+		return nil, ErrSizeLimit
+	}
+	raw, err := readSized(io.LimitReader(f, limit+1), info.Size())
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, ErrSizeLimit
+	}
+	return raw, nil
+}
+
 // ErrNotRegular is ReadBytesErr's reason for a path that is not a regular
 // file.
 var ErrNotRegular = errors.New("not a regular file")

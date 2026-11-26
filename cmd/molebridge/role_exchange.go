@@ -35,6 +35,8 @@ type exchangeConfig struct {
 	server            *exchange.Server
 	listen            string
 	certFile, keyFile string
+	// warnings are printed at start, after the prefix.
+	warnings []string
 }
 
 // exchangeFromEnv reads PANEL_EXITS (the exits served, with the panel's ids),
@@ -68,7 +70,18 @@ func exchangeFromEnv(env map[string]string) (*exchangeConfig, error) {
 	}
 	served := map[string]exchange.Exit{}
 	for _, ex := range exits {
+		if ex.Multi() {
+			// The exchange carries one provider's files (relays.json); a
+			// multi-provider exit refuses EXCHANGE_URL, and the panel refuses
+			// it in PANEL_NETWORK_EXITS (docs/multi-provider.md).
+			cfg.warnings = append(cfg.warnings, fmt.Sprintf(
+				"warning: PANEL_EXITS: '%s' is a multi-provider exit, which the network exchange does not carry; it is not served", ex.ID))
+			continue
+		}
 		served[ex.ID] = exchange.Exit{ID: ex.ID, Provider: ex.Provider, Dir: filepath.Join(stateDir, ex.ID)}
+	}
+	if len(served) == 0 {
+		return nil, errors.New("PANEL_EXITS names no exit the network exchange carries (multi-provider exits are not carried)")
 	}
 	cfg.server = &exchange.Server{Exits: served, TokensDir: tokens}
 	return cfg, nil
@@ -85,6 +98,9 @@ func exchangeMain(ctx context.Context, args []string, env map[string]string, std
 	if err != nil {
 		fmt.Fprintln(stderr, exchangePrefix+err.Error())
 		return 1
+	}
+	for _, w := range cfg.warnings {
+		fmt.Fprintln(stderr, exchangePrefix+w)
 	}
 	// The panel's first two checks: no capabilities, not root. The exchange
 	// writes the copies, so the read-only check of applier/ is the panel's

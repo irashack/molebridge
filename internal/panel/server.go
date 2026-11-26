@@ -844,6 +844,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html;charset=utf-8")
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.Header().Set("Connection", "close")
+		for k, v := range s.secHeaders {
+			w.Header().Set(k, v)
+		}
 		w.WriteHeader(501)
 		io.WriteString(w, body)
 		s.logRequest(r, 501)

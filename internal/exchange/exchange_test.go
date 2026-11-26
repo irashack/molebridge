@@ -356,3 +356,33 @@ func TestPathLikeExitIDsAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// A copy replaced by rename with one of the same size and time is a new file:
+// its hash is read again, not served from the cache.
+func TestCopyHashSeesAReplacedFileOfTheSameSizeAndTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "result.json")
+	when := time.Date(2026, 11, 26, 22, 0, 0, 0, time.UTC)
+	put := func(body string) {
+		tmp := path + ".tmp"
+		if err := os.WriteFile(tmp, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(tmp, when, when); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{}
+	put(`{"a":1}`)
+	first := s.copyHash(path)
+	if first != Hash([]byte(`{"a":1}`)) {
+		t.Fatal(first)
+	}
+	put(`{"a":2}`)
+	if got := s.copyHash(path); got != Hash([]byte(`{"a":2}`)) {
+		t.Fatalf("a stale hash for a replaced copy: %s", got)
+	}
+}

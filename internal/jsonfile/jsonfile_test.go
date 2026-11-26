@@ -315,3 +315,36 @@ func TestReadBytesErrSaysWhy(t *testing.T) {
 		}
 	}
 }
+
+// ReadMountedErr follows a symbolic link (a Kubernetes secret volume) but
+// refuses a FIFO at once, a directory, and a file over its limit.
+func TestReadMountedErr(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "secret")
+	if err := os.WriteFile(file, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(file, link); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := ReadMountedErr(link, 64); err != nil || string(raw) != "s3cret\n" {
+		t.Fatalf("%q %v", raw, err)
+	}
+	if _, err := ReadBytesErr(link, 64); err == nil {
+		t.Fatal("ReadBytesErr followed a link")
+	}
+	if _, err := ReadMountedErr(file, 3); !errors.Is(err, ErrSizeLimit) {
+		t.Fatalf("over the limit: %v", err)
+	}
+	if _, err := ReadMountedErr(dir, 64); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("a directory: %v", err)
+	}
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	if _, err := ReadMountedErr(fifo, 64); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("a FIFO: %v", err)
+	}
+}

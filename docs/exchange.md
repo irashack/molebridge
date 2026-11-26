@@ -168,6 +168,13 @@ warns that those settings do nothing:
 molebridge-exit: exchange: warning: EXCHANGE_CA_FILE and EXCHANGE_TLS_NAME apply only to an https:// EXCHANGE_URL; with http:// they are ignored
 ```
 
+On the exchange, at start, for each multi-provider exit in `PANEL_EXITS`,
+which it leaves out (an exchange left with no exit to carry stops instead):
+
+```text
+molebridge exchange: warning: PANEL_EXITS: '<id>' is a multi-provider exit, which the network exchange does not carry; it is not served
+```
+
 On the exchange, at start, for each exit without a usable token file:
 
 ```text
