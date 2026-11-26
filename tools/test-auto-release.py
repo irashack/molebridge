@@ -370,5 +370,25 @@ class ReviewHardening(unittest.TestCase):
             self.assertTrue((src / "untracked").exists())
 
 
+
+class ReviewHardening2(unittest.TestCase):
+    """The second pass of the 2026-11-26 review: which issues the automation trusts."""
+
+    def test_apk_fixes_take_only_names_and_versions(self):
+        body = ("## The v0.14.5 image\n\n| a | b | zlib 1.3-r0 (apk) | 1.3.1-r0 |\n"
+                "| a | b | evil 1 (apk) | [x](https://example.net) **y** |\n"
+                "| a | b | musl 1.2 (apk) | none yet |\n")
+        self.assertEqual(ar.apk_fixes(body, "0.14.5"), ["zlib 1.3.1-r0"])
+
+    def test_trusted_issues(self):
+        bot = {"user": {"login": ar.ME_NAME}, "author_association": "NONE"}
+        owner = {"user": {"login": "someone"}, "author_association": "OWNER"}
+        stranger = {"user": {"login": "someone"}, "author_association": "NONE"}
+        self.assertTrue(ar.trusted(bot))
+        self.assertTrue(ar.trusted(owner))
+        self.assertFalse(ar.trusted(stranger))
+        self.assertIn("github-actions[bot]", ar.SCAN_AUTHORS)
+
+
 if __name__ == "__main__":
     unittest.main()

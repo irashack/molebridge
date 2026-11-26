@@ -46,6 +46,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -58,6 +59,11 @@ IMAGE = "ghcr.io/irashack/molebridge"
 CORE_IMAGE = "ghcr.io/irashack/molebridge-core"
 HANDOFF_ISSUE = 45
 SCAN_TITLE = "Scheduled scan findings"
+# Who opens the scan issue: scan.yml, with the workflow's token.
+SCAN_AUTHORS = ("github-actions[bot]",)
+# Whose "Release blocked: ..." issue holds the automation: its own, or a
+# maintainer's. Anyone can open an issue on a public repository.
+TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 BLOCKED = "Release blocked: "
 HOLD_LABEL = "hold-release"
 # Who may post a live acceptance result: the homelab's GitHub identity
@@ -191,6 +197,9 @@ def bump_policy_test(script: str, prev: str) -> str:
     return re.sub(r"upgrade-from-\d+\.\d+\.\d+", f"upgrade-from-{prev}", out)
 
 
+APK_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]{0,99}")
+
+
 def apk_fixes(scan_body: str, stable: str) -> list[str]:
     """Alpine packages with a fix that the scan of v<stable>'s image lists."""
     if not re.search(rf"^## The v{re.escape(stable)} image\b", scan_body, re.M):
@@ -198,7 +207,8 @@ def apk_fixes(scan_body: str, stable: str) -> list[str]:
     out = []
     for m in re.finditer(r"^\|[^|]*\|[^|]*\|\s*(\S+) (\S+) \(apk\)\s*\|\s*([^|]+?)\s*\|",
                          scan_body, re.M):
-        if m[3] != "none yet":
+        # A package name and a version only: the text goes into CHANGELOG.md.
+        if m[3] != "none yet" and APK_TOKEN.fullmatch(m[1]) and APK_TOKEN.fullmatch(m[3]):
             fix = f"{m[1]} {m[3]}"
             if fix not in out:
                 out.append(fix)
@@ -344,7 +354,7 @@ class World:
         cmd = self.env.get(TOKEN_ENV)
         if cmd:
             if force or time.monotonic() - self.minted > TOKEN_AGE:
-                out = subprocess.run(cmd.split(), capture_output=True, text=True, check=True)
+                out = subprocess.run(shlex.split(cmd), capture_output=True, text=True, check=True)
                 self.env["GH_TOKEN"] = out.stdout.strip()
                 self.minted = time.monotonic()
         elif not self.env.get("GH_TOKEN"):
@@ -471,7 +481,7 @@ def open_issues(w: World, label: str | None = None) -> list[dict]:
 
 def file_issue(w: World, title: str, body: str):
     for i in open_issues(w):
-        if i["title"] == title:
+        if i["title"] == title and trusted(i):
             return i["number"]
     if not w.write(f"open issue: {title}"):
         return None
@@ -741,6 +751,12 @@ def step_record(w: World, stable: str) -> str:
                       "result to record. Write the record by hand (docs/releasing.md, step 6).")
     note = w.api(f"repos/{REPO}/issues/comments/{acc['comment']}")
     result = parse_result(note["body"], acc["rc"])
+    if not result or note["created_at"] != note["updated_at"]:
+        raise Blocked(f"{BLOCKED}{tag} record needs a person",
+                      f"The live acceptance result behind `{tag}` ({note['html_url']}) "
+                      "was edited or no longer parses, so the automation "
+                      "will not write it into docs/testing.md. Write the record by hand "
+                      "(docs/releasing.md, step 6).")
     result["coverage"] = expand_drills(result.get("coverage"))
     root = w.dir
     files = {}
@@ -819,7 +835,8 @@ def step_prepare(w: World, stable: str) -> str:
         # milestone or a breaking change.
         new = f"{x}.{y}.{z + 1}"
     else:
-        scan = [i for i in open_issues(w) if i["title"] == SCAN_TITLE]
+        scan = [i for i in open_issues(w)
+                if i["title"] == SCAN_TITLE and i["user"]["login"] in SCAN_AUTHORS]
         fixes = apk_fixes(scan[0]["body"] or "", stable) if scan else []
         if not fixes:
             print("nothing to release")
@@ -873,11 +890,17 @@ def dry_clone(workdir: Path, dest: Path) -> Path:
     return dest
 
 
+def trusted(issue: dict) -> bool:
+    """An issue the automation opened, or a maintainer did."""
+    return issue["user"]["login"] == ME_NAME or \
+        issue.get("author_association") in TRUSTED_ASSOCIATIONS
+
+
 def held(w: World):
     for i in open_issues(w, HOLD_LABEL):
         return f"#{i['number']} is labeled {HOLD_LABEL}"
     for i in open_issues(w):
-        if i["title"].startswith(BLOCKED):
+        if i["title"].startswith(BLOCKED) and trusted(i):
             return f"#{i['number']} ({i['title']}) is open"
     return None
 
