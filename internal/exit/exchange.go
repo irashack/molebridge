@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -230,8 +231,15 @@ func (r *exchangeRunner) Close() {
 
 // exchangeWarnings are the start-up warnings about the exchange's settings.
 func exchangeWarnings(x *ExchangeSettings) []string {
-	if x != nil && plainRemote(x.URL) {
-		return []string{"exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)"}
+	if x == nil {
+		return nil
 	}
-	return nil
+	var out []string
+	if plainRemote(x.URL) {
+		out = append(out, "exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)")
+	}
+	if strings.HasPrefix(strings.ToLower(x.URL), "http://") && (x.CAFile != "" || x.TLSName != "") {
+		out = append(out, "exchange: warning: EXCHANGE_CA_FILE and EXCHANGE_TLS_NAME apply only to an https:// EXCHANGE_URL; with http:// they are ignored")
+	}
+	return out
 }

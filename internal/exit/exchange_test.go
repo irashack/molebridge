@@ -136,3 +136,31 @@ func TestExchangeChildEndingStopsNothing(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 }
+
+func TestExchangeWarnings(t *testing.T) {
+	cases := []struct {
+		x    ExchangeSettings
+		want []string
+	}{
+		{ExchangeSettings{URL: "https://exchange.example.net"}, nil},
+		{ExchangeSettings{URL: "http://127.0.0.1:8080"}, nil},
+		{ExchangeSettings{URL: "http://exchange.example.net"}, []string{"plain http://"}},
+		{ExchangeSettings{URL: "https://exchange.example.net", CAFile: "/ca.pem", TLSName: "x.test"}, nil},
+		{ExchangeSettings{URL: "http://127.0.0.1:8080", CAFile: "/ca.pem"}, []string{"apply only to an https://"}},
+		{ExchangeSettings{URL: "http://exchange.example.net", TLSName: "x.test"}, []string{"plain http://", "apply only to an https://"}},
+	}
+	for _, c := range cases {
+		got := exchangeWarnings(&c.x)
+		if len(got) != len(c.want) {
+			t.Fatalf("%+v: %q", c.x, got)
+		}
+		for i, w := range c.want {
+			if !strings.Contains(got[i], w) {
+				t.Errorf("%+v: %q lacks %q", c.x, got[i], w)
+			}
+		}
+	}
+	if exchangeWarnings(nil) != nil {
+		t.Fatal("warnings without an exchange")
+	}
+}

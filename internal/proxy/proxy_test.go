@@ -832,3 +832,83 @@ func TestPasswordMatches(t *testing.T) {
 		}
 	}
 }
+
+// Connections that start together on a new session share the first one's
+// server: the others wait for its choice instead of choosing their own.
+func TestSessionFirstBurstSharesOneServer(t *testing.T) {
+	clock := &fakeClock{t: time.Date(2026, 11, 26, 18, 0, 0, 0, time.UTC)}
+	s := newSessions(clock.now)
+	pinned, done := s.acquire(context.Background(), "se", "a")
+	if pinned != "" {
+		t.Fatalf("a new session has a server: %q", pinned)
+	}
+	got := make(chan string, 1)
+	go func() {
+		p, d := s.acquire(context.Background(), "se", "a")
+		d(p)
+		got <- p
+	}()
+	select {
+	case p := <-got:
+		t.Fatalf("the second connection chose (%q) before the first had", p)
+	case <-time.After(50 * time.Millisecond):
+	}
+	done("se-got-wg-001")
+	select {
+	case p := <-got:
+		if p != "se-got-wg-001" {
+			t.Fatalf("the second connection got %q, not the first's server", p)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second connection never got the first's server")
+	}
+	// A first dial that named no server lets the next connection choose.
+	_, done = s.acquire(context.Background(), "se", "b")
+	go func() {
+		p, d := s.acquire(context.Background(), "se", "b")
+		d("se-got-wg-002")
+		got <- p
+	}()
+	done("")
+	if p := <-got; p != "" {
+		t.Fatalf("a failed first dial left a server: %q", p)
+	}
+	if p := s.pinned("se", "b"); p != "se-got-wg-002" {
+		t.Fatal(p)
+	}
+	// A wait ends with its context; that connection dials without a pin.
+	_, done = s.acquire(context.Background(), "se", "c")
+	defer done("")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if p, _ := s.acquire(ctx, "se", "c"); p != "" {
+		t.Fatal(p)
+	}
+	// Without a session nothing waits.
+	if p, d := s.acquire(context.Background(), "se", ""); p != "" {
+		t.Fatal(p)
+	} else {
+		d("se-got-wg-003")
+	}
+}
+
+// A FIFO as the password file is refused at once, not waited on.
+func TestReadPasswordRefusesFIFOWithoutBlocking(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "password")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ReadPassword(path)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReadPassword blocked on a FIFO")
+	}
+}

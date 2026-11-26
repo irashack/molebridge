@@ -14,6 +14,16 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   starts after it dispatched one; and in
   `--dry-run` works in a throwaway clone instead of resetting the checkout
   you name (`--workdir` is now required). Nothing changes in the images.
+- Fixed: proxy connections that start together on a new session
+  (`<location>.<session>`) now share one server. Before, a burst of first
+  connections, as a browser opens, could each choose a different server; now
+  the first chooses and the others wait for its choice
+  ([proxy](docs/proxy.md#choosing-where-a-connection-leaves-the-username)).
+- Fixed: the proxy refuses a password file that is a FIFO at once, as it says
+  it does, instead of waiting at start for something to write to it.
+- The exit warns at start when `EXCHANGE_CA_FILE` or `EXCHANGE_TLS_NAME` is
+  set with an `http://` `EXCHANGE_URL`, where they do nothing
+  ([exchange](docs/exchange.md)).
 
 ## 0.14.5 — 2026-11-25
 

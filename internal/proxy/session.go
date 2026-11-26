@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -22,10 +23,54 @@ type sessions struct {
 	now func() time.Time
 	mu  sync.Mutex
 	m   map[string]pin
+	// choosing holds the sessions whose first server is being chosen: the
+	// channel closes when that connection's dial has ended and its server
+	// is recorded.
+	choosing map[string]chan struct{}
 }
 
 func newSessions(now func() time.Time) *sessions {
-	return &sessions{now: now, m: map[string]pin{}}
+	return &sessions{now: now, m: map[string]pin{}, choosing: map[string]chan struct{}{}}
+}
+
+// acquire is the session's server for a new connection, as pinned does, and
+// a done func to call with the server the connection used once its dial has
+// ended (it calls update). Of several connections that start together on a
+// session with no server yet, one chooses and the others wait for its
+// choice, so a session's first burst of connections shares one server. A
+// wait ends with ctx; the connection then dials without a pin.
+func (s *sessions) acquire(ctx context.Context, location, session string) (string, func(server string)) {
+	done := func(server string) { s.update(location, session, server) }
+	if session == "" {
+		return "", done
+	}
+	key := sessionKey(location, session)
+	for {
+		s.mu.Lock()
+		if p, ok := s.m[key]; ok && p.server != "" && s.now().Sub(p.lastUsed) <= SessionTTL {
+			s.mu.Unlock()
+			return p.server, done
+		}
+		wait, busy := s.choosing[key]
+		if !busy {
+			ch := make(chan struct{})
+			s.choosing[key] = ch
+			s.mu.Unlock()
+			return "", func(server string) {
+				s.update(location, session, server)
+				s.mu.Lock()
+				delete(s.choosing, key)
+				s.mu.Unlock()
+				close(ch)
+			}
+		}
+		s.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return "", done
+		}
+	}
 }
 
 func sessionKey(location, session string) string { return location + "." + session }
