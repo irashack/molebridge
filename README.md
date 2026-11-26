@@ -73,7 +73,9 @@ needed on the host: the tools run from the signed image.
      init --out /out --image "$IMAGE" --core-image "$CORE"
    ```
 
-3. Create the tunnel config and the secrets, then check and start:
+3. Create the tunnel config and the secrets, then check and start (with
+   gluetun, start it first, `docker compose up -d gluetun`, because the
+   check joins its namespace):
 
    ```sh
    docker compose run --rm --no-deps exit check-config
@@ -117,8 +119,11 @@ exit. Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 - **Three native providers and six through gluetun, no others**
   ([other providers](docs/other-providers.md)). PIA and NordVPN are IPv4
   only.
-- **One provider per exit.** Run one exit per provider and serve them from
-  one [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
+- **One active provider per exit at a time.** A
+  [multi-provider exit](docs/multi-provider.md) (experimental, since 0.14.2)
+  switches between Mullvad, PIA and NordVPN, but uses one at a time. To use
+  several at once, run one exit per provider and serve them from one
+  [Switchyard](docs/switchyard.md#several-exits-in-one-panel).
 - **NetBird only** for the exit; it was never built or tested for Tailscale or
   other overlays.
 

@@ -7,8 +7,11 @@ HTTP, so neither mounts the other's directory. It is **experimental**.
 
 It changes nothing about the guarantee of the way in it runs beside. The exit
 still serves no HTTP: it makes outbound requests only, from a child process
-that holds none of the exit's secrets except its own exchange token, and the
-panel still only writes the name of the server you picked.
+whose environment holds none of the exit's secrets except its own exchange
+token, and the panel still only writes the name of the server you picked.
+The child runs as the exit's user, with the exit's capabilities and mounts,
+so it could read what the exit can (the tunnel config, the credentials):
+treat it as part of the exit, not as a separately confined process.
 
 ## Status
 

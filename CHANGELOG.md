@@ -23,6 +23,12 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   it does, instead of waiting at start for something to write to it.
 - The exit warns at start when `EXCHANGE_CA_FILE` or `EXCHANGE_TLS_NAME` is
   set with an `http://` `EXCHANGE_URL`, where they do nothing
+- Docs: the proxy's password is at most 255 bytes, not 1 KiB; the `curl`
+  examples keep the password off the command line
+  ([proxy](docs/proxy.md#the-password)); the quick start says to start
+  gluetun before `check-config`; the README and the multi-provider page say
+  the multi-provider exit is in releases since 0.14.2; and the exchange page
+  says its child process runs with the exit's privileges
   ([exchange](docs/exchange.md)).
 
 ## 0.14.5 — 2026-11-25
