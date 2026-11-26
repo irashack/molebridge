@@ -135,7 +135,9 @@ def has_entries(body: str) -> bool:
 
 
 def has_breaking(body: str) -> bool:
-    return re.search(r"\*\*Breaking", body) is not None
+    """A **Breaking** heading or item: at the start of a line (or of a list
+    item), not the word in an entry's prose."""
+    return re.search(r"^(?:[-*] )?\*\*Breaking\b", body, re.M) is not None
 
 
 

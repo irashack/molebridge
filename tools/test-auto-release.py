@@ -48,6 +48,10 @@ class Changelog(unittest.TestCase):
         self.assertTrue(ar.has_entries(body))
         self.assertFalse(ar.has_breaking(body))
         self.assertTrue(ar.has_breaking("**Breaking**:\n- x\n"))
+        self.assertTrue(ar.has_breaking("- A fix.\n\n**Breaking**:\n- x\n"))
+        self.assertTrue(ar.has_breaking("- **Breaking:** the x setting is gone.\n"))
+        # The word in an entry's prose is not a Breaking item.
+        self.assertFalse(ar.has_breaking("- It checks for a **Breaking** item again.\n"))
         self.assertFalse(ar.has_entries(ar.unreleased("## Unreleased\n\n## 0.1.0 — x\n- y\n")))
 
     def test_real_changelog_parses(self):
