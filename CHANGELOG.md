@@ -6,6 +6,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Releases: the release automation (`tools/auto-release.py`) is stricter
+  about what it acts on. It merges only the release-prep pull requests it
+  opened itself; tags a candidate only once every CI job has passed on the
+  commit; checks the changelog for a **Breaking** item again before each
+  candidate tag; stops rather than guess when more than one acceptance run
+  starts after it dispatched one; and in
+  `--dry-run` works in a throwaway clone instead of resetting the checkout
+  you name (`--workdir` is now required). Nothing changes in the images.
+
 ## 0.14.5 — 2026-11-25
 
 **Experimental.** Upgrade from 0.14.4 by moving to the new image;

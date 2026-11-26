@@ -292,5 +292,83 @@ class Record(unittest.TestCase):
         self.assertTrue(out.startswith(text[:first]))
 
 
+def pr(ref, repo="irashack/molebridge", user=None, base="main"):
+    return {"number": 1, "head": {"ref": ref, "repo": {"full_name": repo} if repo else None},
+            "base": {"ref": base}, "user": {"login": user or ar.ME_NAME}}
+
+
+class ReviewHardening(unittest.TestCase):
+    """The review of 2026-11-26 (homelab-ops#4204): what the automation trusts."""
+
+    def test_only_own_prep_prs(self):
+        mine = pr("auto/prep-0.14.6")
+        prs = [pr("auto/prep-0.14.6", repo="someone/molebridge", user="someone"),
+               pr("auto/prep-0.14.6", user="someone"),
+               pr("auto/prep-0.14.6", base="release"),
+               pr("auto/prep-0.14.6", repo=None),
+               pr("feature/x"),
+               mine]
+        self.assertEqual(ar.own_prs(prs, "auto/prep-"), [mine])
+
+    def test_ci_job_names_of_real_ci(self):
+        names = ar.ci_job_names((ROOT / ".github/workflows/ci.yml").read_text())
+        self.assertIn("Release tooling", names)
+        self.assertIn("System rig", names)
+        self.assertGreaterEqual(len(names), 5)
+
+    def test_ci_job_names_id_without_name(self):
+        text = "on: push\njobs:\n  a:\n    runs-on: x\n  b:\n    name: Bee\n    runs-on: x\n"
+        self.assertEqual(ar.ci_job_names(text), ["a", "Bee"])
+
+    def test_check_state_needs_every_job(self):
+        ok = lambda n: {"name": n, "status": "completed", "conclusion": "success"}
+        req = ["Go", "System rig"]
+        self.assertEqual(ar.check_state([], req), "pending")
+        # Another app's check finished before CI created its jobs: not green.
+        self.assertEqual(ar.check_state([ok("Analyze (go)")], req), "pending")
+        self.assertEqual(ar.check_state([ok("Go"), ok("System rig"), ok("Dependabot")], req), "success")
+        skipped = {"name": "System rig", "status": "completed", "conclusion": "skipped"}
+        self.assertEqual(ar.check_state([ok("Go"), skipped], req), "failure: System rig did not run")
+        failed = {"name": "Go", "status": "completed", "conclusion": "failure"}
+        self.assertEqual(ar.check_state([failed, ok("System rig")], req), "failure: Go")
+        running = {"name": "Go", "status": "in_progress", "conclusion": None}
+        self.assertEqual(ar.check_state([running, ok("System rig")], req), "pending")
+
+    def test_breaking_stop_before_a_candidate(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            w = ar.World(Path(d), dry_run=True)
+            (Path(d) / "CHANGELOG.md").write_text(
+                "# C\n\n## Unreleased\n\n**Breaking**:\n- x\n\n## 0.14.6 — unreleased\n\n- y\n")
+            with self.assertRaises(ar.Blocked):
+                ar.refuse_breaking(w)
+            (Path(d) / "CHANGELOG.md").write_text(
+                "# C\n\n## Unreleased\n\n## 0.14.6 — unreleased\n\n- y\n")
+            ar.refuse_breaking(w)
+
+    def test_dry_clone_leaves_the_checkout_alone(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "src"
+            git = lambda *a, cwd=src: subprocess.run(["git", *a], cwd=cwd, check=True,
+                                                      capture_output=True, text=True).stdout
+            src.mkdir()
+            git("init", "-q")
+            git("remote", "add", "origin", "https://example.net/irashack/molebridge.git")
+            (src / "f").write_text("committed\n")
+            git("add", "f")
+            git("-c", "user.name=t", "-c", "user.email=t@example.net", "commit", "-qm", "c")
+            (src / "f").write_text("local change\n")
+            (src / "untracked").write_text("keep me\n")
+            clone = ar.dry_clone(src, Path(d) / "clone")
+            self.assertEqual(git("remote", "get-url", "origin", cwd=clone).strip(),
+                             "https://example.net/irashack/molebridge.git")
+            git("checkout", "-q", "--detach", "HEAD", cwd=clone)
+            git("clean", "-qfdx", cwd=clone)
+            self.assertEqual((src / "f").read_text(), "local change\n")
+            self.assertTrue((src / "untracked").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
