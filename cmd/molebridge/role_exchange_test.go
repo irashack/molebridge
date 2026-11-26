@@ -42,3 +42,24 @@ func TestExchangeRefusesCapabilitiesAndRoot(t *testing.T) {
 		t.Fatalf("code %d, output %q", code, out.String())
 	}
 }
+
+// A multi-provider exit in PANEL_EXITS is left out with a warning: the
+// network exchange carries one provider's files.
+func TestExchangeLeavesOutMultiProviderExits(t *testing.T) {
+	cfg, err := exchangeFromEnv(map[string]string{"PANEL_EXITS": "home=mullvad,multi=mullvad+pia", "STATE_DIR": "/s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.server.Exits["multi"]; ok {
+		t.Fatal("a multi-provider exit is served")
+	}
+	if _, ok := cfg.server.Exits["home"]; !ok {
+		t.Fatal("the single exit is not served")
+	}
+	if len(cfg.warnings) != 1 || !strings.Contains(cfg.warnings[0], "'multi' is a multi-provider exit") {
+		t.Fatalf("%q", cfg.warnings)
+	}
+	if _, err := exchangeFromEnv(map[string]string{"PANEL_EXITS": "multi=mullvad+pia", "STATE_DIR": "/s"}); err == nil {
+		t.Fatal("an exchange with nothing to carry started")
+	}
+}

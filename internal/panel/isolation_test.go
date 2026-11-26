@@ -177,3 +177,23 @@ func TestReadOnlyMountOnARealDirectory(t *testing.T) {
 		t.Fatal("a file counted as a directory")
 	}
 }
+
+// Permitted and ambient capabilities count: an empty effective set can be
+// raised again from the permitted one.
+func TestParseCapEffFoldsInPermittedAndAmbient(t *testing.T) {
+	status := "CapInh:\t0000000000000000\nCapPrm:\t0000000000003000\nCapEff:\t0000000000000000\nCapAmb:\t0000000000000000\n"
+	if n, ok := ParseCapEff(strings.NewReader(status)); !ok || n != 0x3000 {
+		t.Fatalf("%x %v", n, ok)
+	}
+	status = "CapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapAmb:\t0000000000000400\n"
+	if n, ok := ParseCapEff(strings.NewReader(status)); !ok || n != 0x400 {
+		t.Fatalf("%x %v", n, ok)
+	}
+	// Without CapEff they are not known; a set that doesn't parse isn't either.
+	if _, ok := ParseCapEff(strings.NewReader("CapPrm:\t0000000000000000\n")); ok {
+		t.Fatal("known without CapEff")
+	}
+	if _, ok := ParseCapEff(strings.NewReader("CapEff:\t0\nCapPrm:\tzz\n")); ok {
+		t.Fatal("known with a bad CapPrm")
+	}
+}

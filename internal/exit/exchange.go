@@ -3,11 +3,11 @@ package exit
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/url"
-	"os"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/irashack/molebridge/internal/exchange"
+	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/netx"
 	"github.com/irashack/molebridge/internal/proc"
 )
@@ -75,9 +76,17 @@ func validToken(t string) bool {
 	return true
 }
 
+// maxCAFileBytes bounds EXCHANGE_CA_FILE.
+const maxCAFileBytes = 1 << 20
+
 func loadCA(path string) (*x509.CertPool, error) {
-	pem, err := os.ReadFile(path)
-	if err != nil {
+	pem, err := jsonfile.ReadMountedErr(path, maxCAFileBytes)
+	switch {
+	case errors.Is(err, jsonfile.ErrNotRegular):
+		return nil, fmt.Errorf("not a regular file")
+	case errors.Is(err, jsonfile.ErrSizeLimit):
+		return nil, fmt.Errorf("larger than %d bytes", maxCAFileBytes)
+	case err != nil:
 		return nil, fmt.Errorf("cannot read the file")
 	}
 	pool := x509.NewCertPool()
@@ -178,9 +187,23 @@ func (r *exchangeRunner) Run() {
 			r.mu.Unlock()
 			return
 		}
-		p, err := r.start()
-		r.current = p
 		r.mu.Unlock()
+		// No lock across the fork: process creation can stall, and Close,
+		// which the stop sequence calls, takes the lock (as nbManager.spawn).
+		// A child created after Close is killed at once.
+		p, err := r.start()
+		r.mu.Lock()
+		closed := r.closed
+		if !closed {
+			r.current = p
+		}
+		r.mu.Unlock()
+		if closed {
+			if err == nil {
+				_ = p.KillGroup()
+			}
+			return
+		}
 		began := time.Now()
 		if err != nil {
 			r.logf("exchange: cannot start: %v", err)

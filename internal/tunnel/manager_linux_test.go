@@ -286,15 +286,18 @@ func testConf(t *testing.T) *tunnelconf.Conf {
 // A route socket whose calls each take a while, and which blocks a chosen
 // call until it is interrupted, as a read on a netlink socket does.
 type fakeRT struct {
-	mu        sync.Mutex
-	per       time.Duration
-	stallOn   string // a method name, "*" for every call, "" for none
-	ignores   bool   // a stalled call does not return when interrupted
-	missing   bool
-	calls     []string
-	deadlines []time.Time
-	intr      chan struct{}
-	closed    atomic.Bool
+	mu      sync.Mutex
+	per     time.Duration
+	stallOn string // a method name, "*" for every call, "" for none
+	ignores bool   // a stalled call does not return when interrupted
+	missing bool
+	// lookupErrAfterDel: LinkByName fails with it once DelLink has run.
+	lookupErrAfterDel error
+	deleted           bool
+	calls             []string
+	deadlines         []time.Time
+	intr              chan struct{}
+	closed            atomic.Bool
 }
 
 func newFakeRT() *fakeRT { return &fakeRT{intr: make(chan struct{})} }
@@ -330,13 +333,25 @@ func (f *fakeRT) LinkByName(name string) (rtnl.Link, error) {
 	if err := f.call("LinkByName"); err != nil {
 		return rtnl.Link{}, err
 	}
+	f.mu.Lock()
+	failAfterDel := f.deleted && f.lookupErrAfterDel != nil
+	f.mu.Unlock()
+	if failAfterDel {
+		return rtnl.Link{}, f.lookupErrAfterDel
+	}
 	if f.missing {
 		return rtnl.Link{}, syscall.ENODEV
 	}
 	return rtnl.Link{Index: 7, Name: name, Kind: "wireguard"}, nil
 }
-func (f *fakeRT) AddLink(string, string) error  { return f.call("AddLink") }
-func (f *fakeRT) DelLink(uint32) error          { return f.call("DelLink") }
+func (f *fakeRT) AddLink(string, string) error { return f.call("AddLink") }
+func (f *fakeRT) DelLink(uint32) error {
+	err := f.call("DelLink")
+	f.mu.Lock()
+	f.deleted = true
+	f.mu.Unlock()
+	return err
+}
 func (f *fakeRT) SetLinkMTU(_, _ uint32) error  { return f.call("SetLinkMTU") }
 func (f *fakeRT) SetLinkUp(uint32) error        { return f.call("SetLinkUp") }
 func (f *fakeRT) AddAddr(rtnl.Addr) error       { return f.call("AddAddr") }
@@ -566,5 +581,18 @@ func TestACancelledOperationSendsNothing(t *testing.T) {
 	cancel()
 	if err := m.DownContext(ctx, Params{ExitIf: "wg0"}); err == nil || r.count() != 0 {
 		t.Fatalf("%v, %d sockets", err, r.count())
+	}
+}
+
+// A link whose removal can't be confirmed (the lookup after the delete fails
+// with something other than "no such device") is not reported cleaned up.
+func TestCleanupDoesNotCallAnUnconfirmedRemovalDone(t *testing.T) {
+	r := &rtFactory{make: func(int) *fakeRT { f := newFakeRT(); f.lookupErrAfterDel = syscall.EIO; return f }}
+	m := newRTManager(r)
+	// One link (the gluetun backend's overlay), so the failed lookup is the
+	// one after its delete.
+	err := m.CleanupContext(context.Background(), contract.Gluetun, "", "wt0")
+	if err == nil {
+		t.Fatalf("%v", err)
 	}
 }

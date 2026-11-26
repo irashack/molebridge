@@ -626,6 +626,9 @@ func (m *Manager) CleanupContext(ctx context.Context, backend contract.Backend, 
 			}
 			if _, err := r.LinkByName(name); err == nil {
 				return fmt.Errorf("%s remains", name)
+			} else if !notFound(err) {
+				// Not seen gone is not gone: the cleanup is not reported done.
+				return fmt.Errorf("%s: cannot confirm it is gone: %w", name, err)
 			}
 			return nil
 		})

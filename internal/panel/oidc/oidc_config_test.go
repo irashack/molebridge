@@ -198,7 +198,12 @@ func TestConfigClientSecretFile(t *testing.T) {
 	}
 	assertRejects(t, "is empty", envFor(testIssuer, o("PANEL_OIDC_CLIENT_SECRET_FILE", empty)))
 	assertRejects(t, "cannot be read: No such file or directory", envFor(testIssuer, o("PANEL_OIDC_CLIENT_SECRET_FILE", filepath.Join(dir, "missing"))))
-	assertRejects(t, "cannot be read: Is a directory", envFor(testIssuer, o("PANEL_OIDC_CLIENT_SECRET_FILE", dir)))
+	assertRejects(t, "cannot be read: not a regular file", envFor(testIssuer, o("PANEL_OIDC_CLIENT_SECRET_FILE", dir)))
+	big := filepath.Join(dir, "big")
+	if err := os.WriteFile(big, []byte(strings.Repeat("x", maxSecretFileBytes+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertRejects(t, "cannot be read: larger than 4096 bytes", envFor(testIssuer, o("PANEL_OIDC_CLIENT_SECRET_FILE", big)))
 	binary := filepath.Join(dir, "binary")
 	if err := os.WriteFile(binary, []byte{0xff, 0xfe}, 0o600); err != nil {
 		t.Fatal(err)

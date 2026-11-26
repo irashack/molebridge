@@ -14,6 +14,26 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   before the record is written. A Breaking item is now a `**Breaking**`
   heading or item at the start of a line, not the word in an entry's prose.
   Nothing changes in the images.
+- Fixed: stopping the exit no longer waits on a stalled start of the
+  exchange child; the stop sequence's signals go first, as they do for
+  NetBird ([exchange](docs/exchange.md)).
+- Fixed: the exit's cleanup no longer reports an interface removed when it
+  could not confirm it is gone.
+- Fixed: the exchange no longer serves a stale copy's hash when a file is
+  replaced by one of the same size and time.
+- The exchange leaves out a multi-provider exit in `PANEL_EXITS` with a
+  warning, instead of serving it as a single-provider exit it can't carry,
+  and stops when no exit is left to carry ([exchange](docs/exchange.md)).
+- The panel's, the exchange's and the proxy's start-up check now counts the
+  permitted and ambient capability sets as well as the effective one, and
+  the panel's counts an effective uid of 0 as root
+  ([configuration](docs/configuration.md)).
+- `PANEL_OIDC_CLIENT_SECRET_FILE` (at most 4096 bytes) and
+  `EXCHANGE_CA_FILE` (at most 1 MiB) must be regular files and are read
+  without blocking, so a FIFO is refused instead of stalling the start
+  ([troubleshooting](docs/troubleshooting.md)).
+- Switchyard's answer to an unsupported method (501) carries its security
+  headers too.
 
 - Releases: the release automation (`tools/auto-release.py`) is stricter
   about what it acts on. It merges only the release-prep pull requests it

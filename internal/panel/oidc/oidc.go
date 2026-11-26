@@ -51,6 +51,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/irashack/molebridge/internal/jsonfile"
 	"github.com/irashack/molebridge/internal/panel/pystr"
 )
 
@@ -339,6 +340,21 @@ func pyInt(text string) (value int64, ok bool) {
 	return n, true
 }
 
+// maxSecretFileBytes bounds PANEL_OIDC_CLIENT_SECRET_FILE.
+const maxSecretFileBytes = 4096
+
+// secretFileError is why the client secret file could not be read, without
+// its path or any of its content.
+func secretFileError(err error) string {
+	switch {
+	case errors.Is(err, jsonfile.ErrNotRegular):
+		return "not a regular file"
+	case errors.Is(err, jsonfile.ErrSizeLimit):
+		return fmt.Sprintf("larger than %d bytes", maxSecretFileBytes)
+	}
+	return strerror(err)
+}
+
 // ConfigFromEnv returns nil when PANEL_OIDC_ISSUER is unset: the panel has
 // no login. An error, which stops the panel, is returned for any incomplete
 // or unsafe setting.
@@ -362,9 +378,9 @@ func ConfigFromEnv(env map[string]string, exitIDs []string) (*Config, error) {
 	}
 	var clientSecret *string
 	if secretFile := pystr.Strip(get("PANEL_OIDC_CLIENT_SECRET_FILE")); secretFile != "" {
-		raw, err := os.ReadFile(secretFile)
+		raw, err := jsonfile.ReadMountedErr(secretFile, maxSecretFileBytes)
 		if err != nil {
-			return nil, fmt.Errorf("PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: %s", strerror(err))
+			return nil, fmt.Errorf("PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: %s", secretFileError(err))
 		}
 		if !utf8.Valid(raw) {
 			return nil, errors.New("PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: not valid UTF-8")

@@ -69,9 +69,8 @@ type received struct {
 }
 
 type cachedHash struct {
-	size  int64
-	mtime time.Time
-	hash  string
+	info os.FileInfo
+	hash string
 }
 
 func (s *Server) now() time.Time {
@@ -254,7 +253,10 @@ func (s *Server) copyHash(path string) string {
 	s.mu.Lock()
 	cached, ok := s.hashes[path]
 	s.mu.Unlock()
-	if ok && cached.size == info.Size() && cached.mtime.Equal(info.ModTime()) {
+	// The same file (a copy is replaced by rename, so a new copy is a new
+	// inode), unchanged in size and time.
+	if ok && os.SameFile(cached.info, info) && cached.info.Size() == info.Size() &&
+		cached.info.ModTime().Equal(info.ModTime()) {
 		return cached.hash
 	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
@@ -273,7 +275,7 @@ func (s *Server) copyHash(path string) string {
 	if s.hashes == nil {
 		s.hashes = map[string]cachedHash{}
 	}
-	s.hashes[path] = cachedHash{size: info.Size(), mtime: info.ModTime(), hash: h}
+	s.hashes[path] = cachedHash{info: info, hash: h}
 	s.mu.Unlock()
 	return h
 }

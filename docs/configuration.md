@@ -750,10 +750,10 @@ desired server name. At every start it checks its own isolation and, when any
 of these is false, prints one line per problem to standard error and exits with
 status 1 before it listens:
 
-- **No capabilities.** Its effective capability set (`CapEff` in
-  `/proc/self/status`) is empty, as `cap_drop: [ALL]` makes it. If it can't
-  read the set, it refuses too.
-- **Not root.** It is not uid 0, unless `PANEL_ALLOW_ROOT` is exactly `1`
+- **No capabilities.** Its effective, permitted and ambient capability sets
+  (`CapEff`, `CapPrm` and `CapAmb` in `/proc/self/status`) are empty, as
+  `cap_drop: [ALL]` makes them. If it can't read them, it refuses too.
+- **Not root.** Neither its real nor its effective uid is 0, unless `PANEL_ALLOW_ROOT` is exactly `1`
   (empty counts as unset; the Compose files pass it through empty). Set
   `PANEL_USER` to the uid and gid that own `state/panel`. On a rootless engine
   that remaps uids, container root is already your host user and another uid

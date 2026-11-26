@@ -753,6 +753,10 @@ func TestOtherMethodsAreNotSupported(t *testing.T) {
 		if a.Status != 501 || !strings.Contains(a.Body, "Unsupported method") {
 			t.Errorf("%s: %d %q", method, a.Status, a.Body)
 		}
+		// The error page carries the panel's security headers too.
+		if a.Header.Get("X-Frame-Options") != "DENY" || !strings.Contains(a.Header.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+			t.Errorf("%s: no security headers: %v", method, a.Header)
+		}
 	}
 }
 

@@ -92,17 +92,29 @@ func CheckIsolation(in IsolationInputs) []string {
 	return refusals
 }
 
-// ParseCapEff reads the CapEff line of /proc/<pid>/status.
+// ParseCapEff reads the capabilities a process holds from /proc/<pid>/status:
+// its effective set, with its permitted and ambient sets folded in, since a
+// process with an empty effective set but a permitted one can raise it again.
+// It is known when CapEff is there and every set present parses (CapAmb is
+// absent before Linux 4.3).
 func ParseCapEff(status io.Reader) (uint64, bool) {
 	scanner := bufio.NewScanner(status)
+	var held uint64
+	seen := map[string]bool{}
 	for scanner.Scan() {
 		line := scanner.Text()
-		if value, ok := strings.CutPrefix(line, "CapEff:"); ok {
-			n, err := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
-			return n, err == nil
+		for _, key := range []string{"CapEff:", "CapPrm:", "CapAmb:"} {
+			if value, ok := strings.CutPrefix(line, key); ok {
+				n, err := strconv.ParseUint(strings.TrimSpace(value), 16, 64)
+				if err != nil {
+					return 0, false
+				}
+				held |= n
+				seen[key] = true
+			}
 		}
 	}
-	return 0, false
+	return held, seen["CapEff:"]
 }
 
 // IsolationProbe reads the facts from the running process.
@@ -112,9 +124,17 @@ type IsolationProbe struct {
 	ReadOnly   func(dir string) (bool, error) // statfs-based
 }
 
+// effectiveUID is 0 when either the real or the effective uid is root.
+func effectiveUID() int {
+	if os.Geteuid() == 0 {
+		return 0
+	}
+	return os.Getuid()
+}
+
 // DefaultProbe is the probe for the real process.
 func DefaultProbe() IsolationProbe {
-	return IsolationProbe{StatusPath: "/proc/self/status", UID: os.Getuid, ReadOnly: readOnlyMount}
+	return IsolationProbe{StatusPath: "/proc/self/status", UID: effectiveUID, ReadOnly: readOnlyMount}
 }
 
 // Gather builds the inputs for a panel with the given exits.

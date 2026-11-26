@@ -806,7 +806,8 @@ is the setting):
 - `PANEL_OIDC_ISSUER must be an https URL (http only for a loopback test issuer)`
 - `PANEL_OIDC_CLIENT_ID is required with PANEL_OIDC_ISSUER`
 - `PANEL_OIDC_CLIENT_SECRET_FILE cannot be read: <reason>` (including `not valid
-  UTF-8`) and `PANEL_OIDC_CLIENT_SECRET_FILE is empty`
+  UTF-8`, `not a regular file` and `larger than 4096 bytes`) and
+  `PANEL_OIDC_CLIENT_SECRET_FILE is empty`
 - `PANEL_PUBLIC_URL must be the https origin people open, such as https://exit.example.net`
 - `PANEL_OIDC_SCOPES must include openid`
 - `PANEL_ADMIN_GROUPS: '<group>' is not a valid group name`
