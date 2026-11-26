@@ -48,6 +48,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -399,15 +400,62 @@ def commit_of(w: World, ref: str) -> str:
     return w.git("rev-parse", f"{ref}^{{commit}}").strip()
 
 
-def checks(w: World, sha: str) -> str:
-    """'success', 'pending' or 'failure' for a commit's check runs."""
-    runs = w.api(f"repos/{REPO}/commits/{sha}/check-runs?per_page=100")["check_runs"]
-    if not runs:
-        return "pending"
-    if any(r["status"] != "completed" for r in runs):
+def ci_job_names(text: str) -> list[str]:
+    """The check-run names of ci.yml's jobs: each job's `name:`, else its id."""
+    names, job, in_jobs = [], None, False
+    for line in text.splitlines():
+        if re.match(r"^jobs:\s*$", line):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if re.match(r"^\S", line):
+            break
+        m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if m:
+            if job is not None:
+                names.append(job)
+            job = m[1]
+            continue
+        m = re.match(r"^    name:\s*(.+?)\s*$", line)
+        if m and job is not None:
+            names.append(m[1].strip("'\""))
+            job = None
+    if job is not None:
+        names.append(job)
+    return names
+
+
+def check_state(runs: list[dict], required: list[str]) -> str:
+    """'success', 'pending' or 'failure: ...' for a commit's check runs. They
+    must include a successful run of every required name (ci.yml's jobs): a
+    commit whose CI has not created its jobs yet is pending, not green, and a
+    required job that was skipped is a failure."""
+    if not runs or any(r["status"] != "completed" for r in runs):
         return "pending"
     bad = [r["name"] for r in runs if r["conclusion"] not in ("success", "skipped", "neutral")]
-    return "failure: " + ", ".join(bad) if bad else "success"
+    if bad:
+        return "failure: " + ", ".join(bad)
+    if any(n not in {r["name"] for r in runs} for n in required):
+        return "pending"
+    passed = {r["name"] for r in runs if r["conclusion"] == "success"}
+    missed = [n for n in required if n not in passed]
+    return "failure: " + ", ".join(f"{n} did not run" for n in missed) if missed else "success"
+
+
+def checks(w: World, sha: str) -> str:
+    """'success', 'pending' or 'failure' for a commit's check runs."""
+    runs, page = [], 1
+    while True:
+        got = w.api(f"repos/{REPO}/commits/{sha}/check-runs?per_page=100&page={page}")["check_runs"]
+        runs += got
+        if len(got) < 100:
+            break
+        page += 1
+    required = ci_job_names((w.dir / ".github/workflows/ci.yml").read_text())
+    if not required:
+        raise RuntimeError("no jobs found in .github/workflows/ci.yml")
+    return check_state(runs, required)
 
 
 def workflow_run(w: World, workflow: str, branch: str):
@@ -460,8 +508,21 @@ def save(name: str, value):
 
 # --- steps -----------------------------------------------------------------------
 
+def own_prs(prs: list[dict], prefix: str) -> list[dict]:
+    """The open pull requests this automation opened: a branch of this
+    repository starting with <prefix>, into main, by the release bot. Anyone
+    can open a pull request from a fork with a branch of the same name; the
+    automation merges only its own."""
+    return [p for p in prs
+            if p["head"]["ref"].startswith(prefix)
+            and (p["head"].get("repo") or {}).get("full_name") == REPO
+            and p["base"]["ref"] == "main"
+            and p["user"]["login"] == ME_NAME]
+
+
 def open_pr(w: World, branch: str):
-    prs = w.api(f"repos/{REPO}/pulls?state=open&head=irashack:{branch}")
+    prs = own_prs(w.api(f"repos/{REPO}/pulls?state=open&head=irashack:{branch}"), branch)
+    prs = [p for p in prs if p["head"]["ref"] == branch]
     return prs[0] if prs else None
 
 
@@ -505,6 +566,19 @@ def make_pr(w: World, branch: str, title: str, body: str, files: dict) -> str:
                             "(`tools/auto-release.py`, #45)."}))
     w.git("checkout", "-q", "--detach", "origin/main")
     return DONE
+
+
+def refuse_breaking(w: World):
+    """The Breaking stop, checked again on the commit a candidate is tagged
+    from: a Breaking item merged after the prep pull request still hands the
+    release to a person."""
+    if has_breaking(unreleased((w.dir / "CHANGELOG.md").read_text())):
+        raise Blocked(f"{BLOCKED}Breaking changes need an attended release",
+                      "CHANGELOG.md's Unreleased section on main has a **Breaking** item, so "
+                      "the automation will not tag a candidate from it. A person prepares and "
+                      "tags this candidate (docs/releasing.md). Close this issue once its "
+                      "candidate is tagged; the automation then carries on from the live "
+                      "acceptance.")
 
 
 def create_tag(w: World, tag: str, sha: str):
@@ -585,6 +659,7 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
         n = max(version(t)[3] for t in all_tags
                 if version(t)[:3] == v[:3] and version(t)[3] is not None)
         nxt = f"v{vstr(v)}-rc.{n + 1}"
+        refuse_breaking(w)
         create_tag(w, nxt, head)
         return DONE
 
@@ -620,6 +695,12 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
             time.sleep(5)
             runs = w.api(f"repos/{REPO}/actions/workflows/acceptance.yml/runs"
                          f"?event=workflow_dispatch&created=%3E%3D{since}")["workflow_runs"]
+            if len(runs) > 1:
+                raise Blocked(f"{BLOCKED}{rc} attestation run unclear",
+                              f"{len(runs)} acceptance.yml runs started after the automation "
+                              f"dispatched one for `{rc}`; it cannot tell which is its own. "
+                              "Nothing was promoted. Promote by hand (docs/releasing.md, "
+                              "step 5), then close this issue.")
             if runs:
                 save(mark, {"run": runs[0]["id"]})
                 return SHORT
@@ -631,9 +712,10 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
     if run["conclusion"] != "success":
         raise Blocked(f"{BLOCKED}{rc} attestation failed",
                       f"acceptance.yml for `{rc}` ended {run['conclusion']}: {run['html_url']}.")
-    save(f"accepted-{vstr(v)}", {"rc": rc, "run": disp["run"], "comment": note["id"],
-                                  "digests": digests, "commit": sha,
-                                  "day": note["created_at"][:10]})
+    if not w.dry:
+        save(f"accepted-{vstr(v)}", {"rc": rc, "run": disp["run"], "comment": note["id"],
+                                      "digests": digests, "commit": sha,
+                                      "day": note["created_at"][:10]})
     create_tag(w, f"v{vstr(v)}", sha)
     return DONE
 
@@ -714,11 +796,11 @@ def step_prepare(w: World, stable: str) -> str:
         if c != "success":
             raise Blocked(f"{BLOCKED}{pending} main CI failed",
                           f"CI on main ({head[:7]}) did not pass: {c[9:]}.")
+        refuse_breaking(w)
         create_tag(w, f"v{pending}-rc.1", head)
         return DONE
     branch_prefix = "auto/prep-"
-    prs = [p for p in w.api(f"repos/{REPO}/pulls?state=open&per_page=100")
-           if p["head"]["ref"].startswith(branch_prefix)]
+    prs = own_prs(w.api(f"repos/{REPO}/pulls?state=open&per_page=100"), branch_prefix)
     if prs:
         return merge_when_green(w, prs[0], f"{prs[0]['head']['ref'][len(branch_prefix):]} prep")
     body = unreleased(changelog)
@@ -778,6 +860,19 @@ def step(w: World) -> str:
     return step_prepare(w, stable)
 
 
+def dry_clone(workdir: Path, dest: Path) -> Path:
+    """A clone of <workdir> sharing its objects, with the same origin, for a dry
+    run: step() resets and cleans its work tree and may commit on a branch, and
+    a dry run leaves the caller's checkout, index and refs as they were."""
+    url = subprocess.run(["git", "-C", str(workdir), "remote", "get-url", "origin"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(workdir), str(dest)],
+                   capture_output=True, text=True, check=True)
+    subprocess.run(["git", "-C", str(dest), "remote", "set-url", "origin", url],
+                   capture_output=True, text=True, check=True)
+    return dest
+
+
 def held(w: World):
     for i in open_issues(w, HOLD_LABEL):
         return f"#{i['number']} is labeled {HOLD_LABEL}"
@@ -790,8 +885,9 @@ def held(w: World):
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dry-run", action="store_true", help="read only; print what it would do")
-    ap.add_argument("--workdir", type=Path, default=Path.cwd(),
-                    help="a clone of irashack/molebridge to work in (reset to origin/main)")
+    ap.add_argument("--workdir", type=Path, required=True,
+                    help="a clone of irashack/molebridge to work in (reset to origin/main; "
+                    "a dry run leaves it alone and works in a throwaway clone of it)")
     args = ap.parse_args()
     # Lines reach a log file in the order they happened.
     sys.stdout.reconfigure(line_buffering=True)
@@ -802,6 +898,9 @@ def main() -> int:
     except OSError:
         print("another run holds the lock")
         return 0
+    if args.dry_run:
+        scratch = tempfile.TemporaryDirectory(prefix="auto-release-dry-")
+        args.workdir = dry_clone(args.workdir, Path(scratch.name) / "clone")
     w = World(args.workdir, args.dry_run)
     deadline = time.monotonic() + FOLLOW_SECONDS
     try:
@@ -826,6 +925,8 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001 - one place reports any failure
         # One failure may be the network; the second in a row files an issue.
         print(f"failed: {e}", file=sys.stderr)
+        if w.dry:
+            return 1
         failures = (state("failures") or 0) + 1
         save("failures", failures)
         if failures >= 2:
