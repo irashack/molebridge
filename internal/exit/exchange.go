@@ -22,7 +22,7 @@ import (
 )
 
 // ExchangeSettings are the network exchange's settings
-// (docs/network-exchange-design.md): nil in Settings when EXCHANGE_URL is
+// (docs/exchange.md): nil in Settings when EXCHANGE_URL is
 // unset, and the exit then exchanges files only.
 type ExchangeSettings struct {
 	URL     string

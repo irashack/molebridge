@@ -40,7 +40,7 @@ RUN set -eu; \
 # committed here. The hashes are the linux_amd64 and linux_arm64 lines of
 #   https://github.com/netbirdio/netbird/releases/download/v0.82.1/netbird_0.82.1_checksums.txt
 # Update the version and both hashes together.
-# Alpine 3.24.3, as before: https://hub.docker.com/_/alpine
+# Alpine 3.24.4: https://hub.docker.com/_/alpine
 FROM --platform=$BUILDPLATFORM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS netbird
 ARG TARGETARCH
 ARG NETBIRD_VERSION=0.82.1

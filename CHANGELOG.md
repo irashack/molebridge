@@ -14,6 +14,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   before the record is written. A Breaking item is now a `**Breaking**`
   heading or item at the start of a line, not the word in an entry's prose.
   Nothing changes in the images.
+
 - Fixed: stopping the exit no longer waits on a stalled start of the
   exchange child; the stop sequence's signals go first, as they do for
   NetBird ([exchange](docs/exchange.md)).
@@ -34,6 +35,11 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
   ([troubleshooting](docs/troubleshooting.md)).
 - Switchyard's answer to an unsupported method (501) carries its security
   headers too.
+- Docs: the README no longer says every candidate is tested on rootless
+  Podman (not since 0.14.5); the roadmap says the multi-provider exit is in
+  releases since 0.14.2 and that every candidate needs its live drill since
+  acceptance policy 20; and `compose.proxy.yaml` says binding to the tunnel
+  needs no capability only from Linux 5.7.
 
 - Releases: the release automation (`tools/auto-release.py`) is stricter
   about what it acts on. It merges only the release-prep pull requests it
