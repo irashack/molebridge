@@ -239,7 +239,8 @@ With it on:
   bound for 15);
 - an nftables table, `ip molebridge_forward`, sends TCP and UDP for that port
   from the tunnel to the target, on the **same port number**, and masquerades
-  it as the exit's overlay address;
+  it as the exit's overlay address. It is replaced at every bind, so a
+  table removed or changed in between is back within ten minutes;
 - a separate, permanent table, `inet molebridge_guard`, drops anything
   forwarded from the tunnel that would leave other than over the overlay;
 - the port appears under Diagnostics in the panel, and in `result.json` as

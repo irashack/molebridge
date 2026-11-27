@@ -89,6 +89,10 @@ what changed is below.
   the multi-provider exit is in releases since 0.14.2; and the exchange page
   says its child process runs with the exit's privileges
   ([exchange](docs/exchange.md)).
+- Hardening: with PIA port forwarding on a NetBird exit, table
+  `ip molebridge_forward` is replaced at every bind (every ten minutes),
+  not only when the port changes, so a table removed in between is
+  restored ([providers](docs/providers.md#port-forwarding)).
 
 ## 0.14.5 — 2026-11-25
 
