@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/nftables"
 	"github.com/google/nftables/expr"
+	"github.com/mdlayher/netlink"
 	"golang.org/x/sys/unix"
 
 	"github.com/irashack/molebridge/internal/rtnl"
@@ -79,7 +80,7 @@ func replaceTable(c *nftables.Conn, family nftables.TableFamily, name string) *n
 	return c.AddTable(t)
 }
 
-// InstallIngressGuard installs the forward-path guard: forwarded tunnel
+// EnsureIngressGuard keeps the forward-path guard in place: forwarded tunnel
 // ingress may leave only over the overlay.
 //
 //	table inet molebridge_guard {
@@ -89,7 +90,37 @@ func replaceTable(c *nftables.Conn, family nftables.TableFamily, name string) *n
 //	  }
 //	}
 //
-// An earlier table of that name is replaced atomically. Nothing removes it.
+// It reads the table back first and replaces it, atomically, only when it is
+// missing or differs; an intact guard is left alone, so a check makes no
+// change and announces nothing to other nftables listeners. (NetBird's client
+// watches for new tables and chains and, half a second after each, inserts
+// its accept rules into every filter chain it finds: replacing the table on
+// every pass kept it doing that every pass.) Rules that match only the
+// overlay, `iifname "<overlay>" ...` or `oifname "<overlay>" ...` (the ones
+// NetBird inserts), cannot let tunnel ingress out anywhere else and are
+// tolerated; any other difference is repaired. It returns why it installed
+// the table, "" when the guard was already in place. Nothing removes it.
+func EnsureIngressGuard(ctx context.Context, netns int, exitIf, overlayIf string) (string, error) {
+	var why string
+	err := withSidecarReadConn(ctx, netns, func(c *nftables.Conn, raw *netlink.Conn) error {
+		reason, err := ingressGuardDifference(c, raw, exitIf, overlayIf)
+		if err != nil {
+			return fmt.Errorf("read back: %w", err)
+		}
+		if reason == "" {
+			return nil
+		}
+		why = reason
+		return installIngressGuard(c, exitIf, overlayIf)
+	})
+	if err != nil {
+		return "", fmt.Errorf("nft: ensure the ingress guard: %w", err)
+	}
+	return why, nil
+}
+
+// InstallIngressGuard replaces the guard unconditionally (tests and drills;
+// the exit calls EnsureIngressGuard).
 func InstallIngressGuard(ctx context.Context, netns int, exitIf, overlayIf string) error {
 	err := withConn(ctx, netns, func(c *nftables.Conn) error { return installIngressGuard(c, exitIf, overlayIf) })
 	if err != nil {
@@ -98,19 +129,99 @@ func InstallIngressGuard(ctx context.Context, netns int, exitIf, overlayIf strin
 	return nil
 }
 
-func installIngressGuard(c *nftables.Conn, exitIf, overlayIf string) error {
-	t := replaceTable(c, nftables.TableFamilyINet, GuardTable)
+func guardChain(t *nftables.Table) *nftables.Chain {
 	policy := nftables.ChainPolicyAccept
-	chain := c.AddChain(&nftables.Chain{Name: "forward", Table: t, Type: nftables.ChainTypeFilter,
-		Hooknum: nftables.ChainHookForward, Priority: nftables.ChainPriorityFilter, Policy: &policy})
-	c.AddRule(&nftables.Rule{Table: t, Chain: chain, Exprs: []expr.Any{
+	return &nftables.Chain{Name: "forward", Table: t, Type: nftables.ChainTypeFilter,
+		Hooknum: nftables.ChainHookForward, Priority: nftables.ChainPriorityFilter, Policy: &policy}
+}
+
+func guardDrop(exitIf, overlayIf string) []expr.Any {
+	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname(exitIf)},
 		&expr.Meta{Key: expr.MetaKeyOIFNAME, Register: 1},
 		&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifname(overlayIf)},
 		&expr.Verdict{Kind: expr.VerdictDrop},
-	}})
+	}
+}
+
+// overlayOnly is the start of a rule that matches only packets arriving on,
+// or leaving by, the overlay.
+func overlayOnly(key expr.MetaKey, overlayIf string) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: key, Register: 1},
+		&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifname(overlayIf)},
+	}
+}
+
+func installIngressGuard(c *nftables.Conn, exitIf, overlayIf string) error {
+	t := replaceTable(c, nftables.TableFamilyINet, GuardTable)
+	chain := c.AddChain(guardChain(t))
+	c.AddRule(&nftables.Rule{Table: t, Chain: chain, Exprs: guardDrop(exitIf, overlayIf)})
 	return c.Flush()
+}
+
+// ingressGuardDifference reads the live guard back: "" when it holds, or what
+// is wrong with it.
+func ingressGuardDifference(c *nftables.Conn, raw *netlink.Conn, exitIf, overlayIf string) (string, error) {
+	want := &nftables.Table{Family: nftables.TableFamilyINet, Name: GuardTable}
+	tables, err := c.ListTablesOfFamily(want.Family)
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for _, live := range tables {
+		if live.Name == want.Name && live.Family == want.Family {
+			found = true
+			if live.Flags != 0 {
+				return "table flags differ", nil
+			}
+		}
+	}
+	if !found {
+		return "no table inet " + GuardTable, nil
+	}
+	chains, err := c.ListChainsOfTableFamily(want.Family)
+	if err != nil {
+		return "", err
+	}
+	wantChain := guardChain(want)
+	var live *nftables.Chain
+	for _, chain := range chains {
+		if chain.Table == nil || chain.Table.Name != want.Name || chain.Table.Family != want.Family {
+			continue
+		}
+		if chain.Name != wantChain.Name {
+			return "extra chain " + chain.Name, nil
+		}
+		live = chain
+	}
+	if live == nil {
+		return "no chain forward", nil
+	}
+	if reason := sidecarChainDifference(live, wantChain); reason != "" {
+		return "chain forward: " + reason, nil
+	}
+	rules, err := readRules(raw, want, live)
+	if err != nil {
+		return "", err
+	}
+	drop := false
+	for i, r := range rules {
+		switch {
+		case !r.userData && sidecarExpressionsEqual(r.exprs, guardDrop(exitIf, overlayIf)):
+			drop = true
+		case expressionsPrefixEqual(r.exprs, overlayOnly(expr.MetaKeyIIFNAME, overlayIf)),
+			expressionsPrefixEqual(r.exprs, overlayOnly(expr.MetaKeyOIFNAME, overlayIf)):
+			// Matches only overlay traffic, which the guard does not hold.
+		default:
+			return fmt.Sprintf("chain forward: rule %d is not the guard's", i+1), nil
+		}
+	}
+	if !drop {
+		return "chain forward: no drop rule", nil
+	}
+	return "", nil
 }
 
 // ApplyForwardRules atomically replaces `table ip molebridge_forward`:

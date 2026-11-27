@@ -287,10 +287,16 @@ sidecar the firewall is the second of two layers.
   arriving from the tunnel interface and not leaving over the overlay. The
   routing contract holds what arrives from the overlay; this holds what
   arrives from the tunnel, so a VPN server cannot send through the exit to
-  the host's network or out of its host interface. The applier installs it
-  on every pass (every 5 seconds), replacing the table atomically, so a table
-  that was deleted or changed is back within one pass; nothing removes it.
-  While a pass's install fails, the gates hold every change, the first one
+  the host's network or out of its host interface. The applier reads it back
+  on every pass (every 5 seconds) and replaces the table, atomically, only
+  when it is missing or differs, so a table that was deleted or changed is
+  back within one pass; nothing removes it. An intact guard is not
+  rewritten: NetBird's client watches nftables and, after every new table or
+  chain, inserts its accept rules into each filter chain it finds, ours
+  included. Those two rules match only traffic arriving on or leaving by the
+  overlay (`iifname "wt0" ...`, `oifname "wt0" ...`), so the check accepts
+  them; any other rule, or a missing drop rule, is a difference. While a
+  pass's check or install fails, the gates hold every change, the first one
   included, so the tunnel gets no peer until the guard is in, and PIA
   forwards no new port.
 - **PIA's port forwarding.** While forwarding is on, table

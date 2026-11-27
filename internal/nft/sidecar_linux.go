@@ -368,7 +368,33 @@ func withSidecarReadConn(ctx context.Context, netns int, fn func(*nftables.Conn,
 
 // sidecarReadRules retains raw expression attributes, including unknown ones.
 // Handles, transaction IDs and positions identify rules, rather than policy.
+// A rule with user data (a comment) reads as no expressions: still a change
+// to the installed rule.
 func sidecarReadRules(c *netlink.Conn, table *nftables.Table, chain *nftables.Chain) ([][]byte, error) {
+	live, err := readRules(c, table, chain)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([][]byte, 0, len(live))
+	for _, r := range live {
+		if r.userData {
+			rules = append(rules, nil)
+			continue
+		}
+		rules = append(rules, r.exprs)
+	}
+	return rules, nil
+}
+
+// liveRule is one rule as the kernel dumps it: its raw expression list and
+// whether it carries user data.
+type liveRule struct {
+	exprs    []byte
+	userData bool
+}
+
+// readRules dumps one chain's rules, in order, with raw expression attributes.
+func readRules(c *netlink.Conn, table *nftables.Table, chain *nftables.Chain) ([]liveRule, error) {
 	attrs, err := netlink.MarshalAttributes([]netlink.Attribute{
 		{Type: unix.NFTA_RULE_TABLE, Data: []byte(table.Name + "\x00")},
 		{Type: unix.NFTA_RULE_CHAIN, Data: []byte(chain.Name + "\x00")},
@@ -383,7 +409,7 @@ func sidecarReadRules(c *netlink.Conn, table *nftables.Table, chain *nftables.Ch
 	if err != nil {
 		return nil, err
 	}
-	var rules [][]byte
+	var rules []liveRule
 	for _, m := range messages {
 		if m.Header.Type != unix.NFNL_SUBSYS_NFTABLES<<8|unix.NFT_MSG_NEWRULE || len(m.Data) < 4 || m.Data[0] != byte(table.Family) {
 			return nil, fmt.Errorf("unexpected sidecar rule reply")
@@ -413,11 +439,7 @@ func sidecarReadRules(c *netlink.Conn, table *nftables.Table, chain *nftables.Ch
 		if tableName != table.Name || chainName != chain.Name {
 			return nil, fmt.Errorf("unexpected sidecar rule location")
 		}
-		if changed {
-			// A comment is still a change to the installed rule.
-			expressions = nil
-		}
-		rules = append(rules, expressions)
+		rules = append(rules, liveRule{exprs: expressions, userData: changed})
 	}
 	return rules, nil
 }
@@ -427,6 +449,20 @@ func sidecarExpressionsEqual(live []byte, want []expr.Any) bool {
 	if err != nil || len(attrs) != len(want) {
 		return false
 	}
+	return expressionsMatch(attrs, want)
+}
+
+// expressionsPrefixEqual: the rule's first expressions are exactly want; any
+// may follow.
+func expressionsPrefixEqual(live []byte, want []expr.Any) bool {
+	attrs, err := netlink.UnmarshalAttributes(live)
+	if err != nil || len(attrs) < len(want) {
+		return false
+	}
+	return expressionsMatch(attrs[:len(want)], want)
+}
+
+func expressionsMatch(attrs []netlink.Attribute, want []expr.Any) bool {
 	for i, e := range want {
 		if attrs[i].Type&sidecarAttrTypeMask != unix.NFTA_LIST_ELEM {
 			return false
