@@ -79,6 +79,9 @@ type worker struct {
 	// firewallOK is a native sidecar's firewall as last read back: installed
 	// and exactly as described.
 	firewallOK atomic.Bool
+	// firewallStep is the boot-clock time the firewall loop last completed
+	// a step: its progress under the lease.
+	firewallStep atomic.Int64
 	// fatalMsg is set when the generation must end with a failure (the way
 	// in condemned its client).
 	fatalOnce sync.Once
@@ -384,6 +387,12 @@ func (w *worker) run() int {
 			Tables: spec.Interest().Tables, Links: links, Logf: w.libLogf})
 		w.watcher = wt
 		w.loops[LoopWatcher] = loopSource{wt.Progress, LoopBound}
+		if s.Routing.IsNativeSidecar() {
+			// A wedged firewall loop would leave the firewall unrepaired and
+			// firewallOK at its last value: it lapses the lease instead.
+			w.firewallStep.Store(int64(w.clock()))
+			w.loops[LoopFirewall] = loopSource{func() time.Duration { return time.Duration(w.firewallStep.Load()) }, FirewallBound}
+		}
 		go func() {
 			// Run returns nil once the worker stops; an error is the event
 			// socket failing, and without the watcher nothing repairs the
@@ -638,11 +647,14 @@ func (w *worker) warnStrictReversePath() {
 // one transaction. nftables announces no change the worker subscribes to, so
 // this is a poll, not a watch.
 func (w *worker) firewallLoop() {
+	step := func() { w.firewallStep.Store(int64(w.clock())) }
 	for {
+		step()
 		if !sleepCtx(w.ctx, FirewallCheckInterval) {
 			return
 		}
 		ok, reason, err := w.sys.SidecarFirewall(w.ctx)
+		step()
 		switch {
 		case w.ctx.Err() != nil:
 			return
@@ -654,7 +666,9 @@ func (w *worker) firewallLoop() {
 			w.writeGuarded()
 		default:
 			w.firewallOK.Store(false)
-			if err := w.sys.InstallSidecarFirewall(w.ctx); err != nil {
+			err := w.sys.InstallSidecarFirewall(w.ctx)
+			step()
+			if err != nil {
 				w.warnEvery("firewall-install", time.Minute, "the sidecar firewall was not as installed (%s) and could not be replaced: %v", reason, err)
 				continue
 			}

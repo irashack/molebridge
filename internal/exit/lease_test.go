@@ -253,4 +253,14 @@ func TestLoopBoundsByMode(t *testing.T) {
 	if b := LoopBounds(sc); len(b) != 1 {
 		t.Errorf("sidecar: %v", b)
 	}
+	// A native sidecar's firewall loop is supervised too, with a bound above
+	// its check interval.
+	ns := &Settings{}
+	ns.Routing.Kind, ns.Routing.Backend = "sidecar", "wireguard"
+	if b := LoopBounds(ns); len(b) != 3 || b[LoopWatcher] != LoopBound || b[LoopFirewall] != FirewallBound {
+		t.Errorf("native sidecar: %v", b)
+	}
+	if FirewallBound <= FirewallCheckInterval+MutatorBound {
+		t.Errorf("FirewallBound %v leaves no room for a step behind another job", FirewallBound)
+	}
 }

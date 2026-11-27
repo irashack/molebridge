@@ -18,6 +18,8 @@ const (
 	LoopWatcher = "watcher"
 	LoopFwmark  = "fwmark"
 	LoopLog     = "log"
+	// LoopFirewall is a native sidecar's firewall loop (firewallLoop).
+	LoopFirewall = "firewall"
 )
 
 // Bounds of the loops (D21). The mutation owner completes or fails every
@@ -41,6 +43,11 @@ const (
 	// FirewallCheckInterval is how often a native sidecar reads its firewall
 	// back.
 	FirewallCheckInterval = 2 * time.Second
+	// FirewallBound bounds a native sidecar's firewall loop between two
+	// reports: its sleep, then one step of it, a read back or a replacement
+	// waiting behind another job on the mutation owner (each bounded by
+	// MutatorBound), with a second of slack.
+	FirewallBound = FirewallCheckInterval + 2*MutatorBound + time.Second
 )
 
 // LoopBounds returns the loops the settings' mode supervises and their bounds.
@@ -55,6 +62,9 @@ func LoopBounds(s *Settings) map[string]time.Duration {
 		// loop is the pipeline's tick, reported as the mutator's idle step. A
 		// native sidecar keeps its contract and watcher.
 		delete(b, LoopWatcher)
+	}
+	if s.Routing.IsNativeSidecar() {
+		b[LoopFirewall] = FirewallBound
 	}
 	return b
 }
