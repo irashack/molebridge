@@ -111,7 +111,8 @@ type Applier struct {
 
 	catalog Catalog
 	bootID  string
-	// guardInstalled: the ingress guard is in place (ensureIngressGuard).
+	// guardInstalled: this pass installed the ingress guard
+	// (ensureIngressGuard); the gate holds every change while it is false.
 	guardInstalled bool
 	attempt        *attempt.Attempt
 	// location is where the last verified server is (moved.go).
@@ -1406,20 +1407,30 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 // exit, whatever the provider: table inet molebridge_guard drops anything
 // forwarded from the tunnel interface that is not leaving over the overlay,
 // so a VPN server cannot send through the exit to the host's network or out
-// of its host interface. Retried every tick until it succeeds, logged as
-// stepFailed logs, and never removed. A native sidecar has its own firewall,
-// installed before the applier starts; the gluetun backend leaves the
-// namespace's forwarding to gluetun's firewall.
+// of its host interface. It is installed again on every pass, replacing the
+// table atomically, so a table that was deleted or changed is back within one
+// pass; nothing removes it. While the pass's install has failed, the gate
+// holds every change (the first tunnel's peer included) and PIA forwards no
+// new port; a failure is logged as stepFailed logs. A native sidecar has its
+// own firewall, installed before the applier starts; the gluetun backend
+// leaves the namespace's forwarding to gluetun's firewall.
 func (a *Applier) ensureIngressGuard(ctx context.Context) {
-	if a.guardInstalled || a.kind() != "overlay" || a.backend() != providers.BackendNative {
+	if !a.needsIngressGuard() {
 		return
 	}
 	if err := a.sys.InstallIngressGuard(ctx); err != nil {
+		a.guardInstalled = false
 		a.stepFailed(ctx, "ingress-guard", "applier: installing the ingress guard failed", err)
 		return
 	}
 	a.guardInstalled = true
 	a.stepSucceeded("ingress-guard", "applier: the ingress guard is installed")
+}
+
+// needsIngressGuard: a native overlay exit, whose applier installs the
+// ingress guard.
+func (a *Applier) needsIngressGuard() bool {
+	return a.kind() == "overlay" && a.backend() == providers.BackendNative
 }
 
 // ingressGuarded: forwarded tunnel ingress is held to the overlay, by the
@@ -1865,6 +1876,8 @@ func (a *Applier) askedNow(target *Selection) bool {
 
 // Switch applies a panel request now, as a new target (tests and tools).
 func (a *Applier) Switch(ctx context.Context, request map[string]any) (*Record, error) {
+	// As a pass does: the gate holds the change unless the guard is in.
+	a.ensureIngressGuard(ctx)
 	a.target = a.resolveRequest(request)
 	if a.target == nil {
 		return a.Inspect(ctx, false)
@@ -1926,6 +1939,12 @@ func (a *Applier) gate(ctx context.Context, target *Selection) *gateResult {
 	}
 	if message := a.credentialsGate(a.providerOf(target)); message != "" {
 		return &gateResult{"pending", message, ""}
+	}
+	if a.needsIngressGuard() && !a.guardInstalled {
+		// Fail closed: no peer is set, so no tunnel carries traffic, until
+		// this pass has installed the ingress guard.
+		return &gateResult{"pending", "Waiting for the ingress guard (nftables table inet molebridge_guard); " +
+			"request will retry automatically. If this persists, check the exit's log.", ""}
 	}
 	if a.kind() == "overlay" {
 		if protected, _ := a.routingStatus(ctx, a.spec.AddressBeforeSwitch); !protected {

@@ -11,6 +11,17 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 **Experimental.** Upgrade from 0.14.5 by moving to the new image;
 what changed is below.
 
+- Hardening: a native overlay exit installs its ingress guard (table
+  `inet molebridge_guard`) again on every pass, replacing it atomically, so
+  a table that was deleted or changed is back within 5 seconds; and while
+  the guard can't be installed, the exit applies no server, the first one
+  included, and PIA forwards no new port
+  ([architecture](docs/architecture.md#nftables)). A host whose nftables
+  refuses the table now holds the exit at "Waiting for the ingress guard"
+  instead of running without it.
+- Releases: acceptance policy 28 adds `ingress-guard-live`, the guard's
+  deletion and restart check on a real exit
+  ([releasing](docs/releasing.md#3-run-the-live-acceptance)).
 - The proxy has two optional limits, both off unless set:
   `PROXY_MAX_CONNS_PER_CLIENT` bounds the connections one client address
   may hold open, so one program can no longer take every slot of
