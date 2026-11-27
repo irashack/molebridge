@@ -100,8 +100,8 @@ func TestASwitchLogsEachStateChangeOnce(t *testing.T) {
 	}
 }
 
-// Every native overlay exit installs the ingress guard, not only PIA: on every
-// pass, before the provider's own steps. A failure is logged once and its
+// Every native overlay exit installs the ingress guard, not only PIA: checked
+// on every pass, before the provider's own steps. A failure is logged once and its
 // recovery once. The gluetun backend and the native sidecar install none.
 func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
 	for name, setup := range map[string]func(testing.TB) (*Applier, *kernel, string){"mullvad": mullvadSetup, "nordvpn": nordSetup} {
@@ -119,7 +119,7 @@ func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
 			mustTick(t, a)
 			k.now += PollSec
 			mustTick(t, a)
-			if !a.ingressGuarded() || k.guardInstalled != 2 {
+			if !a.ingressGuarded() || k.guardInstalled != 1 {
 				t.Fatalf("guard installed %d times", k.guardInstalled)
 			}
 			if n := k.countLogged("applier: the ingress guard is installed"); n != 1 {
@@ -169,5 +169,42 @@ func TestNoTunnelIsSetUntilTheIngressGuardIsIn(t *testing.T) {
 				t.Fatalf("guard lost: %s %q %v", status(r), message(r), k.keys)
 			}
 		})
+	}
+}
+
+// molebridge#180: an intact ingress guard is read back on every pass and not
+// written again. Rewriting it every pass (v0.14.6-rc.1 to rc.2) made a new
+// nftables table and chain every 5 s, and NetBird's client in the same
+// namespace reacts to each one by reconciling its firewall; in live
+// acceptance those exits' PIA switches timed out. A guard that was deleted is
+// written again at the next pass, logged once, and changes are held only
+// while the check itself fails.
+func TestAnIntactIngressGuardIsNotRewrittenEveryPass(t *testing.T) {
+	a, k, _ := mullvadSetup(t)
+	mustTick(t, a)
+	if k.guardInstalled != 1 {
+		t.Fatalf("guard installed %d times at the first pass", k.guardInstalled)
+	}
+	for i := 0; i < 20; i++ {
+		k.now += PollSec
+		mustTick(t, a)
+	}
+	if k.guardInstalled != 1 {
+		t.Fatalf("an intact guard was written %d times in 21 passes", k.guardInstalled)
+	}
+	if n := k.countLogged("applier: the ingress guard was not as installed"); n != 0 {
+		t.Fatalf("repair logged for an intact guard: %q", k.logs)
+	}
+	k.guardLost = true
+	k.now += PollSec
+	mustTick(t, a)
+	if k.guardInstalled != 2 || !a.ingressGuarded() {
+		t.Fatalf("a deleted guard: written %d times, guarded %v", k.guardInstalled, a.ingressGuarded())
+	}
+	if n := k.countLogged("applier: the ingress guard was not as installed (no table inet molebridge_guard); it is installed again"); n != 1 {
+		t.Fatalf("repair logged %d times: %q", n, k.logs)
+	}
+	if r := a.switchTo(t, requestAt(testHost, nil)); status(r) != "ok" {
+		t.Fatalf("switch after the repair: %s %q", status(r), message(r))
 	}
 }

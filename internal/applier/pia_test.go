@@ -797,8 +797,7 @@ func TestPIAPortForwardConfigurationAccepted(t *testing.T) {
 
 // -- port forwarding ---------------------------------------------------------------------------
 
-// tableOps are the nftables changes other than the ingress guard, which
-// every pass installs again.
+// tableOps are the nftables changes other than the ingress guard.
 func (k *kernel) tableOps() []string {
 	var ops []string
 	for _, op := range k.nftOps {
@@ -883,8 +882,8 @@ func TestPIASwitchDropsTheOldPort(t *testing.T) {
 	}
 }
 
-// The leftover cleanup runs once; the ingress guard is installed again on
-// every pass, forwarding or not.
+// The leftover cleanup runs once; the ingress guard is checked on every
+// pass, forwarding or not, and written again only once it is lost.
 func TestPIALeftoverCleanupRunsOnceAndTheGuardEveryPassEvenWithForwardingOff(t *testing.T) {
 	a, k, _, _, _ := piaSetup(t, false)
 	mustTick(t, a)
@@ -893,8 +892,13 @@ func TestPIALeftoverCleanupRunsOnceAndTheGuardEveryPassEvenWithForwardingOff(t *
 	}
 	loads := len(k.nftOps)
 	mustTick(t, a)
+	if again := k.nftOps[loads:]; len(again) != 0 {
+		t.Errorf("an intact guard changed: %v", again)
+	}
+	k.guardLost = true
+	mustTick(t, a)
 	if again := k.nftOps[loads:]; len(again) != 1 || again[0] != "guard" {
-		t.Errorf("again: %v", again)
+		t.Errorf("a lost guard: %v", again)
 	}
 }
 

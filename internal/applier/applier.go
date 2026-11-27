@@ -1403,25 +1403,31 @@ func (a *Applier) Tick(ctx context.Context) (*Record, error) {
 	return result, nil
 }
 
-// ensureIngressGuard installs the forward-path guard on a native overlay
-// exit, whatever the provider: table inet molebridge_guard drops anything
-// forwarded from the tunnel interface that is not leaving over the overlay,
-// so a VPN server cannot send through the exit to the host's network or out
-// of its host interface. It is installed again on every pass, replacing the
-// table atomically, so a table that was deleted or changed is back within one
-// pass; nothing removes it. While the pass's install has failed, the gate
-// holds every change (the first tunnel's peer included) and PIA forwards no
-// new port; a failure is logged as stepFailed logs. A native sidecar has its
-// own firewall, installed before the applier starts; the gluetun backend
-// leaves the namespace's forwarding to gluetun's firewall.
+// ensureIngressGuard keeps the forward-path guard in place on a native
+// overlay exit, whatever the provider: table inet molebridge_guard drops
+// anything forwarded from the tunnel interface that is not leaving over the
+// overlay, so a VPN server cannot send through the exit to the host's network
+// or out of its host interface. Every pass reads it back and replaces it,
+// atomically, only when it is missing or differs, so a table that was deleted
+// or changed is back within one pass while an intact one is not rewritten
+// (EnsureIngressGuard); nothing removes it. While the pass's check has
+// failed, the gate holds every change (the first tunnel's peer included) and
+// PIA forwards no new port; a failure is logged as stepFailed logs. A native
+// sidecar has its own firewall, installed before the applier starts; the
+// gluetun backend leaves the namespace's forwarding to gluetun's firewall.
 func (a *Applier) ensureIngressGuard(ctx context.Context) {
 	if !a.needsIngressGuard() {
 		return
 	}
-	if err := a.sys.InstallIngressGuard(ctx); err != nil {
+	why, err := a.sys.EnsureIngressGuard(ctx)
+	if err != nil {
 		a.guardInstalled = false
 		a.stepFailed(ctx, "ingress-guard", "applier: installing the ingress guard failed", err)
 		return
+	}
+	if why != "" && a.guardInstalled {
+		// It was in place at the last pass: something removed or changed it.
+		a.log("applier: the ingress guard was not as installed (" + why + "); it is installed again")
 	}
 	a.guardInstalled = true
 	a.stepSucceeded("ingress-guard", "applier: the ingress guard is installed")

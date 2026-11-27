@@ -749,11 +749,16 @@ func (k *KernelSystem) ChangePIAAddress(ctx context.Context, old, next netip.Add
 // owner), and bounded by the operation's one absolute deadline, which every
 // nftables socket carries.
 
-// InstallIngressGuard installs the forward-path guard (never removed).
-func (k *KernelSystem) InstallIngressGuard(ctx context.Context) error {
-	return k.Mut.Do(ctx, "install the ingress guard", func(tx *mutator.Tx) error {
-		return nft.InstallIngressGuard(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf())
+// EnsureIngressGuard checks the forward-path guard and replaces it only when
+// it is missing or differs (never removed).
+func (k *KernelSystem) EnsureIngressGuard(ctx context.Context) (string, error) {
+	var why string
+	err := k.Mut.Do(ctx, "ensure the ingress guard", func(tx *mutator.Tx) error {
+		var err error
+		why, err = nft.EnsureIngressGuard(tx.Context(), k.NetNS, k.exitIf(), k.overlayIf())
+		return err
 	})
+	return why, err
 }
 
 // ApplyForwardRules atomically replaces the port-forwarding table.

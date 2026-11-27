@@ -42,7 +42,7 @@ import (
 //	wg set <exit> peer ... remove / endpoint    ReplacePeer
 //	ip -j -4 address show (every interface)     NamespaceIPv4Prefixes
 //	the PIA rule 94/98, address and route calls PIAKernel and ChangePIAAddress
-//	nft -f (the ingress guard)                  InstallIngressGuard
+//	nft -f (the ingress guard)                  EnsureIngressGuard
 //	nft -f (the forwarding table)               ApplyForwardRules, RemoveForwardRules
 //	curl                                        Fetch
 type System interface {
@@ -61,7 +61,7 @@ type System interface {
 	SidecarFirewall(ctx context.Context) (ok bool, reason string, err error)
 	// SetForwardedPort reinstalls the native sidecar's firewall so that its input
 	// chain admits port (TCP and UDP) from the tunnel; 0 admits none. One queued
-	// job on the mutation owner, atomic like InstallIngressGuard.
+	// job on the mutation owner, atomic like EnsureIngressGuard.
 	SetForwardedPort(ctx context.Context, port int) error
 	// ReadSysctl returns the text of a /proc/sys file.
 	ReadSysctl(ctx context.Context, path string) (string, error)
@@ -116,11 +116,13 @@ type System interface {
 	// package is the ordering to follow and the one the tests run: the worker
 	// implements this method by calling it over its own PIAKernel.
 	ChangePIAAddress(ctx context.Context, old, new netip.Addr) error
-	// InstallIngressGuard installs the forward-path guard: forwarded tunnel
-	// ingress may leave only over the overlay (`table inet molebridge_guard`,
-	// chain forward, `iifname <exit> oifname != <overlay> drop`), replacing any
-	// earlier table of that name atomically. It is never removed.
-	InstallIngressGuard(ctx context.Context) error
+	// EnsureIngressGuard keeps the forward-path guard in place: forwarded
+	// tunnel ingress may leave only over the overlay (`table inet
+	// molebridge_guard`, chain forward, `iifname <exit> oifname != <overlay>
+	// drop`). It reads the table back and replaces it atomically only when it
+	// is missing or differs, returning why ("" when it was in place). It is
+	// never removed.
+	EnsureIngressGuard(ctx context.Context) (string, error)
 	// ApplyForwardRules atomically replaces `table ip molebridge_forward`: in
 	// prerouting (dstnat) `iifname <exit> meta l4proto {tcp, udp} th dport
 	// <port> dnat to <target>`, and in postrouting (srcnat) `oifname <overlay>

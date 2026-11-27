@@ -122,7 +122,8 @@ type kernel struct {
 	nftOps         []string
 	nftFailures    int
 	nftAlwaysFail  bool
-	guardInstalled int
+	guardInstalled int    // times the guard was written
+	guardLost      bool   // the written guard was deleted since
 	nftFailOnly    string // with nftAlwaysFail, only the changes with this prefix fail
 
 	addrErr  error
@@ -658,6 +659,15 @@ func (k *kernel) ChangePIAAddress(ctx context.Context, old, new netip.Addr) erro
 }
 
 func (k *kernel) nft(what string) error {
+	if err := k.nftFail(what); err != nil {
+		return err
+	}
+	k.nftOps = append(k.nftOps, what)
+	return nil
+}
+
+// nftFail is the injected failure of an nftables call, a read included.
+func (k *kernel) nftFail(what string) error {
 	if k.nftAlwaysFail && (k.nftFailOnly == "" || strings.HasPrefix(what, k.nftFailOnly)) {
 		k.record("nft failed %s", what)
 		return errInjected
@@ -667,7 +677,6 @@ func (k *kernel) nft(what string) error {
 		k.record("nft failed %s", what)
 		return errInjected
 	}
-	k.nftOps = append(k.nftOps, what)
 	return nil
 }
 
@@ -684,12 +693,21 @@ func (k *kernel) SetForwardedPort(_ context.Context, port int) error {
 	return nil
 }
 
-func (k *kernel) InstallIngressGuard(context.Context) error {
+// EnsureIngressGuard reads the guard back (a read that can fail) and writes
+// it ("guard" in nftOps) only when guardLost or never written.
+func (k *kernel) EnsureIngressGuard(context.Context) (string, error) {
+	if err := k.nftFail("guard"); err != nil {
+		return "", err
+	}
+	if k.guardInstalled > 0 && !k.guardLost {
+		return "", nil
+	}
 	if err := k.nft("guard"); err != nil {
-		return err
+		return "", err
 	}
 	k.guardInstalled++
-	return nil
+	k.guardLost = false
+	return "no table inet molebridge_guard", nil
 }
 
 func (k *kernel) ApplyForwardRules(_ context.Context, port int, target netip.Addr) error {
