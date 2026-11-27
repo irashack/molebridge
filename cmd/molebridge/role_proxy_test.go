@@ -47,7 +47,7 @@ func TestProxySettingsDefaults(t *testing.T) {
 	}
 	// Empty is unset, as Compose's ${NAME:-} passes it.
 	env := proxyEnv()
-	for _, k := range []string{"STATE_DIR", "PROXY_LISTEN", "PROXY_MAX_CONNS", "OVERLAY_IF", "PROXY_DNS"} {
+	for _, k := range []string{"STATE_DIR", "PROXY_LISTEN", "PROXY_MAX_CONNS", "PROXY_MAX_CONNS_PER_CLIENT", "PROXY_IDLE_TIMEOUT", "OVERLAY_IF", "PROXY_DNS"} {
 		env[k] = ""
 	}
 	if s, err := proxySettingsFrom(env); err != nil || s != want {
@@ -62,6 +62,8 @@ func TestProxySettingsSet(t *testing.T) {
 	env["TUNNEL_INTERFACE"] = "pia0"
 	env["PROXY_LISTEN"] = "192.0.2.10:1081"
 	env["PROXY_MAX_CONNS"] = "64"
+	env["PROXY_MAX_CONNS_PER_CLIENT"] = "16"
+	env["PROXY_IDLE_TIMEOUT"] = "600"
 	env["OVERLAY_IF"] = "mesh0"
 	env["PROXY_DNS"] = "192.0.2.53"
 	s, err := proxySettingsFrom(env)
@@ -69,7 +71,7 @@ func TestProxySettingsSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := proxySettings{StateDir: "/srv/state", Provider: "pia", TunnelInterface: "pia0",
-		Listen: "192.0.2.10:1081", MaxConns: 64, PasswordFile: "/run/secrets/proxy/password",
+		Listen: "192.0.2.10:1081", MaxConns: 64, MaxPerClient: 16, IdleTimeout: 600, PasswordFile: "/run/secrets/proxy/password",
 		OverlayIf: "mesh0", DNS: "192.0.2.53:53"}
 	if s != want {
 		t.Fatalf("got %+v\nwant %+v", s, want)
@@ -113,6 +115,14 @@ func TestProxySettingsRefusals(t *testing.T) {
 		{"PROXY_MAX_CONNS", "+5", "PROXY_MAX_CONNS"},
 		{"PROXY_MAX_CONNS", "05", "PROXY_MAX_CONNS"},
 		{"PROXY_MAX_CONNS", " 5", "PROXY_MAX_CONNS"},
+		{"PROXY_MAX_CONNS_PER_CLIENT", "-1", "PROXY_MAX_CONNS_PER_CLIENT must be a whole number"},
+		{"PROXY_MAX_CONNS_PER_CLIENT", "65536", "PROXY_MAX_CONNS_PER_CLIENT must be a whole number"},
+		{"PROXY_MAX_CONNS_PER_CLIENT", "05", "PROXY_MAX_CONNS_PER_CLIENT must be a whole number"},
+		{"PROXY_MAX_CONNS_PER_CLIENT", "513", "PROXY_MAX_CONNS_PER_CLIENT must not be above PROXY_MAX_CONNS"},
+		{"PROXY_IDLE_TIMEOUT", "-1", "PROXY_IDLE_TIMEOUT must be a whole number of seconds"},
+		{"PROXY_IDLE_TIMEOUT", "86401", "PROXY_IDLE_TIMEOUT must be a whole number of seconds"},
+		{"PROXY_IDLE_TIMEOUT", "10m", "PROXY_IDLE_TIMEOUT must be a whole number of seconds"},
+		{"PROXY_IDLE_TIMEOUT", "1.5", "PROXY_IDLE_TIMEOUT must be a whole number of seconds"},
 		{"PROXY_PASSWORD_FILE", "", "PROXY_PASSWORD_FILE is required"},
 		{"PROXY_PASSWORD_FILE", "secrets/password", "PROXY_PASSWORD_FILE must be an absolute path"},
 		{"PROXY_DNS", "dns.example.net", "PROXY_DNS must be an IP address"},

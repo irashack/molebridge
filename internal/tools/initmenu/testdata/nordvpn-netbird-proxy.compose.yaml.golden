@@ -187,6 +187,11 @@ services:
       # whose addresses PROXY_LISTEN may use besides loopback.
       OVERLAY_IF: "${OVERLAY_IF:-wt0}"
       PROXY_MAX_CONNS: "${PROXY_MAX_CONNS:-512}"
+      # Off when empty or 0: the most connections one client address may
+      # hold open, and the seconds an open connection may carry nothing
+      # before it is closed (docs/proxy.md).
+      PROXY_MAX_CONNS_PER_CLIENT: "${PROXY_MAX_CONNS_PER_CLIENT:-}"
+      PROXY_IDLE_TIMEOUT: "${PROXY_IDLE_TIMEOUT:-}"
       # One line, mode 0600, owned by the user above.
       PROXY_PASSWORD_FILE: /run/secrets/proxy/password
       # The resolver for the names the proxy resolves itself, asked through

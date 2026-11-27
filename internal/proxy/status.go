@@ -57,9 +57,31 @@ func (s *server) statusRecord(status, message string) (validate.Obj, string) {
 			"checked_at", orNull(tunnel.CheckedAt)),
 		"servers", validate.Members("known", len(servers), "benched", list),
 		"sessions", s.sessions.active(),
-		"connections", validate.Members("open", s.open.Load(), "total", s.total.Load(), "failed", s.failed.Load()),
+		"connections", validate.Members("open", s.open.Load(), "total", s.total.Load(), "failed", s.failed.Load(),
+			"over_client_limit", s.overClient.Load(), "idle_closed", s.idleClosed.Load()),
+		"limits", validate.Members("max_conns", s.cfg.MaxConns,
+			"max_conns_per_client", orNullInt(s.cfg.MaxConnsPerClient),
+			"idle_timeout_seconds", orNullInt(int(s.cfg.IdleTimeout/time.Second)),
+			"clients", s.clientsOrNull()),
 	)
 	return record, sig.String()
+}
+
+// clientsOrNull is the number of client addresses with an open connection,
+// or null while MaxConnsPerClient is off (they are counted only then).
+func (s *server) clientsOrNull() any {
+	if s.cfg.MaxConnsPerClient <= 0 {
+		return nil
+	}
+	return s.clients()
+}
+
+// orNullInt is n, or null for zero (a bound that is off).
+func orNullInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 func orNull(v string) any {

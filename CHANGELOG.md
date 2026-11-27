@@ -6,6 +6,14 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- The proxy has two optional limits, both off unless set:
+  `PROXY_MAX_CONNS_PER_CLIENT` bounds the connections one client address
+  may hold open, so one program can no longer take every slot of
+  `PROXY_MAX_CONNS`, and `PROXY_IDLE_TIMEOUT` closes a connection that has
+  carried nothing either way for that many seconds. `proxy.json` reports
+  both, with counts of the connections each closed
+  ([the proxy](docs/proxy.md#limits-per-client-and-idle-connections)).
+
 ## 0.14.6 — unreleased
 
 **Experimental.** Upgrade from 0.14.5 by moving to the new image;

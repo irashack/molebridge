@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/irashack/molebridge/internal/exit"
 	"github.com/irashack/molebridge/internal/panel"
@@ -42,6 +43,7 @@ func init() {
 const (
 	defaultProxyOverlayIf = "wt0" // the exit's OVERLAY_IF default (compose.yaml)
 	maxProxyConns         = 65535
+	maxProxyIdleTimeout   = 86400 // seconds: a day
 )
 
 // defaultProxyDNS is the resolver the proxy asks, through the tunnel, for
@@ -62,6 +64,8 @@ type proxySettings struct {
 	TunnelInterface string // TUNNEL_INTERFACE: every connection is bound to it
 	Listen          string // PROXY_LISTEN
 	MaxConns        int    // PROXY_MAX_CONNS
+	MaxPerClient    int    // PROXY_MAX_CONNS_PER_CLIENT: 0 is off
+	IdleTimeout     int    // PROXY_IDLE_TIMEOUT, seconds: 0 is off
 	PasswordFile    string // PROXY_PASSWORD_FILE
 	OverlayIf       string // OVERLAY_IF: NetBird's interface, whose addresses PROXY_LISTEN may use
 	DNS             string // PROXY_DNS: "ip:port"
@@ -127,6 +131,24 @@ func proxySettingsFrom(env map[string]string) (proxySettings, error) {
 			refuse(fmt.Errorf("PROXY_MAX_CONNS must be a whole number from 1 to %d", maxProxyConns))
 		} else {
 			s.MaxConns = n
+		}
+	}
+	if v := env["PROXY_MAX_CONNS_PER_CLIENT"]; v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > maxProxyConns || strconv.Itoa(n) != v {
+			refuse(fmt.Errorf("PROXY_MAX_CONNS_PER_CLIENT must be a whole number from 0 (off) to %d", maxProxyConns))
+		} else if n > s.MaxConns {
+			refuse(errors.New("PROXY_MAX_CONNS_PER_CLIENT must not be above PROXY_MAX_CONNS"))
+		} else {
+			s.MaxPerClient = n
+		}
+	}
+	if v := env["PROXY_IDLE_TIMEOUT"]; v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > maxProxyIdleTimeout || strconv.Itoa(n) != v {
+			refuse(fmt.Errorf("PROXY_IDLE_TIMEOUT must be a whole number of seconds from 0 (off) to %d", maxProxyIdleTimeout))
+		} else {
+			s.IdleTimeout = n
 		}
 	}
 	switch {
@@ -282,7 +304,10 @@ func runProxy(ctx context.Context, s proxySettings, stderr io.Writer) int {
 		Interface:    s.OverlayIf,
 		PasswordFile: s.PasswordFile,
 		MaxConns:     s.MaxConns,
-		Upstream:     upstream,
+		// Both zero (off) unless set.
+		MaxConnsPerClient: s.MaxPerClient,
+		IdleTimeout:       time.Duration(s.IdleTimeout) * time.Second,
+		Upstream:          upstream,
 		// No kind: the exit's record states it (an overlay exit or a native
 		// sidecar), and the provider is held to PROVIDER.
 		Tunnel:     proxy.ResultGate(filepath.Join(applier, "result.json"), verdict.ExitConfig{Provider: s.Provider}, nil),

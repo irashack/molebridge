@@ -51,7 +51,8 @@ func TestStatusRecordShape(t *testing.T) {
 		`"status": "ok", "message": "Serving.", "checked_at": "2026-11-19T18:00:00Z", "listen": "127.0.0.1:1080", ` +
 		`"tunnel": {"verdict": "ok", "server": "se-got-wg-001", "checked_at": "2026-11-19T17:59:30Z"}, ` +
 		`"servers": {"known": 3, "benched": [{"server": "de-fra-wg-003", "until": "2026-11-19T18:02:00Z", "reason": "handshake timed out"}]}, ` +
-		`"sessions": 0, "connections": {"open": 0, "total": 0, "failed": 0}}`
+		`"sessions": 0, "connections": {"open": 0, "total": 0, "failed": 0, "over_client_limit": 0, "idle_closed": 0}, ` +
+		`"limits": {"max_conns": 512, "max_conns_per_client": null, "idle_timeout_seconds": null, "clients": null}}`
 	if string(raw) != want {
 		t.Fatalf("proxy.json:\n%s\nwant\n%s", raw, want)
 	}
