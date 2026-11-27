@@ -20,7 +20,7 @@ what changed is below.
   ([architecture](docs/architecture.md#nftables)). A host whose nftables
   refuses the table now holds the exit at "Waiting for the ingress guard"
   instead of running without it. An intact guard is only read, never
-  rewritten: the 0.14.6 candidates rewrote it every pass, and NetBird's
+  rewritten: v0.14.6-rc.2 rewrote it every pass, and NetBird's
   client, which reconciles its firewall after every new nftables table,
   ran with them during PIA switches that timed out in live acceptance.
 - Releases: acceptance policy 28 adds `ingress-guard-live`, the guard's
