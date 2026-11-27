@@ -184,7 +184,9 @@ jobs:
             printf '%s' "$IMAGE_REPORT" | base64 -d
             echo
           } > body.md
-          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$title\"" \
+          # Only the issue this job opened (github-actions[bot]), as tools/auto-release.py reads it.
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --author app/github-actions \
+            --search "in:title \"$title\"" \
             --json number,title --jq "map(select(.title == \"$title\")) | first | .number // empty")
           if [ -z "$number" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file body.md

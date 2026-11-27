@@ -1,4 +1,7 @@
 name: Acceptance
+# Names each run after its candidate, so tools/auto-release.py can tell its own
+# dispatch from another one started at the same time.
+run-name: Acceptance ${{ inputs.rc_tag }}
 
 # Run by a maintainer after live acceptance of a release candidate (D19). It
 # attests, against each of the candidate's two index digests (the image with
