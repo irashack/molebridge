@@ -287,9 +287,12 @@ sidecar the firewall is the second of two layers.
   arriving from the tunnel interface and not leaving over the overlay. The
   routing contract holds what arrives from the overlay; this holds what
   arrives from the tunnel, so a VPN server cannot send through the exit to
-  the host's network or out of its host interface. An earlier table of that
-  name is replaced; nothing removes it. The applier installs it on its first
-  pass and retries every pass until it succeeds.
+  the host's network or out of its host interface. The applier installs it
+  on every pass (every 5 seconds), replacing the table atomically, so a table
+  that was deleted or changed is back within one pass; nothing removes it.
+  While a pass's install fails, the gates hold every change, the first one
+  included, so the tunnel gets no peer until the guard is in, and PIA
+  forwards no new port.
 - **PIA's port forwarding.** While forwarding is on, table
   `ip molebridge_forward` holds the DNAT and masquerade rules for the forwarded
   port ([providers](providers.md#port-forwarding)). A native sidecar has
@@ -1133,8 +1136,8 @@ Some changes stay outside the pipeline because they repair or protect
 rather than select: PIA's repair of an interrupted switch
 ([providers](providers.md#how-pia-differs)), which runs on every pass before
 the gates so a damaged exit can pass them; the ingress guard of every native
-overlay exit; PIA's port forwarding, which runs only while the verdict is
-`ok`; and gluetun's server-list refresh. PIA's repair, the ingress guard and
+overlay exit, installed again on every pass; PIA's port forwarding, which runs only while the verdict is
+`ok`; and gluetun's server-list refresh. PIA's repair and
 the cleanup of a forwarded port left by an earlier run are retried on every
 pass until they succeed. A failure of one of them, or of taking the forwarded port out of
 the firewall, is logged when it starts or its reason changes, and again

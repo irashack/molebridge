@@ -163,6 +163,15 @@ candidate's digest. Then run what the policy names:
   exits; the rig runs both on fakes, and the upgrade on the native Mullvad
   exit only ([#54](https://github.com/irashack/molebridge/issues/54)).
 
+  Since policy 28, `ingress-guard-live`: on each native overlay exit
+  (Mullvad, PIA and NordVPN), `nft list table inet molebridge_guard` inside
+  the exit's namespace shows the guard after the upgrade; the table deleted
+  there is back within 10 seconds while the exit stays `ok`; and after the
+  exit restarts, its first verified record comes with the guard already
+  listed ([the drill](verification.md#fail-closed-drills)). CI's System rig
+  drills the deletion on every commit (`TestSystemRigIngressGuardDeleted`);
+  the live run is what shows a real host's nftables accepting the table.
+
   Since policy 26, rootless Podman with Quadlet is no longer a platform the
   acceptance needs: the policy names Kubernetes only. Up to policy 25, its
   `upgrade-from-<previous>` moved a gluetun sidecar's Quadlet units from the
@@ -208,7 +217,8 @@ For the policy above, the coverage is:
            {"id":"network-exchange-smoke","result":"passed"},
            {"id":"retired-server-move","result":"passed"},
            {"id":"proxy-live","result":"passed"},
-           {"id":"multi-provider-live","result":"passed"}]}
+           {"id":"multi-provider-live","result":"passed"},
+           {"id":"ingress-guard-live","result":"passed"}]}
 ```
 
 Dispatch the workflow on `main`: the attestation is signed with the identity

@@ -123,6 +123,7 @@ type kernel struct {
 	nftFailures    int
 	nftAlwaysFail  bool
 	guardInstalled int
+	nftFailOnly    string // with nftAlwaysFail, only the changes with this prefix fail
 
 	addrErr  error
 	insights []any // each insights call takes the next answer; the last repeats
@@ -657,7 +658,7 @@ func (k *kernel) ChangePIAAddress(ctx context.Context, old, new netip.Addr) erro
 }
 
 func (k *kernel) nft(what string) error {
-	if k.nftAlwaysFail {
+	if k.nftAlwaysFail && (k.nftFailOnly == "" || strings.HasPrefix(what, k.nftFailOnly)) {
 		k.record("nft failed %s", what)
 		return errInjected
 	}

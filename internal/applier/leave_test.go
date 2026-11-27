@@ -52,13 +52,13 @@ func TestLeavingPIARemovesTheForwardBeforeTheTunnelChanges(t *testing.T) {
 		t.Fatalf("forwarding state kept: %+v %q %d", pia.forward, pia.forwardError, pia.nftPort)
 	}
 	// Nothing binds while another provider is active.
-	ops := len(m.k.nftOps)
+	ops := len(m.k.tableOps())
 	for range 5 {
 		m.k.now += 600
 		mustTick(t, m.a)
 	}
-	if len(m.k.nftOps) != ops {
-		t.Fatalf("forwarding went on: %v", m.k.nftOps[ops:])
+	if len(m.k.tableOps()) != ops {
+		t.Fatalf("forwarding went on: %v", m.k.tableOps()[ops:])
 	}
 
 	// Back to PIA: a new registration, and the port forwarded again.
@@ -77,7 +77,9 @@ func TestLeavingPIARemovesTheForwardBeforeTheTunnelChanges(t *testing.T) {
 
 func TestAForwardThatCannotBeRemovedRefusesTheChange(t *testing.T) {
 	m := onPIAForwarding(t)
-	m.k.nftAlwaysFail = true
+	// Only the removal fails: with the guard failing too, the gate would
+	// hold the change before it reached the removal.
+	m.k.nftAlwaysFail, m.k.nftFailOnly = true, "remove-forward"
 	desire(t, m.a, targetOf("mullvad"))
 	r := mustTick(t, m.a)
 	if status(r) == "ok" || len(m.tunnels.replaced) != 0 || m.a.Providers().Active() != "pia" {

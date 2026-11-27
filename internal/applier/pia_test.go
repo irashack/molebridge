@@ -797,11 +797,24 @@ func TestPIAPortForwardConfigurationAccepted(t *testing.T) {
 
 // -- port forwarding ---------------------------------------------------------------------------
 
+// tableOps are the nftables changes other than the ingress guard, which
+// every pass installs again.
+func (k *kernel) tableOps() []string {
+	var ops []string
+	for _, op := range k.nftOps {
+		if op != "guard" {
+			ops = append(ops, op)
+		}
+	}
+	return ops
+}
+
 func (k *kernel) lastNFT() string {
-	if len(k.nftOps) == 0 {
+	ops := k.tableOps()
+	if len(ops) == 0 {
 		return ""
 	}
-	return k.nftOps[len(k.nftOps)-1]
+	return ops[len(ops)-1]
 }
 
 func TestPIAPortForwardBindsAndPointsAtTheTarget(t *testing.T) {
@@ -821,7 +834,7 @@ func TestPIAPortForwardRebindsOnScheduleWithoutNewSignature(t *testing.T) {
 	a, k, _, _, _ := piaSetup(t, true)
 	piaDesire(t, a)
 	mustTick(t, a)
-	loads := len(k.nftOps)
+	loads := len(k.tableOps())
 	k.now += BindIntervalSec
 	a.nextHealth = 0
 	mustTick(t, a)
@@ -831,8 +844,8 @@ func TestPIAPortForwardRebindsOnScheduleWithoutNewSignature(t *testing.T) {
 	if n := len(k.requestsTo("/bindPort")); n != 2 {
 		t.Errorf("%d binds", n)
 	}
-	if len(k.nftOps) != loads {
-		t.Errorf("rules loaded again: %v", k.nftOps[loads:])
+	if len(k.tableOps()) != loads {
+		t.Errorf("rules loaded again: %v", k.tableOps()[loads:])
 	}
 }
 
@@ -868,7 +881,9 @@ func TestPIASwitchDropsTheOldPort(t *testing.T) {
 	}
 }
 
-func TestPIAIngressGuardAndLeftoverCleanupRunOnceEvenWithForwardingOff(t *testing.T) {
+// The leftover cleanup runs once; the ingress guard is installed again on
+// every pass, forwarding or not.
+func TestPIALeftoverCleanupRunsOnceAndTheGuardEveryPassEvenWithForwardingOff(t *testing.T) {
 	a, k, _, _, _ := piaSetup(t, false)
 	mustTick(t, a)
 	if len(k.nftOps) < 2 || k.nftOps[0] != "guard" || k.nftOps[1] != "remove-forward" {
@@ -876,8 +891,8 @@ func TestPIAIngressGuardAndLeftoverCleanupRunOnceEvenWithForwardingOff(t *testin
 	}
 	loads := len(k.nftOps)
 	mustTick(t, a)
-	if len(k.nftOps) != loads {
-		t.Errorf("again: %v", k.nftOps[loads:])
+	if again := k.nftOps[loads:]; len(again) != 1 || again[0] != "guard" {
+		t.Errorf("again: %v", again)
 	}
 }
 
@@ -912,11 +927,11 @@ func TestPIANoForwardingUntilGuardAndCleanupSucceed(t *testing.T) {
 		t.Fatalf("%+v %v", f, k.nftOps)
 	}
 	// The cleanup already ran, so the next tick keeps the new rules.
-	loads := len(k.nftOps)
+	loads := len(k.tableOps())
 	k.now++
 	mustTick(t, a)
-	if len(k.nftOps) != loads {
-		t.Errorf("rules touched again: %v", k.nftOps[loads:])
+	if len(k.tableOps()) != loads {
+		t.Errorf("rules touched again: %v", k.tableOps()[loads:])
 	}
 }
 

@@ -100,9 +100,9 @@ func TestASwitchLogsEachStateChangeOnce(t *testing.T) {
 	}
 }
 
-// Every native overlay exit installs the ingress guard, not only PIA: once,
-// retried every pass until it succeeds, before the provider's own steps. The
-// gluetun backend and the native sidecar install none.
+// Every native overlay exit installs the ingress guard, not only PIA: on every
+// pass, before the provider's own steps. A failure is logged once and its
+// recovery once. The gluetun backend and the native sidecar install none.
 func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
 	for name, setup := range map[string]func(testing.TB) (*Applier, *kernel, string){"mullvad": mullvadSetup, "nordvpn": nordSetup} {
 		t.Run(name, func(t *testing.T) {
@@ -119,7 +119,7 @@ func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
 			mustTick(t, a)
 			k.now += PollSec
 			mustTick(t, a)
-			if !a.ingressGuarded() || k.guardInstalled != 1 {
+			if !a.ingressGuarded() || k.guardInstalled != 2 {
 				t.Fatalf("guard installed %d times", k.guardInstalled)
 			}
 			if n := k.countLogged("applier: the ingress guard is installed"); n != 1 {
@@ -131,5 +131,43 @@ func TestEveryNativeOverlayInstallsTheIngressGuard(t *testing.T) {
 	mustTick(t, f.a)
 	if f.k.guardInstalled != 0 {
 		t.Error("the gluetun backend installed the ingress guard")
+	}
+}
+
+// Fail closed: while the ingress guard cannot be installed, no change is
+// applied, the first one included, so no tunnel carries forwarded traffic
+// unguarded; once it installs, the change goes ahead. A guard that fails
+// again later holds the next change the same way.
+func TestNoTunnelIsSetUntilTheIngressGuardIsIn(t *testing.T) {
+	cases := map[string]struct {
+		setup   func(testing.TB) (*Applier, *kernel, string)
+		request func() map[string]any
+	}{
+		"mullvad": {mullvadSetup, func() map[string]any { return requestAt(testHost, nil) }},
+		"nordvpn": {nordSetup, func() map[string]any { return nordRequest(nordUS, nil) }},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			a, k, _ := c.setup(t)
+			before := strings.Join(k.keys, ",")
+			k.nftAlwaysFail = true
+			r := a.switchTo(t, c.request())
+			if status(r) == "ok" || !strings.Contains(message(r), "Waiting for the ingress guard") ||
+				a.attempt.State != "pending" || strings.Join(k.keys, ",") != before {
+				t.Fatalf("without the guard: %s %q %s %v", status(r), message(r), a.attempt.State, k.keys)
+			}
+			k.nftAlwaysFail = false
+			k.now += PollSec
+			if r := a.switchTo(t, c.request()); status(r) != "ok" {
+				t.Fatalf("with the guard: %s %q", status(r), message(r))
+			}
+			after := strings.Join(k.keys, ",")
+			// The guard fails again: the next change waits, the tunnel as it was.
+			k.nftAlwaysFail = true
+			k.now += 600
+			if r := a.switchTo(t, c.request()); status(r) == "ok" || strings.Join(k.keys, ",") != after {
+				t.Fatalf("guard lost: %s %q %v", status(r), message(r), k.keys)
+			}
+		})
 	}
 }
