@@ -19,6 +19,12 @@ what changed is below.
   both, with counts of the connections each closed
   ([the proxy](docs/proxy.md#limits-per-client-and-idle-connections)).
 
+- Hardening: a native sidecar's firewall loop is now one of the loops the
+  lease supervises (bound 23 seconds), so a loop that stops no longer
+  leaves the firewall unrepaired while the exit keeps reporting it as
+  checked; the lease lapses and the exit stops instead
+  ([architecture](docs/architecture.md#the-lease)).
+
 - Releases: the release automation acts only on a "Release blocked" issue it
   or a maintainer opened and on the scan issue the scan workflow opened; it
   copies only package names and versions from that issue into the

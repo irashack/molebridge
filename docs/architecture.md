@@ -367,6 +367,7 @@ within that loop's bound:
 | The kernel watcher | overlay exits and the native sidecar | each event batch, an overrun, and a 2 s timer when idle | 3 s |
 | The fwmark monitor | gluetun overlay | each 2 s sample of the overlay interface's mark | 3 s |
 | The NetBird log monitor | gluetun overlay | each 2 s read of NetBird's log | 3 s |
+| The firewall loop | the native sidecar | each read back of its firewall every 2 s, and each replacement | 23 s |
 
 The renewal carries the launch generation, a sequence number that only rises,
 and the boot-clock time of each loop's last completed step. The supervisor
