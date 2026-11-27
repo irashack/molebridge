@@ -12,3 +12,7 @@ tunnel/gluetun/
 # Compiled test binaries (go test -c)
 *.test
 .claude/worktrees/
+
+# Build output and Python caches
+/molebridge
+__pycache__/
