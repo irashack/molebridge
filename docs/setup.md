@@ -8,7 +8,7 @@ first ([the menu](menu.md)), and have everything in
 [requirements](prerequisites.md) ready. Plan for about half an hour; for a
 NetBird exit most of it is in the NetBird dashboard.
 
-**What was tested.** Molebridge is experimental. Its live runs used Quadlet
+**What was tested.** Its live runs used Quadlet
 units on a Debian host with rootless Podman 5.8, and Kubernetes manifests,
 neither of which this repository ships. The Compose commands on this page are
 what the bundle is for, but they have not been run on any engine, and Docker
