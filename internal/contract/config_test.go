@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/irashack/molebridge/internal/rtnl"
 )
 
 func env(kv map[string]string) func(string) string {
@@ -200,5 +202,63 @@ func TestReconcileInterval(t *testing.T) {
 		if _, err := ReconcileInterval(env(map[string]string{"ROUTING_RECONCILE_INTERVAL": bad})); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// homelab-ops #4401: with the gluetun backend, an EXCHANGE_URL that names an
+// address gives rule 87, which sends the exit's control-marked traffic to
+// that one address by main's own route to it (suppress_prefixlength 0: never
+// main's default), ahead of 88. A host name, loopback or no exchange gives no
+// rule; a native exit, whose control traffic already follows main, none.
+func TestGluetunExchangeAddressGivesRule87(t *testing.T) {
+	cases := map[string]struct {
+		url  string
+		want string
+	}{
+		"IPv4":             {"http://198.51.100.7:8097", "198.51.100.7"},
+		"https IPv4":       {"https://198.51.100.7/", "198.51.100.7"},
+		"IPv6":             {"https://[2001:db8:5::7]:8443", "2001:db8:5::7"},
+		"IPv4-mapped IPv6": {"http://[::ffff:198.51.100.7]:8097", "198.51.100.7"},
+		"host name":        {"http://exchange.example.net:8097", ""},
+		"loopback":         {"http://127.0.0.1:8097", ""},
+		"none":             {"", ""},
+		"malformed":        {"http://[2001:db8::1", ""},
+	}
+	for name, tc := range cases {
+		c, err := ConfigFromEnv(env(gl(map[string]string{"EXCHANGE_URL": tc.url})))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got := ""
+		if c.ExchangeAddr.IsValid() {
+			got = c.ExchangeAddr.String()
+		}
+		if got != tc.want {
+			t.Errorf("%s: exchange address %q, want %q", name, got, tc.want)
+		}
+		spec := Spec{Config: c}
+		r4, r6 := spec.RulesAt(rtnl.V4, PrioExchange), spec.RulesAt(rtnl.V6, PrioExchange)
+		switch {
+		case tc.want == "":
+			if len(r4)+len(r6) != 0 {
+				t.Errorf("%s: rule 87 %v %v", name, r4, r6)
+			}
+		default:
+			a := netip.MustParseAddr(tc.want)
+			rules, other := r4, r6
+			if a.Is6() {
+				rules, other = r6, r4
+			}
+			want := rtnl.Rule{Family: map[bool]rtnl.Family{true: rtnl.V4, false: rtnl.V6}[a.Is4()], Priority: PrioExchange,
+				Action: rtnl.FRActToTbl, Table: rtnl.TableMain, IifName: "lo", Dst: netip.PrefixFrom(a, a.BitLen()),
+				FwMark: rtnl.Some(uint32(0x1bd00)), FwMask: rtnl.Some(uint32(0xffffffff)), SuppressPrefixLen: rtnl.Some(uint32(0))}
+			if len(rules) != 1 || len(other) != 0 || !reflect.DeepEqual(rules[0], want) {
+				t.Errorf("%s: rule 87 %v (other family %v), want %v", name, rules, other, want)
+			}
+		}
+	}
+	n, err := ConfigFromEnv(env(base(map[string]string{"EXCHANGE_URL": "http://198.51.100.7:8097"})))
+	if err != nil || n.ExchangeAddr.IsValid() || len((Spec{Config: n}).RulesAt(rtnl.V4, PrioExchange)) != 0 {
+		t.Errorf("native: %+v %v", n, err)
 	}
 }

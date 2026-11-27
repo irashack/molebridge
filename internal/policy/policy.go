@@ -251,6 +251,8 @@ type class struct {
 	// devs are the devices a route may send it out of; tables the tables not
 	// read that may answer it. Being stopped is always safe.
 	devs, tables []uint32
+	// notDevs, when set, allows any device a route names except these.
+	notDevs []uint32
 }
 
 func (c class) allows(o Outcome) bool {
@@ -263,6 +265,14 @@ func (c class) allows(o Outcome) bool {
 			if d == o.Dev && d != 0 && d != unknownDev {
 				return true
 			}
+		}
+		if c.notDevs != nil && o.Dev != 0 && o.Dev != unknownDev {
+			for _, d := range c.notDevs {
+				if d == o.Dev {
+					return false
+				}
+			}
+			return true
 		}
 	case viaTable:
 		for _, t := range c.tables {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -74,6 +75,12 @@ type Config struct {
 	// HostResolvers are the native sidecar's resolvers for the exit's own
 	// marked lookups, in place of /etc/resolv.conf's; empty uses those.
 	HostResolvers []netip.Addr
+	// ExchangeAddr, gluetun overlay only, is the network exchange's address
+	// when EXCHANGE_URL names one (an IP literal, not loopback): the exit's
+	// control-marked traffic to it may take a more specific main-table route
+	// than the host table's default (rule 87), so an exchange reached by
+	// another interface than HOST_IF works. Invalid when there is none.
+	ExchangeAddr netip.Addr
 }
 
 // IsGluetun reports the gluetun backend.
@@ -392,7 +399,30 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if c.ControlMark, err = ControlMarkValue(env.get("CONTROL_MARK", DefaultControlMark)); err != nil {
 		return Config{}, err
 	}
+	c.ExchangeAddr = exchangeAddr(getenv("EXCHANGE_URL"))
 	return c, nil
+}
+
+// exchangeAddr is the address EXCHANGE_URL names, when its host is an IP
+// literal other than loopback or unspecified; otherwise invalid (a host name,
+// or no exchange). The exit refuses a malformed EXCHANGE_URL elsewhere.
+func exchangeAddr(raw string) netip.Addr {
+	if raw == "" {
+		return netip.Addr{}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return netip.Addr{}
+	}
+	a, err := netip.ParseAddr(u.Hostname())
+	if err != nil || a.Zone() != "" {
+		return netip.Addr{}
+	}
+	a = a.Unmap()
+	if a.IsLoopback() || a.IsUnspecified() {
+		return netip.Addr{}
+	}
+	return a
 }
 
 // nativeSidecarConfig reads no overlay or NetBird configuration. The host

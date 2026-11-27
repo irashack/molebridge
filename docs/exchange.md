@@ -19,8 +19,15 @@ Run live on Kubernetes with a NordVPN NetBird exit only
 ([testing](testing.md#v0100-rc2-2026-11-03-released)), and every release's
 live acceptance since includes the exchange drill
 ([verification](verification.md#the-network-exchange) lists what it checks).
-CI runs it in the system rig. It has not been run with the gluetun backend,
-with Mullvad or PIA, or with the native sidecar. A
+CI runs it in the system rig. It has not been run live with the gluetun
+backend, with Mullvad or PIA, or with the native sidecar. With the gluetun
+backend, the exit's exchange connections are control traffic, which rule 88
+sends to the host table (`HOST_IF`'s routes). An exchange on another network
+than `HOST_IF`'s needs `EXCHANGE_URL` to name its address, not a host name:
+rule 87 then lets those connections take the main table's own route to that
+address ([the rules](architecture.md#why-the-routing-contract-is-policy-routing)), and
+gluetun's firewall must let them out (`FIREWALL_OUTBOUND_SUBNETS`). That path
+is covered by unit tests of the rules and the routing model only. A
 [multi-provider exit](multi-provider.md) refuses it.
 
 ## How it works

@@ -651,3 +651,70 @@ func TestAWeakerConditionForTheSameEscapeIsRefused(t *testing.T) {
 		t.Error("deleting one of two uncertain barriers was approved")
 	}
 }
+
+// homelab-ops #4401: with EXCHANGE_URL naming an address, rule 87 lets the
+// exit's control-marked traffic to the exchange take main's own route to it
+// by another interface than HOST_IF (a cluster network, say); main's route
+// into the tunnel or the overlay would still be an escape, and without such a
+// route the traffic goes on to 88 as before. Other control traffic is
+// unchanged: the host interface or nothing.
+func TestTheExchangeMayLeaveByMainsRouteButNotByTheTunnel(t *testing.T) {
+	const clusterIdx = 9
+	exchange := netip.MustParseAddr("198.51.100.200")
+	env := gluetunEnv()
+	env["EXCHANGE_URL"] = "http://198.51.100.200:8097"
+	c := cfg(t, env)
+	if c.ExchangeAddr != exchange {
+		t.Fatalf("exchange address %v", c.ExchangeAddr)
+	}
+	base := gluetunState(t)
+	spec := base.Spec
+	spec.Config = c
+	s := healthy(spec)
+	s.Rules, s.Routes = base.Rules, base.Routes
+	s = s.set(rtnl.V4, func(rules []rtnl.Rule) []rtnl.Rule {
+		return append(rules, spec.RulesAt(rtnl.V4, contract.PrioExchange)...)
+	})
+	if len(spec.RulesAt(rtnl.V4, contract.PrioExchange)) != 1 || len(spec.RulesAt(rtnl.V6, contract.PrioExchange)) != 0 {
+		t.Fatalf("rule 87: %v %v", spec.RulesAt(rtnl.V4, contract.PrioExchange), spec.RulesAt(rtnl.V6, contract.PrioExchange))
+	}
+	if v := s.Violations(); len(v) != 0 {
+		t.Fatalf("no route to the exchange in main: %v", v)
+	}
+	withRoute := func(dev uint32, dst netip.Prefix) State {
+		out := s.clone()
+		out.Routes[rtnl.V4][rtnl.TableMain] = append(append([]rtnl.Route(nil), out.Routes[rtnl.V4][rtnl.TableMain]...),
+			rtnl.Route{Family: rtnl.V4, Dst: dst, Table: rtnl.TableMain, Type: rtnl.RTNUnicast, Oif: rtnl.Some(dev)})
+		return out
+	}
+	cluster := netip.MustParsePrefix("198.51.100.192/26")
+	if v := withRoute(clusterIdx, cluster).Violations(); len(v) != 0 {
+		t.Errorf("the exchange by main's cluster route: %v", v)
+	}
+	if v := withRoute(exitIdx, cluster).Violations(); len(v) == 0 {
+		t.Error("the exchange into the tunnel by main's route is not an escape")
+	}
+	if v := withRoute(overlayIdx, cluster).Violations(); len(v) == 0 {
+		t.Error("the exchange into the overlay by main's route is not an escape")
+	}
+	// The same cluster route without the exchange setting: rule 87 is not
+	// there, control traffic to that address goes to the host table.
+	plain := gluetunState(t)
+	plain.Routes[rtnl.V4][rtnl.TableMain] = append(plain.Routes[rtnl.V4][rtnl.TableMain],
+		rtnl.Route{Family: rtnl.V4, Dst: cluster, Table: rtnl.TableMain, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(clusterIdx))})
+	if v := plain.Violations(); len(v) != 0 {
+		t.Fatalf("%v", v)
+	}
+	// A rule 87 the contract does not expect, sending all control traffic
+	// to main, is an escape for the rest of it.
+	wide := s.set(rtnl.V4, func(rules []rtnl.Rule) []rtnl.Rule {
+		r := spec.RulesAt(rtnl.V4, contract.PrioExchange)[0]
+		r.Dst = netip.Prefix{}
+		return append(rules, r)
+	})
+	wide.Routes[rtnl.V4][rtnl.TableMain] = append(wide.Routes[rtnl.V4][rtnl.TableMain],
+		rtnl.Route{Family: rtnl.V4, Dst: netip.MustParsePrefix("203.0.113.0/24"), Table: rtnl.TableMain, Type: rtnl.RTNUnicast, Oif: rtnl.Some(uint32(clusterIdx))})
+	if v := wide.Violations(); len(v) == 0 {
+		t.Error("control traffic to other addresses by main's route is not an escape")
+	}
+}

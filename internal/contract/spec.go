@@ -11,6 +11,7 @@ import (
 const (
 	PrioLocalGuard    = 1
 	PrioTempGuard     = 80
+	PrioExchange      = 87
 	PrioMarkHost      = 88
 	PrioMarkReject    = 89
 	PrioFromTunnel    = 90
@@ -171,6 +172,14 @@ func (s Spec) Rules(f rtnl.Family) []rtnl.Rule {
 		table := c.HostTable
 		if c.IsNativeSidecar() {
 			table = rtnl.TableMain
+		}
+		if a := c.ExchangeAddr; c.IsGluetun() && a.IsValid() && a.Is4() == (f == rtnl.V4) {
+			// The exchange by main's own route to it, if main has one more
+			// specific than a default; otherwise on to 88.
+			r := lookup(PrioExchange, f, rtnl.TableMain)
+			r.IifName, r.FwMark, r.FwMask, r.Dst = "lo", mark, mask, hostPrefix(a)
+			r.SuppressPrefixLen = rtnl.Some(uint32(0))
+			add(r)
 		}
 		r := lookup(PrioMarkHost, f, table)
 		r.IifName, r.FwMark, r.FwMask = "lo", mark, mask
