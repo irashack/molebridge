@@ -37,8 +37,10 @@ type ExchangeSettings struct {
 const markEnv = "MOLEBRIDGE_EXCHANGE_MARK"
 
 // loadExchange reads EXCHANGE_URL, EXCHANGE_EXIT_ID, EXCHANGE_TOKEN (from
-// secrets/applier.env, like GATUS_TOKEN), EXCHANGE_CA_FILE and
-// EXCHANGE_TLS_NAME.
+// secrets/applier.env, like GATUS_TOKEN), EXCHANGE_CA_FILE,
+// EXCHANGE_TLS_NAME and EXCHANGE_ALLOW_HTTP. A plain http:// URL to a host
+// other than loopback is refused unless EXCHANGE_ALLOW_HTTP is exactly "1":
+// the token would cross the network unencrypted.
 func loadExchange(env map[string]string) (*ExchangeSettings, error) {
 	raw := env["EXCHANGE_URL"]
 	if raw == "" {
@@ -47,6 +49,10 @@ func loadExchange(env map[string]string) (*ExchangeSettings, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, refuse("EXCHANGE_URL must be an http:// or https:// URL with a host and no credentials, query or fragment")
+	}
+	if plainRemote(raw) && env["EXCHANGE_ALLOW_HTTP"] != "1" {
+		return nil, refuse("EXCHANGE_URL is plain http:// to a host other than loopback; use https://, " +
+			"or set EXCHANGE_ALLOW_HTTP=1 to send the exchange token unencrypted")
 	}
 	x := &ExchangeSettings{URL: raw, ExitID: env["EXCHANGE_EXIT_ID"], Token: env["EXCHANGE_TOKEN"],
 		CAFile: env["EXCHANGE_CA_FILE"], TLSName: env["EXCHANGE_TLS_NAME"]}
@@ -118,7 +124,7 @@ func plainRemote(raw string) bool {
 func ExchangeEnv(s *Settings) []string {
 	out := map[string]string{"PATH": "/usr/local/bin:/usr/bin:/bin", "STATE_DIR": s.StateDir, "PROVIDER": s.Provider,
 		markEnv: strconv.FormatUint(uint64(s.Routing.ControlMark), 10)}
-	for _, k := range []string{"EXCHANGE_URL", "EXCHANGE_EXIT_ID", "EXCHANGE_TOKEN", "EXCHANGE_CA_FILE", "EXCHANGE_TLS_NAME", "TZ"} {
+	for _, k := range []string{"EXCHANGE_URL", "EXCHANGE_EXIT_ID", "EXCHANGE_TOKEN", "EXCHANGE_CA_FILE", "EXCHANGE_TLS_NAME", "EXCHANGE_ALLOW_HTTP", "TZ"} {
 		if v, ok := s.Env[k]; ok {
 			out[k] = v
 		}
@@ -259,7 +265,7 @@ func exchangeWarnings(x *ExchangeSettings) []string {
 	}
 	var out []string
 	if plainRemote(x.URL) {
-		out = append(out, "exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)")
+		out = append(out, "exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback (allowed by EXCHANGE_ALLOW_HTTP=1); the exchange token crosses the network unencrypted (use https://)")
 	}
 	if strings.HasPrefix(strings.ToLower(x.URL), "http://") && (x.CAFile != "" || x.TLSName != "") {
 		out = append(out, "exchange: warning: EXCHANGE_CA_FILE and EXCHANGE_TLS_NAME apply only to an https:// EXCHANGE_URL; with http:// they are ignored")
