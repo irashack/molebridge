@@ -960,11 +960,12 @@ exit without `EXCHANGE_URL`.
 ### On the exit
 | Setting | Default | Meaning |
 |---|---|---|
-| `EXCHANGE_URL` | empty | The exchange's base URL, `https://` or `http://`, with a host and no credentials, query or fragment. Empty: files only. Not accepted with `PROVIDERS`. |
+| `EXCHANGE_URL` | empty | The exchange's base URL, with a host and no credentials, query or fragment: `https://`, or `http://` to `localhost` or a loopback address (any other host needs `EXCHANGE_ALLOW_HTTP=1`). Empty: files only. Not accepted with `PROVIDERS`. |
 | `EXCHANGE_EXIT_ID` | empty | The exit's id at the exchange: its id in the panel's `PANEL_EXITS`. Required with `EXCHANGE_URL`. |
 | `EXCHANGE_TOKEN` | empty | In `secrets/applier.env`, beside `GATUS_TOKEN`: the exit's token, at least 32 printable characters with no spaces. Required with `EXCHANGE_URL`. |
 | `EXCHANGE_CA_FILE` | empty | A PEM file of the authority the exchange's certificate must chain to, instead of the system's. |
 | `EXCHANGE_TLS_NAME` | empty | The name the exchange's certificate must carry, when it isn't the URL's host. |
+| `EXCHANGE_ALLOW_HTTP` | empty | Exactly `1` allows an `http://` `EXCHANGE_URL` to a host other than loopback, sending the token unencrypted. Any other value, as empty, refuses it ([exchange](exchange.md#2-the-exit)). |
 
 A bad value stops the exit at start with one line. With `EXCHANGE_URL` set,
 the exit's `state/panel/` is the exit's own: the exchange client writes

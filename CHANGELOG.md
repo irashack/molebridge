@@ -6,6 +6,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- **Breaking:** the network exchange requires `https://`. An exit whose
+  `EXCHANGE_URL` is `http://` to a host other than `localhost` or a
+  loopback address now refuses to start (`EXCHANGE_URL is plain http:// to
+  a host other than loopback; use https://, or set EXCHANGE_ALLOW_HTTP=1 to
+  send the exchange token unencrypted`). Serve the exchange with TLS and
+  move the exit to `https://`, or set `EXCHANGE_ALLOW_HTTP=1` on the exit to
+  keep plain http ([exchange](docs/exchange.md#2-the-exit)). Loopback
+  `http://` needs no change.
+
 ## 0.14.6 — unreleased
 
 **Experimental.** Upgrade from 0.14.5 by moving to the new image;

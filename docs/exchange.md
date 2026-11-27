@@ -72,11 +72,12 @@ the exit, whose `EXCHANGE_TOKEN` comes from its environment.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `EXCHANGE_URL` | empty | The exchange's base URL, `https://` or `http://`, with a host and no credentials, query or fragment. Empty: files only. |
+| `EXCHANGE_URL` | empty | The exchange's base URL, with a host and no credentials, query or fragment: `https://`, or `http://` to `localhost` or a loopback address. `http://` to any other host needs `EXCHANGE_ALLOW_HTTP=1`. Empty: files only. |
 | `EXCHANGE_EXIT_ID` | empty | The exit's id at the exchange, its id in the panel's `PANEL_EXITS`: 1 to 32 of `a-z`, `0-9` and `-`. Required with `EXCHANGE_URL`. |
 | `EXCHANGE_TOKEN` | empty | In `secrets/applier.env`: at least 32 printable characters with no spaces. Required with `EXCHANGE_URL`. |
 | `EXCHANGE_CA_FILE` | empty | A PEM file of the authority the exchange's certificate must chain to, instead of the system's. |
 | `EXCHANGE_TLS_NAME` | empty | The name the exchange's certificate must carry, when it isn't the URL's host. |
+| `EXCHANGE_ALLOW_HTTP` | empty | Exactly `1` allows an `http://` `EXCHANGE_URL` to a host other than loopback, which sends the exchange token and every file unencrypted. Any other value, as empty, refuses it. Use `https://` instead; the exchange serves TLS itself with a certificate and key ([the exchange](#3-the-exchange), `EXCHANGE_CERT_FILE` and `EXCHANGE_KEY_FILE`). |
 
 The bundled Compose files don't pass `EXCHANGE_URL` and its settings; set
 them on the `exit` service in an override (the token already arrives through
@@ -155,10 +156,11 @@ molebridge-exit: exchange: works again
 
 A 401 means a wrong `EXCHANGE_TOKEN` or `EXCHANGE_EXIT_ID`, or a token file
 the exchange refused. With an `http://` URL whose host isn't `localhost` or
-a loopback address, the exit warns at start:
+a loopback address, allowed by `EXCHANGE_ALLOW_HTTP=1`, the exit warns at
+start:
 
 ```text
-molebridge-exit: exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback; the exchange token crosses the network unencrypted (use https://)
+molebridge-exit: exchange: warning: EXCHANGE_URL is plain http:// to a host other than loopback (allowed by EXCHANGE_ALLOW_HTTP=1); the exchange token crosses the network unencrypted (use https://)
 ```
 
 With an `http://` URL and `EXCHANGE_CA_FILE` or `EXCHANGE_TLS_NAME` set, it
@@ -188,6 +190,7 @@ The exit stops at start with one line, before anything changes:
 | Message | Cause |
 |---|---|
 | `molebridge-exit: EXCHANGE_URL must be an http:// or https:// URL with a host and no credentials, query or fragment` | A bad URL |
+| `molebridge-exit: EXCHANGE_URL is plain http:// to a host other than loopback; use https://, or set EXCHANGE_ALLOW_HTTP=1 to send the exchange token unencrypted` | `http://` to another host without the opt-in |
 | `molebridge-exit: EXCHANGE_EXIT_ID must be the exit's id at the exchange: 1-32 of a-z, 0-9 and -` | Missing or malformed id |
 | `molebridge-exit: EXCHANGE_TOKEN (in secrets/applier.env) must be at least 32 printable characters with no spaces` | Missing or short token |
 | `molebridge-exit: EXCHANGE_CA_FILE: <reason>` | The CA file can't be read or holds no PEM certificate |

@@ -34,21 +34,58 @@ func TestLoadExchange(t *testing.T) {
 		t.Fatalf("good: %v %v", x, err)
 	}
 	for name, env := range map[string]map[string]string{
-		"scheme":      with("EXCHANGE_URL", "ftp://exchange.example.net"),
-		"credentials": with("EXCHANGE_URL", "https://u:p@exchange.example.net"),
-		"query":       with("EXCHANGE_URL", "https://exchange.example.net/?t=1"),
-		"no host":     with("EXCHANGE_URL", "https:///x"),
-		"exit id":     with("EXCHANGE_EXIT_ID", "Home"),
-		"no exit id":  with("EXCHANGE_EXIT_ID", ""),
-		"short token": with("EXCHANGE_TOKEN", "short"),
-		"token space": with("EXCHANGE_TOKEN", strings.Repeat("a", 20)+" "+strings.Repeat("b", 20)),
-		"bad CA":      with("EXCHANGE_CA_FILE", ca),
-		"missing CA":  with("EXCHANGE_CA_FILE", ca+".missing"),
+		"scheme":                   with("EXCHANGE_URL", "ftp://exchange.example.net"),
+		"credentials":              with("EXCHANGE_URL", "https://u:p@exchange.example.net"),
+		"query":                    with("EXCHANGE_URL", "https://exchange.example.net/?t=1"),
+		"no host":                  with("EXCHANGE_URL", "https:///x"),
+		"exit id":                  with("EXCHANGE_EXIT_ID", "Home"),
+		"no exit id":               with("EXCHANGE_EXIT_ID", ""),
+		"short token":              with("EXCHANGE_TOKEN", "short"),
+		"token space":              with("EXCHANGE_TOKEN", strings.Repeat("a", 20)+" "+strings.Repeat("b", 20)),
+		"bad CA":                   with("EXCHANGE_CA_FILE", ca),
+		"missing CA":               with("EXCHANGE_CA_FILE", ca+".missing"),
+		"plain http":               with("EXCHANGE_URL", "http://exchange.example.net:8097"),
+		"plain http to an address": with("EXCHANGE_URL", "http://192.0.2.10:8097"),
 	} {
 		if _, err := loadExchange(env); err == nil {
 			t.Errorf("%s: accepted", name)
 		} else if _, ok := err.(*Refusal); !ok {
 			t.Errorf("%s: %T is not a refusal", name, err)
+		}
+	}
+}
+
+// https is required: plain http:// to a host other than loopback only with
+// EXCHANGE_ALLOW_HTTP exactly "1"; loopback needs no opt-in.
+func TestLoadExchangeRequiresHTTPSUnlessAllowed(t *testing.T) {
+	env := func(url, allow string) map[string]string {
+		m := map[string]string{"EXCHANGE_URL": url, "EXCHANGE_EXIT_ID": "home", "EXCHANGE_TOKEN": goodToken}
+		if allow != "" {
+			m["EXCHANGE_ALLOW_HTTP"] = allow
+		}
+		return m
+	}
+	for _, c := range []struct {
+		url, allow string
+		ok         bool
+	}{
+		{"https://exchange.example.net", "", true},
+		{"http://exchange.example.net", "", false},
+		{"http://exchange.example.net", "1", true},
+		{"http://exchange.example.net", "true", false},
+		{"http://exchange.example.net", "yes", false},
+		{"http://exchange.example.net", " 1", false},
+		{"http://192.0.2.10:8097", "1", true},
+		{"http://127.0.0.1:8097", "", true},
+		{"http://localhost:8097", "", true},
+		{"http://[::1]:8097", "", true},
+	} {
+		_, err := loadExchange(env(c.url, c.allow))
+		if (err == nil) != c.ok {
+			t.Errorf("%s with EXCHANGE_ALLOW_HTTP=%q: %v", c.url, c.allow, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "EXCHANGE_ALLOW_HTTP=1") {
+			t.Errorf("%s: the refusal doesn't name the opt-in: %v", c.url, err)
 		}
 	}
 }
@@ -69,14 +106,16 @@ func TestExchangeEnvHoldsNoOtherSecret(t *testing.T) {
 	s := settingsFor(contract.Overlay, contract.Native, "mullvad")
 	s.StateDir = "/state"
 	s.Env = map[string]string{"NB_SETUP_KEY": "SETUP", "GATUS_TOKEN": "GATUS", "PIA_PASS": "PIA",
-		"EXCHANGE_URL": "https://exchange.example.net", "EXCHANGE_EXIT_ID": "home", "EXCHANGE_TOKEN": goodToken, "TZ": "UTC"}
+		"EXCHANGE_URL": "https://exchange.example.net", "EXCHANGE_EXIT_ID": "home", "EXCHANGE_TOKEN": goodToken, "TZ": "UTC",
+		"EXCHANGE_ALLOW_HTTP": "1"}
 	env := strings.Join(ExchangeEnv(s), "\n")
 	for _, secret := range []string{"SETUP", "GATUS", "PIA"} {
 		if strings.Contains(env, secret) {
 			t.Fatalf("the exchange child's environment holds %s:\n%s", secret, env)
 		}
 	}
-	for _, want := range []string{"EXCHANGE_TOKEN=" + goodToken, "STATE_DIR=/state", "PROVIDER=mullvad", markEnv + "="} {
+	// The child checks its settings again, so it gets the opt-in too.
+	for _, want := range []string{"EXCHANGE_TOKEN=" + goodToken, "STATE_DIR=/state", "PROVIDER=mullvad", markEnv + "=", "EXCHANGE_ALLOW_HTTP=1"} {
 		if !strings.Contains(env, want) {
 			t.Fatalf("missing %s:\n%s", want, env)
 		}
