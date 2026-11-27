@@ -69,6 +69,11 @@ func (s State) classify(p packet, prot map[netip.Addr]bool, hostSubnets []netip.
 	fromTunnel := prot[p.src]
 	if c.IsGluetun() {
 		switch {
+		case p.mark == c.ControlMark && c.ExchangeAddr.IsValid() && p.dst == c.ExchangeAddr:
+			// Rule 87: the exchange by main's own route to it, by any
+			// interface but the tunnel and the overlay.
+			return class{name: "control-marked traffic the exit sends to the exchange", devs: []uint32{s.HostIdx},
+				notDevs: []uint32{s.ExitIdx, s.OverlayIdx}}
 		case p.mark == c.ControlMark:
 			return class{name: "control-marked traffic the exit sends", devs: []uint32{s.HostIdx}}
 		case p.mark == contract.GluetunMark:
@@ -210,6 +215,9 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 		prefixes = append(prefixes, r.Dst, r.Src)
 	}
 	prefixes = append(prefixes, c.OverlayFor(f))
+	if a := c.ExchangeAddr; a.IsValid() && a.Is4() == (f == rtnl.V4) {
+		prefixes = append(prefixes, netip.PrefixFrom(a, a.BitLen()))
+	}
 	prefixes = append(prefixes, hostSubnets...)
 	prefixes = append(prefixes, lan...)
 	if c.IsNativeSidecar() {
@@ -268,6 +276,7 @@ func points(f rtnl.Family, states ...State) ([]packet, bool) {
 		}
 		g.add(isLocal(a))
 		g.add(ov.IsValid() && ov.Contains(a))
+		g.add(c.ExchangeAddr.IsValid() && a == c.ExchangeAddr)
 		for _, h := range hostSubnets {
 			g.add(h.Contains(a))
 		}

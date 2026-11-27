@@ -1698,7 +1698,7 @@ flowchart LR
     subgraph ns["Exit namespace, owned by gluetun"]
         gluetun("gluetun<br/>firewall, tunnel wg0,<br/>control server :8000")
         subgraph exit["exit container"]
-            worker("worker: rules 1, 88-97, 102-104,<br/>events and a full pass")
+            worker("worker: rules 1, 87-97, 102-104,<br/>events and a full pass")
             sup("supervisor: lease")
             netbird("NetBird<br/>exit peer on wt0")
         end
@@ -1784,6 +1784,7 @@ NetBird's 105 and 110, both address families:
 |---|---|---|
 | 1 | `not iif wt0 lookup local` | The [local-delivery guard](#netbird-and-its-checks), replacing the kernel's priority-0 rule. |
 | 80 | `iif wt0 unreachable` | Temporary, while the rules are first installed. |
+| 87 | `iif lo to <exchange address> fwmark 0x1bd00/0xffffffff lookup main suppress_prefixlength 0` | Only when `EXCHANGE_URL` names an address (not a host name): the exit's control traffic to the [network exchange](exchange.md) takes the main table's own route to it, so an exchange reached by another interface than `HOST_IF` (a Kubernetes service network on `eth0` while `HOST_IF` is a LAN attachment, say) works. `suppress_prefixlength 0` ignores main's default route; without a more specific route the traffic goes on to 88 as before. Gluetun's own rule for a `FIREWALL_OUTBOUND_SUBNETS` entry comes after 88 and never sees it. |
 | 88 | `iif lo fwmark 0x1bd00/0xffffffff lookup 51822` | NetBird's control traffic uses the host table. `iif lo` limits it to packets the exit itself sends, and the exact mark leaves out NetBird's data-plane marks (0x1bd10–0x1bdff), so no forwarded packet can match. |
 | 89 | `iif lo fwmark 0x1bd00/0xffffffff unreachable` | Control traffic with no host route fails here instead of reaching rule 101 and the tunnel. |
 | 90 | `iif wg0 to <overlay range> lookup main` | Tunnel replies return over the overlay. |
@@ -2061,7 +2062,7 @@ Anything else the full check would refuse aborts the switch with
 "Routing changed during the switch; retrying after recovery.": any other
 duplicate or extra rule, rule 94 for a third address, a detached rule while
 the interface is present, any other rule of the contract missing or altered
-(1, 88 to 92, 95 to 97, 102 to 104), the fallback gone, an extra route in the
+(1, 87 to 92, 95 to 97, 102 to 104), the fallback gone, an extra route in the
 exit table, the ICMP source sysctl unset, or NetBird no longer in kernel
 mode. This is the
 protective predicate, the transition predicate in `internal/contract`.

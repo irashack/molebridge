@@ -6,6 +6,15 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## Unreleased
 
+- Fix: with the gluetun backend, an exit whose network exchange is on
+  another network than `HOST_IF` (a Kubernetes service address on `eth0`
+  while `HOST_IF` is a LAN attachment, say) timed out on every exchange
+  round: rule 88 sent its connections to the host table first. When
+  `EXCHANGE_URL` names an address, a new rule 87 sends the exit's control
+  traffic to that one address by the main table's own route to it, if main
+  has one more specific than its default
+  ([the exchange](docs/exchange.md#status)).
+
 ## 0.14.6 — unreleased
 
 Upgrade from 0.14.5 by moving to the new image;

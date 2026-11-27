@@ -48,7 +48,7 @@ func (a Action) String() string { return fmt.Sprintf("%s %d: %s", a.Kind, a.Prio
 // addOrder is the order missing rules go in: terminal rules first, so nothing
 // falls through while the rest go in; 102 and 103, the exceptions, before 104,
 // which would block them (rule_actions' END block).
-var addOrder = []uint32{97, 98, 89, 92, 102, 103, 104, 1, 80, 88, 90, 91, 94, 95, 96}
+var addOrder = []uint32{97, 98, 89, 92, 102, 103, 104, 1, 80, 87, 88, 90, 91, 94, 95, 96}
 
 // DiffOptions tune a comparison.
 type DiffOptions struct {
