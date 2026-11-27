@@ -374,22 +374,24 @@ for form in "native:compose.yaml:.env.example" "nsc:compose.native-sidecar.yaml:
       .environment.STATE_DIR == "/state" and
       .environment.PROVIDER == $exit.environment.PROVIDER and .environment.TUNNEL_INTERFACE == $exit.environment.EXIT_IF and
       .environment.PROXY_LISTEN == "127.0.0.1:1080" and .environment.PROXY_MAX_CONNS == "512" and
+      .environment.PROXY_MAX_CONNS_PER_CLIENT == "" and .environment.PROXY_IDLE_TIMEOUT == "" and
       .environment.PROXY_PASSWORD_FILE == "/run/secrets/proxy/password" and .environment.PROXY_DNS == "" and .environment.PANEL_ALLOW_ROOT == "" and
       .environment.OVERLAY_IF == ($exit.environment.OVERLAY_IF // "wt0") and
-      ([.environment | keys[] | select(test("^(STATE_DIR|PROVIDER|PANEL_ALLOW_ROOT|TUNNEL_INTERFACE|OVERLAY_IF|PROXY_(LISTEN|MAX_CONNS|PASSWORD_FILE|DNS))$") | not)] == []) and
+      ([.environment | keys[] | select(test("^(STATE_DIR|PROVIDER|PANEL_ALLOW_ROOT|TUNNEL_INTERFACE|OVERLAY_IF|PROXY_(LISTEN|MAX_CONNS|MAX_CONNS_PER_CLIENT|IDLE_TIMEOUT|PASSWORD_FILE|DNS))$") | not)] == []) and
       pids(128) and .deploy.resources.limits.memory != null'
     ok "$name" "only the proxy mounts its state and password, and it sees no tunnel or provider secret" '
       '"$defs"' ([.services | to_entries[] | select(.key != "proxy") | .value.volumes[]? | (.source // "") | select(test("secrets/proxy|state/proxy"))] == []) and
       ([.services.proxy | sources[] | select(test("tunnel|wg_confs|secrets/pia|applier.env|netbird|state/panel"))] == [])'
 done
-env PROVIDER=pia EXIT_IF=pia0 OVERLAY_IF=mesh0 PROXY_LISTEN=192.0.2.10:1081 PROXY_MAX_CONNS=64 PROXY_DNS=192.0.2.53 PANEL_USER=0:0 PANEL_ALLOW_ROOT=1 \
+env PROVIDER=pia EXIT_IF=pia0 OVERLAY_IF=mesh0 PROXY_LISTEN=192.0.2.10:1081 PROXY_MAX_CONNS=64 PROXY_MAX_CONNS_PER_CLIENT=8 PROXY_IDLE_TIMEOUT=600 PROXY_DNS=192.0.2.53 PANEL_USER=0:0 PANEL_ALLOW_ROOT=1 \
     docker compose --env-file .env.example -f compose.yaml -f compose.proxy.yaml config --format json > "$work/proxy-set.json" ||
     fail "compose.proxy.yaml does not resolve with its settings set"
 ok proxy-set "the proxy's settings reach it, and the exit's interface names agree with it" '
   .services.proxy.environment as $p | .services.exit.environment as $e |
   $p.PROVIDER == "pia" and $p.TUNNEL_INTERFACE == "pia0" and $e.EXIT_IF == "pia0" and
   $p.OVERLAY_IF == "mesh0" and $e.OVERLAY_IF == "mesh0" and
-  $p.PROXY_LISTEN == "192.0.2.10:1081" and $p.PROXY_MAX_CONNS == "64" and $p.PROXY_DNS == "192.0.2.53" and
+  $p.PROXY_LISTEN == "192.0.2.10:1081" and $p.PROXY_MAX_CONNS == "64" and $p.PROXY_MAX_CONNS_PER_CLIENT == "8" and
+  $p.PROXY_IDLE_TIMEOUT == "600" and $p.PROXY_DNS == "192.0.2.53" and
   $p.PANEL_ALLOW_ROOT == "1" and .services.proxy.user == "0:0"'
 pass "proxy overlay: added to the NetBird exit and the native sidecar, hardened, holding only its own state and password"
 

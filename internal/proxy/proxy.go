@@ -79,6 +79,12 @@ type Config struct {
 	PasswordFile string
 	// MaxConns bounds the open client connections (PROXY_MAX_CONNS).
 	MaxConns int
+	// MaxConnsPerClient bounds the open connections from one client address
+	// (PROXY_MAX_CONNS_PER_CLIENT); zero is no bound beyond MaxConns.
+	MaxConnsPerClient int
+	// IdleTimeout closes an open connection that has carried nothing either
+	// way for this long (PROXY_IDLE_TIMEOUT); zero never does.
+	IdleTimeout time.Duration
 	// HandshakeTimeout bounds a client's handshake, from accept to the
 	// request read.
 	HandshakeTimeout time.Duration
@@ -125,11 +131,15 @@ type server struct {
 	slots    chan struct{}
 	kick     chan struct{} // asks the status loop to look for a bench change
 
-	mu    sync.Mutex
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	mu        sync.Mutex
+	conns     map[net.Conn]struct{}
+	perClient map[string]int // open connections by client address, with MaxConnsPerClient
+	wg        sync.WaitGroup
 
 	open, total, failed atomic.Int64
+	// overClient counts connections closed at accept for their client's
+	// bound; idleClosed, open connections closed by IdleTimeout.
+	overClient, idleClosed atomic.Int64
 }
 
 // Serve checks cfg (the listen address and the password file), listens and
@@ -164,12 +174,13 @@ func newServer(cfg Config) (*server, error) {
 		return nil, err
 	}
 	return &server{
-		cfg:      cfg,
-		password: password,
-		sessions: newSessions(cfg.Now),
-		slots:    make(chan struct{}, cfg.MaxConns),
-		kick:     make(chan struct{}, 1),
-		conns:    map[net.Conn]struct{}{},
+		cfg:       cfg,
+		password:  password,
+		sessions:  newSessions(cfg.Now),
+		slots:     make(chan struct{}, cfg.MaxConns),
+		kick:      make(chan struct{}, 1),
+		conns:     map[net.Conn]struct{}{},
+		perClient: map[string]int{},
 	}, nil
 }
 
@@ -202,10 +213,20 @@ func (s *server) run(ctx context.Context, ln net.Listener) error {
 			break
 		}
 		s.total.Add(1)
+		client := clientKey(conn.RemoteAddr())
+		if !s.admitClient(client) {
+			// Over PROXY_MAX_CONNS_PER_CLIENT: closed before anything is
+			// read, and without taking one of the shared slots.
+			s.failed.Add(1)
+			s.overClient.Add(1)
+			conn.Close()
+			continue
+		}
 		select {
 		case s.slots <- struct{}{}:
 		default:
 			// Over PROXY_MAX_CONNS: closed before anything is read.
+			s.releaseClient(client)
 			s.failed.Add(1)
 			conn.Close()
 			continue
@@ -215,6 +236,7 @@ func (s *server) run(ctx context.Context, ln net.Listener) error {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer s.releaseClient(client)
 			defer func() { <-s.slots }()
 			defer s.open.Add(-1)
 			defer s.track(conn, false)
@@ -251,6 +273,59 @@ func (s *server) track(c net.Conn, add bool) {
 		delete(s.conns, c)
 		c.Close()
 	}
+}
+
+// clientKey is the client a connection is counted against for
+// MaxConnsPerClient: its IP address, without the port. Programs on one host
+// share an address, so they share its bound.
+func clientKey(addr net.Addr) string {
+	if tcp, ok := addr.(*net.TCPAddr); ok {
+		return tcp.IP.String()
+	}
+	if addr == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+		return host
+	}
+	return addr.String()
+}
+
+// admitClient counts one more open connection for client, or reports false
+// when that would pass MaxConnsPerClient.
+func (s *server) admitClient(client string) bool {
+	if s.cfg.MaxConnsPerClient <= 0 {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.perClient[client] >= s.cfg.MaxConnsPerClient {
+		return false
+	}
+	s.perClient[client]++
+	return true
+}
+
+// releaseClient counts one connection of client's as closed.
+func (s *server) releaseClient(client string) {
+	if s.cfg.MaxConnsPerClient <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.perClient[client] <= 1 {
+		delete(s.perClient, client)
+		return
+	}
+	s.perClient[client]--
+}
+
+// clients is the number of client addresses with an open connection
+// (counted only while MaxConnsPerClient is set).
+func (s *server) clients() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.perClient)
 }
 
 // request is a client's handshake, read and authenticated.
@@ -332,17 +407,33 @@ func (s *server) handle(ctx context.Context, conn net.Conn) {
 	}
 	s.track(up, true)
 	defer s.track(up, false)
-	pipe(conn, up)
+	if pipe(conn, up, s.cfg.IdleTimeout) {
+		s.idleClosed.Add(1)
+	}
 }
 
 // pipe copies both ways until both are done. A clean end of one direction
-// is passed on as a half-close; an error closes both.
-func pipe(client, upstream net.Conn) {
+// is passed on as a half-close; an error closes both. With idle above zero,
+// both are closed once nothing has been read either way for that long, and
+// pipe reports true.
+func pipe(client, upstream net.Conn, idle time.Duration) (idled bool) {
+	var watch *idleWatch
+	if idle > 0 {
+		watch = newIdleWatch(idle, func() {
+			client.Close()
+			upstream.Close()
+		})
+		defer watch.stop()
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	one := func(dst, src net.Conn) {
 		defer wg.Done()
-		if _, err := io.Copy(dst, src); err != nil {
+		var r io.Reader = src
+		if watch != nil {
+			r = watch.reader(src)
+		}
+		if _, err := io.Copy(dst, r); err != nil {
 			client.Close()
 			upstream.Close()
 			return
@@ -358,6 +449,64 @@ func pipe(client, upstream net.Conn) {
 	go one(upstream, client)
 	go one(client, upstream)
 	wg.Wait()
+	return watch != nil && watch.fired()
+}
+
+// idleWatch closes a connection that has been idle too long: every read
+// through one of its readers is activity, and a timer looks again when the
+// last activity is idle old.
+type idleWatch struct {
+	idle    time.Duration
+	last    atomic.Int64 // unix nanoseconds of the last read (the real clock: socket time)
+	idled   atomic.Bool
+	timer   *time.Timer
+	onIdle  func()
+	stopped atomic.Bool
+}
+
+func newIdleWatch(idle time.Duration, onIdle func()) *idleWatch {
+	w := &idleWatch{idle: idle, onIdle: onIdle}
+	w.last.Store(time.Now().UnixNano())
+	w.timer = time.AfterFunc(idle, w.check)
+	return w
+}
+
+func (w *idleWatch) check() {
+	if w.stopped.Load() {
+		return
+	}
+	since := time.Since(time.Unix(0, w.last.Load()))
+	if since >= w.idle {
+		w.idled.Store(true)
+		w.onIdle()
+		return
+	}
+	w.timer.Reset(w.idle - since)
+}
+
+func (w *idleWatch) stop() {
+	w.stopped.Store(true)
+	w.timer.Stop()
+}
+
+func (w *idleWatch) fired() bool { return w.idled.Load() }
+
+// reader is r with every read that returns bytes counted as activity. (It
+// hides r's own fast paths from io.Copy, which is why it is used only with
+// an idle timeout.)
+func (w *idleWatch) reader(r io.Reader) io.Reader { return activityReader{r: r, w: w} }
+
+type activityReader struct {
+	r io.Reader
+	w *idleWatch
+}
+
+func (a activityReader) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if n > 0 {
+		a.w.last.Store(time.Now().UnixNano())
+	}
+	return n, err
 }
 
 func (s *server) kickStatus() {

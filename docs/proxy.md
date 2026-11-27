@@ -136,6 +136,8 @@ Docker form is not recorded in [testing](testing.md).
 | `PROXY_LISTEN` | `127.0.0.1:1080` | An IP address and a port ([below](#where-it-listens)). |
 | `PROXY_PASSWORD_FILE` | required | The password file, an absolute path. Compose mounts `secrets/proxy` and sets `/run/secrets/proxy/password`. |
 | `PROXY_MAX_CONNS` | `512` | The most client connections open at once, 1 to 65535. One more is closed before anything is read. |
+| `PROXY_MAX_CONNS_PER_CLIENT` | empty: off | The most connections one client address may hold open, 0 (off) to `PROXY_MAX_CONNS` ([limits per client](#limits-per-client-and-idle-connections)). |
+| `PROXY_IDLE_TIMEOUT` | empty: off | Seconds an open connection may carry nothing, either way, before the proxy closes it, 0 (off) to 86400 ([below](#limits-per-client-and-idle-connections)). |
 | `PROXY_DNS` | the provider's | The resolver, an IP address with an optional port (53 when left out), for the names the proxy resolves itself: Mullvad relay proxy names, and every target with PIA and NordVPN. Asked through the tunnel. The defaults are each provider's own: Mullvad `10.64.0.1:53`, PIA `10.0.0.243:53`, NordVPN `103.86.96.100:53`. |
 | `OVERLAY_IF` | `wt0` | The only interface besides loopback whose addresses `PROXY_LISTEN` may use: NetBird's, as the exit's own `OVERLAY_IF`, or on Kubernetes the pod's own interface ([below](#on-kubernetes)). It must differ from `TUNNEL_INTERFACE`. |
 | `PANEL_ALLOW_ROOT` | empty | Exactly `1` lets the proxy run as uid 0, for `PANEL_USER=0:0` on a rootless engine ([rootless Podman](prerequisites.md#rootless-podman)). Any other value, as empty, refuses uid 0. Compose passes the stack's. |
@@ -149,6 +151,29 @@ checks every setting, the password file and the listen address, and stops
 with one `molebridge proxy: refusing to start: ...` line for each problem
 it finds, so a configuration you write by hand is corrected in one pass.
 Every setting is also listed in [configuration](configuration.md#the-proxy).
+
+## Limits per client and idle connections
+
+`PROXY_MAX_CONNS` is shared by every client, so one program that opens
+connections and never closes them can hold every slot. Two optional
+settings stop that; both are off unless you set them.
+
+- **`PROXY_MAX_CONNS_PER_CLIENT`** bounds the connections open at once from
+  one client IP address. One more from that address is closed before
+  anything is read, without taking one of the shared slots, and counted as
+  `over_client_limit` in [`proxy.json`](#status). Programs on the same host
+  share an address: with the native sidecar every container in the
+  namespace connects from `127.0.0.1`, so there the bound is the whole
+  namespace's, and it only helps where clients connect from addresses of
+  their own (devices on your NetBird network, or pods on Kubernetes).
+- **`PROXY_IDLE_TIMEOUT`** closes an open connection once nothing has been
+  read from either side for that many seconds, and counts it as
+  `idle_closed`. Choose it above the longest quiet spell your programs
+  expect: an SSH session or a long poll with no keep-alive is closed too.
+  The handshake keeps its own 10-second limit either way.
+
+Both are read at start; change them by restarting the proxy. `proxy.json`
+states them under `limits`.
 
 ## Where it listens
 
@@ -283,7 +308,12 @@ prints the guarantee, `state:` (`ok` serving, `refusing` while the exit's
 verdict isn't `ok`, `failed` when the listener is down, `unknown` for a
 missing, malformed or stale record, over 30 seconds old), its reasons, the
 exit's verdict as the proxy last saw it, the benched servers, the sessions
-and the open connections. It exits 0 only while the proxy serves.
+and the open connections. It exits 0 only while the proxy serves. The record
+also carries the connections closed for a client's bound
+(`connections.over_client_limit`) or for being idle (`idle_closed`), and the
+limits in force (`limits`: `max_conns`, `max_conns_per_client`,
+`idle_timeout_seconds`, null when off, and `clients`, the client addresses
+with an open connection while the per-client bound is on).
 
 The container's health check is `molebridge health --proxy`: healthy only
 while `proxy.json` is fresh and says `ok`. A proxy that refuses new

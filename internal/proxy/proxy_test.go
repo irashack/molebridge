@@ -562,6 +562,132 @@ func TestMaxConns(t *testing.T) {
 	}
 }
 
+func openSOCKS(t *testing.T, r *rig) net.Conn {
+	t.Helper()
+	c := r.dial(t)
+	socksGreet(t, c, "any", testPassword)
+	c.Write(socksRequest(cmdConnect, atypIPv4, []byte{192, 0, 2, 1}, 80))
+	if rep := socksReply(t, c); rep != replySucceeded {
+		t.Fatal(rep)
+	}
+	return c
+}
+
+func waitOpen(t *testing.T, r *rig, want int64) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.srv.open.Load() != want {
+		if time.Now().After(deadline) {
+			t.Fatalf("open %d, want %d", r.srv.open.Load(), want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestMaxConnsPerClient(t *testing.T) {
+	// Every test client connects from 127.0.0.1: one client address.
+	r := startRig(t, func(c *Config) { c.MaxConns = 10; c.MaxConnsPerClient = 2 })
+	first, second := openSOCKS(t, r), openSOCKS(t, r)
+	third := r.dial(t)
+	expectClosed(t, third, 2*time.Second)
+	if n := r.srv.overClient.Load(); n != 1 {
+		t.Fatalf("over_client_limit %d", n)
+	}
+	if n := r.srv.clients(); n != 1 {
+		t.Fatalf("clients %d", n)
+	}
+	// The refused one took no shared slot: the open count is the two.
+	if n := r.srv.open.Load(); n != 2 {
+		t.Fatalf("open %d", n)
+	}
+	roundTrip(t, first) // the open ones are unaffected
+	waitOpen(t, r, 1)
+	// The first's place is free again for the same client.
+	openSOCKS(t, r)
+	roundTrip(t, second)
+	waitOpen(t, r, 1)
+	if n := r.srv.overClient.Load(); n != 1 {
+		t.Fatalf("over_client_limit %d", n)
+	}
+}
+
+func TestMaxConnsPerClientReleasedWhenTheSharedBoundRefuses(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.MaxConns = 1; c.MaxConnsPerClient = 5 })
+	first := openSOCKS(t, r)
+	for i := 0; i < 3; i++ {
+		expectClosed(t, r.dial(t), 2*time.Second)
+	}
+	if n := r.srv.overClient.Load(); n != 0 {
+		t.Fatalf("over_client_limit %d: the shared bound refused these", n)
+	}
+	r.srv.mu.Lock()
+	held := r.srv.perClient["127.0.0.1"]
+	r.srv.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("counted %d for the client, want 1", held)
+	}
+	roundTrip(t, first)
+	waitOpen(t, r, 0)
+	if n := r.srv.clients(); n != 0 {
+		t.Fatalf("clients %d after every connection closed", n)
+	}
+}
+
+func TestClientKey(t *testing.T) {
+	for addr, want := range map[net.Addr]string{
+		&net.TCPAddr{IP: net.ParseIP("192.0.2.7"), Port: 4000}:   "192.0.2.7",
+		&net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 4000}: "2001:db8::1",
+	} {
+		if got := clientKey(addr); got != want {
+			t.Errorf("%v: %q", addr, got)
+		}
+	}
+	if got := clientKey(nil); got != "" {
+		t.Errorf("nil: %q", got)
+	}
+}
+
+func TestIdleTimeoutClosesAnIdleConnection(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.IdleTimeout = 300 * time.Millisecond })
+	c := openSOCKS(t, r)
+	start := time.Now()
+	expectClosed(t, c, 3*time.Second)
+	if took := time.Since(start); took < 250*time.Millisecond {
+		t.Fatalf("closed after %v, before the idle timeout", took)
+	}
+	waitOpen(t, r, 0)
+	if n := r.srv.idleClosed.Load(); n != 1 {
+		t.Fatalf("idle_closed %d", n)
+	}
+}
+
+func TestIdleTimeoutSparesAnActiveConnection(t *testing.T) {
+	r := startRig(t, func(c *Config) { c.IdleTimeout = 300 * time.Millisecond })
+	c := openSOCKS(t, r)
+	// Traffic every 100 ms for three idle timeouts keeps it open.
+	for i := 0; i < 9; i++ {
+		if _, err := c.Write([]byte("x")); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	c.(*net.TCPConn).CloseWrite()
+	got, err := io.ReadAll(c)
+	if err != nil || string(got) != "xxxxxxxxx" {
+		t.Fatalf("echo %q %v", got, err)
+	}
+	if n := r.srv.idleClosed.Load(); n != 0 {
+		t.Fatalf("idle_closed %d", n)
+	}
+}
+
+func TestNoIdleTimeoutByDefault(t *testing.T) {
+	r := startRig(t, nil)
+	c := openSOCKS(t, r)
+	time.Sleep(400 * time.Millisecond)
+	roundTrip(t, c)
+}
+
 func TestHalfClose(t *testing.T) {
 	r := startRig(t, nil)
 	c := r.dial(t)
