@@ -844,8 +844,10 @@ func TestPIAPortForwardRebindsOnScheduleWithoutNewSignature(t *testing.T) {
 	if n := len(k.requestsTo("/bindPort")); n != 2 {
 		t.Errorf("%d binds", n)
 	}
-	if len(k.tableOps()) != loads {
-		t.Errorf("rules loaded again: %v", k.tableOps()[loads:])
+	// The forward table is replaced at the rebind, the port unchanged, so a
+	// table removed since the last bind is back.
+	if again := k.tableOps()[loads:]; len(again) != 1 || again[0] != "forward 43210 192.0.2.10" {
+		t.Errorf("rules at the rebind: %v", again)
 	}
 }
 

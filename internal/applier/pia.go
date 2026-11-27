@@ -1160,12 +1160,18 @@ func (p *piaProvider) bindPort(ctx context.Context, a *Applier, current map[stri
 	return nil
 }
 
+// applyForwardRules puts the forwarded port in the firewall at every bind.
+// On an overlay, table ip molebridge_forward is replaced atomically each
+// time, so a table that was removed or changed while the port stayed the
+// same is restored at the next bind. In a native sidecar the port is part of
+// the sidecar firewall, which the exit's firewall loop reads back and
+// repairs, so only a change of port is passed on.
 func (p *piaProvider) applyForwardRules(ctx context.Context, a *Applier, port int) error {
-	if p.nftPort == port {
-		return nil
-	}
 	var err error
 	if a.nativeSidecar() {
+		if p.nftPort == port {
+			return nil
+		}
 		err = a.sys.SetForwardedPort(ctx, port)
 	} else {
 		err = a.sys.ApplyForwardRules(ctx, port, netip.MustParseAddr(p.cfg.ForwardTarget))
