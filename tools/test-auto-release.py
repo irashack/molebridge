@@ -393,6 +393,15 @@ class ReviewHardening2(unittest.TestCase):
         self.assertFalse(ar.trusted(stranger))
         self.assertIn("github-actions[bot]", ar.SCAN_AUTHORS)
 
+    def test_own_acceptance_runs_by_run_name(self):
+        runs = [{"id": 1, "display_title": "Acceptance v0.14.6-rc.1"},
+                {"id": 2, "display_title": "Acceptance v0.14.6-rc.2"},
+                {"id": 3, "display_title": "Acceptance"}]
+        self.assertEqual([r["id"] for r in ar.own_acceptance_runs(runs, "v0.14.6-rc.1")], [1])
+        self.assertEqual(ar.own_acceptance_runs(runs, "v0.14.7-rc.1"), [])
+        accept = (ROOT / ".github/workflows/acceptance.yml").read_text()
+        self.assertIn("run-name: Acceptance ${{ inputs.rc_tag }}", accept)
+
 
 if __name__ == "__main__":
     unittest.main()

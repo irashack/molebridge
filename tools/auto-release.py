@@ -438,6 +438,13 @@ def ci_job_names(text: str) -> list[str]:
     return names
 
 
+def own_acceptance_runs(runs: list[dict], rc: str) -> list[dict]:
+    """The acceptance.yml runs dispatched for <rc>: the workflow names each run
+    "Acceptance <rc_tag>" (run-name), so a dispatch for another candidate is not
+    taken for this one."""
+    return [r for r in runs if r.get("display_title") == f"Acceptance {rc}"]
+
+
 def check_state(runs: list[dict], required: list[str]) -> str:
     """'success', 'pending' or 'failure: ...' for a commit's check runs. They
     must include a successful run of every required name (ci.yml's jobs): a
@@ -705,8 +712,9 @@ def step_candidate(w: World, rc: str, all_tags: list[str]) -> str:
              "-f", f"evidence={json.dumps(result['evidence'])}")
         for _ in range(30):
             time.sleep(5)
-            runs = w.api(f"repos/{REPO}/actions/workflows/acceptance.yml/runs"
-                         f"?event=workflow_dispatch&created=%3E%3D{since}")["workflow_runs"]
+            runs = own_acceptance_runs(
+                w.api(f"repos/{REPO}/actions/workflows/acceptance.yml/runs"
+                      f"?event=workflow_dispatch&created=%3E%3D{since}")["workflow_runs"], rc)
             if len(runs) > 1:
                 raise Blocked(f"{BLOCKED}{rc} attestation run unclear",
                               f"{len(runs)} acceptance.yml runs started after the automation "
