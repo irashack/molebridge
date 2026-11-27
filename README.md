@@ -32,7 +32,7 @@ verified where your traffic leaves.
 
 | Way in | For | Status | Guide |
 |---|---|---|---|
-| NetBird exit | phones and laptops on your NetBird network, which select the exit instead of running a second VPN | experimental; run live with Mullvad, PIA and NordVPN | [NetBird exit](docs/netbird-exit.md) |
+| NetBird exit | phones and laptops on your NetBird network, which select the exit instead of running a second VPN | run live with Mullvad, PIA and NordVPN (PIA and NordVPN [experimental](docs/providers.md)) | [NetBird exit](docs/netbird-exit.md) |
 | NetBird exit with gluetun | the same, for FastestVPN, IVPN, Surfshark or Windscribe (or Mullvad, NordVPN) | experimental; run live with NordVPN only | [gluetun as a NetBird exit](docs/gluetun-netbird-exit.md) |
 | Native sidecar | containers that must use the tunnel and nothing else, PIA first, with `port-sync` for qBittorrent | experimental; run live with PIA on Kubernetes only | [native sidecar](docs/native-sidecar.md) |
 | gluetun sidecar | containers behind a gluetun you already run, with Switchyard picking its server | experimental; run live with NordVPN only | [gluetun sidecar](docs/gluetun-sidecar.md) |
@@ -87,7 +87,9 @@ without `init` too.
 
 ## Status
 
-**Molebridge is experimental software with one maintainer, not a 1.0.**
+**Molebridge has one maintainer and is not a 1.0.** The NetBird exit with
+Mullvad is its main form; the newer forms and providers are marked
+experimental where they appear, until they have more live runs.
 [Testing](docs/testing.md) is the record: what ran live, where and at which
 revision, and what hasn't. In short, each release candidate is upgraded from
 the release before it on Kubernetes (native Mullvad, PIA and NordVPN exits, a

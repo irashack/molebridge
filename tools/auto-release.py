@@ -153,12 +153,12 @@ def prep_changelog(changelog: str, new: str, prev: str, apk_fixes: list[str]) ->
     so changes merged while the candidate waits don't land in its section."""
     body = unreleased(changelog)
     if has_entries(body):
-        intro = (f"**Experimental.** Upgrade from {prev} by moving to the new image;\n"
+        intro = (f"Upgrade from {prev} by moving to the new image;\n"
                  "what changed is below.\n")
         return re.sub(r"^## Unreleased[ \t]*\n\n?", f"## Unreleased\n\n## {new} — unreleased\n\n{intro}\n",
                       changelog, count=1, flags=re.M)
     entry = (f"## {new} — unreleased\n\n"
-             "**Experimental.** A security rebuild: no change to Molebridge's code or\n"
+             "A security rebuild: no change to Molebridge's code or\n"
              f"behaviour. Upgrade from {prev} by moving to the new image; nothing else\n"
              "changes.\n\n**Security**:\n"
              "- The image takes Alpine's package updates when it is built: "

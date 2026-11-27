@@ -61,7 +61,7 @@ bundle=molebridge-$tag.tar.gz
 if [ "$kind" = candidate ]; then
     echo "Release candidate $tag. It has not passed live acceptance; do not install it on an exit you rely on."
 else
-    echo "Molebridge $tag, promoted without rebuilding from candidate $build_tag, which passed live acceptance (experimental software; see the README)."
+    echo "Molebridge $tag, promoted without rebuilding from candidate $build_tag, which passed live acceptance; see the README for what was tested."
 fi
 cat <<EOM
 

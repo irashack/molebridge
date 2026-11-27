@@ -1,6 +1,6 @@
 # Changelog
 
-Molebridge is experimental. Each release lists what was tested; the full
+Each release lists what was tested; the full
 record is in [docs/testing.md](docs/testing.md). Upgrade by following
 [operations](docs/operations.md#upgrades).
 
@@ -8,7 +8,7 @@ record is in [docs/testing.md](docs/testing.md). Upgrade by following
 
 ## 0.14.6 — unreleased
 
-**Experimental.** Upgrade from 0.14.5 by moving to the new image;
+Upgrade from 0.14.5 by moving to the new image;
 what changed is below.
 
 - Hardening: a native overlay exit installs its ingress guard (table
@@ -99,6 +99,10 @@ what changed is below.
   `ip molebridge_forward` is replaced at every bind (every ten minutes),
   not only when the port changes, so a table removed in between is
   restored ([providers](docs/providers.md#port-forwarding)).
+- Docs: Molebridge as a whole is no longer labeled experimental (the
+  owner's decision after the 0.14 bake). The newer forms and providers keep
+  their own experimental marks where they appear; the README's
+  [status](README.md#status) says which.
 
 ## 0.14.5 — 2026-11-25
 
